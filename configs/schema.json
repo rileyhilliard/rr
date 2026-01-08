@@ -1,0 +1,269 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/rileyhilliard/rr/raw/main/configs/schema.json",
+  "title": "rr Configuration",
+  "description": "Configuration schema for .rr.yaml - the Remote Runner CLI tool",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Config schema version. Currently must be 1.",
+      "const": 1,
+      "default": 1
+    },
+    "hosts": {
+      "type": "object",
+      "description": "Remote host definitions. At least one host is required.",
+      "additionalProperties": {
+        "$ref": "#/definitions/host"
+      },
+      "minProperties": 1
+    },
+    "default": {
+      "type": "string",
+      "description": "Default host when --host is not specified. If not set, uses the first host."
+    },
+    "local_fallback": {
+      "type": "boolean",
+      "description": "Run locally if no hosts are reachable.",
+      "default": false
+    },
+    "probe_timeout": {
+      "type": "string",
+      "description": "How long to wait when testing SSH connectivity. Uses Go duration format (e.g., 2s, 500ms, 1m).",
+      "default": "2s",
+      "pattern": "^[0-9]+(ns|us|ms|s|m|h)+$",
+      "examples": ["500ms", "2s", "5s", "1m"]
+    },
+    "sync": {
+      "$ref": "#/definitions/sync"
+    },
+    "lock": {
+      "$ref": "#/definitions/lock"
+    },
+    "tasks": {
+      "type": "object",
+      "description": "Named command sequences.",
+      "additionalProperties": {
+        "$ref": "#/definitions/task"
+      },
+      "default": {}
+    },
+    "output": {
+      "$ref": "#/definitions/output"
+    }
+  },
+  "required": ["version", "hosts"],
+  "additionalProperties": false,
+  "definitions": {
+    "host": {
+      "type": "object",
+      "description": "Remote machine configuration.",
+      "properties": {
+        "ssh": {
+          "type": "array",
+          "description": "SSH connection strings, tried in order until one succeeds. Can be: hostname, user@hostname, or SSH config alias.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "examples": [
+            ["mac-mini.local"],
+            ["user@server.example.com", "server-vpn"]
+          ]
+        },
+        "dir": {
+          "type": "string",
+          "description": "Working directory on remote (where files sync to). Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}.",
+          "examples": ["~/projects/${PROJECT}", "/var/www/${PROJECT}"]
+        },
+        "tags": {
+          "type": "array",
+          "description": "Tags for filtering hosts with --tag flag.",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["fast", "local"], ["linux", "production"]]
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables specific to this host.",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "examples": [{"GOPATH": "/home/user/go", "DEBUG": "1"}]
+        }
+      },
+      "required": ["ssh", "dir"],
+      "additionalProperties": false
+    },
+    "sync": {
+      "type": "object",
+      "description": "File synchronization settings using rsync.",
+      "properties": {
+        "exclude": {
+          "type": "array",
+          "description": "Patterns for files/directories not sent to remote (rsync syntax).",
+          "items": {
+            "type": "string"
+          },
+          "default": [".git/", ".venv/", "__pycache__/", "*.pyc", "node_modules/", ".mypy_cache/", ".pytest_cache/", ".ruff_cache/", ".DS_Store", "*.log"],
+          "examples": [[".git/", "node_modules/", "*.pyc"]]
+        },
+        "preserve": {
+          "type": "array",
+          "description": "Patterns for files/directories not deleted on remote even if missing locally.",
+          "items": {
+            "type": "string"
+          },
+          "default": [".venv/", "node_modules/", "data/", ".cache/"],
+          "examples": [[".venv/", "node_modules/"]]
+        },
+        "flags": {
+          "type": "array",
+          "description": "Extra rsync flags to pass.",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "examples": [["--compress", "--verbose"]]
+        }
+      },
+      "additionalProperties": false
+    },
+    "lock": {
+      "type": "object",
+      "description": "Distributed lock settings to prevent concurrent executions.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether to use distributed locking.",
+          "default": true
+        },
+        "timeout": {
+          "type": "string",
+          "description": "How long to wait for a lock before giving up. Uses Go duration format.",
+          "default": "5m",
+          "pattern": "^[0-9]+(ns|us|ms|s|m|h)+$",
+          "examples": ["30s", "5m", "10m"]
+        },
+        "stale": {
+          "type": "string",
+          "description": "When to consider a lock abandoned (holder probably crashed). Uses Go duration format.",
+          "default": "10m",
+          "pattern": "^[0-9]+(ns|us|ms|s|m|h)+$",
+          "examples": ["5m", "10m", "1h"]
+        },
+        "dir": {
+          "type": "string",
+          "description": "Directory where lock files are stored on the remote.",
+          "default": "/tmp/rr-locks"
+        }
+      },
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "description": "Named task (command sequence).",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Description shown in rr --help."
+        },
+        "run": {
+          "type": "string",
+          "description": "Command to execute (for simple single-command tasks). Mutually exclusive with steps."
+        },
+        "steps": {
+          "type": "array",
+          "description": "Steps for multi-step tasks. Mutually exclusive with run.",
+          "items": {
+            "$ref": "#/definitions/taskStep"
+          },
+          "minItems": 1
+        },
+        "hosts": {
+          "type": "array",
+          "description": "Restrict this task to specific hosts.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for this task.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["run"],
+          "not": {
+            "required": ["steps"]
+          }
+        },
+        {
+          "required": ["steps"],
+          "not": {
+            "required": ["run"]
+          }
+        }
+      ]
+    },
+    "taskStep": {
+      "type": "object",
+      "description": "A single step in a multi-step task.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Identifier shown in output."
+        },
+        "run": {
+          "type": "string",
+          "description": "Command to execute."
+        },
+        "on_fail": {
+          "type": "string",
+          "description": "Behavior when step fails.",
+          "enum": ["stop", "continue"],
+          "default": "stop"
+        }
+      },
+      "required": ["run"],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "description": "Terminal output formatting settings.",
+      "properties": {
+        "color": {
+          "type": "string",
+          "description": "Color mode. 'auto' disables color when output is piped.",
+          "enum": ["auto", "always", "never"],
+          "default": "auto"
+        },
+        "format": {
+          "type": "string",
+          "description": "Output formatter. 'auto' detects test framework from command.",
+          "enum": ["auto", "generic", "pytest", "jest", "go", "cargo"],
+          "default": "auto"
+        },
+        "timing": {
+          "type": "boolean",
+          "description": "Show timing for each phase.",
+          "default": true
+        },
+        "verbosity": {
+          "type": "string",
+          "description": "Output verbosity level.",
+          "enum": ["quiet", "normal", "verbose"],
+          "default": "normal"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

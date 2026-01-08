@@ -13,6 +13,12 @@ Sync code and run commands on remote machines.
 
 ## Installation
 
+### Quick install (macOS/Linux)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
+```
+
 ### Homebrew (macOS/Linux)
 
 ```bash
