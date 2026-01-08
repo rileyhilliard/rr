@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh
+.PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh completions
 
 build:
 	go build -o rr ./cmd/rr
@@ -24,3 +24,6 @@ fmt:
 clean:
 	rm -f rr
 	rm -rf dist/
+
+completions:
+	@./scripts/generate-completions.sh

@@ -28,6 +28,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - completions/*
 
 checksum:
   name_template: 'checksums.txt'
