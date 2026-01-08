@@ -81,13 +81,35 @@ func Run(opts RunOptions) (int, error) {
 		preferredHost = cfg.Default
 	}
 
+	// Track if we're using a fallback alias for output
+	var usedFallback bool
+	var failedAliases []string
+
+	// Set up event handler for connection progress
+	selector.SetEventHandler(func(event host.ConnectionEvent) {
+		switch event.Type {
+		case host.EventFailed:
+			failedAliases = append(failedAliases, event.Alias)
+		case host.EventConnected:
+			if len(failedAliases) > 0 {
+				usedFallback = true
+			}
+		}
+	})
+
 	conn, err := selector.Select(preferredHost)
 	if err != nil {
 		spinner.Fail()
 		return 1, err
 	}
 	spinner.Success()
-	phaseDisplay.RenderSuccess("Connected to "+conn.Alias, time.Since(connectStart))
+
+	// Show connection result, noting fallback if used
+	connectMsg := "Connected to " + conn.Alias
+	if usedFallback {
+		connectMsg = fmt.Sprintf("Connected to %s (fallback)", conn.Alias)
+	}
+	phaseDisplay.RenderSuccess(connectMsg, time.Since(connectStart))
 
 	// Phase 2: Sync (unless skipped)
 	var syncDuration time.Duration

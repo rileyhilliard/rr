@@ -372,6 +372,190 @@ func TestQuickSelect_Success(t *testing.T) {
 	}
 }
 
+func TestSelector_Select_FallbackOnFirstAliasFail(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"test": {
+			// First alias is unreachable, second should work
+			SSH: []string{"192.0.2.1", host},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(2 * time.Second) // Short timeout for unreachable host
+	defer selector.Close()
+
+	// Track events
+	var events []ConnectionEvent
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		events = append(events, event)
+	})
+
+	conn, err := selector.Select("test")
+	if err != nil {
+		t.Fatalf("Select with fallback failed: %v", err)
+	}
+
+	// Should have connected via the second alias
+	if conn.Alias != host {
+		t.Errorf("conn.Alias = %q, want %q (fallback)", conn.Alias, host)
+	}
+
+	// Verify events were emitted
+	if len(events) < 3 {
+		t.Errorf("expected at least 3 events (try, fail, try, connect), got %d", len(events))
+	}
+
+	// First event should be trying the first alias
+	if len(events) > 0 && events[0].Type != EventTrying {
+		t.Errorf("first event type = %v, want EventTrying", events[0].Type)
+	}
+
+	// Should have a failure event for the unreachable host
+	var sawFailure bool
+	for _, e := range events {
+		if e.Type == EventFailed && e.Alias == "192.0.2.1" {
+			sawFailure = true
+			break
+		}
+	}
+	if !sawFailure {
+		t.Error("expected EventFailed for unreachable host")
+	}
+
+	// Should have a connected event for the working host
+	var sawConnected bool
+	for _, e := range events {
+		if e.Type == EventConnected && e.Alias == host {
+			sawConnected = true
+			break
+		}
+	}
+	if !sawConnected {
+		t.Error("expected EventConnected for working host")
+	}
+}
+
+func TestSelector_Select_AllAliasesFail(t *testing.T) {
+	hosts := map[string]config.Host{
+		"test": {
+			// All aliases are unreachable
+			SSH: []string{"192.0.2.1", "192.0.2.2"},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(1 * time.Second) // Short timeout
+	defer selector.Close()
+
+	// Track events
+	var failCount int
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		if event.Type == EventFailed {
+			failCount++
+		}
+	})
+
+	_, err := selector.Select("test")
+	if err == nil {
+		t.Fatal("Select should fail when all aliases are unreachable")
+	}
+
+	// Should have tried both aliases
+	if failCount != 2 {
+		t.Errorf("expected 2 failure events, got %d", failCount)
+	}
+}
+
+func TestSelector_EventHandler_CacheHit(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"test": {SSH: []string{host}},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(10 * time.Second)
+	defer selector.Close()
+
+	// First call to establish connection
+	_, err := selector.Select("test")
+	if err != nil {
+		t.Fatalf("First Select failed: %v", err)
+	}
+
+	// Track events for second call
+	var events []ConnectionEvent
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		events = append(events, event)
+	})
+
+	// Second call should hit cache
+	_, err = selector.Select("test")
+	if err != nil {
+		t.Fatalf("Second Select failed: %v", err)
+	}
+
+	// Should have a cache hit event
+	var sawCacheHit bool
+	for _, e := range events {
+		if e.Type == EventCacheHit {
+			sawCacheHit = true
+			break
+		}
+	}
+	if !sawCacheHit {
+		t.Error("expected EventCacheHit for cached connection")
+	}
+}
+
+func TestConnectionEventType_String(t *testing.T) {
+	tests := []struct {
+		eventType ConnectionEventType
+		expected  string
+	}{
+		{EventTrying, "trying"},
+		{EventFailed, "failed"},
+		{EventConnected, "connected"},
+		{EventCacheHit, "cache_hit"},
+		{ConnectionEventType(99), "unknown"},
+	}
+
+	for _, tt := range tests {
+		result := tt.eventType.String()
+		if result != tt.expected {
+			t.Errorf("ConnectionEventType(%d).String() = %q, want %q", tt.eventType, result, tt.expected)
+		}
+	}
+}
+
+func TestSelector_SetEventHandler(t *testing.T) {
+	selector := NewSelector(nil)
+
+	var called bool
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		called = true
+	})
+
+	// Emit an event manually to test the handler is set
+	selector.emit(ConnectionEvent{Type: EventTrying, Alias: "test"})
+
+	if !called {
+		t.Error("event handler was not called")
+	}
+}
+
+func TestSelector_emit_NoHandler(t *testing.T) {
+	selector := NewSelector(nil)
+	// Should not panic when no handler is set
+	selector.emit(ConnectionEvent{Type: EventTrying, Alias: "test"})
+}
+
 // Helper function
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsBytes([]byte(s), []byte(substr)))

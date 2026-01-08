@@ -10,6 +10,48 @@ import (
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
+// ConnectionEvent represents an event during connection attempts.
+type ConnectionEvent struct {
+	Type    ConnectionEventType
+	Alias   string
+	Message string
+	Error   error
+	Latency time.Duration
+}
+
+// ConnectionEventType categorizes connection events.
+type ConnectionEventType int
+
+const (
+	// EventTrying indicates an alias connection attempt is starting.
+	EventTrying ConnectionEventType = iota
+	// EventFailed indicates an alias connection attempt failed.
+	EventFailed
+	// EventConnected indicates a successful connection.
+	EventConnected
+	// EventCacheHit indicates a cached connection was reused.
+	EventCacheHit
+)
+
+// String returns a human-readable description of the event type.
+func (t ConnectionEventType) String() string {
+	switch t {
+	case EventTrying:
+		return "trying"
+	case EventFailed:
+		return "failed"
+	case EventConnected:
+		return "connected"
+	case EventCacheHit:
+		return "cache_hit"
+	default:
+		return "unknown"
+	}
+}
+
+// EventHandler is a callback for connection events.
+type EventHandler func(event ConnectionEvent)
+
 // DefaultProbeTimeout is the default timeout for SSH connection probes.
 const DefaultProbeTimeout = 5 * time.Second
 
@@ -32,8 +74,9 @@ func (c *Connection) Close() error {
 
 // Selector manages host selection and connection caching.
 type Selector struct {
-	hosts   map[string]config.Host
-	timeout time.Duration
+	hosts        map[string]config.Host
+	timeout      time.Duration
+	eventHandler EventHandler
 
 	// Connection cache for session reuse
 	mu     sync.Mutex
@@ -53,11 +96,25 @@ func (s *Selector) SetTimeout(timeout time.Duration) {
 	s.timeout = timeout
 }
 
-// Select chooses and connects to a host.
-// If preferred is specified and exists, it tries that host first.
-// For Phase 1, this only tries the first SSH alias (no fallback chain).
+// SetEventHandler sets a callback for connection events.
+// Events are emitted during Select/SelectWithFallback to report progress.
+func (s *Selector) SetEventHandler(handler EventHandler) {
+	s.eventHandler = handler
+}
+
+// emit sends an event to the handler if one is configured.
+func (s *Selector) emit(event ConnectionEvent) {
+	if s.eventHandler != nil {
+		s.eventHandler(event)
+	}
+}
+
+// Select chooses and connects to a host, trying each SSH alias in order
+// until one succeeds (fallback behavior).
+// If preferred is specified and exists, it tries that host.
 //
 // Returns a cached connection if one exists for the same host.
+// Emits ConnectionEvents to report progress through the event handler.
 func (s *Selector) Select(preferred string) (*Connection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,6 +124,11 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 		if preferred == "" || s.cached.Name == preferred {
 			// Verify connection is still alive
 			if s.isConnectionAlive(s.cached) {
+				s.emit(ConnectionEvent{
+					Type:    EventCacheHit,
+					Alias:   s.cached.Alias,
+					Message: fmt.Sprintf("reusing cached connection to %s", s.cached.Alias),
+				})
 				return s.cached, nil
 			}
 			// Connection is dead, clear cache
@@ -85,69 +147,61 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 		return nil, err
 	}
 
-	// For Phase 1: try only the first SSH alias
 	if len(host.SSH) == 0 {
 		return nil, errors.New(errors.ErrConfig,
 			fmt.Sprintf("Host '%s' has no SSH aliases configured", hostName),
 			"Add at least one SSH alias to the host configuration")
 	}
 
-	sshAlias := host.SSH[0]
-	conn, err := s.connect(hostName, sshAlias, host)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the connection
-	s.cached = conn
-	return conn, nil
-}
-
-// SelectWithFallback tries to connect to a host, falling back through all
-// SSH aliases if the first fails. This is the Phase 2 implementation.
-func (s *Selector) SelectWithFallback(preferred string) (*Connection, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check cache first
-	if s.cached != nil {
-		if preferred == "" || s.cached.Name == preferred {
-			if s.isConnectionAlive(s.cached) {
-				return s.cached, nil
-			}
-			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
-			s.cached = nil
-		} else {
-			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
-			s.cached = nil
-		}
-	}
-
-	hostName, host, err := s.resolveHost(preferred)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(host.SSH) == 0 {
-		return nil, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Host '%s' has no SSH aliases configured", hostName),
-			"Add at least one SSH alias to the host configuration")
-	}
-
-	// Try each SSH alias in order
+	// Try each SSH alias in order (fallback chain)
 	var lastErr error
-	for _, sshAlias := range host.SSH {
+	for i, sshAlias := range host.SSH {
+		s.emit(ConnectionEvent{
+			Type:    EventTrying,
+			Alias:   sshAlias,
+			Message: fmt.Sprintf("trying alias %s", sshAlias),
+		})
+
 		conn, err := s.connect(hostName, sshAlias, host)
 		if err == nil {
+			// Emit success event, noting if this was a fallback
+			msg := fmt.Sprintf("connected via %s", sshAlias)
+			if i > 0 {
+				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
+			}
+			s.emit(ConnectionEvent{
+				Type:    EventConnected,
+				Alias:   sshAlias,
+				Message: msg,
+				Latency: conn.Latency,
+			})
 			s.cached = conn
 			return conn, nil
 		}
+
+		// Emit failure event
+		errMsg := "connection failed"
+		if probeErr, ok := err.(*ProbeError); ok {
+			errMsg = probeErr.Reason.String()
+		}
+		s.emit(ConnectionEvent{
+			Type:    EventFailed,
+			Alias:   sshAlias,
+			Message: errMsg,
+			Error:   err,
+		})
 		lastErr = err
 	}
 
 	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
 		fmt.Sprintf("All SSH aliases failed for host '%s'", hostName),
 		"Check your network connection and SSH configuration")
+}
+
+// SelectWithFallback is an alias for Select, which now includes fallback behavior.
+// Deprecated: Use Select instead. This method exists for backward compatibility.
+func (s *Selector) SelectWithFallback(preferred string) (*Connection, error) {
+	return s.Select(preferred)
 }
 
 // Close closes any cached connection.
