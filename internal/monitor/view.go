@@ -9,6 +9,16 @@ import (
 
 // renderDashboard renders the complete dashboard view.
 func (m Model) renderDashboard() string {
+	// If in detail view mode, render the expanded host view
+	if m.viewMode == ViewDetail {
+		content := m.renderDetailView()
+		// If help is showing, overlay the help box
+		if m.showHelp {
+			return m.renderHelpOverlay(content)
+		}
+		return content
+	}
+
 	var b strings.Builder
 
 	// Render header (always shown, but may be compact)

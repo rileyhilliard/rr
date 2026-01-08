@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"fmt"
 	"os"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/spf13/cobra"
@@ -21,6 +23,8 @@ var (
 	syncDryRun           bool
 	initHostFlag         string
 	initForce            bool
+	monitorHostsFlag     string
+	monitorIntervalFlag  string
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -135,20 +139,49 @@ Examples:
 	},
 }
 
-// monitorCmd starts the file watcher for continuous sync
+// monitorCmd starts the TUI monitoring dashboard
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
-	Short: "Watch files and sync on changes",
-	Long: `Start continuous file monitoring and sync on changes.
+	Short: "Real-time system metrics dashboard for remote hosts",
+	Long: `Start an interactive TUI dashboard showing real-time system metrics
+for all configured remote hosts.
 
-Watches the project directory for file changes and automatically
-syncs to the remote host when changes are detected.
+Displays CPU, RAM, GPU (if available), and network metrics with
+color-coded status indicators and responsive layout.
+
+Keyboard shortcuts:
+  q / Ctrl+C  Quit
+  r           Force refresh
+  s           Cycle sort order (name/CPU/RAM/GPU)
+  up/k        Select previous host
+  down/j      Select next host
+  Enter       Expand selected host details
+  Esc         Collapse / go back
+  ?           Show help
 
 Examples:
   rr monitor
-  rr monitor --run "make test"`,
+  rr monitor --hosts mini,workstation
+  rr monitor --interval 5s`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("monitor")
+		// Parse interval
+		interval := 2 * time.Second
+		if monitorIntervalFlag != "" {
+			parsed, err := time.ParseDuration(monitorIntervalFlag)
+			if err != nil {
+				return errors.WrapWithCode(err, errors.ErrConfig,
+					fmt.Sprintf("Invalid interval: %s", monitorIntervalFlag),
+					"Use a valid duration like 2s, 5s, or 1m")
+			}
+			if parsed < 500*time.Millisecond {
+				return errors.New(errors.ErrConfig,
+					"Interval too short",
+					"Minimum interval is 500ms to avoid overwhelming hosts")
+			}
+			interval = parsed
+		}
+
+		return monitorCommand(monitorHostsFlag, interval)
 	},
 }
 
@@ -228,6 +261,10 @@ func init() {
 	// init command flags
 	initCmd.Flags().StringVar(&initHostFlag, "host", "", "pre-specify SSH host")
 	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config")
+
+	// monitor command flags
+	monitorCmd.Flags().StringVar(&monitorHostsFlag, "hosts", "", "filter to specific hosts (comma-separated)")
+	monitorCmd.Flags().StringVar(&monitorIntervalFlag, "interval", "2s", "refresh interval (e.g., 2s, 5s, 1m)")
 
 	// Register all commands
 	rootCmd.AddCommand(runCmd)
