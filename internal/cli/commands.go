@@ -1,0 +1,189 @@
+package cli
+
+import (
+	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/spf13/cobra"
+)
+
+// runCmd syncs code and executes a command on the remote host
+var runCmd = &cobra.Command{
+	Use:   "run [command]",
+	Short: "Sync code and run command on remote host",
+	Long: `Sync local code to the remote host and execute the specified command.
+
+This is the primary command for running builds, tests, or any command remotely.
+Files are synced using rsync, then the command runs in the remote project directory.
+
+Examples:
+  rr run "make test"
+  rr run "npm run build"
+  rr run --host mini "cargo test"`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("run")
+	},
+}
+
+// execCmd executes a command on the remote host without syncing
+var execCmd = &cobra.Command{
+	Use:   "exec [command]",
+	Short: "Run command on remote host without syncing",
+	Long: `Execute a command on the remote host without syncing files first.
+
+Useful for quick commands, checking status, or when files are already synced.
+
+Examples:
+  rr exec "ls -la"
+  rr exec "git status"
+  rr exec "cat /var/log/app.log"`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("exec")
+	},
+}
+
+// syncCmd syncs code to the remote host without executing
+var syncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Sync code to remote host",
+	Long: `Sync local code to the remote host without running any command.
+
+Uses rsync for efficient incremental file transfer.
+
+Examples:
+  rr sync
+  rr sync --dry-run
+  rr sync --host mini`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("sync")
+	},
+}
+
+// initCmd creates a new .rr.yaml configuration
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Create .rr.yaml configuration",
+	Long: `Initialize a new Remote Runner configuration file.
+
+Creates a .rr.yaml file in the current directory with sensible defaults
+based on detected project type.
+
+Examples:
+  rr init
+  rr init --host myserver`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("init")
+	},
+}
+
+// setupCmd configures SSH keys and tests connection
+var setupCmd = &cobra.Command{
+	Use:   "setup",
+	Short: "Configure SSH keys and test connection",
+	Long: `Set up SSH authentication and verify connectivity to remote hosts.
+
+Guides you through:
+  - SSH key generation (if needed)
+  - Key deployment to remote hosts
+  - Connection testing
+  - Remote directory creation
+
+Examples:
+  rr setup
+  rr setup --host mini`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("setup")
+	},
+}
+
+// statusCmd shows connection and sync status
+var statusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show connection and sync status",
+	Long: `Display the current status of remote hosts and sync state.
+
+Shows:
+  - Host connectivity
+  - Last sync time
+  - Lock status
+  - Configuration summary
+
+Examples:
+  rr status
+  rr status --json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("status")
+	},
+}
+
+// monitorCmd starts the file watcher for continuous sync
+var monitorCmd = &cobra.Command{
+	Use:   "monitor",
+	Short: "Watch files and sync on changes",
+	Long: `Start continuous file monitoring and sync on changes.
+
+Watches the project directory for file changes and automatically
+syncs to the remote host when changes are detected.
+
+Examples:
+  rr monitor
+  rr monitor --run "make test"`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("monitor")
+	},
+}
+
+// doctorCmd diagnoses connection and configuration issues
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Diagnose connection and config issues",
+	Long: `Run diagnostic checks to identify and fix common issues.
+
+Checks:
+  - SSH connectivity to all hosts
+  - rsync availability
+  - Configuration validity
+  - Lock file status
+  - Network latency
+
+Examples:
+  rr doctor
+  rr doctor --fix`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("doctor")
+	},
+}
+
+// completionCmd generates shell completion scripts
+var completionCmd = &cobra.Command{
+	Use:   "completion [bash|zsh|fish|powershell]",
+	Short: "Generate shell completion script",
+	Long: `Generate shell completion scripts for rr.
+
+Examples:
+  # Bash
+  rr completion bash > /etc/bash_completion.d/rr
+
+  # Zsh
+  rr completion zsh > "${fpath[1]}/_rr"
+
+  # Fish
+  rr completion fish > ~/.config/fish/completions/rr.fish`,
+	ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
+	Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.NewNotImplemented("completion")
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(execCmd)
+	rootCmd.AddCommand(syncCmd)
+	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(monitorCmd)
+	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(completionCmd)
+}
