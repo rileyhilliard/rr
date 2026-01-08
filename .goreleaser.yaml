@@ -40,3 +40,19 @@ changelog:
       - '^docs:'
       - '^test:'
       - '^chore:'
+
+brews:
+  - repository:
+      owner: rileyhilliard
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/rileyhilliard/rr
+    description: Sync code and run commands on remote machines
+    license: MIT
+    install: |
+      bin.install "rr"
+      bash_completion.install "completions/rr.bash" => "rr"
+      zsh_completion.install "completions/_rr"
+      fish_completion.install "completions/rr.fish"
+    test: |
+      system "#{bin}/rr", "--version"

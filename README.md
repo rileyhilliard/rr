@@ -16,7 +16,12 @@ Sync code and run commands on remote machines.
 ### Homebrew (macOS/Linux)
 
 ```bash
+# Install directly
 brew install rileyhilliard/tap/rr
+
+# Or tap first, then install
+brew tap rileyhilliard/tap
+brew install rr
 ```
 
 ### Go install
