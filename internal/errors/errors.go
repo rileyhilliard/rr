@@ -103,3 +103,30 @@ func IsCode(err error, code string) bool {
 	}
 	return false
 }
+
+// ExitError represents a non-zero exit code from a remote command.
+// This allows commands to propagate exit codes without calling os.Exit directly,
+// ensuring proper cleanup via defer statements.
+type ExitError struct {
+	Code int
+}
+
+// NewExitError creates a new ExitError with the given exit code.
+func NewExitError(code int) *ExitError {
+	return &ExitError{Code: code}
+}
+
+// Error implements the error interface.
+func (e *ExitError) Error() string {
+	return fmt.Sprintf("exit code %d", e.Code)
+}
+
+// GetExitCode extracts the exit code from an error if it's an ExitError.
+// Returns 0 and false if the error is not an ExitError.
+func GetExitCode(err error) (int, bool) {
+	var exitErr *ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.Code, true
+	}
+	return 0, false
+}

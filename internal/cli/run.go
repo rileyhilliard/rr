@@ -339,6 +339,7 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error
 		Host:         hostFlag,
 		Tag:          tagFlag,
 		ProbeTimeout: probeTimeout,
+		Quiet:        Quiet(),
 	})
 
 	if err != nil {
@@ -346,7 +347,7 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error
 	}
 
 	if exitCode != 0 {
-		os.Exit(exitCode)
+		return errors.NewExitError(exitCode)
 	}
 
 	return nil

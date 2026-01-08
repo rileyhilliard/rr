@@ -2,6 +2,14 @@
 
 Thanks for your interest in contributing! This doc covers how to get set up, run tests, and submit changes.
 
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
+
+## Finding something to work on
+
+- Look for issues labeled [`good first issue`](https://github.com/rileyhilliard/rr/labels/good%20first%20issue) for starter tasks
+- Check the [ARCHITECTURE.md](ARCHITECTURE.md) to understand the design before diving into code
+- Not sure where to start? Open an issue and ask
+
 ## Development setup
 
 **Requirements:**
@@ -121,3 +129,7 @@ Default 2s was too short for high-latency VPN connections.
 ## Questions?
 
 Open an issue if you're not sure about something. We're happy to help.
+
+## Code of conduct
+
+This project follows the [Contributor Covenant](https://www.contributor-covenant.org/). See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for details.

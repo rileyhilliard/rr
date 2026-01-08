@@ -2,6 +2,16 @@
 
 This guide covers common issues and their solutions.
 
+## Contents
+
+- [Running diagnostics](#running-diagnostics)
+- [SSH connection failures](#ssh-connection-failures)
+- [rsync issues](#rsync-issues)
+- [Lock contention](#lock-contention)
+- [Config validation errors](#config-validation-errors)
+- [Platform-specific issues](#platform-specific-issues)
+- [Debug tips](#debug-tips)
+
 ## Running diagnostics
 
 The `rr doctor` command checks your setup and reports issues:

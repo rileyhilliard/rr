@@ -1,0 +1,95 @@
+# Example: Multi-host setup with tags
+#
+# This config shows how to set up multiple hosts with tags for targeting
+# specific machines. Useful for small teams sharing build servers.
+
+version: 1
+
+hosts:
+  mac-mini:
+    ssh:
+      - mac-mini.local
+      - mac-mini-tailscale
+    dir: ~/builds/${PROJECT}
+    tags:
+      - fast
+      - macos
+      - gpu
+
+  linux-server:
+    ssh:
+      - linux-server.internal
+      - linux-tailscale
+    dir: /home/builds/${PROJECT}
+    tags:
+      - linux
+      - docker
+
+  raspberry-pi:
+    ssh:
+      - pi.local
+    dir: ~/projects/${PROJECT}
+    tags:
+      - arm
+      - linux
+
+# Default to the fastest machine
+default: mac-mini
+
+# Fall back to local if all remotes are down
+local_fallback: true
+
+# Longer timeout for flaky connections
+probe_timeout: 5s
+
+sync:
+  exclude:
+    - .git/
+    - node_modules/
+    - .venv/
+    - __pycache__/
+    - build/
+    - dist/
+  preserve:
+    - node_modules/
+    - .venv/
+
+lock:
+  enabled: true
+  timeout: 10m  # Longer timeout for shared machines
+  stale: 30m
+
+tasks:
+  test:
+    description: Run tests on any host
+    run: make test
+
+  build-linux:
+    description: Build Linux binary
+    hosts:
+      - linux-server
+    run: make build-linux
+
+  build-arm:
+    description: Build ARM binary
+    hosts:
+      - raspberry-pi
+    run: make build-arm
+
+  docker-build:
+    description: Build Docker image
+    hosts:
+      - linux-server  # Only the Linux box has Docker
+    run: docker build -t myapp .
+
+  gpu-train:
+    description: Run ML training
+    hosts:
+      - mac-mini  # Only the Mac Mini has a GPU
+    run: python train.py
+
+# Usage:
+#   rr test                    # Runs on mac-mini (default)
+#   rr test --host linux-server # Runs on specific host
+#   rr test --tag linux        # Runs on any host tagged 'linux'
+#   rr build-linux             # Only runs on linux-server

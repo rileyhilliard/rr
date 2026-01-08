@@ -1,0 +1,60 @@
+# Example: Node.js/TypeScript project
+#
+# This config is for a Node.js project using npm/yarn and Jest for testing.
+
+version: 1
+
+hosts:
+  dev-server:
+    ssh:
+      - dev.local
+      - dev-tailscale
+    dir: ~/projects/${PROJECT}
+    env:
+      NODE_ENV: development
+
+default: dev-server
+
+sync:
+  exclude:
+    - .git/
+    - node_modules/
+    - dist/
+    - build/
+    - coverage/
+    - .next/
+    - .nuxt/
+    - "*.log"
+    - .DS_Store
+  preserve:
+    # Keep node_modules on remote - npm install is slow
+    - node_modules/
+
+tasks:
+  test:
+    description: Run Jest tests
+    run: npm test
+
+  test-watch:
+    description: Run tests in watch mode
+    run: npm test -- --watch
+
+  lint:
+    description: Run ESLint
+    run: npm run lint
+
+  build:
+    description: Build the project
+    run: npm run build
+
+  install:
+    description: Install npm dependencies on remote
+    run: npm ci
+
+  dev:
+    description: Start dev server
+    run: npm run dev
+
+output:
+  format: jest
+  timing: true

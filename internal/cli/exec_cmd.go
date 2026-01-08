@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -39,6 +38,7 @@ func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) erro
 		Tag:          tagFlag,
 		ProbeTimeout: probeTimeout,
 		SkipSync:     true, // Key difference from run
+		Quiet:        Quiet(),
 	})
 
 	if err != nil {
@@ -46,7 +46,7 @@ func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) erro
 	}
 
 	if exitCode != 0 {
-		os.Exit(exitCode)
+		return errors.NewExitError(exitCode)
 	}
 
 	return nil

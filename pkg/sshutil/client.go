@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kevinburke/ssh_config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 // Client wraps an SSH connection with additional metadata.
@@ -151,6 +153,43 @@ func resolveSSHSettings(host string) *sshSettings {
 	return settings
 }
 
+// StrictHostKeyChecking controls host key verification behavior.
+// When true (default), host keys are verified against ~/.ssh/known_hosts.
+// When false, host key verification is skipped (insecure, for CI/automation).
+var StrictHostKeyChecking = true
+
+// hostKeyCallback is cached to avoid re-parsing known_hosts on every connection.
+var (
+	hostKeyCallback     ssh.HostKeyCallback
+	hostKeyCallbackOnce sync.Once
+	hostKeyCallbackErr  error
+)
+
+// getHostKeyCallback returns a cached host key callback that reads from known_hosts.
+func getHostKeyCallback() (ssh.HostKeyCallback, error) {
+	hostKeyCallbackOnce.Do(func() {
+		knownHostsPath := filepath.Join(homeDir(), ".ssh", "known_hosts")
+
+		// Check if known_hosts exists
+		if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
+			// Create an empty known_hosts file if it doesn't exist
+			dir := filepath.Dir(knownHostsPath)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				hostKeyCallbackErr = fmt.Errorf("failed to create .ssh directory: %w", err)
+				return
+			}
+			if err := os.WriteFile(knownHostsPath, []byte{}, 0600); err != nil {
+				hostKeyCallbackErr = fmt.Errorf("failed to create known_hosts: %w", err)
+				return
+			}
+		}
+
+		hostKeyCallback, hostKeyCallbackErr = knownhosts.New(knownHostsPath)
+	})
+
+	return hostKeyCallback, hostKeyCallbackErr
+}
+
 // buildSSHConfig creates an SSH client config with authentication methods.
 func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
@@ -187,28 +226,63 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		return nil, fmt.Errorf("no SSH authentication methods available")
 	}
 
+	// Determine host key callback
+	var hostKeyCallback ssh.HostKeyCallback
+	if StrictHostKeyChecking {
+		var err error
+		hostKeyCallback, err = getHostKeyCallback()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load known_hosts: %w", err)
+		}
+	} else {
+		hostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec // User explicitly disabled host key checking
+	}
+
 	return &ssh.ClientConfig{
 		User:            settings.user,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: proper host key verification
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         10 * time.Second,
 	}, nil
 }
 
+// agentConn holds the reusable SSH agent connection.
+var (
+	agentConn     net.Conn
+	agentClient   agent.ExtendedAgent
+	agentConnOnce sync.Once
+)
+
 // sshAgentAuth returns an auth method using the SSH agent if available.
+// The agent connection is reused across multiple SSH connections.
 func sshAgentAuth() ssh.AuthMethod {
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
 		return nil
 	}
 
-	conn, err := net.Dial("unix", socket)
-	if err != nil {
+	agentConnOnce.Do(func() {
+		conn, err := net.Dial("unix", socket)
+		if err != nil {
+			return
+		}
+		agentConn = conn
+		agentClient = agent.NewClient(conn)
+	})
+
+	if agentClient == nil {
 		return nil
 	}
 
-	agentClient := agent.NewClient(conn)
 	return ssh.PublicKeysCallback(agentClient.Signers)
+}
+
+// CloseAgent closes the SSH agent connection if one is open.
+// This should be called when the application is shutting down.
+func CloseAgent() {
+	if agentConn != nil {
+		agentConn.Close() //nolint:errcheck // Best-effort cleanup
+	}
 }
 
 // keyFileAuth returns an auth method using a private key file.
@@ -220,8 +294,10 @@ func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		// Key might be encrypted, try without passphrase handling for now
-		// TODO: prompt for passphrase or use agent
+		// Key might be encrypted - passphrase-protected keys must be loaded via ssh-agent
+		if strings.Contains(err.Error(), "encrypted") || strings.Contains(err.Error(), "passphrase") {
+			return nil, fmt.Errorf("encrypted key at %s requires ssh-agent: ssh-add %s", keyPath, keyPath)
+		}
 		return nil, err
 	}
 

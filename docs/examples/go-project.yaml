@@ -1,0 +1,54 @@
+# Example: Go project
+#
+# This config is for a Go project that builds and tests on a remote Linux
+# machine (useful when developing on macOS but deploying to Linux).
+
+version: 1
+
+hosts:
+  linux-box:
+    ssh:
+      - linux.local
+      - linux-vpn
+    dir: ~/code/${PROJECT}
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+
+default: linux-box
+
+sync:
+  exclude:
+    - .git/
+    - bin/
+    - dist/
+    - "*.exe"
+    - vendor/  # If you vendor deps locally, exclude them
+  preserve:
+    # Go module cache lives elsewhere, nothing to preserve
+
+tasks:
+  test:
+    description: Run all tests
+    run: go test ./... -v
+
+  test-race:
+    description: Run tests with race detector
+    run: go test ./... -race -v
+
+  build:
+    description: Build the binary
+    run: go build -o bin/app ./cmd/app
+
+  lint:
+    description: Run golangci-lint
+    run: golangci-lint run
+
+  tidy:
+    description: Tidy go.mod
+    run: go mod tidy
+
+output:
+  format: go
+  timing: true

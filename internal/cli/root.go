@@ -6,15 +6,18 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/spf13/cobra"
 )
 
 // Global flags
 var (
-	cfgFile string
-	verbose bool
-	quiet   bool
-	noColor bool
+	cfgFile              string
+	verbose              bool
+	quiet                bool
+	noColor              bool
+	noStrictHostKeyCheck bool
 )
 
 // tasksRegistered tracks whether tasks have been registered to avoid double registration.
@@ -45,12 +48,20 @@ Get started:
 
 // Execute runs the root command and handles errors with structured output.
 func Execute() {
+	// Ensure SSH agent connection is closed on exit
+	defer sshutil.CloseAgent()
+
 	// Try to register tasks before execution.
 	// We need to check for --config flag manually since Cobra hasn't parsed flags yet.
 	explicitConfig := findConfigFlag()
 	registerTasksFromConfig(explicitConfig)
 
 	if err := rootCmd.Execute(); err != nil {
+		// Check if it's an exit code error (command ran but returned non-zero)
+		if code, ok := errors.GetExitCode(err); ok {
+			os.Exit(code)
+		}
+
 		// Check if it's a structured error
 		var rrErr *errors.Error
 		if ok := errors.IsCode(err, ""); !ok {
@@ -125,6 +136,25 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-essential output")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
+	rootCmd.PersistentFlags().BoolVar(&noStrictHostKeyCheck, "no-strict-host-key-checking", false,
+		"disable SSH host key verification (insecure, for CI/automation only)")
+
+	// Set up a pre-run hook to apply global flags
+	originalPreRun := rootCmd.PersistentPreRun
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		// Apply color setting
+		if noColor {
+			ui.DisableColors()
+		}
+		// Apply SSH host key checking setting
+		if noStrictHostKeyCheck {
+			sshutil.StrictHostKeyChecking = false
+		}
+		// Call original pre-run if it exists
+		if originalPreRun != nil {
+			originalPreRun(cmd, args)
+		}
+	}
 }
 
 // GetRootCmd returns the root command for testing and subcommand registration.

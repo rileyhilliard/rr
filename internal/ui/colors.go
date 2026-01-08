@@ -1,6 +1,15 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+)
+
+// DisableColors disables all color output by setting the color profile to Ascii.
+// This should be called early in the program if --no-color flag is set.
+func DisableColors() {
+	lipgloss.SetColorProfile(termenv.Ascii)
+}
 
 // Color palette using ANSI color codes for terminal compatibility.
 // Maps to proof-of-concept.sh color definitions:

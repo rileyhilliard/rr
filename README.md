@@ -1,6 +1,23 @@
 # rr
 
+[![Go Version](https://img.shields.io/github/go-mod/go-version/rileyhilliard/rr)](https://go.dev/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/rileyhilliard/rr)](https://github.com/rileyhilliard/rr/releases)
+
 Sync code and run commands on remote machines.
+
+<!-- TODO: Add terminal demo GIF
+Record with: https://github.com/charmbracelet/vhs
+Example script in: scripts/demo.tape
+-->
+
+## Why rr?
+
+If you sync code to a remote machine and run commands there, you know the drill: rsync with a dozen flags, SSH, and hope nobody else is using the box. `rr` handles the boring parts:
+
+- **Smart host fallback**: Switch networks and it just works (LAN to VPN to local)
+- **Sane sync defaults**: Excludes .git, node_modules, .venv automatically
+- **Distributed locking**: Don't clobber your teammate's test run
 
 ## Features
 
@@ -206,6 +223,7 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common p
 ## Documentation
 
 - [Configuration reference](docs/configuration.md) - All config options explained
+- [Example configs](docs/examples/) - Sample configs for Python, Go, Node.js projects
 - [Troubleshooting guide](docs/troubleshooting.md) - Common errors and fixes
 - [Architecture](ARCHITECTURE.md) - Design decisions and system overview
 - [Contributing](CONTRIBUTING.md) - Development setup and guidelines
@@ -213,3 +231,9 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common p
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+## Contributing
+
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting a PR.
+
+Found a bug or have a feature idea? [Open an issue](https://github.com/rileyhilliard/rr/issues).

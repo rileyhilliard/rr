@@ -2,6 +2,21 @@
 
 This document covers all configuration options for `.rr.yaml`.
 
+## Contents
+
+- [File location](#file-location)
+- [Complete example](#complete-example)
+- [Top-level fields](#top-level-fields)
+- [Hosts](#hosts)
+- [Sync](#sync)
+- [Lock](#lock)
+- [Tasks](#tasks)
+- [Output](#output)
+- [Monitor](#monitor)
+- [Duration syntax](#duration-syntax)
+- [Validation rules](#validation-rules)
+- [Minimal config](#minimal-config)
+
 ## File location
 
 `rr` searches for configuration in this order:
