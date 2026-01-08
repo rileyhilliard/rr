@@ -88,10 +88,16 @@ const (
 // MetricColor returns the appropriate color for a percentage-based metric.
 // Uses threshold-based coloring: green < 70%, yellow 70-90%, red > 90%.
 func MetricColor(percent float64) lipgloss.Color {
+	return MetricColorWithThresholds(percent, int(WarningThreshold), int(CriticalThreshold))
+}
+
+// MetricColorWithThresholds returns the appropriate color for a percentage-based metric
+// using the provided warning and critical threshold values.
+func MetricColorWithThresholds(percent float64, warning, critical int) lipgloss.Color {
 	switch {
-	case percent >= CriticalThreshold:
+	case percent >= float64(critical):
 		return ColorCritical
-	case percent >= WarningThreshold:
+	case percent >= float64(warning):
 		return ColorWarning
 	default:
 		return ColorHealthy
@@ -101,6 +107,12 @@ func MetricColor(percent float64) lipgloss.Color {
 // MetricStyle returns a style with the appropriate foreground color for the metric.
 func MetricStyle(percent float64) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(MetricColor(percent))
+}
+
+// MetricStyleWithThresholds returns a style with the appropriate foreground color
+// using custom warning and critical thresholds.
+func MetricStyleWithThresholds(percent float64, warning, critical int) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical))
 }
 
 // ProgressBar renders a progress bar with the given width and percentage.
@@ -144,6 +156,11 @@ func ProgressBar(width int, percent float64) string {
 
 // CompactProgressBar renders a minimal progress bar without brackets.
 func CompactProgressBar(width int, percent float64) string {
+	return CompactProgressBarWithThresholds(width, percent, int(WarningThreshold), int(CriticalThreshold))
+}
+
+// CompactProgressBarWithThresholds renders a minimal progress bar using custom thresholds.
+func CompactProgressBarWithThresholds(width int, percent float64, warning, critical int) string {
 	if width < 1 {
 		width = 1
 	}
@@ -170,5 +187,5 @@ func CompactProgressBar(width int, percent float64) string {
 		}
 	}
 
-	return lipgloss.NewStyle().Foreground(MetricColor(percent)).Render(bar)
+	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical)).Render(bar)
 }

@@ -83,6 +83,20 @@ output:
   format: auto
   timing: true
   verbosity: normal
+
+monitor:
+  interval: 2s
+  thresholds:
+    cpu:
+      warning: 70
+      critical: 90
+    ram:
+      warning: 70
+      critical: 90
+    gpu:
+      warning: 70
+      critical: 90
+  exclude: []
 ```
 
 ## Top-level fields
@@ -98,6 +112,7 @@ output:
 | `lock` | object | see below | Distributed lock settings. |
 | `tasks` | map | `{}` | Named command sequences. |
 | `output` | object | see below | Terminal output formatting. |
+| `monitor` | object | see below | Resource monitoring dashboard settings. |
 
 ## Hosts
 
@@ -357,6 +372,67 @@ output:
 - `jest` - Format Jest output
 - `go` - Format `go test` output
 - `cargo` - Format `cargo test` output
+
+## Monitor
+
+Controls the resource monitoring dashboard (`rr monitor`).
+
+```yaml
+monitor:
+  interval: 2s
+  thresholds:
+    cpu:
+      warning: 70
+      critical: 90
+    ram:
+      warning: 80
+      critical: 95
+    gpu:
+      warning: 70
+      critical: 90
+  exclude:
+    - slow-host
+```
+
+### Monitor fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `interval` | duration | `2s` | Time between metric updates. |
+| `thresholds` | object | see below | Threshold settings for metric coloring. |
+| `exclude` | list | `[]` | Host names to exclude from the monitor. |
+
+### Thresholds
+
+Each metric type (CPU, RAM, GPU) has warning and critical thresholds that control the color coding in the dashboard:
+
+- Below warning: Green (healthy)
+- Warning to critical: Yellow (warning)
+- Above critical: Red (critical)
+
+| Threshold | Default | Description |
+|-----------|---------|-------------|
+| `cpu.warning` | `70` | CPU percentage for yellow color. |
+| `cpu.critical` | `90` | CPU percentage for red color. |
+| `ram.warning` | `70` | RAM percentage for yellow color. |
+| `ram.critical` | `90` | RAM percentage for red color. |
+| `gpu.warning` | `70` | GPU percentage for yellow color. |
+| `gpu.critical` | `90` | GPU percentage for red color. |
+
+### Excluding hosts
+
+Use `exclude` to hide specific hosts from the monitor dashboard. This is useful for hosts that are:
+
+- Slow to respond (causing dashboard delays)
+- Temporarily offline for maintenance
+- Not relevant for monitoring
+
+```yaml
+monitor:
+  exclude:
+    - dev-machine
+    - staging-server
+```
 
 ## Duration syntax
 

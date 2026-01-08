@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 )
@@ -98,6 +99,11 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Fix the lock configuration in your .rr.yaml")
 	}
 
+	// Validate monitor config
+	if err := validateMonitor(cfg.Monitor, cfg.Hosts); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Fix the monitor configuration in your .rr.yaml")
+	}
+
 	return nil
 }
 
@@ -180,6 +186,56 @@ func validateLock(lock LockConfig) error {
 	}
 	if lock.Enabled && lock.Timeout > 0 && lock.Stale > 0 && lock.Timeout > lock.Stale {
 		return fmt.Errorf("lock.timeout (%v) should be less than lock.stale (%v)", lock.Timeout, lock.Stale)
+	}
+	return nil
+}
+
+// validateMonitor checks monitor configuration.
+func validateMonitor(monitor MonitorConfig, hosts map[string]Host) error {
+	// Validate interval format if specified
+	if monitor.Interval != "" {
+		if _, err := time.ParseDuration(monitor.Interval); err != nil {
+			return fmt.Errorf("monitor.interval '%s' is not a valid duration (try '2s', '5s', '1m')", monitor.Interval)
+		}
+	}
+
+	// Validate thresholds
+	if err := validateThresholds("cpu", monitor.Thresholds.CPU); err != nil {
+		return err
+	}
+	if err := validateThresholds("ram", monitor.Thresholds.RAM); err != nil {
+		return err
+	}
+	if err := validateThresholds("gpu", monitor.Thresholds.GPU); err != nil {
+		return err
+	}
+
+	// Validate excluded hosts exist (warning only, don't fail validation)
+	// This allows excluding hosts that might be temporarily removed from config
+	for _, excluded := range monitor.Exclude {
+		if _, ok := hosts[excluded]; !ok && len(hosts) > 0 {
+			// Just validate that it's not empty, don't require it to exist
+			if strings.TrimSpace(excluded) == "" {
+				return fmt.Errorf("monitor.exclude contains an empty entry")
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateThresholds checks a threshold configuration for a single metric type.
+func validateThresholds(name string, thresh ThresholdValues) error {
+	// Only validate if non-zero (0 means use default)
+	if thresh.Warning < 0 || thresh.Warning > 100 {
+		return fmt.Errorf("monitor.thresholds.%s.warning must be between 0 and 100 (got %d)", name, thresh.Warning)
+	}
+	if thresh.Critical < 0 || thresh.Critical > 100 {
+		return fmt.Errorf("monitor.thresholds.%s.critical must be between 0 and 100 (got %d)", name, thresh.Critical)
+	}
+	// Warning should be less than critical (if both are non-zero)
+	if thresh.Warning > 0 && thresh.Critical > 0 && thresh.Warning >= thresh.Critical {
+		return fmt.Errorf("monitor.thresholds.%s.warning (%d) should be less than critical (%d)", name, thresh.Warning, thresh.Critical)
 	}
 	return nil
 }

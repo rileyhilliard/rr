@@ -25,6 +25,16 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, "auto", cfg.Output.Format)
 	assert.True(t, cfg.Output.Timing)
 	assert.Equal(t, "normal", cfg.Output.Verbosity)
+
+	// Monitor defaults
+	assert.Equal(t, "2s", cfg.Monitor.Interval)
+	assert.Equal(t, 70, cfg.Monitor.Thresholds.CPU.Warning)
+	assert.Equal(t, 90, cfg.Monitor.Thresholds.CPU.Critical)
+	assert.Equal(t, 70, cfg.Monitor.Thresholds.RAM.Warning)
+	assert.Equal(t, 90, cfg.Monitor.Thresholds.RAM.Critical)
+	assert.Equal(t, 70, cfg.Monitor.Thresholds.GPU.Warning)
+	assert.Equal(t, 90, cfg.Monitor.Thresholds.GPU.Critical)
+	assert.Empty(t, cfg.Monitor.Exclude)
 }
 
 func TestLoad(t *testing.T) {

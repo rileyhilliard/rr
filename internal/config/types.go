@@ -17,6 +17,7 @@ type Config struct {
 	Lock          LockConfig            `yaml:"lock" mapstructure:"lock"`
 	Tasks         map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
 	Output        OutputConfig          `yaml:"output" mapstructure:"output"`
+	Monitor       MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
 }
 
 // Host defines a remote machine and its connection settings.
@@ -109,6 +110,34 @@ type OutputConfig struct {
 	Verbosity string `yaml:"verbosity" mapstructure:"verbosity"`
 }
 
+// MonitorConfig controls the resource monitoring dashboard.
+type MonitorConfig struct {
+	// Interval between metric updates (e.g., "2s", "5s").
+	Interval string `yaml:"interval" mapstructure:"interval"`
+
+	// Thresholds for metric severity coloring.
+	Thresholds ThresholdConfig `yaml:"thresholds" mapstructure:"thresholds"`
+
+	// Exclude lists host names to exclude from the monitor dashboard.
+	Exclude []string `yaml:"exclude" mapstructure:"exclude"`
+}
+
+// ThresholdConfig defines warning and critical thresholds for metrics.
+type ThresholdConfig struct {
+	CPU ThresholdValues `yaml:"cpu" mapstructure:"cpu"`
+	RAM ThresholdValues `yaml:"ram" mapstructure:"ram"`
+	GPU ThresholdValues `yaml:"gpu" mapstructure:"gpu"`
+}
+
+// ThresholdValues contains the percentage thresholds for a metric type.
+type ThresholdValues struct {
+	// Warning threshold percentage (default 70).
+	Warning int `yaml:"warning" mapstructure:"warning"`
+
+	// Critical threshold percentage (default 90).
+	Critical int `yaml:"critical" mapstructure:"critical"`
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -149,6 +178,15 @@ func DefaultConfig() *Config {
 			Format:    "auto",
 			Timing:    true,
 			Verbosity: "normal",
+		},
+		Monitor: MonitorConfig{
+			Interval: "2s",
+			Thresholds: ThresholdConfig{
+				CPU: ThresholdValues{Warning: 70, Critical: 90},
+				RAM: ThresholdValues{Warning: 70, Critical: 90},
+				GPU: ThresholdValues{Warning: 70, Critical: 90},
+			},
+			Exclude: []string{},
 		},
 	}
 }
