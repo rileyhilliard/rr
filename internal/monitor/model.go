@@ -16,6 +16,33 @@ const (
 	StatusUnreachableState
 )
 
+// LayoutMode represents the responsive layout mode based on terminal size.
+type LayoutMode int
+
+const (
+	// LayoutMinimal is for terminals < 80 columns: metrics only, no graphs, single column
+	LayoutMinimal LayoutMode = iota
+	// LayoutCompact is for terminals 80-120 columns: inline graphs, abbreviated labels, single column
+	LayoutCompact
+	// LayoutStandard is for terminals 120-160 columns: full cards, possibly 2 columns
+	LayoutStandard
+	// LayoutWide is for terminals 160+ columns: two-column layout with more detail
+	LayoutWide
+)
+
+// Width breakpoints for layout modes
+const (
+	BreakpointCompact  = 80
+	BreakpointStandard = 120
+	BreakpointWide     = 160
+)
+
+// Height breakpoints for layout adjustments
+const (
+	HeightMinimal  = 24
+	HeightStandard = 40
+)
+
 // String returns a human-readable status string.
 func (s HostStatus) String() string {
 	switch s {
@@ -43,6 +70,9 @@ type Model struct {
 	lastUpdate time.Time
 	interval   time.Duration
 	quitting   bool
+	sortOrder  SortOrder
+	viewMode   ViewMode
+	showHelp   bool
 }
 
 // tickMsg signals a periodic refresh.
@@ -87,26 +117,9 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
-			m.quitting = true
-			return m, tea.Quit
-		case "r":
-			return m, m.collectCmd()
-		case "up", "k":
-			if m.selected > 0 {
-				m.selected--
-			}
-		case "down", "j":
-			if m.selected < len(m.hosts)-1 {
-				m.selected++
-			}
-		case "home":
-			m.selected = 0
-		case "end":
-			if len(m.hosts) > 0 {
-				m.selected = len(m.hosts) - 1
-			}
+		handled, cmd := m.HandleKeyMsg(msg)
+		if handled {
+			return m, cmd
 		}
 
 	case tea.WindowSizeMsg:
@@ -192,4 +205,128 @@ func (m Model) SecondsSinceUpdate() int {
 		return 0
 	}
 	return int(time.Since(m.lastUpdate).Seconds())
+}
+
+// LayoutMode returns the current layout mode based on terminal width.
+func (m Model) LayoutMode() LayoutMode {
+	switch {
+	case m.width >= BreakpointWide:
+		return LayoutWide
+	case m.width >= BreakpointStandard:
+		return LayoutStandard
+	case m.width >= BreakpointCompact:
+		return LayoutCompact
+	default:
+		return LayoutMinimal
+	}
+}
+
+// ShowFooter returns true if the terminal is tall enough to show the footer.
+func (m Model) ShowFooter() bool {
+	return m.height >= HeightMinimal
+}
+
+// CanShowExtendedInfo returns true if the terminal is tall enough for extra details.
+func (m Model) CanShowExtendedInfo() bool {
+	return m.height >= HeightStandard
+}
+
+// sortHosts sorts the hosts slice based on the current sort order.
+// Preserves the selected host by updating the selected index after sorting.
+func (m *Model) sortHosts() {
+	if len(m.hosts) == 0 {
+		return
+	}
+
+	// Remember the currently selected host
+	selectedHost := ""
+	if m.selected >= 0 && m.selected < len(m.hosts) {
+		selectedHost = m.hosts[m.selected]
+	}
+
+	switch m.sortOrder {
+	case SortByName:
+		sort.Strings(m.hosts)
+
+	case SortByCPU:
+		sort.Slice(m.hosts, func(i, j int) bool {
+			metricsI := m.metrics[m.hosts[i]]
+			metricsJ := m.metrics[m.hosts[j]]
+			// Hosts without metrics go to the end
+			if metricsI == nil && metricsJ == nil {
+				return m.hosts[i] < m.hosts[j]
+			}
+			if metricsI == nil {
+				return false
+			}
+			if metricsJ == nil {
+				return true
+			}
+			// Sort descending by CPU usage
+			return metricsI.CPU.Percent > metricsJ.CPU.Percent
+		})
+
+	case SortByRAM:
+		sort.Slice(m.hosts, func(i, j int) bool {
+			metricsI := m.metrics[m.hosts[i]]
+			metricsJ := m.metrics[m.hosts[j]]
+			if metricsI == nil && metricsJ == nil {
+				return m.hosts[i] < m.hosts[j]
+			}
+			if metricsI == nil {
+				return false
+			}
+			if metricsJ == nil {
+				return true
+			}
+			// Calculate RAM percentage for comparison
+			var pctI, pctJ float64
+			if metricsI.RAM.TotalBytes > 0 {
+				pctI = float64(metricsI.RAM.UsedBytes) / float64(metricsI.RAM.TotalBytes)
+			}
+			if metricsJ.RAM.TotalBytes > 0 {
+				pctJ = float64(metricsJ.RAM.UsedBytes) / float64(metricsJ.RAM.TotalBytes)
+			}
+			// Sort descending by RAM usage
+			return pctI > pctJ
+		})
+
+	case SortByGPU:
+		sort.Slice(m.hosts, func(i, j int) bool {
+			metricsI := m.metrics[m.hosts[i]]
+			metricsJ := m.metrics[m.hosts[j]]
+			// Hosts without metrics go to the end
+			if metricsI == nil && metricsJ == nil {
+				return m.hosts[i] < m.hosts[j]
+			}
+			if metricsI == nil {
+				return false
+			}
+			if metricsJ == nil {
+				return true
+			}
+			// Hosts without GPU go after hosts with GPU
+			if metricsI.GPU == nil && metricsJ.GPU == nil {
+				return m.hosts[i] < m.hosts[j]
+			}
+			if metricsI.GPU == nil {
+				return false
+			}
+			if metricsJ.GPU == nil {
+				return true
+			}
+			// Sort descending by GPU usage
+			return metricsI.GPU.Percent > metricsJ.GPU.Percent
+		})
+	}
+
+	// Restore selection to the same host
+	if selectedHost != "" {
+		for i, host := range m.hosts {
+			if host == selectedHost {
+				m.selected = i
+				break
+			}
+		}
+	}
 }

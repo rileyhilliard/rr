@@ -11,21 +11,30 @@ import (
 func (m Model) renderDashboard() string {
 	var b strings.Builder
 
-	// Render header
+	// Render header (always shown, but may be compact)
 	header := m.renderHeader()
 	b.WriteString(header)
 	b.WriteString("\n\n")
 
-	// Render host cards
+	// Render host cards based on layout mode
 	cards := m.renderHostCards()
 	b.WriteString(cards)
 
-	// Render footer
-	footer := m.renderFooter()
-	b.WriteString("\n")
-	b.WriteString(footer)
+	// Render footer only if terminal is tall enough
+	if m.ShowFooter() {
+		footer := m.renderFooter()
+		b.WriteString("\n")
+		b.WriteString(footer)
+	}
 
-	return b.String()
+	content := b.String()
+
+	// If help is showing, overlay the help box
+	if m.showHelp {
+		return m.renderHelpOverlay(content)
+	}
+
+	return content
 }
 
 // renderHeader renders the dashboard header with summary stats.
@@ -49,9 +58,33 @@ func (m Model) renderHeader() string {
 		Bold(true).
 		Render("rr monitor")
 
-	stats := lipgloss.NewStyle().
-		Foreground(ColorTextSecondary).
-		Render(fmt.Sprintf(" | %d hosts | %d online | last update %s", totalHosts, onlineHosts, updateText))
+	// Sort indicator with down arrow for descending (except name which is ascending)
+	sortArrow := "\u2193" // down arrow for descending
+	if m.sortOrder == SortByName {
+		sortArrow = "\u2191" // up arrow for ascending (alphabetical)
+	}
+	sortIndicator := fmt.Sprintf(" sorted by: %s %s", m.sortOrder.String(), sortArrow)
+
+	// Adjust stats display based on layout mode
+	var stats string
+	layout := m.LayoutMode()
+	switch layout {
+	case LayoutMinimal:
+		// Most compact: just online count
+		stats = lipgloss.NewStyle().
+			Foreground(ColorTextSecondary).
+			Render(fmt.Sprintf(" %d/%d", onlineHosts, totalHosts))
+	case LayoutCompact:
+		// Abbreviated labels with sort indicator
+		stats = lipgloss.NewStyle().
+			Foreground(ColorTextSecondary).
+			Render(fmt.Sprintf(" | %d/%d online | %s |%s", onlineHosts, totalHosts, updateText, sortIndicator))
+	default:
+		// Full stats for standard and wide
+		stats = lipgloss.NewStyle().
+			Foreground(ColorTextSecondary).
+			Render(fmt.Sprintf(" | %d hosts | %d online | last update %s |%s", totalHosts, onlineHosts, updateText, sortIndicator))
+	}
 
 	return HeaderStyle.Render(title + stats)
 }
@@ -64,11 +97,23 @@ func (m Model) renderHostCards() string {
 
 	// Calculate card dimensions based on terminal width
 	cardWidth := m.calculateCardWidth()
+	layout := m.LayoutMode()
 
 	var cards []string
 	for i, host := range m.hosts {
 		isSelected := i == m.selected
-		card := m.renderCard(host, cardWidth, isSelected)
+		var card string
+
+		// Use different card renderers based on layout mode
+		switch layout {
+		case LayoutMinimal:
+			card = m.renderMinimalCard(host, cardWidth, isSelected)
+		case LayoutCompact:
+			card = m.renderCompactCard(host, cardWidth, isSelected)
+		default:
+			card = m.renderCard(host, cardWidth, isSelected)
+		}
+
 		cards = append(cards, card)
 	}
 
@@ -76,37 +121,57 @@ func (m Model) renderHostCards() string {
 	return m.layoutCards(cards, cardWidth)
 }
 
-// calculateCardWidth determines the optimal card width based on terminal width.
+// calculateCardWidth determines the optimal card width based on terminal width and layout mode.
 func (m Model) calculateCardWidth() int {
 	if m.width == 0 {
 		return 40 // Default width
 	}
 
-	// Try to fit 2-3 cards per row with some margin
-	if m.width >= 120 {
-		return 38 // 3 cards with margins
-	} else if m.width >= 80 {
-		return 38 // 2 cards with margins
+	layout := m.LayoutMode()
+
+	// Account for borders (2) and padding (2) and margin (1)
+	const cardOverhead = 5
+
+	switch layout {
+	case LayoutMinimal:
+		// Single column, use most of the available width
+		return m.width - 4
+
+	case LayoutCompact:
+		// Single column with some margin
+		return m.width - 6
+
+	case LayoutStandard:
+		// Try to fit 2 cards per row
+		cardWidth := (m.width - 4) / 2
+		if cardWidth < 40 {
+			// Fall back to single column if cards would be too narrow
+			return m.width - 4
+		}
+		return cardWidth - cardOverhead
+
+	case LayoutWide:
+		// Fit 2 cards per row with generous spacing
+		cardWidth := (m.width - 8) / 2
+		if cardWidth > 70 {
+			// Cap card width to prevent overly wide cards
+			cardWidth = 70
+		}
+		return cardWidth - cardOverhead
+
+	default:
+		return 40
 	}
-	return m.width - 4 // Single column with margin
 }
 
-// layoutCards arranges cards in rows based on terminal width.
+// layoutCards arranges cards in rows based on terminal width and layout mode.
 func (m Model) layoutCards(cards []string, cardWidth int) string {
 	if len(cards) == 0 {
 		return ""
 	}
 
-	// Calculate cards per row
-	cardsPerRow := 1
-	if m.width > 0 {
-		// Account for card margins and borders
-		effectiveCardWidth := cardWidth + 3 // margin + border
-		cardsPerRow = m.width / effectiveCardWidth
-		if cardsPerRow < 1 {
-			cardsPerRow = 1
-		}
-	}
+	// Calculate cards per row based on layout mode
+	cardsPerRow := m.cardsPerRow(cardWidth)
 
 	var rows []string
 	for i := 0; i < len(cards); i += cardsPerRow {
@@ -123,12 +188,59 @@ func (m Model) layoutCards(cards []string, cardWidth int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
+// cardsPerRow returns the number of cards to display per row based on layout mode.
+func (m Model) cardsPerRow(cardWidth int) int {
+	layout := m.LayoutMode()
+
+	switch layout {
+	case LayoutMinimal, LayoutCompact:
+		// Always single column for narrow terminals
+		return 1
+
+	case LayoutStandard, LayoutWide:
+		// Calculate how many cards fit
+		if m.width <= 0 {
+			return 1
+		}
+		// Account for card margins and borders
+		effectiveCardWidth := cardWidth + 5 // margin + border + padding
+		perRow := m.width / effectiveCardWidth
+		if perRow < 1 {
+			return 1
+		}
+		// Cap at 2 for readability
+		if perRow > 2 {
+			return 2
+		}
+		return perRow
+
+	default:
+		return 1
+	}
+}
+
 // renderFooter renders the keyboard help footer.
 func (m Model) renderFooter() string {
-	hints := []string{
-		"q quit",
-		"r refresh",
-		"\u2191\u2193 select",
+	layout := m.LayoutMode()
+
+	var hints []string
+	switch layout {
+	case LayoutMinimal:
+		// Most compact: minimal hints
+		hints = []string{"q quit", "? help"}
+	case LayoutCompact:
+		// Compact hints
+		hints = []string{"q quit", "r refresh", "s sort", "? help"}
+	default:
+		// Full hints for wider terminals
+		hints = []string{
+			"q quit",
+			"r refresh",
+			"s sort",
+			"\u2191\u2193 select",
+			"Enter expand",
+			"? help",
+		}
 	}
 
 	return FooterStyle.Render(strings.Join(hints, " | "))
