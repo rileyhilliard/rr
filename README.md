@@ -1,5 +1,9 @@
 # rr
 
+<p align="center">
+  <img src="assets/rr.gif" alt="Meep meep!" width="400">
+</p>
+
 [![Go](https://img.shields.io/github/go-mod/go-version/rileyhilliard/rr)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/rileyhilliard/rr)](https://github.com/rileyhilliard/rr/releases)
