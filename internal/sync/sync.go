@@ -1,1 +1,196 @@
 package sync
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/host"
+)
+
+// Sync transfers files from localDir to the remote host using rsync.
+// Progress output is streamed to the progress writer if provided.
+//
+// The rsync command follows the pattern from proof-of-concept.sh:
+// - Base flags: -az --delete --force
+// - Preserve patterns prevent deletion of specified paths on remote
+// - Exclude patterns prevent files from being synced
+// - Custom flags from config are appended
+func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer) error {
+	rsyncPath, err := FindRsync()
+	if err != nil {
+		return err
+	}
+
+	args, err := BuildArgs(conn, localDir, cfg)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(rsyncPath, args...)
+
+	// Set up progress output if provided
+	if progress != nil {
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return errors.WrapWithCode(err, errors.ErrSync,
+				"Failed to capture rsync output",
+				"Try running rsync manually to diagnose")
+		}
+
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return errors.WrapWithCode(err, errors.ErrSync,
+				"Failed to capture rsync stderr",
+				"Try running rsync manually to diagnose")
+		}
+
+		if err := cmd.Start(); err != nil {
+			return errors.WrapWithCode(err, errors.ErrSync,
+				"Failed to start rsync",
+				"Check that rsync is installed and the paths are valid")
+		}
+
+		// Stream stdout (progress info)
+		go streamOutput(stdout, progress)
+		// Stream stderr (errors/warnings)
+		go streamOutput(stderr, progress)
+
+		if err := cmd.Wait(); err != nil {
+			return handleRsyncError(err, conn.Name)
+		}
+	} else {
+		// No progress output, just run and wait
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return errors.WrapWithCode(err, errors.ErrSync,
+				fmt.Sprintf("rsync failed: %s", strings.TrimSpace(string(output))),
+				"Check that the remote directory exists and you have write permissions")
+		}
+	}
+
+	return nil
+}
+
+// BuildArgs constructs the rsync command arguments.
+// Exported for testing command construction without running rsync.
+func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([]string, error) {
+	if conn == nil {
+		return nil, errors.New(errors.ErrSync,
+			"No connection provided",
+			"Establish a connection to the remote host first")
+	}
+
+	// Ensure localDir ends with / so rsync syncs contents, not directory itself
+	localDir = filepath.Clean(localDir)
+	if !strings.HasSuffix(localDir, "/") {
+		localDir += "/"
+	}
+
+	// Build remote destination: ssh-alias:remote-dir
+	remoteDir := config.Expand(conn.Host.Dir)
+	if !strings.HasSuffix(remoteDir, "/") {
+		remoteDir += "/"
+	}
+	remoteDest := fmt.Sprintf("%s:%s", conn.Alias, remoteDir)
+
+	// Base flags following proof-of-concept.sh pattern
+	args := []string{
+		"-az",      // archive mode, compress
+		"--delete", // delete files on remote not in source
+		"--force",  // force deletion of non-empty dirs
+	}
+
+	// Add progress info flag for parsing
+	args = append(args, "--info=progress2")
+
+	// Add preserve patterns as filters (P = protect from deletion)
+	// These go BEFORE excludes so they protect paths that might otherwise be deleted
+	for _, pattern := range cfg.Preserve {
+		// Handle both simple patterns and patterns with subdirs
+		args = append(args, fmt.Sprintf("--filter=P %s", pattern))
+		// Also protect the pattern in any subdirectory
+		if !strings.HasPrefix(pattern, "**/") {
+			args = append(args, fmt.Sprintf("--filter=P **/%s", pattern))
+		}
+	}
+
+	// Add exclude patterns
+	for _, pattern := range cfg.Exclude {
+		args = append(args, fmt.Sprintf("--exclude=%s", pattern))
+	}
+
+	// Add custom flags from config
+	args = append(args, cfg.Flags...)
+
+	// Source and destination last
+	args = append(args, localDir, remoteDest)
+
+	return args, nil
+}
+
+// streamOutput reads from r and writes each line to w.
+func streamOutput(r io.Reader, w io.Writer) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fmt.Fprintln(w, scanner.Text())
+	}
+}
+
+// handleRsyncError wraps rsync exit errors with helpful messages.
+func handleRsyncError(err error, hostName string) error {
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		return errors.WrapWithCode(err, errors.ErrSync,
+			"rsync failed",
+			"Try running rsync manually to diagnose")
+	}
+
+	// rsync exit codes have specific meanings
+	// See: https://download.samba.org/pub/rsync/rsync.1
+	exitCode := exitErr.ExitCode()
+	var msg, suggestion string
+
+	switch exitCode {
+	case 1:
+		msg = "rsync syntax or usage error"
+		suggestion = "Check your rsync configuration for invalid options"
+	case 2:
+		msg = "rsync protocol incompatibility"
+		suggestion = "Ensure rsync versions are compatible on local and remote"
+	case 3:
+		msg = "File selection error"
+		suggestion = "Check that source paths exist and are readable"
+	case 5:
+		msg = "Error starting client-server protocol"
+		suggestion = "Check SSH connection and remote rsync installation"
+	case 10:
+		msg = "Error in socket I/O"
+		suggestion = "Check network connectivity to the remote host"
+	case 11:
+		msg = "Error in file I/O"
+		suggestion = "Check disk space and file permissions on both local and remote"
+	case 12:
+		msg = "Error in rsync protocol data stream"
+		suggestion = "This may indicate a corrupted transfer, try again"
+	case 23:
+		msg = "Partial transfer due to error"
+		suggestion = "Some files may have permission issues, check the output above"
+	case 24:
+		msg = "Partial transfer due to vanished source files"
+		suggestion = "Files were modified during sync, this is usually harmless"
+	case 255:
+		msg = fmt.Sprintf("SSH connection to '%s' failed", hostName)
+		suggestion = "Check that the host is reachable: ssh " + hostName
+	default:
+		msg = fmt.Sprintf("rsync exited with code %d", exitCode)
+		suggestion = "Check the output above for specific error details"
+	}
+
+	return errors.WrapWithCode(err, errors.ErrSync, msg, suggestion)
+}
