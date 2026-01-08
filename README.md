@@ -1,103 +1,49 @@
-# rr (Road Runner)
+# rr
 
-[![Go Version](https://img.shields.io/github/go-mod/go-version/rileyhilliard/rr)](https://go.dev/)
+[![Go](https://img.shields.io/github/go-mod/go-version/rileyhilliard/rr)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/rileyhilliard/rr)](https://github.com/rileyhilliard/rr/releases)
 
-*Meep meep!* Sync code and run commands on remote machines. Fast.
-
-<!-- TODO: Add terminal demo GIF
-Record with: https://github.com/charmbracelet/vhs
-Example script in: scripts/demo.tape
--->
-
-## Why rr?
-
-If you sync code to a remote machine and run commands there, you know the drill: rsync with a dozen flags, SSH, and hope nobody else is using the box. `rr` handles the boring parts so you can go fast:
-
-- **Smart host fallback**: Switch networks and it just works (LAN to VPN to local). No more "which hostname was it again?"
-- **Sane sync defaults**: Excludes .git, node_modules, .venv automatically. You've got better things to do than maintain rsync flags.
-- **Distributed locking**: Don't clobber your teammate's test run. First come, first served.
-
-## Features
-
-- **Sync and run**: Rsync files to a remote host and execute commands in one step
-- **Multi-host fallback**: Configure multiple SSH aliases per host; `rr` tries each until one connects
-- **Distributed locking**: Prevent concurrent executions on shared hosts
-- **Smart output formatting**: Auto-detect test frameworks (pytest, jest, go test, cargo) for cleaner output
-- **Named tasks**: Define reusable command sequences in your config
-- **Doctor diagnostics**: Built-in troubleshooting for SSH, rsync, and config issues
-- **Real-time monitoring**: TUI dashboard showing CPU, RAM, GPU across all hosts
-
-## Installation
-
-### Quick install (macOS/Linux)
+Sync code to a remote machine and run commands there. That's it.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
+rr run "make test"
 ```
 
-### Homebrew (macOS/Linux)
+This rsyncs your project to the remote host, runs `make test`, and streams the output back. If you switch from your home LAN to a VPN, it figures out which hostname works. If someone else is using the machine, it waits for them to finish.
+
+## Install
 
 ```bash
-# Install directly
+# macOS/Linux
+curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
+
+# Homebrew
 brew install rileyhilliard/tap/rr
 
-# Or tap first, then install
-brew tap rileyhilliard/tap
-brew install rr
-```
-
-### Go install
-
-```bash
+# Go
 go install github.com/rileyhilliard/rr/cmd/rr@latest
 ```
 
-### From source
+## Setup
 
 ```bash
-git clone https://github.com/rileyhilliard/rr.git
-cd rr
-make setup    # Install dev dependencies and git hooks
-make build
-./rr --help
+rr init          # Creates .rr.yaml in your project
+rr setup myhost  # Walks you through SSH key setup (if needed)
+rr doctor        # Checks that everything works
 ```
 
-## Quick start
-
-### 1. Create a config file
+## Usage
 
 ```bash
-rr init
+rr run "make test"    # Sync + run
+rr exec "git status"  # Run without syncing
+rr sync               # Just sync
 ```
 
-This creates `.rr.yaml` in your project directory with interactive prompts for your SSH host.
+## Config
 
-### 2. Set up SSH (if needed)
-
-```bash
-rr setup myserver
-```
-
-Guides you through SSH key generation and deployment to the remote host.
-
-### 3. Run commands remotely
-
-```bash
-# Sync files and run a command
-rr run "make test"
-
-# Run without syncing (files already there)
-rr exec "git status"
-
-# Just sync, no command
-rr sync
-```
-
-## Configuration
-
-The `.rr.yaml` file lives in your project root. Here's a basic example:
+The `.rr.yaml` file lives in your project root:
 
 ```yaml
 version: 1
@@ -105,8 +51,8 @@ version: 1
 hosts:
   mini:
     ssh:
-      - mac-mini.local
-      - mac-mini-tailscale
+      - mac-mini.local      # Try LAN first
+      - mac-mini-tailscale  # Fall back to VPN
     dir: ~/projects/${PROJECT}
 
 default: mini
@@ -116,125 +62,37 @@ sync:
     - .git/
     - node_modules/
     - .venv/
-  preserve:
-    - node_modules/
-    - .venv/
 ```
 
-### Key sections
+`rr` tries each SSH alias in order until one connects. The `${PROJECT}` variable expands to your local directory name.
 
-| Section | Purpose |
-|---------|---------|
-| `hosts` | Remote machines and their SSH connection details |
-| `sync` | Files to exclude from sync, files to preserve on remote |
-| `lock` | Distributed locking settings |
-| `tasks` | Named command sequences |
-| `output` | Terminal output formatting |
+See [docs/configuration.md](docs/configuration.md) for all options.
 
-See [docs/configuration.md](docs/configuration.md) for the complete reference.
+## What it actually does
 
-## Commands
+1. **Host fallback**: You list multiple SSH aliases per host. `rr` tries them in order until one works. Useful when you're sometimes on LAN, sometimes on VPN.
 
-| Command | Description |
-|---------|-------------|
-| `rr run <cmd>` | Sync files and run command on remote |
-| `rr exec <cmd>` | Run command without syncing |
-| `rr sync` | Sync files to remote |
-| `rr init` | Create `.rr.yaml` config file |
-| `rr setup <host>` | Configure SSH keys and test connection |
-| `rr doctor` | Diagnose connection and config issues |
-| `rr monitor` | Real-time resource dashboard for all hosts |
-| `rr completion` | Generate shell completions |
+2. **File sync**: Wraps rsync with sane defaults. Excludes `.git`, `node_modules`, etc. Preserves remote-only directories so you don't nuke your venv every sync.
 
-### Common flags
+3. **Locking**: Creates a lock file on the remote before running commands. If someone else has the lock, you wait. No more stepping on each other's test runs.
+
+4. **Output formatting**: Auto-detects pytest, jest, go test, cargo and formats failures nicely. You can turn this off if you hate it.
+
+## Other commands
 
 ```bash
---host <name>      # Target a specific host
---tag <tag>        # Target hosts with a specific tag
---probe-timeout    # SSH connection timeout (e.g., 5s, 2m)
+rr monitor              # TUI dashboard showing CPU/RAM/GPU across hosts
+rr completion bash      # Shell completions (also zsh, fish)
 ```
 
-## Shell completions
+## Docs
 
-### Bash
-
-```bash
-rr completion bash > /etc/bash_completion.d/rr
-# Or for user-local:
-rr completion bash > ~/.local/share/bash-completion/completions/rr
-```
-
-### Zsh
-
-```bash
-rr completion zsh > "${fpath[1]}/_rr"
-# Then add to ~/.zshrc:
-autoload -U compinit && compinit
-```
-
-### Fish
-
-```bash
-rr completion fish > ~/.config/fish/completions/rr.fish
-```
-
-## Monitoring hosts
-
-Watch CPU, RAM, GPU, and network across all configured hosts:
-
-```bash
-rr monitor
-```
-
-The dashboard shows real-time metrics with color-coded thresholds. Keyboard controls:
-
-| Key | Action |
-|-----|--------|
-| `j/k` or `↑/↓` | Select host |
-| `Enter` | Expand host details |
-| `Esc` | Return to list |
-| `s` | Cycle sort order |
-| `r` | Force refresh |
-| `q` | Quit |
-
-Options:
-
-```bash
-rr monitor --hosts mini,server  # Monitor specific hosts
-rr monitor --interval 1s        # Update every second
-```
-
-## Troubleshooting
-
-Run `rr doctor` to diagnose common issues:
-
-```bash
-rr doctor
-```
-
-This checks:
-- SSH key configuration
-- Host connectivity
-- rsync availability (local and remote)
-- Config file validity
-- Lock file status
-
-See [docs/troubleshooting.md](docs/troubleshooting.md) for solutions to common problems.
-
-## Documentation
-
-- [Configuration reference](docs/configuration.md) - All config options explained
-- [Example configs](docs/examples/) - Sample configs for Python, Go, Node.js projects
-- [Troubleshooting guide](docs/troubleshooting.md) - Common errors and fixes
-- [Architecture](ARCHITECTURE.md) - Design decisions and system overview
-- [Contributing](CONTRIBUTING.md) - Development setup and guidelines
+- [Configuration reference](docs/configuration.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Example configs](docs/examples/)
+- [Architecture](ARCHITECTURE.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before submitting a PR.
-
-Found a bug or have a feature idea? [Open an issue](https://github.com/rileyhilliard/rr/issues).
+MIT
