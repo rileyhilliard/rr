@@ -3,9 +3,11 @@ package formatters
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -345,4 +347,58 @@ func (f *GoTestFormatter) Reset() {
 	f.currentTest = ""
 	f.currentPkg = ""
 	f.failureLines = make([]string, 0)
+}
+
+// GetTestFailures implements output.TestSummaryProvider.
+// Returns the list of test failures collected during processing.
+func (f *GoTestFormatter) GetTestFailures() []output.TestFailure {
+	var failures []output.TestFailure
+	for _, t := range f.tests {
+		if t.Status == "FAIL" {
+			// Parse location if available (format: "file.go:line")
+			file := ""
+			line := 0
+			if t.Location != "" {
+				parts := strings.SplitN(t.Location, ":", 2)
+				file = parts[0]
+				if len(parts) > 1 {
+					if l, err := strconv.Atoi(parts[1]); err == nil {
+						line = l
+					}
+				}
+			}
+
+			// Build message from output lines
+			var message string
+			if len(t.Output) > 0 {
+				message = strings.Join(t.Output, "\n")
+			} else if t.Message != "" {
+				message = t.Message
+			}
+
+			failures = append(failures, output.TestFailure{
+				TestName: t.Name,
+				File:     file,
+				Line:     line,
+				Message:  message,
+			})
+		}
+	}
+	return failures
+}
+
+// GetTestCounts implements output.TestSummaryProvider.
+// Returns (passed, failed, skipped, errors) counts.
+func (f *GoTestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
+	for _, t := range f.tests {
+		switch t.Status {
+		case "PASS":
+			passed++
+		case "FAIL":
+			failed++
+		case "SKIP":
+			skipped++
+		}
+	}
+	return passed, failed, skipped, 0
 }

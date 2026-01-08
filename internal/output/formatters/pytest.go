@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -328,4 +329,39 @@ func (f *PytestFormatter) Reset() {
 	f.inFailures = false
 	f.currentFailure = nil
 	f.summaryLine = ""
+}
+
+// GetTestFailures implements output.TestSummaryProvider.
+// Returns the list of test failures collected during processing.
+func (f *PytestFormatter) GetTestFailures() []output.TestFailure {
+	f.finishCurrentFailure()
+
+	failures := make([]output.TestFailure, len(f.failures))
+	for i, pf := range f.failures {
+		failures[i] = output.TestFailure{
+			TestName: pf.TestName,
+			File:     pf.File,
+			Line:     pf.Line,
+			Message:  pf.Message,
+		}
+	}
+	return failures
+}
+
+// GetTestCounts implements output.TestSummaryProvider.
+// Returns (passed, failed, skipped, errors) counts.
+func (f *PytestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
+	for _, r := range f.results {
+		switch r.Status {
+		case "PASSED":
+			passed++
+		case "FAILED":
+			failed++
+		case "SKIPPED":
+			skipped++
+		case "ERROR":
+			errors++
+		}
+	}
+	return
 }

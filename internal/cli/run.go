@@ -210,15 +210,44 @@ func Run(opts RunOptions) (int, error) {
 		lck.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
 
-	// Show summary
+	// Check for test failures and render summary if available
+	if exitCode != 0 {
+		if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
+			failures := provider.GetTestFailures()
+			if len(failures) > 0 {
+				passed, failed, skipped, errors := provider.GetTestCounts()
+				summary := &ui.TestSummary{
+					Passed:   passed,
+					Failed:   failed,
+					Skipped:  skipped,
+					Errors:   errors,
+					Failures: make([]ui.TestFailure, len(failures)),
+				}
+				for i, f := range failures {
+					summary.Failures[i] = ui.TestFailure{
+						TestName: f.TestName,
+						File:     f.File,
+						Line:     f.Line,
+						Message:  f.Message,
+					}
+				}
+				fmt.Println()
+				fmt.Print(ui.FormatDivider(ui.DividerWidth))
+				fmt.Println()
+				fmt.Print(ui.RenderSummary(summary, exitCode))
+			}
+		}
+	}
+
+	// Show final status
 	phaseDisplay.ThinDivider()
-	renderSummary(phaseDisplay, exitCode, time.Since(startTime), execDuration, conn.Alias)
+	renderFinalStatus(phaseDisplay, exitCode, time.Since(startTime), execDuration, conn.Alias)
 
 	return exitCode, nil
 }
 
-// renderSummary displays the final execution summary.
-func renderSummary(pd *ui.PhaseDisplay, exitCode int, totalTime, execTime time.Duration, host string) {
+// renderFinalStatus displays the final execution status line.
+func renderFinalStatus(pd *ui.PhaseDisplay, exitCode int, totalTime, execTime time.Duration, host string) {
 	var symbol string
 	var symbolColor lipgloss.Color
 

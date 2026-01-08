@@ -21,6 +21,24 @@ type Formatter interface {
 	Summary(exitCode int) string
 }
 
+// TestFailure represents a single test failure with location and message.
+type TestFailure struct {
+	TestName string
+	File     string
+	Line     int
+	Message  string
+}
+
+// TestSummaryProvider is an optional interface for formatters that track test results.
+// Formatters implementing this interface can provide structured test failure data
+// for enhanced summary display.
+type TestSummaryProvider interface {
+	// GetTestFailures returns the list of test failures collected during processing.
+	GetTestFailures() []TestFailure
+	// GetTestCounts returns (passed, failed, skipped, errors) counts.
+	GetTestCounts() (passed, failed, skipped, errors int)
+}
+
 // GenericFormatter provides simple passthrough with error highlighting.
 type GenericFormatter struct {
 	errorStyle lipgloss.Style

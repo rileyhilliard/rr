@@ -437,3 +437,50 @@ func TestPytestGetSummaryReturnsCopy(t *testing.T) {
 	summary1.Failures[0].TestName = "MODIFIED"
 	assert.Equal(t, "test_fail", summary2.Failures[0].TestName)
 }
+
+func TestPytestImplementsTestSummaryProvider(t *testing.T) {
+	f := NewPytestFormatter()
+
+	// Process the sample output with failures
+	for _, line := range strings.Split(samplePytestOutput, "\n") {
+		f.ProcessLine(line)
+	}
+
+	// Verify it implements the interface
+	failures := f.GetTestFailures()
+	require.Len(t, failures, 1)
+
+	assert.Equal(t, "test_fail", failures[0].TestName)
+	assert.Equal(t, "tests/test_example.py", failures[0].File)
+	assert.Equal(t, 5, failures[0].Line)
+	assert.Contains(t, failures[0].Message, "AssertionError")
+
+	// Test counts
+	passed, failed, skipped, errors := f.GetTestCounts()
+	assert.Equal(t, 1, passed)
+	assert.Equal(t, 1, failed)
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 0, errors)
+}
+
+func TestPytestGetTestFailuresEmpty(t *testing.T) {
+	f := NewPytestFormatter()
+
+	passingOutput := `============================= test session starts ==============================
+tests/test_example.py::test_one PASSED                                   [ 50%]
+tests/test_example.py::test_two PASSED                                   [100%]
+============================== 2 passed in 0.01s ===============================`
+
+	for _, line := range strings.Split(passingOutput, "\n") {
+		f.ProcessLine(line)
+	}
+
+	failures := f.GetTestFailures()
+	assert.Empty(t, failures)
+
+	passed, failed, skipped, errors := f.GetTestCounts()
+	assert.Equal(t, 2, passed)
+	assert.Equal(t, 0, failed)
+	assert.Equal(t, 0, skipped)
+	assert.Equal(t, 0, errors)
+}

@@ -233,3 +233,26 @@ func TestANSIPassthrough(t *testing.T) {
 	assert.Contains(t, stdout.String(), "Red text")
 	assert.Contains(t, stdout.String(), "\033[0m")
 }
+
+func TestStreamHandlerGetFormatter(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	h := NewStreamHandler(&stdout, &stderr)
+
+	// Initially nil
+	assert.Nil(t, h.GetFormatter())
+
+	// After setting
+	f := NewGenericFormatter()
+	h.SetFormatter(f)
+	assert.Equal(t, f, h.GetFormatter())
+	assert.Equal(t, "generic", h.GetFormatter().Name())
+}
+
+func TestStreamHandlerGetFormatterNil(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	h := NewStreamHandler(&stdout, &stderr)
+
+	// Should not panic when nil
+	f := h.GetFormatter()
+	assert.Nil(t, f)
+}

@@ -436,3 +436,59 @@ func TestProcessLineCachedResults(t *testing.T) {
 	require.Len(t, pkgs, 1)
 	assert.Equal(t, "(cached)", pkgs[0].Duration)
 }
+
+func TestGoTestImplementsTestSummaryProvider(t *testing.T) {
+	f := NewGoTestFormatter()
+
+	lines := []string{
+		"=== RUN   TestA",
+		"--- PASS: TestA (0.01s)",
+		"=== RUN   TestB",
+		"    math_test.go:15: expected 6, got 5",
+		"--- FAIL: TestB (0.02s)",
+		"=== RUN   TestC",
+		"--- SKIP: TestC (0.00s)",
+		"FAIL    github.com/example/pkg    0.03s",
+	}
+
+	for _, line := range lines {
+		f.ProcessLine(line)
+	}
+
+	// Verify it implements the interface
+	failures := f.GetTestFailures()
+	require.Len(t, failures, 1)
+	assert.Equal(t, "TestB", failures[0].TestName)
+
+	// Test counts
+	passed, failed, skipped, errors := f.GetTestCounts()
+	assert.Equal(t, 1, passed)
+	assert.Equal(t, 1, failed)
+	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 0, errors)
+}
+
+func TestGoTestGetTestFailuresEmpty(t *testing.T) {
+	f := NewGoTestFormatter()
+
+	lines := []string{
+		"=== RUN   TestA",
+		"--- PASS: TestA (0.01s)",
+		"=== RUN   TestB",
+		"--- PASS: TestB (0.02s)",
+		"ok      github.com/example/pkg    0.03s",
+	}
+
+	for _, line := range lines {
+		f.ProcessLine(line)
+	}
+
+	failures := f.GetTestFailures()
+	assert.Empty(t, failures)
+
+	passed, failed, skipped, errors := f.GetTestCounts()
+	assert.Equal(t, 2, passed)
+	assert.Equal(t, 0, failed)
+	assert.Equal(t, 0, skipped)
+	assert.Equal(t, 0, errors)
+}
