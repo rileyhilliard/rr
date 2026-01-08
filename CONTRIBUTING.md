@@ -40,13 +40,17 @@ make test
 
 **Integration tests:**
 
-Integration tests require SSH access to a remote host. See [tests/integration/README.md](tests/integration/README.md) for setup details.
+Integration tests require SSH access to a remote host. See [tests/integration/README.md](tests/integration/README.md) for full setup details.
 
 ```bash
-# Skip SSH-dependent tests
+# Option 1: Skip SSH-dependent tests (when working on non-SSH features)
 RR_TEST_SKIP_SSH=1 go test ./tests/integration/...
 
-# Run with real SSH (requires localhost SSH access)
+# Option 2: Use Docker SSH server
+./scripts/test-ssh-server.sh
+RR_TEST_SSH_HOST=localhost:2222 go test ./tests/integration/... -v
+
+# Option 3: Use local SSH (requires SSH enabled on your machine)
 RR_TEST_SSH_HOST=localhost make test-integration
 ```
 
