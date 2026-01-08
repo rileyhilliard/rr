@@ -14,9 +14,11 @@ import (
 
 // SyncOptions holds options for the sync command.
 type SyncOptions struct {
-	Host       string // Preferred host name
-	DryRun     bool   // If true, show what would be synced without syncing
-	WorkingDir string // Override local working directory
+	Host         string        // Preferred host name
+	Tag          string        // Filter hosts by tag
+	ProbeTimeout time.Duration // Override SSH probe timeout (0 means use config default)
+	DryRun       bool          // If true, show what would be synced without syncing
+	WorkingDir   string        // Override local working directory
 }
 
 // Sync transfers files to the remote host without executing any command.
@@ -59,6 +61,15 @@ func Sync(opts SyncOptions) error {
 	selector := host.NewSelector(cfg.Hosts)
 	defer selector.Close()
 
+	// Set probe timeout (CLI flag overrides config)
+	probeTimeout := cfg.ProbeTimeout
+	if opts.ProbeTimeout > 0 {
+		probeTimeout = opts.ProbeTimeout
+	}
+	if probeTimeout > 0 {
+		selector.SetTimeout(probeTimeout)
+	}
+
 	// Phase 1: Connect
 	connectStart := time.Now()
 	spinner := ui.NewSpinner("Connecting")
@@ -69,7 +80,13 @@ func Sync(opts SyncOptions) error {
 		preferredHost = cfg.Default
 	}
 
-	conn, err := selector.Select(preferredHost)
+	// Connect - either by tag or by host/default
+	var conn *host.Connection
+	if opts.Tag != "" {
+		conn, err = selector.SelectByTag(opts.Tag)
+	} else {
+		conn, err = selector.Select(preferredHost)
+	}
 	if err != nil {
 		spinner.Fail()
 		return err
@@ -113,9 +130,23 @@ func Sync(opts SyncOptions) error {
 }
 
 // syncCommand is the implementation called by the cobra command.
-func syncCommand(hostFlag string, dryRun bool) error {
+func syncCommand(hostFlag, tagFlag, probeTimeoutFlag string, dryRun bool) error {
+	// Parse probe timeout if provided
+	var probeTimeout time.Duration
+	if probeTimeoutFlag != "" {
+		var err error
+		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
+		if err != nil {
+			return errors.WrapWithCode(err, errors.ErrConfig,
+				fmt.Sprintf("Invalid probe timeout: %s", probeTimeoutFlag),
+				"Use a valid duration like 5s, 2m, or 500ms")
+		}
+	}
+
 	return Sync(SyncOptions{
-		Host:   hostFlag,
-		DryRun: dryRun,
+		Host:         hostFlag,
+		Tag:          tagFlag,
+		ProbeTimeout: probeTimeout,
+		DryRun:       dryRun,
 	})
 }

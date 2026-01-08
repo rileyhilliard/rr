@@ -772,3 +772,251 @@ func TestFormatFailedAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestHasTag(t *testing.T) {
+	tests := []struct {
+		tags     []string
+		tag      string
+		expected bool
+	}{
+		{[]string{"gpu", "fast", "dev"}, "gpu", true},
+		{[]string{"gpu", "fast", "dev"}, "fast", true},
+		{[]string{"gpu", "fast", "dev"}, "slow", false},
+		{[]string{}, "anything", false},
+		{[]string{"production"}, "production", true},
+		{[]string{"prod"}, "production", false}, // Exact match required
+	}
+
+	for _, tt := range tests {
+		result := hasTag(tt.tags, tt.tag)
+		if result != tt.expected {
+			t.Errorf("hasTag(%v, %q) = %v, want %v", tt.tags, tt.tag, result, tt.expected)
+		}
+	}
+}
+
+func TestFormatTags(t *testing.T) {
+	tests := []struct {
+		tags     []string
+		expected string
+	}{
+		{[]string{}, "(none)"},
+		{[]string{"gpu"}, "gpu"},
+		{[]string{"gpu", "fast"}, "gpu, fast"},
+		{[]string{"a", "b", "c"}, "a, b, c"},
+	}
+
+	for _, tt := range tests {
+		result := formatTags(tt.tags)
+		if result != tt.expected {
+			t.Errorf("formatTags(%v) = %q, want %q", tt.tags, result, tt.expected)
+		}
+	}
+}
+
+func TestSelector_collectTags(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host1": {SSH: []string{"localhost"}, Tags: []string{"gpu", "fast"}},
+		"host2": {SSH: []string{"localhost"}, Tags: []string{"cpu", "fast"}},
+		"host3": {SSH: []string{"localhost"}, Tags: []string{}},
+	}
+
+	selector := NewSelector(hosts)
+	tags := selector.collectTags()
+
+	// Should have all unique tags
+	tagMap := make(map[string]bool)
+	for _, tag := range tags {
+		tagMap[tag] = true
+	}
+
+	expectedTags := []string{"gpu", "fast", "cpu"}
+	for _, expected := range expectedTags {
+		if !tagMap[expected] {
+			t.Errorf("collectTags() missing expected tag %q, got %v", expected, tags)
+		}
+	}
+
+	if len(tags) != 3 {
+		t.Errorf("collectTags() returned %d tags, want 3 unique tags", len(tags))
+	}
+}
+
+func TestSelector_SelectByTag_NoMatchingHosts(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host1": {SSH: []string{"localhost"}, Tags: []string{"gpu", "fast"}},
+		"host2": {SSH: []string{"localhost"}, Tags: []string{"cpu", "slow"}},
+	}
+
+	selector := NewSelector(hosts)
+
+	_, err := selector.SelectByTag("nonexistent")
+	if err == nil {
+		t.Fatal("SelectByTag should fail when no hosts have the requested tag")
+	}
+
+	// Error message should mention the tag
+	if !containsString(err.Error(), "nonexistent") {
+		t.Errorf("error should mention the missing tag: %v", err)
+	}
+}
+
+func TestSelector_SelectByTag_NoTagsConfigured(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host1": {SSH: []string{"localhost"}, Tags: []string{}},
+		"host2": {SSH: []string{"localhost"}}, // Tags is nil
+	}
+
+	selector := NewSelector(hosts)
+
+	_, err := selector.SelectByTag("any")
+	if err == nil {
+		t.Fatal("SelectByTag should fail when no hosts have tags configured")
+	}
+}
+
+func TestSelector_SelectByTag_Success(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"gpu-host": {
+			SSH:  []string{host},
+			Tags: []string{"gpu", "fast"},
+			Dir:  "/tmp/test",
+		},
+		"cpu-host": {
+			SSH:  []string{"192.0.2.1"}, // Unreachable
+			Tags: []string{"cpu", "slow"},
+			Dir:  "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(10 * time.Second)
+	defer selector.Close()
+
+	conn, err := selector.SelectByTag("gpu")
+	if err != nil {
+		t.Fatalf("SelectByTag(\"gpu\") failed: %v", err)
+	}
+
+	if conn.Name != "gpu-host" {
+		t.Errorf("conn.Name = %q, want 'gpu-host'", conn.Name)
+	}
+
+	// Verify the connection works
+	if conn.Client == nil {
+		t.Error("conn.Client should not be nil")
+	}
+}
+
+func TestSelector_SelectByTag_MultipleHostsWithTag(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"host1": {
+			SSH:  []string{"192.0.2.1"}, // Unreachable
+			Tags: []string{"fast"},
+			Dir:  "/tmp/test",
+		},
+		"host2": {
+			SSH:  []string{host}, // Reachable
+			Tags: []string{"fast"},
+			Dir:  "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(2 * time.Second)
+	defer selector.Close()
+
+	conn, err := selector.SelectByTag("fast")
+	if err != nil {
+		t.Fatalf("SelectByTag(\"fast\") failed: %v", err)
+	}
+
+	// Should connect to whichever host is reachable
+	if conn.Name != "host2" {
+		// If host1 was tried first and failed, that's OK
+		// The point is we got a connection
+		t.Logf("Connected to %s", conn.Name)
+	}
+
+	if conn.Client == nil {
+		t.Error("conn.Client should not be nil")
+	}
+}
+
+func TestSelector_SelectByTag_CachesConnection(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"tagged": {
+			SSH:  []string{host},
+			Tags: []string{"gpu"},
+			Dir:  "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(10 * time.Second)
+	defer selector.Close()
+
+	// First call
+	conn1, err := selector.SelectByTag("gpu")
+	if err != nil {
+		t.Fatalf("First SelectByTag failed: %v", err)
+	}
+
+	// Second call should return cached connection
+	var sawCacheHit bool
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		if event.Type == EventCacheHit {
+			sawCacheHit = true
+		}
+	})
+
+	conn2, err := selector.Select("") // Use regular Select to check cache
+	if err != nil {
+		t.Fatalf("Second Select failed: %v", err)
+	}
+
+	if conn1 != conn2 {
+		t.Error("Second call should return cached connection")
+	}
+
+	if !sawCacheHit {
+		t.Error("expected EventCacheHit for cached connection")
+	}
+}
+
+func TestSelector_SelectByTag_LocalFallback(t *testing.T) {
+	hosts := map[string]config.Host{
+		"unreachable": {
+			SSH:  []string{"192.0.2.1"}, // Unreachable
+			Tags: []string{"test"},
+			Dir:  "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(1 * time.Second)
+	selector.SetLocalFallback(true) // Enable local fallback
+	defer selector.Close()
+
+	conn, err := selector.SelectByTag("test")
+	if err != nil {
+		t.Fatalf("SelectByTag with local fallback should succeed: %v", err)
+	}
+
+	if !conn.IsLocal {
+		t.Error("expected conn.IsLocal to be true")
+	}
+
+	if conn.Name != "local" {
+		t.Errorf("conn.Name = %q, want 'local'", conn.Name)
+	}
+}

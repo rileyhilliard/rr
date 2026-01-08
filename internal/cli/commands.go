@@ -9,12 +9,18 @@ import (
 
 // Command-specific flags
 var (
-	runHostFlag  string
-	execHostFlag string
-	syncHostFlag string
-	syncDryRun   bool
-	initHostFlag string
-	initForce    bool
+	runHostFlag         string
+	runTagFlag          string
+	runProbeTimeoutFlag string
+	execHostFlag        string
+	execTagFlag         string
+	execProbeTimeoutFlag string
+	syncHostFlag        string
+	syncTagFlag         string
+	syncProbeTimeoutFlag string
+	syncDryRun          bool
+	initHostFlag        string
+	initForce           bool
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -32,7 +38,7 @@ Examples:
   rr run --host mini "cargo test"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(args, runHostFlag)
+		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag)
 	},
 }
 
@@ -50,7 +56,7 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return execCommand(args, execHostFlag)
+		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag)
 	},
 }
 
@@ -67,7 +73,7 @@ Examples:
   rr sync --dry-run
   rr sync --host mini`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return syncCommand(syncHostFlag, syncDryRun)
+		return syncCommand(syncHostFlag, syncTagFlag, syncProbeTimeoutFlag, syncDryRun)
 	},
 }
 
@@ -205,12 +211,18 @@ Examples:
 func init() {
 	// run command flags
 	runCmd.Flags().StringVar(&runHostFlag, "host", "", "target host name")
+	runCmd.Flags().StringVar(&runTagFlag, "tag", "", "select host by tag")
+	runCmd.Flags().StringVar(&runProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
+	execCmd.Flags().StringVar(&execTagFlag, "tag", "", "select host by tag")
+	execCmd.Flags().StringVar(&execProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 
 	// sync command flags
 	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")
+	syncCmd.Flags().StringVar(&syncTagFlag, "tag", "", "select host by tag")
+	syncCmd.Flags().StringVar(&syncProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "show what would be synced without syncing")
 
 	// init command flags

@@ -372,3 +372,189 @@ func QuickSelect(hosts map[string]config.Host, preferred string) (*Connection, e
 	selector := NewSelector(hosts)
 	return selector.Select(preferred)
 }
+
+// SelectByTag selects a host that has the specified tag.
+// It filters the configured hosts to those containing the tag, then performs
+// normal selection from the filtered set. If no hosts match the tag, returns an error.
+func (s *Selector) SelectByTag(tag string) (*Connection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Filter hosts to those with the matching tag
+	matchingHosts := make(map[string]config.Host)
+	for name, host := range s.hosts {
+		if hasTag(host.Tags, tag) {
+			matchingHosts[name] = host
+		}
+	}
+
+	if len(matchingHosts) == 0 {
+		availableTags := s.collectTags()
+		hint := "Check your host configurations in .rr.yaml"
+		if len(availableTags) > 0 {
+			hint = fmt.Sprintf("Available tags: %s", formatTags(availableTags))
+		}
+		return nil, errors.New(errors.ErrConfig,
+			fmt.Sprintf("No hosts found with tag '%s'", tag),
+			hint)
+	}
+
+	// Create a temporary selector with filtered hosts
+	filteredSelector := &Selector{
+		hosts:         matchingHosts,
+		timeout:       s.timeout,
+		eventHandler:  s.eventHandler,
+		localFallback: s.localFallback,
+	}
+
+	// Use Select logic without preferred host (will use first available from filtered set)
+	conn, err := filteredSelector.selectUnlocked("")
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the connection in the original selector
+	s.cached = conn
+	return conn, nil
+}
+
+// selectUnlocked performs selection without locking (called when lock is already held).
+func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
+	// If we have a cached connection for the preferred host, return it
+	if s.cached != nil {
+		// Local fallback connections are reused regardless of preferred host
+		if preferred == "" || s.cached.Name == preferred || s.cached.IsLocal {
+			// Verify connection is still alive
+			if s.isConnectionAlive(s.cached) {
+				s.emit(ConnectionEvent{
+					Type:    EventCacheHit,
+					Alias:   s.cached.Alias,
+					Message: fmt.Sprintf("reusing cached connection to %s", s.cached.Alias),
+				})
+				return s.cached, nil
+			}
+			// Connection is dead, clear cache
+			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
+			s.cached = nil
+		} else {
+			// Different host requested, close existing connection
+			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
+			s.cached = nil
+		}
+	}
+
+	// Determine which host to try
+	hostName, host, err := s.resolveHost(preferred)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(host.SSH) == 0 {
+		return nil, errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host '%s' has no SSH aliases configured", hostName),
+			"Add at least one SSH alias to the host configuration")
+	}
+
+	// Try each SSH alias in order (fallback chain)
+	var lastErr error
+	var failedAliases []string
+	for i, sshAlias := range host.SSH {
+		s.emit(ConnectionEvent{
+			Type:    EventTrying,
+			Alias:   sshAlias,
+			Message: fmt.Sprintf("trying alias %s", sshAlias),
+		})
+
+		conn, err := s.connect(hostName, sshAlias, host)
+		if err == nil {
+			// Emit success event, noting if this was a fallback
+			msg := fmt.Sprintf("connected via %s", sshAlias)
+			if i > 0 {
+				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
+			}
+			s.emit(ConnectionEvent{
+				Type:    EventConnected,
+				Alias:   sshAlias,
+				Message: msg,
+				Latency: conn.Latency,
+			})
+			s.cached = conn
+			return conn, nil
+		}
+
+		// Emit failure event
+		errMsg := "connection failed"
+		if probeErr, ok := err.(*ProbeError); ok {
+			errMsg = probeErr.Reason.String()
+		}
+		s.emit(ConnectionEvent{
+			Type:    EventFailed,
+			Alias:   sshAlias,
+			Message: errMsg,
+			Error:   err,
+		})
+		failedAliases = append(failedAliases, sshAlias)
+		lastErr = err
+	}
+
+	// All remote hosts failed - check if local fallback is enabled
+	if s.localFallback {
+		s.emit(ConnectionEvent{
+			Type:    EventLocalFallback,
+			Alias:   "local",
+			Message: "All remote hosts unreachable, falling back to local execution",
+		})
+		localConn := &Connection{
+			Name:    "local",
+			Alias:   "local",
+			Client:  nil, // No SSH client for local execution
+			Host:    host,
+			IsLocal: true,
+		}
+		s.cached = localConn
+		return localConn, nil
+	}
+
+	// Build detailed error message listing all failed aliases
+	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
+		fmt.Sprintf("All SSH aliases failed for host '%s': %s", hostName, formatFailedAliases(failedAliases)),
+		"Check your network connection and SSH configuration, or enable local_fallback in .rr.yaml")
+}
+
+// hasTag checks if the tags slice contains the specified tag.
+func hasTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// collectTags gathers all unique tags from configured hosts.
+func (s *Selector) collectTags() []string {
+	tagSet := make(map[string]struct{})
+	for _, host := range s.hosts {
+		for _, tag := range host.Tags {
+			tagSet[tag] = struct{}{}
+		}
+	}
+
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	return tags
+}
+
+// formatTags returns a comma-separated list of tags.
+func formatTags(tags []string) string {
+	if len(tags) == 0 {
+		return "(none)"
+	}
+	result := tags[0]
+	for i := 1; i < len(tags); i++ {
+		result += ", " + tags[i]
+	}
+	return result
+}

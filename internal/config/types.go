@@ -12,6 +12,7 @@ type Config struct {
 	Hosts         map[string]Host       `yaml:"hosts" mapstructure:"hosts"`
 	Default       string                `yaml:"default" mapstructure:"default"`
 	LocalFallback bool                  `yaml:"local_fallback" mapstructure:"local_fallback"`
+	ProbeTimeout  time.Duration         `yaml:"probe_timeout" mapstructure:"probe_timeout"`
 	Sync          SyncConfig            `yaml:"sync" mapstructure:"sync"`
 	Lock          LockConfig            `yaml:"lock" mapstructure:"lock"`
 	Tasks         map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
@@ -114,6 +115,7 @@ func DefaultConfig() *Config {
 		Version:       CurrentConfigVersion,
 		Hosts:         make(map[string]Host),
 		LocalFallback: false,
+		ProbeTimeout:  2 * time.Second,
 		Sync: SyncConfig{
 			Exclude: []string{
 				".git/",

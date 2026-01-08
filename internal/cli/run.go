@@ -20,12 +20,14 @@ import (
 
 // RunOptions holds options for the run command.
 type RunOptions struct {
-	Command    string
-	Host       string // Preferred host name
-	SkipSync   bool   // If true, skip sync phase (used by exec)
-	SkipLock   bool   // If true, skip locking
-	DryRun     bool   // If true, show what would be done without doing it
-	WorkingDir string // Override local working directory
+	Command      string
+	Host         string        // Preferred host name
+	Tag          string        // Filter hosts by tag
+	ProbeTimeout time.Duration // Override SSH probe timeout (0 means use config default)
+	SkipSync     bool          // If true, skip sync phase (used by exec)
+	SkipLock     bool          // If true, skip locking
+	DryRun       bool          // If true, show what would be done without doing it
+	WorkingDir   string        // Override local working directory
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -75,6 +77,15 @@ func Run(opts RunOptions) (int, error) {
 	// Enable local fallback if configured
 	selector.SetLocalFallback(cfg.LocalFallback)
 
+	// Set probe timeout (CLI flag overrides config)
+	probeTimeout := cfg.ProbeTimeout
+	if opts.ProbeTimeout > 0 {
+		probeTimeout = opts.ProbeTimeout
+	}
+	if probeTimeout > 0 {
+		selector.SetTimeout(probeTimeout)
+	}
+
 	// Phase 1: Connect
 	connectStart := time.Now()
 	spinner := ui.NewSpinner("Connecting")
@@ -104,7 +115,13 @@ func Run(opts RunOptions) (int, error) {
 		}
 	})
 
-	conn, err := selector.Select(preferredHost)
+	// Connect - either by tag or by host/default
+	var conn *host.Connection
+	if opts.Tag != "" {
+		conn, err = selector.SelectByTag(opts.Tag)
+	} else {
+		conn, err = selector.Select(preferredHost)
+	}
 	if err != nil {
 		spinner.Fail()
 		return 1, err
@@ -245,19 +262,33 @@ func hashProject(path string) string {
 }
 
 // runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag string) error {
+func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"No command specified",
 			"Usage: rr run <command>")
 	}
 
+	// Parse probe timeout if provided
+	var probeTimeout time.Duration
+	if probeTimeoutFlag != "" {
+		var err error
+		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
+		if err != nil {
+			return errors.WrapWithCode(err, errors.ErrConfig,
+				fmt.Sprintf("Invalid probe timeout: %s", probeTimeoutFlag),
+				"Use a valid duration like 5s, 2m, or 500ms")
+		}
+	}
+
 	// Join all args as the command (handles "rr run make test")
 	cmd := strings.Join(args, " ")
 
 	exitCode, err := Run(RunOptions{
-		Command: cmd,
-		Host:    hostFlag,
+		Command:      cmd,
+		Host:         hostFlag,
+		Tag:          tagFlag,
+		ProbeTimeout: probeTimeout,
 	})
 
 	if err != nil {

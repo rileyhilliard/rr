@@ -17,6 +17,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.NotNil(t, cfg.Hosts)
 	assert.Empty(t, cfg.Hosts)
 	assert.False(t, cfg.LocalFallback)
+	assert.Equal(t, 2*time.Second, cfg.ProbeTimeout)
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.Lock.Timeout)
 	assert.Equal(t, 10*time.Minute, cfg.Lock.Stale)
@@ -41,6 +42,7 @@ hosts:
     dir: ~/projects/test
     tags: [macos, arm64]
 default: mini
+probe_timeout: 5s
 sync:
   exclude:
     - .git/
@@ -70,6 +72,7 @@ output:
 	assert.Contains(t, cfg.Hosts, "mini")
 	assert.Equal(t, []string{"mini-local", "mini"}, cfg.Hosts["mini"].SSH)
 	assert.Equal(t, "mini", cfg.Default)
+	assert.Equal(t, 5*time.Second, cfg.ProbeTimeout)
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Len(t, cfg.Tasks, 2)
 	assert.Equal(t, "make build", cfg.Tasks["build"].Run)
