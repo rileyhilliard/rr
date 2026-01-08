@@ -10,6 +10,10 @@
 
 Sync code to a remote machine and run commands there. That's it.
 
+## Why
+
+I got tired of my laptop fan spinning up and battery draining every time I ran tests. I have a beefy machine sitting in the corner doing nothing most of the time, so I wanted an easy way to sync code over and run heavy stuff there instead. `rr` is that.
+
 ```bash
 rr run "make test"
 ```
