@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
@@ -33,7 +32,7 @@ type DoctorOutput struct {
 
 // CategoryOutput represents a category of check results.
 type CategoryOutput struct {
-	Name    string                `json:"name"`
+	Name    string               `json:"name"`
 	Results []doctor.CheckResult `json:"results"`
 }
 
@@ -183,11 +182,12 @@ func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error
 		fmt.Println(headerStyle.Render(category))
 
 		// Special handling for HOSTS category to show nested alias results
-		if category == "HOSTS" {
+		switch category { //nolint:gocritic // if-else chain clearer than tagged switch for string comparison
+		case "HOSTS":
 			renderHostsCategory(checks, results, indices)
-		} else if category == "DEPENDENCIES" {
+		case "DEPENDENCIES":
 			renderDepsCategory(checks, results, indices)
-		} else {
+		default:
 			for _, idx := range indices {
 				result := results[idx]
 				renderCheckResult(result, successStyle, errorStyle, warnStyle, mutedStyle)
@@ -270,13 +270,14 @@ func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, in
 		// Host header
 		var symbol string
 		var style lipgloss.Style
-		if result.Status == doctor.StatusPass {
+		switch result.Status {
+		case doctor.StatusPass:
 			symbol = ui.SymbolComplete
 			style = successStyle
-		} else if result.Status == doctor.StatusWarn {
+		case doctor.StatusWarn:
 			symbol = ui.SymbolComplete
 			style = successStyle // Still has some working aliases
-		} else {
+		default:
 			symbol = ui.SymbolFail
 			style = errorStyle
 		}
@@ -361,14 +362,6 @@ func pluralSuffix(n int) string {
 		return ""
 	}
 	return "s"
-}
-
-// formatLatencyDoctor formats latency for doctor output.
-func formatLatencyDoctor(d time.Duration) string {
-	if d < time.Millisecond {
-		return "<1ms"
-	}
-	return fmt.Sprintf("%dms", d.Milliseconds())
 }
 
 // Update the doctorCmd to use doctorCommand

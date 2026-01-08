@@ -9,18 +9,18 @@ import (
 
 // Command-specific flags
 var (
-	runHostFlag         string
-	runTagFlag          string
-	runProbeTimeoutFlag string
-	execHostFlag        string
-	execTagFlag         string
+	runHostFlag          string
+	runTagFlag           string
+	runProbeTimeoutFlag  string
+	execHostFlag         string
+	execTagFlag          string
 	execProbeTimeoutFlag string
-	syncHostFlag        string
-	syncTagFlag         string
+	syncHostFlag         string
+	syncTagFlag          string
 	syncProbeTimeoutFlag string
-	syncDryRun          bool
-	initHostFlag        string
-	initForce           bool
+	syncDryRun           bool
+	initHostFlag         string
+	initForce            bool
 )
 
 // runCmd syncs code and executes a command on the remote host
