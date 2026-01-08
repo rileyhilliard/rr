@@ -44,13 +44,8 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		opt(ctx)
 	}
 
-	var errs []string
-
 	// Check version
-	if cfg.Version == 0 {
-		// Missing version - warn but continue
-		errs = append(errs, "missing 'version' field (assuming version 1)")
-	} else if cfg.Version > CurrentConfigVersion {
+	if cfg.Version > CurrentConfigVersion {
 		return errors.New(errors.ErrConfig,
 			fmt.Sprintf("Config version %d is newer than supported version %d", cfg.Version, CurrentConfigVersion),
 			"Update rr to the latest version: 'rr update' or check https://github.com/rileyhilliard/rr/releases")
@@ -66,7 +61,7 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 	// Validate each host
 	for name, host := range cfg.Hosts {
 		if err := validateHost(name, host); err != nil {
-			errs = append(errs, err.Error())
+			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Fix the host configuration in your .rr.yaml")
 		}
 	}
 
@@ -89,22 +84,20 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		}
 
 		if err := validateTask(name, cfg.Tasks[name]); err != nil {
-			errs = append(errs, err.Error())
+			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Fix the task configuration in your .rr.yaml")
 		}
 	}
 
 	// Validate output config
 	if err := validateOutput(cfg.Output); err != nil {
-		errs = append(errs, err.Error())
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Fix the output configuration in your .rr.yaml")
 	}
 
 	// Validate lock config
 	if err := validateLock(cfg.Lock); err != nil {
-		errs = append(errs, err.Error())
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Fix the lock configuration in your .rr.yaml")
 	}
 
-	// If we have non-fatal warnings, just proceed
-	// (Version 0 warning is non-fatal)
 	return nil
 }
 

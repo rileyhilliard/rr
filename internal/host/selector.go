@@ -70,11 +70,11 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 				return s.cached, nil
 			}
 			// Connection is dead, clear cache
-			s.cached.Close()
+			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
 			s.cached = nil
 		} else {
 			// Different host requested, close existing connection
-			s.cached.Close()
+			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
 			s.cached = nil
 		}
 	}
@@ -115,10 +115,10 @@ func (s *Selector) SelectWithFallback(preferred string) (*Connection, error) {
 			if s.isConnectionAlive(s.cached) {
 				return s.cached, nil
 			}
-			s.cached.Close()
+			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
 			s.cached = nil
 		} else {
-			s.cached.Close()
+			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
 			s.cached = nil
 		}
 	}
@@ -235,7 +235,7 @@ func (s *Selector) isConnectionAlive(conn *Connection) bool {
 	if err != nil {
 		return false
 	}
-	session.Close()
+	session.Close() //nolint:errcheck // Session close error is not meaningful in health check
 	return true
 }
 

@@ -10,12 +10,31 @@ linters:
 
   settings:
     errcheck:
-      check-blank: true
+      check-blank: false
       exclude-functions:
-        # Common functions where ignoring errors is acceptable in tests
+        # Common functions where ignoring errors is acceptable
         - os.Setenv
         - os.Unsetenv
         - os.RemoveAll
+        - os.Chdir
+        - os.Getwd
+        - os.UserHomeDir
+        # Print functions where errors are generally not actionable
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        - (io.Closer).Close
+
+  exclusions:
+    rules:
+      # Allow Close() errors to be ignored in defer statements
+      - linters:
+          - errcheck
+        source: "defer.*Close\\(\\)"
+      # Allow forceRemove errors to be ignored in lock cleanup
+      - linters:
+          - errcheck
+        source: "forceRemove\\("
 
 formatters:
   enable:

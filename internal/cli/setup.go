@@ -74,9 +74,6 @@ func Setup(opts SetupOptions) error {
 
 		spinner.Success()
 		fmt.Printf("%s Generated key at %s\n\n", ui.SymbolSuccess, keyPath)
-
-		// Refresh key list
-		keys = setup.FindLocalKeys()
 	}
 
 	// Select the best key

@@ -163,11 +163,11 @@ func TestSSHConnectionToTestHost(t *testing.T) {
 func TestFileSyncToTempDirectory(t *testing.T) {
 	// Create source directory with files
 	sourceDir := TempSyncDirWithFiles(t, map[string]string{
-		"main.go":           "package main\n\nfunc main() {}\n",
-		"go.mod":            "module test\n\ngo 1.21\n",
-		"internal/app.go":   "package internal\n",
+		"main.go":            "package main\n\nfunc main() {}\n",
+		"go.mod":             "module test\n\ngo 1.21\n",
+		"internal/app.go":    "package internal\n",
 		"cmd/server/main.go": "package main\n",
-		".git/config":       "[core]\n", // Should be excluded
+		".git/config":        "[core]\n", // Should be excluded
 	})
 
 	// Test rsync command building (without actual execution)

@@ -8,12 +8,12 @@ import (
 
 // Progress represents parsed rsync progress information.
 type Progress struct {
-	BytesTransferred int64   // Total bytes transferred so far
-	Percentage       int     // Transfer percentage (0-100)
-	Speed            string  // Transfer speed (e.g., "1.23MB/s")
-	TimeRemaining    string  // Estimated time remaining (e.g., "0:01:23")
-	FileCount        int     // Number of files transferred (when available)
-	TotalFiles       int     // Total files to transfer (when available)
+	BytesTransferred int64  // Total bytes transferred so far
+	Percentage       int    // Transfer percentage (0-100)
+	Speed            string // Transfer speed (e.g., "1.23MB/s")
+	TimeRemaining    string // Estimated time remaining (e.g., "0:01:23")
+	FileCount        int    // Number of files transferred (when available)
+	TotalFiles       int    // Total files to transfer (when available)
 }
 
 // progressRegex matches rsync --info=progress2 output lines.

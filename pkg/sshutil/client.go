@@ -53,7 +53,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	// SSH handshake
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, address, config)
 	if err != nil {
-		conn.Close()
+		conn.Close() //nolint:errcheck // Best-effort cleanup on error path
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
 			fmt.Sprintf("SSH handshake failed for '%s'", host),
 			suggestionForHandshakeError(err))

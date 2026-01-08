@@ -3,8 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/spf13/viper"
@@ -167,77 +165,4 @@ func setDurationDefaults(v *viper.Viper) {
 	v.SetDefault("output.timing", true)
 	v.SetDefault("output.verbosity", "normal")
 	v.SetDefault("local_fallback", false)
-}
-
-// parseDuration parses a duration string, returning the default if parsing fails.
-func parseDuration(s string, def time.Duration) time.Duration {
-	if s == "" {
-		return def
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return def
-	}
-	return d
-}
-
-// getProjectName returns the project name for variable expansion.
-// It tries git repo name first, then falls back to directory name.
-func getProjectName() string {
-	// Try git remote URL first
-	// This is handled in expand.go for proper separation
-
-	// Fallback to current directory name
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "project"
-	}
-	return filepath.Base(cwd)
-}
-
-// configDir returns the directory containing the config file.
-func configDir(configPath string) string {
-	if configPath == "" {
-		cwd, _ := os.Getwd()
-		return cwd
-	}
-	return filepath.Dir(configPath)
-}
-
-// isGitRoot checks if a directory is a git repository root.
-func isGitRoot(dir string) bool {
-	gitPath := filepath.Join(dir, ".git")
-	info, err := os.Stat(gitPath)
-	if err != nil {
-		return false
-	}
-	return info.IsDir()
-}
-
-// findGitRoot walks up from dir looking for a .git directory.
-func findGitRoot(dir string) string {
-	for {
-		if isGitRoot(dir) {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
-}
-
-// parseGitRemoteURL extracts the repo name from a git remote URL.
-func parseGitRemoteURL(url string) string {
-	// Handle SSH URLs: git@github.com:user/repo.git
-	if strings.HasPrefix(url, "git@") {
-		parts := strings.Split(url, ":")
-		if len(parts) == 2 {
-			return strings.TrimSuffix(filepath.Base(parts[1]), ".git")
-		}
-	}
-
-	// Handle HTTPS URLs: https://github.com/user/repo.git
-	return strings.TrimSuffix(filepath.Base(url), ".git")
 }

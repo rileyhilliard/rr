@@ -57,13 +57,13 @@ func (e PhaseEvent) Duration() time.Duration {
 
 // PhaseTracker tracks execution phases and emits transitions.
 type PhaseTracker struct {
-	mu       sync.Mutex
-	current  Phase
-	events   []PhaseEvent
-	display  *ui.PhaseDisplay
-	spinner  *ui.Spinner
-	started  time.Time
-	onPhase  func(PhaseEvent)
+	mu      sync.Mutex
+	current Phase
+	events  []PhaseEvent
+	display *ui.PhaseDisplay
+	spinner *ui.Spinner
+	started time.Time
+	onPhase func(PhaseEvent)
 }
 
 // NewPhaseTracker creates a tracker that writes output to w.

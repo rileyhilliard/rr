@@ -17,10 +17,10 @@ import (
 
 // InitOptions holds options for the init command.
 type InitOptions struct {
-	Host       string // Pre-specified SSH host/alias
-	Dir        string // Pre-specified remote directory
-	Overwrite  bool   // Overwrite existing config without asking
-	NonInteractive bool // Skip prompts, use defaults
+	Host           string // Pre-specified SSH host/alias
+	Dir            string // Pre-specified remote directory
+	Overwrite      bool   // Overwrite existing config without asking
+	NonInteractive bool   // Skip prompts, use defaults
 }
 
 // Init creates a new .rr.yaml configuration file.
@@ -98,10 +98,10 @@ func Init(opts InitOptions) error {
 					Value(&hostName).
 					Validate(func(s string) error {
 						if strings.TrimSpace(s) == "" {
-							return fmt.Errorf("Host name is required")
+							return fmt.Errorf("host name is required")
 						}
 						if strings.ContainsAny(s, " \t\n") {
-							return fmt.Errorf("Host name cannot contain whitespace")
+							return fmt.Errorf("host name cannot contain whitespace")
 						}
 						return nil
 					}),
@@ -121,7 +121,7 @@ func Init(opts InitOptions) error {
 					Value(&remoteDir).
 					Validate(func(s string) error {
 						if strings.TrimSpace(s) == "" {
-							return fmt.Errorf("Remote directory is required")
+							return fmt.Errorf("remote directory is required")
 						}
 						return nil
 					}),

@@ -9,10 +9,15 @@ import (
 )
 
 // skipIfNoSSH skips the test if SSH tests are disabled.
+// Tests are skipped by default unless RR_TEST_SSH_HOST is explicitly set.
 func skipIfNoSSH(t *testing.T) {
 	t.Helper()
 	if os.Getenv("RR_TEST_SKIP_SSH") == "1" {
 		t.Skip("Skipping SSH test: RR_TEST_SKIP_SSH=1")
+	}
+	// Also skip if no explicit SSH host is configured (most CI environments)
+	if os.Getenv("RR_TEST_SSH_HOST") == "" {
+		t.Skip("Skipping SSH test: RR_TEST_SSH_HOST not set")
 	}
 }
 

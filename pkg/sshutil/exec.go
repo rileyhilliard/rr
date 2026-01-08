@@ -57,13 +57,12 @@ func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int,
 	session.Stderr = stderr
 
 	exitCode = 0
-	err = session.Run(cmd)
-	if err != nil {
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+	runErr := session.Run(cmd)
+	if runErr != nil {
+		if exitErr, ok := runErr.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
-			err = nil // Command ran, just had non-zero exit
 		} else {
-			return -1, errors.WrapWithCode(err, errors.ErrExec,
+			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
 				fmt.Sprintf("Failed to execute command: %s", cmd),
 				"Check if the command exists on the remote host.")
 		}
@@ -101,13 +100,12 @@ func (c *Client) ExecPTY(cmd string, stdout, stderr io.Writer) (exitCode int, er
 	session.Stderr = stderr
 
 	exitCode = 0
-	err = session.Run(cmd)
-	if err != nil {
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+	runErr := session.Run(cmd)
+	if runErr != nil {
+		if exitErr, ok := runErr.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
-			err = nil
 		} else {
-			return -1, errors.WrapWithCode(err, errors.ErrExec,
+			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
 				fmt.Sprintf("Failed to execute command: %s", cmd),
 				"Check if the command exists on the remote host.")
 		}
@@ -132,13 +130,12 @@ func (c *Client) ExecInteractive(cmd string, stdin io.Reader, stdout, stderr io.
 	session.Stderr = stderr
 
 	exitCode = 0
-	err = session.Run(cmd)
-	if err != nil {
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+	runErr := session.Run(cmd)
+	if runErr != nil {
+		if exitErr, ok := runErr.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
-			err = nil
 		} else {
-			return -1, errors.WrapWithCode(err, errors.ErrExec,
+			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
 				fmt.Sprintf("Failed to execute command: %s", cmd),
 				"Check if the command exists on the remote host.")
 		}
@@ -160,7 +157,7 @@ func (c *Client) Shell(stdin io.Reader, stdout, stderr io.Writer) error {
 
 	// Request pseudo-terminal for shell
 	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,     // Enable echoing
+		ssh.ECHO:          1, // Enable echoing
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}

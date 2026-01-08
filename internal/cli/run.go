@@ -19,12 +19,12 @@ import (
 
 // RunOptions holds options for the run command.
 type RunOptions struct {
-	Command     string
-	Host        string // Preferred host name
-	SkipSync    bool   // If true, skip sync phase (used by exec)
-	SkipLock    bool   // If true, skip locking
-	DryRun      bool   // If true, show what would be done without doing it
-	WorkingDir  string // Override local working directory
+	Command    string
+	Host       string // Preferred host name
+	SkipSync   bool   // If true, skip sync phase (used by exec)
+	SkipLock   bool   // If true, skip locking
+	DryRun     bool   // If true, show what would be done without doing it
+	WorkingDir string // Override local working directory
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -121,7 +121,7 @@ func Run(opts RunOptions) (int, error) {
 			spinner.Fail()
 			return 1, err
 		}
-		defer lck.Release()
+		defer lck.Release() //nolint:errcheck // Lock release errors are non-fatal in cleanup
 
 		spinner.Success()
 		phaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
@@ -152,7 +152,7 @@ func Run(opts RunOptions) (int, error) {
 
 	// Release lock early if command completed
 	if lck != nil {
-		lck.Release()
+		lck.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
 
 	// Show summary
