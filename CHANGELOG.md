@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release of Remote Runner CLI
+- Initial release of Road Runner CLI
 - `rr run` - Sync files and execute commands remotely
 - `rr exec` - Execute commands without syncing
 - `rr sync` - Sync files only

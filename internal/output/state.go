@@ -16,7 +16,7 @@ type ConnectionAttemptResult struct {
 	Error   string
 }
 
-// Phase represents a distinct stage in the remote-runner workflow.
+// Phase represents a distinct stage in the road-runner workflow.
 type Phase int
 
 const (

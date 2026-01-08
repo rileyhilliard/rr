@@ -1,4 +1,4 @@
-# Contributing to Remote Runner
+# Contributing to Road Runner
 
 Thanks for your interest in contributing! This doc covers how to get set up, run tests, and submit changes.
 

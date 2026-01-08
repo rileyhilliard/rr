@@ -1,10 +1,10 @@
-# rr
+# rr (Road Runner)
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/rileyhilliard/rr)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/rileyhilliard/rr)](https://github.com/rileyhilliard/rr/releases)
 
-Sync code and run commands on remote machines.
+*Meep meep!* Sync code and run commands on remote machines. Fast.
 
 <!-- TODO: Add terminal demo GIF
 Record with: https://github.com/charmbracelet/vhs
@@ -13,21 +13,21 @@ Example script in: scripts/demo.tape
 
 ## Why rr?
 
-If you sync code to a remote machine and run commands there, you know the drill: rsync with a dozen flags, SSH, and hope nobody else is using the box. `rr` handles the boring parts:
+If you sync code to a remote machine and run commands there, you know the drill: rsync with a dozen flags, SSH, and hope nobody else is using the box. `rr` handles the boring parts so you can go fast:
 
-- **Smart host fallback**: Switch networks and it just works (LAN to VPN to local)
-- **Sane sync defaults**: Excludes .git, node_modules, .venv automatically
-- **Distributed locking**: Don't clobber your teammate's test run
+- **Smart host fallback**: Switch networks and it just works (LAN to VPN to local). No more "which hostname was it again?"
+- **Sane sync defaults**: Excludes .git, node_modules, .venv automatically. You've got better things to do than maintain rsync flags.
+- **Distributed locking**: Don't clobber your teammate's test run. First come, first served.
 
 ## Features
 
-- **Sync and run** - Rsync files to a remote host and execute commands in one step
-- **Multi-host fallback** - Configure multiple SSH aliases per host; `rr` tries each until one connects
-- **Distributed locking** - Prevent concurrent executions on shared hosts
-- **Smart output formatting** - Auto-detect test frameworks (pytest, jest, go test, cargo) for better output
-- **Named tasks** - Define reusable command sequences in your config
-- **Doctor diagnostics** - Built-in troubleshooting for SSH, rsync, and config issues
-- **Real-time monitoring** - TUI dashboard showing CPU, RAM, GPU across all hosts
+- **Sync and run**: Rsync files to a remote host and execute commands in one step
+- **Multi-host fallback**: Configure multiple SSH aliases per host; `rr` tries each until one connects
+- **Distributed locking**: Prevent concurrent executions on shared hosts
+- **Smart output formatting**: Auto-detect test frameworks (pytest, jest, go test, cargo) for cleaner output
+- **Named tasks**: Define reusable command sequences in your config
+- **Doctor diagnostics**: Built-in troubleshooting for SSH, rsync, and config issues
+- **Real-time monitoring**: TUI dashboard showing CPU, RAM, GPU across all hosts
 
 ## Installation
 

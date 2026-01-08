@@ -16,7 +16,7 @@ import (
 func resetRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rr",
-		Short: "Remote Runner - Sync and execute on remote machines",
+		Short: "Road Runner - Sync and execute on remote machines",
 	}
 	return cmd
 }

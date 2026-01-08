@@ -160,7 +160,7 @@ func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error
 	headerStyle := lipgloss.NewStyle().Bold(true)
 
 	fmt.Println()
-	fmt.Println(headerStyle.Render("Remote Runner Diagnostic Report"))
+	fmt.Println(headerStyle.Render("Road Runner Diagnostic Report"))
 	fmt.Println()
 
 	// Group checks by category

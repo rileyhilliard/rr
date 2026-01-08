@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-If you discover a security vulnerability in Remote Runner, please report it responsibly.
+If you discover a security vulnerability in Road Runner, please report it responsibly.
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 

@@ -26,10 +26,10 @@ var tasksRegistered bool
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "rr",
-	Short: "Remote Runner - Sync and execute on remote machines",
-	Long: `rr - Remote Runner - Sync code to remote machines and execute commands with smart host fallback.
+	Short: "Road Runner - Sync and execute on remote machines. Fast.",
+	Long: `rr - Road Runner - Sync code to remote machines and execute commands with smart host fallback.
 
-Remote Runner syncs your local code to a remote machine and runs commands there,
+Road Runner syncs your local code to a remote machine and runs commands there,
 with automatic host failover, smart caching, and collaborative locking.
 
 Common workflows:

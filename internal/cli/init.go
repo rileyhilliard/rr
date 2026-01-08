@@ -201,7 +201,7 @@ func Init(opts InitOptions) error {
 	}
 
 	// Add a header comment
-	header := `# Remote Runner configuration
+	header := `# Road Runner configuration
 # Run 'rr run <command>' to sync and execute remotely
 # See: https://github.com/rileyhilliard/rr for documentation
 

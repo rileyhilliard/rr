@@ -1,8 +1,8 @@
-# Remote Runner CLI: Architecture Plan
+# Road Runner CLI: Architecture Plan
 
 ## TL;DR
 
-**Remote Runner** (`rr`) is a CLI tool that syncs local code to remote machines and executes commands, with smart host fallback (LAN → VPN → local), atomic locking, and beautiful output formatting. We'll build it in **Go** for single-binary distribution, zero dependencies, and fast execution. The tool fills a gap between "just rsync && ssh" scripts and heavyweight tools like Ansible—targeting solo developers and small teams with shared build machines, home labs, or Mac Mini clusters.
+**Road Runner** (`rr`) is a CLI tool that syncs local code to remote machines and executes commands, with smart host fallback (LAN → VPN → local), atomic locking, and beautiful output formatting. Built in **Go** for single-binary distribution, zero dependencies, and fast execution. The tool fills a gap between "just rsync && ssh" scripts and heavyweight tools like Ansible - targeting solo developers and small teams with shared build machines, home labs, or Mac Mini clusters.
 
 ---
 
@@ -296,7 +296,7 @@ Configuring SSH access for host: mini
 ```bash
 $ rr doctor
 
-Remote Runner Diagnostic Report
+Road Runner Diagnostic Report
 
 CONFIG
   ● Config file: .rr.yaml
@@ -331,7 +331,7 @@ REMOTE
 ```bash
 $ rr doctor
 
-Remote Runner Diagnostic Report
+Road Runner Diagnostic Report
 
 CONFIG
   ● Config file: .rr.yaml
@@ -453,13 +453,13 @@ Config is loaded from (first match wins):
 3. `.rr.yaml` in parent directories (stops at git root or home)
 4. `~/.config/rr/config.yaml` (global defaults)
 
-**Design decision**: Use `.rr.yaml` not `.remote-runner.yaml`. It's shorter, matches the command name, and follows the pattern of `.npmrc`, `.nvmrc`, etc.
+**Design decision**: Use `.rr.yaml` not `.road-runner.yaml`. It's shorter, matches the command name, and follows the pattern of `.npmrc`, `.nvmrc`, etc.
 
 ### Complete Schema
 
 ```yaml
 # .rr.yaml
-# Remote Runner configuration
+# Road Runner configuration
 # Docs: https://github.com/yourorg/rr#configuration
 
 # Schema version (for future migrations)
@@ -1812,7 +1812,7 @@ Still open:
 ## Appendix: Full CLI Reference
 
 ```
-rr - Remote Runner
+rr - Road Runner
 
 USAGE
   rr <command> [flags]

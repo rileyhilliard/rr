@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`rr` (Remote Runner) is a Go CLI tool that syncs code to remote machines and executes commands. It handles the tedious parts of remote development: host fallback (LAN to VPN), file sync with rsync, distributed locking, and formatted output for test runners.
+`rr` (Road Runner) is a Go CLI tool that syncs code to remote machines and executes commands. It handles the tedious parts of remote development: host fallback (LAN to VPN), file sync with rsync, distributed locking, and formatted output for test runners.
 
 ## Build & Test Commands
 

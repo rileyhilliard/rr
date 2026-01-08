@@ -85,7 +85,7 @@ Examples:
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create .rr.yaml configuration",
-	Long: `Initialize a new Remote Runner configuration file.
+	Long: `Initialize a new Road Runner configuration file.
 
 Creates a .rr.yaml file in the current directory with sensible defaults.
 Guides you through SSH host configuration with interactive prompts.
