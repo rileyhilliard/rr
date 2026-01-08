@@ -1,4 +1,4 @@
-# rr
+# rr (Road Runner)
 
 <p align="center">
   <img src="assets/rr.gif" alt="Meep meep!" width="400">
