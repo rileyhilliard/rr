@@ -2,7 +2,7 @@
 set -e
 
 # rr installer script
-# Downloads and installs the latest release of rr (Remote Runner CLI)
+# Downloads and installs the latest release of rr (Road Runner CLI)
 # Usage: curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
 
 REPO="rileyhilliard/rr"
