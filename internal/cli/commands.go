@@ -1,8 +1,20 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/spf13/cobra"
+)
+
+// Command-specific flags
+var (
+	runHostFlag   string
+	execHostFlag  string
+	syncHostFlag  string
+	syncDryRun    bool
+	initHostFlag  string
+	initForce     bool
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -20,7 +32,7 @@ Examples:
   rr run --host mini "cargo test"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("run")
+		return runCommand(args, runHostFlag)
 	},
 }
 
@@ -38,7 +50,7 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("exec")
+		return execCommand(args, execHostFlag)
 	},
 }
 
@@ -55,7 +67,7 @@ Examples:
   rr sync --dry-run
   rr sync --host mini`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("sync")
+		return syncCommand(syncHostFlag, syncDryRun)
 	},
 }
 
@@ -65,34 +77,35 @@ var initCmd = &cobra.Command{
 	Short: "Create .rr.yaml configuration",
 	Long: `Initialize a new Remote Runner configuration file.
 
-Creates a .rr.yaml file in the current directory with sensible defaults
-based on detected project type.
+Creates a .rr.yaml file in the current directory with sensible defaults.
+Guides you through SSH host configuration with interactive prompts.
 
 Examples:
   rr init
-  rr init --host myserver`,
+  rr init --host myserver
+  rr init --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("init")
+		return initCommand(initHostFlag, initForce)
 	},
 }
 
 // setupCmd configures SSH keys and tests connection
 var setupCmd = &cobra.Command{
-	Use:   "setup",
+	Use:   "setup <host>",
 	Short: "Configure SSH keys and test connection",
-	Long: `Set up SSH authentication and verify connectivity to remote hosts.
+	Long: `Set up SSH authentication and verify connectivity to a remote host.
 
 Guides you through:
   - SSH key generation (if needed)
   - Key deployment to remote hosts
   - Connection testing
-  - Remote directory creation
 
 Examples:
-  rr setup
-  rr setup --host mini`,
+  rr setup myserver
+  rr setup user@192.168.1.100`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("setup")
+		return setupCommand(args[0])
 	},
 }
 
@@ -172,11 +185,39 @@ Examples:
 	ValidArgs: []string{"bash", "zsh", "fish", "powershell"},
 	Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return errors.NewNotImplemented("completion")
+		switch args[0] {
+		case "bash":
+			return rootCmd.GenBashCompletion(os.Stdout)
+		case "zsh":
+			return rootCmd.GenZshCompletion(os.Stdout)
+		case "fish":
+			return rootCmd.GenFishCompletion(os.Stdout, true)
+		case "powershell":
+			return rootCmd.GenPowerShellCompletion(os.Stdout)
+		default:
+			return errors.New(errors.ErrExec,
+				"Unknown shell: "+args[0],
+				"Supported shells: bash, zsh, fish, powershell")
+		}
 	},
 }
 
 func init() {
+	// run command flags
+	runCmd.Flags().StringVar(&runHostFlag, "host", "", "target host name")
+
+	// exec command flags
+	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
+
+	// sync command flags
+	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")
+	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "show what would be synced without syncing")
+
+	// init command flags
+	initCmd.Flags().StringVar(&initHostFlag, "host", "", "pre-specify SSH host")
+	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config")
+
+	// Register all commands
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(syncCmd)
