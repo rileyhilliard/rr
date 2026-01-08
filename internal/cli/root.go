@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/spf13/cobra"
 )
@@ -15,6 +16,9 @@ var (
 	quiet   bool
 	noColor bool
 )
+
+// tasksRegistered tracks whether tasks have been registered to avoid double registration.
+var tasksRegistered bool
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -41,6 +45,11 @@ Get started:
 
 // Execute runs the root command and handles errors with structured output.
 func Execute() {
+	// Try to register tasks before execution.
+	// We need to check for --config flag manually since Cobra hasn't parsed flags yet.
+	explicitConfig := findConfigFlag()
+	registerTasksFromConfig(explicitConfig)
+
 	if err := rootCmd.Execute(); err != nil {
 		// Check if it's a structured error
 		var rrErr *errors.Error
@@ -61,6 +70,53 @@ func Execute() {
 		}
 		os.Exit(1)
 	}
+}
+
+// registerTasksFromConfig attempts to load config and register task commands.
+// This runs before command execution to make tasks available as first-class commands.
+// Errors are silently ignored since config may not exist or be valid yet.
+// The explicit parameter allows overriding the config path (e.g., from --config flag).
+func registerTasksFromConfig(explicit string) {
+	if tasksRegistered {
+		return // Already registered, don't duplicate
+	}
+
+	// Try to find config
+	cfgPath, err := config.Find(explicit)
+	if err != nil || cfgPath == "" {
+		return // No config found, skip task registration
+	}
+
+	// Load config
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return // Config invalid, skip task registration
+	}
+
+	// Validate (silently) - don't register tasks from invalid configs
+	if err := config.Validate(cfg, config.AllowNoHosts()); err != nil {
+		return
+	}
+
+	// Register tasks as commands
+	RegisterTaskCommands(cfg)
+	tasksRegistered = true
+}
+
+// findConfigFlag manually looks for --config flag in os.Args.
+// This is needed because we want to register task commands before Cobra parses flags.
+func findConfigFlag() string {
+	for i, arg := range os.Args {
+		// Check for --config=value format
+		if len(arg) > 9 && arg[:9] == "--config=" {
+			return arg[9:]
+		}
+		// Check for --config value format
+		if arg == "--config" && i+1 < len(os.Args) {
+			return os.Args[i+1]
+		}
+	}
+	return ""
 }
 
 func init() {
