@@ -28,6 +28,7 @@ type RunOptions struct {
 	SkipLock     bool          // If true, skip locking
 	DryRun       bool          // If true, show what would be done without doing it
 	WorkingDir   string        // Override local working directory
+	Quiet        bool          // If true, minimize output (no individual connection attempts)
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -87,9 +88,9 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Phase 1: Connect
-	connectStart := time.Now()
-	spinner := ui.NewSpinner("Connecting")
-	spinner.Start()
+	connDisplay := ui.NewConnectionDisplay(os.Stdout)
+	connDisplay.SetQuiet(opts.Quiet)
+	connDisplay.Start()
 
 	preferredHost := opts.Host
 	if preferredHost == "" {
@@ -97,19 +98,19 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Track connection status for output
-	var usedFallback bool
 	var usedLocalFallback bool
-	var failedAliases []string
 
-	// Set up event handler for connection progress
+	// Set up event handler for connection progress with visual feedback
 	selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
+		case host.EventTrying:
+			// Don't show "trying" - only show results
 		case host.EventFailed:
-			failedAliases = append(failedAliases, event.Alias)
+			// Map probe error to connection status
+			status := mapProbeErrorToStatus(event.Error)
+			connDisplay.AddAttempt(event.Alias, status, event.Latency, event.Message)
 		case host.EventConnected:
-			if len(failedAliases) > 0 {
-				usedFallback = true
-			}
+			connDisplay.AddAttempt(event.Alias, ui.StatusSuccess, event.Latency, "")
 		case host.EventLocalFallback:
 			usedLocalFallback = true
 		}
@@ -123,21 +124,16 @@ func Run(opts RunOptions) (int, error) {
 		conn, err = selector.Select(preferredHost)
 	}
 	if err != nil {
-		spinner.Fail()
+		connDisplay.Fail(err.Error())
 		return 1, err
 	}
-	spinner.Success()
 
-	// Show connection result, noting fallback if used
-	var connectMsg string
+	// Show connection result
 	if usedLocalFallback {
-		connectMsg = "Running locally (all remote hosts unreachable)"
-	} else if usedFallback {
-		connectMsg = fmt.Sprintf("Connected to %s (fallback)", conn.Alias)
+		connDisplay.SuccessLocal()
 	} else {
-		connectMsg = "Connected to " + conn.Alias
+		connDisplay.Success(conn.Name, conn.Alias)
 	}
-	phaseDisplay.RenderSuccess(connectMsg, time.Since(connectStart))
 
 	// Phase 2: Sync (unless skipped or local)
 	var syncDuration time.Duration
@@ -146,17 +142,17 @@ func Run(opts RunOptions) (int, error) {
 		phaseDisplay.RenderSkipped("Sync", "local")
 	} else if !opts.SkipSync {
 		syncStart := time.Now()
-		spinner = ui.NewSpinner("Syncing files")
-		spinner.Start()
+		syncSpinner := ui.NewSpinner("Syncing files")
+		syncSpinner.Start()
 
 		err = sync.Sync(conn, workDir, cfg.Sync, nil)
 		if err != nil {
-			spinner.Fail()
+			syncSpinner.Fail()
 			return 1, err
 		}
 
 		syncDuration = time.Since(syncStart)
-		spinner.Success()
+		syncSpinner.Success()
 		phaseDisplay.RenderSuccess("Files synced", syncDuration)
 	} else {
 		phaseDisplay.RenderSkipped("Sync", "skipped")
@@ -166,17 +162,17 @@ func Run(opts RunOptions) (int, error) {
 	var lck *lock.Lock
 	if cfg.Lock.Enabled && !opts.SkipLock && !conn.IsLocal {
 		lockStart := time.Now()
-		spinner = ui.NewSpinner("Acquiring lock")
-		spinner.Start()
+		lockSpinner := ui.NewSpinner("Acquiring lock")
+		lockSpinner.Start()
 
 		lck, err = lock.Acquire(conn, cfg.Lock, projectHash)
 		if err != nil {
-			spinner.Fail()
+			lockSpinner.Fail()
 			return 1, err
 		}
 		defer lck.Release() //nolint:errcheck // Lock release errors are non-fatal in cleanup
 
-		spinner.Success()
+		lockSpinner.Success()
 		phaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
 	}
 
@@ -259,6 +255,31 @@ func renderSummary(pd *ui.PhaseDisplay, exitCode int, totalTime, execTime time.D
 func hashProject(path string) string {
 	h := sha256.Sum256([]byte(path))
 	return fmt.Sprintf("%x", h[:8]) // First 16 hex chars
+}
+
+// mapProbeErrorToStatus converts a probe error to a ConnectionStatus for display.
+func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
+	if err == nil {
+		return ui.StatusSuccess
+	}
+
+	// Check if it's a ProbeError with a specific reason
+	if probeErr, ok := err.(*host.ProbeError); ok {
+		switch probeErr.Reason {
+		case host.ProbeFailTimeout:
+			return ui.StatusTimeout
+		case host.ProbeFailRefused:
+			return ui.StatusRefused
+		case host.ProbeFailUnreachable:
+			return ui.StatusUnreachable
+		case host.ProbeFailAuth:
+			return ui.StatusAuthFailed
+		default:
+			return ui.StatusFailed
+		}
+	}
+
+	return ui.StatusFailed
 }
 
 // runCommand is the actual implementation called by the cobra command.

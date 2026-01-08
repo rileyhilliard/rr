@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,4 +237,138 @@ func TestPhaseEventsAreCopied(t *testing.T) {
 	// Modifying one shouldn't affect the other
 	events1[0].Message = "modified"
 	assert.NotEqual(t, events1[0].Message, events2[0].Message)
+}
+
+// Connection tracking tests
+
+func TestPhaseTrackerConnectionDisplay(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+
+	cd := pt.ConnectionDisplay()
+	assert.NotNil(t, cd)
+}
+
+func TestPhaseTrackerAddConnectionAttempt(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+	pt.SetConnectionQuiet(true) // Suppress output for cleaner test
+
+	pt.AddConnectionAttempt("mini-local", ui.StatusTimeout, 2*time.Second, "timeout")
+	pt.AddConnectionAttempt("mini", ui.StatusSuccess, 300*time.Millisecond, "")
+
+	attempts := pt.ConnectionAttempts()
+	require.Len(t, attempts, 2)
+
+	assert.Equal(t, "mini-local", attempts[0].Alias)
+	assert.Equal(t, ui.StatusTimeout, attempts[0].Status)
+	assert.Equal(t, 2*time.Second, attempts[0].Latency)
+
+	assert.Equal(t, "mini", attempts[1].Alias)
+	assert.Equal(t, ui.StatusSuccess, attempts[1].Status)
+}
+
+func TestPhaseTrackerCompleteConnection(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+	pt.SetConnectionQuiet(true)
+
+	pt.StartConnection()
+	pt.AddConnectionAttempt("mini", ui.StatusSuccess, 300*time.Millisecond, "")
+	pt.CompleteConnection("gpu-box", "mini")
+
+	assert.Equal(t, "gpu-box", pt.ConnectedHost())
+	assert.Equal(t, "mini", pt.ConnectedAlias())
+
+	// Should have recorded the connection phase event
+	events := pt.Events()
+	require.Len(t, events, 1)
+	assert.Equal(t, PhaseConnecting, events[0].Phase)
+	assert.True(t, events[0].Success)
+	assert.Contains(t, events[0].Message, "gpu-box")
+	assert.Contains(t, events[0].Message, "mini")
+}
+
+func TestPhaseTrackerCompleteConnectionLocal(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+	pt.SetConnectionQuiet(true)
+
+	pt.StartConnection()
+	pt.AddConnectionAttempt("remote-host", ui.StatusTimeout, 5*time.Second, "")
+	pt.CompleteConnectionLocal()
+
+	assert.Equal(t, "local", pt.ConnectedHost())
+	assert.Equal(t, "local", pt.ConnectedAlias())
+
+	events := pt.Events()
+	require.Len(t, events, 1)
+	assert.True(t, events[0].Success)
+	assert.Contains(t, events[0].Message, "locally")
+}
+
+func TestPhaseTrackerFailConnection(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+	pt.SetConnectionQuiet(true)
+
+	pt.StartConnection()
+	pt.AddConnectionAttempt("host1", ui.StatusTimeout, 5*time.Second, "")
+	pt.AddConnectionAttempt("host2", ui.StatusRefused, 0, "")
+	pt.FailConnection("all hosts unreachable")
+
+	events := pt.Events()
+	require.Len(t, events, 1)
+	assert.False(t, events[0].Success)
+}
+
+func TestPhaseTrackerOnConnection(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+	pt.SetConnectionQuiet(true)
+
+	var receivedResults []ConnectionAttemptResult
+	pt.OnConnection(func(result ConnectionAttemptResult) {
+		receivedResults = append(receivedResults, result)
+	})
+
+	pt.AddConnectionAttempt("host1", ui.StatusTimeout, 2*time.Second, "")
+	pt.AddConnectionAttempt("host2", ui.StatusSuccess, 300*time.Millisecond, "")
+
+	require.Len(t, receivedResults, 2)
+	assert.Equal(t, "host1", receivedResults[0].Alias)
+	assert.Equal(t, ui.StatusTimeout, receivedResults[0].Status)
+	assert.Equal(t, "host2", receivedResults[1].Alias)
+	assert.Equal(t, ui.StatusSuccess, receivedResults[1].Status)
+}
+
+func TestPhaseTrackerConnectionAttemptsCopy(t *testing.T) {
+	var buf bytes.Buffer
+	pt := NewPhaseTracker(&buf)
+	pt.SetConnectionQuiet(true)
+
+	pt.AddConnectionAttempt("host1", ui.StatusSuccess, 100*time.Millisecond, "")
+
+	attempts1 := pt.ConnectionAttempts()
+	attempts2 := pt.ConnectionAttempts()
+
+	// Modify one copy
+	attempts1[0].Alias = "modified"
+
+	// Other copy should be unchanged
+	assert.NotEqual(t, attempts1[0].Alias, attempts2[0].Alias)
+}
+
+func TestConnectionAttemptResultFields(t *testing.T) {
+	result := ConnectionAttemptResult{
+		Alias:   "test-host",
+		Status:  ui.StatusTimeout,
+		Latency: 5 * time.Second,
+		Error:   "connection timed out",
+	}
+
+	assert.Equal(t, "test-host", result.Alias)
+	assert.Equal(t, ui.StatusTimeout, result.Status)
+	assert.Equal(t, 5*time.Second, result.Latency)
+	assert.Equal(t, "connection timed out", result.Error)
 }
