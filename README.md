@@ -10,6 +10,7 @@ Sync code and run commands on remote machines.
 - **Smart output formatting** - Auto-detect test frameworks (pytest, jest, go test, cargo) for better output
 - **Named tasks** - Define reusable command sequences in your config
 - **Doctor diagnostics** - Built-in troubleshooting for SSH, rsync, and config issues
+- **Real-time monitoring** - TUI dashboard showing CPU, RAM, GPU across all hosts
 
 ## Installation
 
@@ -124,6 +125,7 @@ See [docs/configuration.md](docs/configuration.md) for the complete reference.
 | `rr init` | Create `.rr.yaml` config file |
 | `rr setup <host>` | Configure SSH keys and test connection |
 | `rr doctor` | Diagnose connection and config issues |
+| `rr monitor` | Real-time resource dashboard for all hosts |
 | `rr completion` | Generate shell completions |
 
 ### Common flags
@@ -156,6 +158,32 @@ autoload -U compinit && compinit
 
 ```bash
 rr completion fish > ~/.config/fish/completions/rr.fish
+```
+
+## Monitoring hosts
+
+Watch CPU, RAM, GPU, and network across all configured hosts:
+
+```bash
+rr monitor
+```
+
+The dashboard shows real-time metrics with color-coded thresholds. Keyboard controls:
+
+| Key | Action |
+|-----|--------|
+| `j/k` or `↑/↓` | Select host |
+| `Enter` | Expand host details |
+| `Esc` | Return to list |
+| `s` | Cycle sort order |
+| `r` | Force refresh |
+| `q` | Quit |
+
+Options:
+
+```bash
+rr monitor --hosts mini,server  # Monitor specific hosts
+rr monitor --interval 1s        # Update every second
 ```
 
 ## Troubleshooting
