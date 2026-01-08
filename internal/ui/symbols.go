@@ -2,8 +2,9 @@ package ui
 
 // Unicode symbols for status indicators.
 // Matches proof-of-concept.sh symbols where applicable:
-//   SYM_PASS='✓'
-//   SYM_FAIL='✗'
+//
+//	SYM_PASS='✓'
+//	SYM_FAIL='✗'
 const (
 	SymbolSuccess  = "✓" // Task completed successfully
 	SymbolFail     = "✗" // Task failed

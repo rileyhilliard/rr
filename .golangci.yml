@@ -11,6 +11,11 @@ linters:
   settings:
     errcheck:
       check-blank: true
+      exclude-functions:
+        # Common functions where ignoring errors is acceptable in tests
+        - os.Setenv
+        - os.Unsetenv
+        - os.RemoveAll
 
 formatters:
   enable:

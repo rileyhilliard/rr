@@ -40,7 +40,10 @@ func GetTestSSHUser() string {
 func GetTestSSHKey() string {
 	key := os.Getenv("RR_TEST_SSH_KEY")
 	if key == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
 		return filepath.Join(home, ".ssh", "id_rsa")
 	}
 	return key
@@ -55,7 +58,7 @@ func TempSyncDir(t *testing.T, prefix string) string {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
 	t.Cleanup(func() {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 	})
 	return dir
 }
@@ -86,8 +89,8 @@ func TestSetupHelpers(t *testing.T) {
 	t.Run("GetTestSSHHost returns default", func(t *testing.T) {
 		// Temporarily unset the env var
 		orig := os.Getenv("RR_TEST_SSH_HOST")
-		os.Unsetenv("RR_TEST_SSH_HOST")
-		defer os.Setenv("RR_TEST_SSH_HOST", orig)
+		_ = os.Unsetenv("RR_TEST_SSH_HOST")
+		defer func() { _ = os.Setenv("RR_TEST_SSH_HOST", orig) }()
 
 		host := GetTestSSHHost()
 		if host != "localhost" {
@@ -96,8 +99,8 @@ func TestSetupHelpers(t *testing.T) {
 	})
 
 	t.Run("GetTestSSHHost returns env value", func(t *testing.T) {
-		os.Setenv("RR_TEST_SSH_HOST", "testhost:2222")
-		defer os.Unsetenv("RR_TEST_SSH_HOST")
+		_ = os.Setenv("RR_TEST_SSH_HOST", "testhost:2222")
+		defer func() { _ = os.Unsetenv("RR_TEST_SSH_HOST") }()
 
 		host := GetTestSSHHost()
 		if host != "testhost:2222" {

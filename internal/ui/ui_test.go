@@ -53,15 +53,15 @@ func TestColorValues(t *testing.T) {
 		expected string
 	}{
 		// Semantic colors mapped to ANSI
-		{"ColorSuccess is green", ColorSuccess, "2"},   // ANSI green (32 -> 2)
-		{"ColorError is red", ColorError, "1"},         // ANSI red (31 -> 1)
-		{"ColorWarning is yellow", ColorWarning, "3"},  // ANSI yellow (33 -> 3)
-		{"ColorInfo is cyan", ColorInfo, "6"},          // ANSI cyan (36 -> 6)
+		{"ColorSuccess is green", ColorSuccess, "2"},  // ANSI green (32 -> 2)
+		{"ColorError is red", ColorError, "1"},        // ANSI red (31 -> 1)
+		{"ColorWarning is yellow", ColorWarning, "3"}, // ANSI yellow (33 -> 3)
+		{"ColorInfo is cyan", ColorInfo, "6"},         // ANSI cyan (36 -> 6)
 
 		// Text colors
-		{"ColorPrimary is white", ColorPrimary, "7"},   // ANSI white/default
+		{"ColorPrimary is white", ColorPrimary, "7"},    // ANSI white/default
 		{"ColorSecondary is blue", ColorSecondary, "4"}, // ANSI blue (34 -> 4)
-		{"ColorMuted is gray", ColorMuted, "8"},        // ANSI bright black/gray (90 -> 8)
+		{"ColorMuted is gray", ColorMuted, "8"},         // ANSI bright black/gray (90 -> 8)
 	}
 
 	for _, tt := range tests {
