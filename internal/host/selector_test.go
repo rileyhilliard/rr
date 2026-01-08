@@ -569,3 +569,206 @@ func containsBytes(s, substr []byte) bool {
 	}
 	return false
 }
+
+func TestSelector_LocalFallback_Enabled(t *testing.T) {
+	hosts := map[string]config.Host{
+		"test": {
+			// All aliases are unreachable
+			SSH: []string{"192.0.2.1", "192.0.2.2"},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(1 * time.Second) // Short timeout
+	selector.SetLocalFallback(true)      // Enable local fallback
+	defer selector.Close()
+
+	// Track events
+	var sawLocalFallback bool
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		if event.Type == EventLocalFallback {
+			sawLocalFallback = true
+		}
+	})
+
+	conn, err := selector.Select("test")
+
+	// Should succeed with local fallback
+	if err != nil {
+		t.Fatalf("Select with local fallback should succeed: %v", err)
+	}
+
+	// Connection should be local
+	if !conn.IsLocal {
+		t.Error("expected conn.IsLocal to be true")
+	}
+
+	if conn.Name != "local" {
+		t.Errorf("conn.Name = %q, want 'local'", conn.Name)
+	}
+
+	if conn.Alias != "local" {
+		t.Errorf("conn.Alias = %q, want 'local'", conn.Alias)
+	}
+
+	if conn.Client != nil {
+		t.Error("expected conn.Client to be nil for local connection")
+	}
+
+	if !sawLocalFallback {
+		t.Error("expected EventLocalFallback event")
+	}
+}
+
+func TestSelector_LocalFallback_Disabled(t *testing.T) {
+	hosts := map[string]config.Host{
+		"test": {
+			// All aliases are unreachable
+			SSH: []string{"192.0.2.1"},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(1 * time.Second) // Short timeout
+	selector.SetLocalFallback(false)     // Disabled (default)
+	defer selector.Close()
+
+	_, err := selector.Select("test")
+
+	// Should fail since local fallback is disabled
+	if err == nil {
+		t.Fatal("Select without local fallback should fail when all hosts unreachable")
+	}
+
+	// Error message should suggest enabling local_fallback
+	if !containsString(err.Error(), "local_fallback") {
+		t.Errorf("error should mention local_fallback: %v", err)
+	}
+}
+
+func TestSelector_LocalFallback_CachesConnection(t *testing.T) {
+	hosts := map[string]config.Host{
+		"test": {
+			SSH: []string{"192.0.2.1"},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(1 * time.Second)
+	selector.SetLocalFallback(true)
+	defer selector.Close()
+
+	// First call
+	conn1, err := selector.Select("test")
+	if err != nil {
+		t.Fatalf("First Select failed: %v", err)
+	}
+
+	// Set up event handler for second call
+	var sawCacheHit bool
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		if event.Type == EventCacheHit {
+			sawCacheHit = true
+		}
+	})
+
+	// Second call should return cached local connection
+	conn2, err := selector.Select("test")
+	if err != nil {
+		t.Fatalf("Second Select failed: %v", err)
+	}
+
+	if conn1 != conn2 {
+		t.Error("Second Select should return cached connection")
+	}
+
+	if !sawCacheHit {
+		t.Error("expected EventCacheHit for cached local connection")
+	}
+}
+
+func TestSelector_SetLocalFallback(t *testing.T) {
+	selector := NewSelector(nil)
+
+	// Default should be false
+	if selector.localFallback {
+		t.Error("localFallback should be false by default")
+	}
+
+	selector.SetLocalFallback(true)
+	if !selector.localFallback {
+		t.Error("SetLocalFallback(true) should enable local fallback")
+	}
+
+	selector.SetLocalFallback(false)
+	if selector.localFallback {
+		t.Error("SetLocalFallback(false) should disable local fallback")
+	}
+}
+
+func TestConnectionEventType_LocalFallback_String(t *testing.T) {
+	result := EventLocalFallback.String()
+	if result != "local_fallback" {
+		t.Errorf("EventLocalFallback.String() = %q, want 'local_fallback'", result)
+	}
+}
+
+func TestConnection_IsLocal_Field(t *testing.T) {
+	// Remote connection
+	remoteConn := &Connection{
+		Name:    "test",
+		Alias:   "test-alias",
+		IsLocal: false,
+	}
+	if remoteConn.IsLocal {
+		t.Error("remote connection should have IsLocal = false")
+	}
+
+	// Local connection
+	localConn := &Connection{
+		Name:    "local",
+		Alias:   "local",
+		IsLocal: true,
+	}
+	if !localConn.IsLocal {
+		t.Error("local connection should have IsLocal = true")
+	}
+}
+
+func TestSelector_isConnectionAlive_LocalConnection(t *testing.T) {
+	selector := NewSelector(nil)
+
+	// Local connection should always be considered alive
+	localConn := &Connection{
+		Name:    "local",
+		Alias:   "local",
+		IsLocal: true,
+		Client:  nil, // No client for local
+	}
+
+	if !selector.isConnectionAlive(localConn) {
+		t.Error("local connection should be considered alive")
+	}
+}
+
+func TestFormatFailedAliases(t *testing.T) {
+	tests := []struct {
+		aliases  []string
+		expected string
+	}{
+		{[]string{}, "(none)"},
+		{[]string{"host1"}, "host1"},
+		{[]string{"host1", "host2"}, "host1, host2"},
+		{[]string{"a", "b", "c"}, "a, b, c"},
+	}
+
+	for _, tt := range tests {
+		result := formatFailedAliases(tt.aliases)
+		if result != tt.expected {
+			t.Errorf("formatFailedAliases(%v) = %q, want %q", tt.aliases, result, tt.expected)
+		}
+	}
+}

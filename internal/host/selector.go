@@ -31,6 +31,8 @@ const (
 	EventConnected
 	// EventCacheHit indicates a cached connection was reused.
 	EventCacheHit
+	// EventLocalFallback indicates falling back to local execution.
+	EventLocalFallback
 )
 
 // String returns a human-readable description of the event type.
@@ -44,6 +46,8 @@ func (t ConnectionEventType) String() string {
 		return "connected"
 	case EventCacheHit:
 		return "cache_hit"
+	case EventLocalFallback:
+		return "local_fallback"
 	default:
 		return "unknown"
 	}
@@ -55,13 +59,15 @@ type EventHandler func(event ConnectionEvent)
 // DefaultProbeTimeout is the default timeout for SSH connection probes.
 const DefaultProbeTimeout = 5 * time.Second
 
-// Connection represents an established SSH connection to a host.
+// Connection represents an established SSH connection to a host,
+// or a local execution context when IsLocal is true.
 type Connection struct {
 	Name    string          // The host name from config (e.g., "gpu-box")
 	Alias   string          // The SSH alias used to connect (e.g., "gpu-local")
-	Client  *sshutil.Client // The active SSH client
+	Client  *sshutil.Client // The active SSH client (nil for local connections)
 	Host    config.Host     // The host configuration
 	Latency time.Duration   // Connection latency from probe
+	IsLocal bool            // True when falling back to local execution
 }
 
 // Close closes the SSH connection.
@@ -74,9 +80,10 @@ func (c *Connection) Close() error {
 
 // Selector manages host selection and connection caching.
 type Selector struct {
-	hosts        map[string]config.Host
-	timeout      time.Duration
-	eventHandler EventHandler
+	hosts         map[string]config.Host
+	timeout       time.Duration
+	eventHandler  EventHandler
+	localFallback bool // Whether to fall back to local execution when all hosts fail
 
 	// Connection cache for session reuse
 	mu     sync.Mutex
@@ -102,6 +109,12 @@ func (s *Selector) SetEventHandler(handler EventHandler) {
 	s.eventHandler = handler
 }
 
+// SetLocalFallback enables or disables local fallback mode.
+// When enabled, if all remote hosts fail, Select returns a local Connection.
+func (s *Selector) SetLocalFallback(enabled bool) {
+	s.localFallback = enabled
+}
+
 // emit sends an event to the handler if one is configured.
 func (s *Selector) emit(event ConnectionEvent) {
 	if s.eventHandler != nil {
@@ -121,7 +134,9 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 
 	// If we have a cached connection for the preferred host, return it
 	if s.cached != nil {
-		if preferred == "" || s.cached.Name == preferred {
+		// Local fallback connections are reused regardless of preferred host
+		// since they represent "all remote hosts failed"
+		if preferred == "" || s.cached.Name == preferred || s.cached.IsLocal {
 			// Verify connection is still alive
 			if s.isConnectionAlive(s.cached) {
 				s.emit(ConnectionEvent{
@@ -155,6 +170,7 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 
 	// Try each SSH alias in order (fallback chain)
 	var lastErr error
+	var failedAliases []string
 	for i, sshAlias := range host.SSH {
 		s.emit(ConnectionEvent{
 			Type:    EventTrying,
@@ -190,12 +206,32 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 			Message: errMsg,
 			Error:   err,
 		})
+		failedAliases = append(failedAliases, sshAlias)
 		lastErr = err
 	}
 
+	// All remote hosts failed - check if local fallback is enabled
+	if s.localFallback {
+		s.emit(ConnectionEvent{
+			Type:    EventLocalFallback,
+			Alias:   "local",
+			Message: "All remote hosts unreachable, falling back to local execution",
+		})
+		localConn := &Connection{
+			Name:    "local",
+			Alias:   "local",
+			Client:  nil, // No SSH client for local execution
+			Host:    host,
+			IsLocal: true,
+		}
+		s.cached = localConn
+		return localConn, nil
+	}
+
+	// Build detailed error message listing all failed aliases
 	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
-		fmt.Sprintf("All SSH aliases failed for host '%s'", hostName),
-		"Check your network connection and SSH configuration")
+		fmt.Sprintf("All SSH aliases failed for host '%s': %s", hostName, formatFailedAliases(failedAliases)),
+		"Check your network connection and SSH configuration, or enable local_fallback in .rr.yaml")
 }
 
 // SelectWithFallback is an alias for Select, which now includes fallback behavior.
@@ -280,7 +316,16 @@ func (s *Selector) connect(hostName, sshAlias string, host config.Host) (*Connec
 
 // isConnectionAlive checks if the cached connection is still usable.
 func (s *Selector) isConnectionAlive(conn *Connection) bool {
-	if conn == nil || conn.Client == nil {
+	if conn == nil {
+		return false
+	}
+
+	// Local connections are always "alive"
+	if conn.IsLocal {
+		return true
+	}
+
+	if conn.Client == nil {
 		return false
 	}
 
@@ -305,6 +350,18 @@ func (s *Selector) hostNames() string {
 	result := names[0]
 	for i := 1; i < len(names); i++ {
 		result += ", " + names[i]
+	}
+	return result
+}
+
+// formatFailedAliases returns a comma-separated list of failed aliases.
+func formatFailedAliases(aliases []string) string {
+	if len(aliases) == 0 {
+		return "(none)"
+	}
+	result := aliases[0]
+	for i := 1; i < len(aliases); i++ {
+		result += ", " + aliases[i]
 	}
 	return result
 }

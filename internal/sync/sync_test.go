@@ -335,6 +335,27 @@ func TestProgressIsComplete(t *testing.T) {
 	}
 }
 
+func TestSync_SkipsForLocalConnection(t *testing.T) {
+	// Create a local connection
+	localConn := &host.Connection{
+		Name:    "local",
+		Alias:   "local",
+		IsLocal: true,
+		Client:  nil,
+		Host:    config.Host{Dir: "/tmp/test"},
+	}
+
+	// Sync should return immediately without error for local connections
+	err := Sync(localConn, "/some/path", config.SyncConfig{}, nil)
+	assert.NoError(t, err)
+}
+
+func TestSync_NilConnection(t *testing.T) {
+	// Sync with nil connection should fail (but not panic)
+	err := Sync(nil, "/some/path", config.SyncConfig{}, nil)
+	assert.Error(t, err)
+}
+
 func TestFormatBytes(t *testing.T) {
 	tests := []struct {
 		bytes    int64

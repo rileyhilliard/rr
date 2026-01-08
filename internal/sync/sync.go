@@ -16,12 +16,19 @@ import (
 // Sync transfers files from localDir to the remote host using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
+// If conn.IsLocal is true, sync is skipped entirely since we're already local.
+//
 // The rsync command follows the pattern from proof-of-concept.sh:
 // - Base flags: -az --delete --force
 // - Preserve patterns prevent deletion of specified paths on remote
 // - Exclude patterns prevent files from being synced
 // - Custom flags from config are appended
 func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer) error {
+	// Skip sync for local connections - we're already working with local files
+	if conn != nil && conn.IsLocal {
+		return nil
+	}
+
 	rsyncPath, err := FindRsync()
 	if err != nil {
 		return err

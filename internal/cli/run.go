@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/output"
@@ -71,6 +72,9 @@ func Run(opts RunOptions) (int, error) {
 	selector := host.NewSelector(cfg.Hosts)
 	defer selector.Close()
 
+	// Enable local fallback if configured
+	selector.SetLocalFallback(cfg.LocalFallback)
+
 	// Phase 1: Connect
 	connectStart := time.Now()
 	spinner := ui.NewSpinner("Connecting")
@@ -81,8 +85,9 @@ func Run(opts RunOptions) (int, error) {
 		preferredHost = cfg.Default
 	}
 
-	// Track if we're using a fallback alias for output
+	// Track connection status for output
 	var usedFallback bool
+	var usedLocalFallback bool
 	var failedAliases []string
 
 	// Set up event handler for connection progress
@@ -94,6 +99,8 @@ func Run(opts RunOptions) (int, error) {
 			if len(failedAliases) > 0 {
 				usedFallback = true
 			}
+		case host.EventLocalFallback:
+			usedLocalFallback = true
 		}
 	})
 
@@ -105,15 +112,22 @@ func Run(opts RunOptions) (int, error) {
 	spinner.Success()
 
 	// Show connection result, noting fallback if used
-	connectMsg := "Connected to " + conn.Alias
-	if usedFallback {
+	var connectMsg string
+	if usedLocalFallback {
+		connectMsg = "Running locally (all remote hosts unreachable)"
+	} else if usedFallback {
 		connectMsg = fmt.Sprintf("Connected to %s (fallback)", conn.Alias)
+	} else {
+		connectMsg = "Connected to " + conn.Alias
 	}
 	phaseDisplay.RenderSuccess(connectMsg, time.Since(connectStart))
 
-	// Phase 2: Sync (unless skipped)
+	// Phase 2: Sync (unless skipped or local)
 	var syncDuration time.Duration
-	if !opts.SkipSync {
+	if conn.IsLocal {
+		// Local execution - no sync needed
+		phaseDisplay.RenderSkipped("Sync", "local")
+	} else if !opts.SkipSync {
 		syncStart := time.Now()
 		spinner = ui.NewSpinner("Syncing files")
 		spinner.Start()
@@ -131,9 +145,9 @@ func Run(opts RunOptions) (int, error) {
 		phaseDisplay.RenderSkipped("Sync", "skipped")
 	}
 
-	// Phase 3: Acquire lock (unless disabled)
+	// Phase 3: Acquire lock (unless disabled or local)
 	var lck *lock.Lock
-	if cfg.Lock.Enabled && !opts.SkipLock {
+	if cfg.Lock.Enabled && !opts.SkipLock && !conn.IsLocal {
 		lockStart := time.Now()
 		spinner = ui.NewSpinner("Acquiring lock")
 		spinner.Start()
@@ -152,10 +166,6 @@ func Run(opts RunOptions) (int, error) {
 	// Phase 4: Execute command
 	phaseDisplay.Divider()
 
-	// Build the command to run in the remote directory
-	remoteDir := config.Expand(conn.Host.Dir)
-	fullCmd := fmt.Sprintf("cd %q && %s", remoteDir, opts.Command)
-
 	// Show the command being run
 	phaseDisplay.CommandPrompt(opts.Command)
 	fmt.Println()
@@ -165,7 +175,17 @@ func Run(opts RunOptions) (int, error) {
 	streamHandler.SetFormatter(output.NewGenericFormatter())
 
 	execStart := time.Now()
-	exitCode, err := conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
+	var exitCode int
+
+	if conn.IsLocal {
+		// Local execution
+		exitCode, err = exec.ExecuteLocal(opts.Command, workDir, streamHandler.Stdout(), streamHandler.Stderr())
+	} else {
+		// Remote execution - build command with cd to remote directory
+		remoteDir := config.Expand(conn.Host.Dir)
+		fullCmd := fmt.Sprintf("cd %q && %s", remoteDir, opts.Command)
+		exitCode, err = conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
+	}
 	execDuration := time.Since(execStart)
 
 	if err != nil {
