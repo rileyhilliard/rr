@@ -15,27 +15,35 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 **Requirements:**
 
 - Go 1.22 or later
+- lefthook (for git hooks)
 - golangci-lint (for linting)
 - rsync (installed on both local and remote machines)
 - SSH access to at least one remote host (for integration tests)
 
-**Install dependencies:**
-
-```bash
-# Install golangci-lint (macOS)
-brew install golangci-lint
-
-# Or via Go
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-```
-
-**Clone and build:**
+**Quick setup:**
 
 ```bash
 git clone https://github.com/rileyhilliard/rr.git
 cd rr
+make setup    # Installs lefthook hooks and dependencies
 make build
 ./rr --help
+```
+
+This installs lefthook git hooks that run formatting and linting automatically before each commit.
+
+**Manual dependency install (if needed):**
+
+```bash
+# lefthook (macOS)
+brew install lefthook
+
+# golangci-lint (macOS)
+brew install golangci-lint
+
+# Or via Go
+go install github.com/evilmartians/lefthook@latest
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 ```
 
 ## Running tests
@@ -71,7 +79,7 @@ make lint
 **Full verification:**
 
 ```bash
-make lint && make test && make build
+make verify    # Runs lint + test
 ```
 
 ## Code style guidelines
@@ -95,7 +103,7 @@ return fmt.Errorf("something went wrong")
 
 ### General style
 
-- Use `gofmt` (enforced by CI)
+- Formatting is auto-applied by pre-commit hooks (`gofmt`, `goimports`)
 - Keep functions focused and small
 - Prefer table-driven tests
 - Add comments for exported functions
@@ -111,20 +119,32 @@ return fmt.Errorf("something went wrong")
 
 1. Fork the repo and create a branch from `main`
 2. Make your changes with clear, focused commits
-3. Ensure `make lint && make test` passes
+3. Ensure `make verify` passes (runs lint + tests)
 4. Update documentation if you changed behavior
 5. Open a PR with a clear description of what and why
 
 ### Commit messages
 
-Keep them concise and descriptive. Focus on the "why" over the "what" when possible:
+This project uses [Conventional Commits](https://www.conventionalcommits.org/). The lefthook commit-msg hook enforces this format:
 
 ```
-Add host fallback timeout configuration
+<type>: <description>
 
-Users need to control how long to wait before trying the next host.
-Default 2s was too short for high-latency VPN connections.
+[optional body]
 ```
+
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+**Examples:**
+
+```
+feat: add host fallback timeout configuration
+fix: handle SSH connection timeout gracefully
+docs: update configuration reference
+refactor: extract host probing into separate module
+```
+
+Focus on the "why" over the "what" in the body when helpful.
 
 ## Questions?
 

@@ -48,9 +48,15 @@ Get started:
 
 // Execute runs the root command and handles errors with structured output.
 func Execute() {
-	// Ensure SSH agent connection is closed on exit
-	defer sshutil.CloseAgent()
+	code := run()
+	sshutil.CloseAgent()
+	if code != 0 {
+		os.Exit(code)
+	}
+}
 
+// run executes the CLI and returns an exit code.
+func run() int {
 	// Try to register tasks before execution.
 	// We need to check for --config flag manually since Cobra hasn't parsed flags yet.
 	explicitConfig := findConfigFlag()
@@ -59,7 +65,7 @@ func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		// Check if it's an exit code error (command ran but returned non-zero)
 		if code, ok := errors.GetExitCode(err); ok {
-			os.Exit(code)
+			return code
 		}
 
 		// Check if it's a structured error
@@ -79,8 +85,9 @@ func Execute() {
 			wrapped := errors.Wrap(err, err.Error())
 			fmt.Fprintln(os.Stderr, wrapped.Error())
 		}
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // registerTasksFromConfig attempts to load config and register task commands.

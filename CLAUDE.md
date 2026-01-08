@@ -1,0 +1,94 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+`rr` (Remote Runner) is a Go CLI tool that syncs code to remote machines and executes commands. It handles the tedious parts of remote development: host fallback (LAN to VPN), file sync with rsync, distributed locking, and formatted output for test runners.
+
+## Build & Test Commands
+
+```bash
+# Setup (run once after cloning)
+make setup              # Installs lefthook hooks + dependencies
+
+# Build
+make build              # Builds ./rr binary
+
+# Testing
+make test               # Run all unit tests
+make lint               # Run golangci-lint
+make verify             # Full verification (lint + test)
+
+# Integration tests (require SSH)
+RR_TEST_SSH_HOST=localhost make test-integration   # With local SSH
+RR_TEST_SKIP_SSH=1 go test ./tests/integration/... # Skip SSH tests
+
+# Run single test
+go test ./internal/lock/... -run TestLockAcquisition -v
+```
+
+## Git Hooks (Lefthook)
+
+Pre-commit hooks auto-run on commit: `gofmt`, `goimports`, `go vet`, `golangci-lint --fix`. Commit messages must follow Conventional Commits format (`feat:`, `fix:`, `docs:`, etc.).
+
+## Architecture
+
+### Package Layout
+
+```
+cmd/rr/main.go       # Entry point, sets version info, calls cli.Execute()
+internal/
+  cli/               # Cobra commands (run, exec, sync, setup, doctor, monitor, etc.)
+  config/            # YAML config loading, validation, variable expansion
+  host/              # Host selection with ordered SSH fallback, probing, caching
+  sync/              # Rsync wrapper with progress parsing
+  exec/              # Command execution (SSH and local), task runner
+  lock/              # Distributed locking via atomic mkdir on remote
+  doctor/            # Diagnostic checks (SSH, rsync, config, hosts)
+  monitor/           # Real-time TUI dashboard (Bubble Tea)
+  output/            # Stream handling, test formatters (pytest, jest, go test)
+  ui/                # TUI components (spinner, phase indicators, progress)
+  setup/             # SSH key generation and deployment
+  errors/            # Structured error types with suggestions
+pkg/sshutil/         # Reusable SSH client utilities
+```
+
+### Key Flows
+
+1. **Host Selection** (`internal/host/selector.go`): Tries SSH aliases in order until one connects. Caches results within session.
+
+2. **Run Command** (`internal/cli/run.go`): Sync files -> Acquire lock -> Execute command -> Release lock. Each phase has spinner/progress UI.
+
+3. **Lock System** (`internal/lock/`): Creates `/tmp/rr-<hash>.lock/` directory on remote with holder info JSON. Detects stale locks by timestamp.
+
+4. **Output Formatters** (`internal/output/formatters/`): Auto-detect test framework from command, parse output to extract failures for summary display.
+
+## Error Handling Pattern
+
+Always use structured errors from `internal/errors`:
+
+```go
+// Good: includes code, message, and actionable suggestion
+return errors.New(errors.ErrConfig, "config file not found", "Run 'rr init' to create one")
+
+// Good: wrap with context
+return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if host is reachable")
+```
+
+## Testing Conventions
+
+- Use `testify/assert` and `testify/require`
+- Table-driven tests preferred
+- Integration tests use `RR_TEST_SSH_HOST` and `RR_TEST_SKIP_SSH` env vars
+
+## Config File
+
+The tool uses `.rr.yaml` in project root. Key sections: `hosts` (SSH connection details), `sync` (exclude/preserve patterns), `lock` (timeout settings), `tasks` (named commands).
+
+## Dependencies
+
+- **CLI**: Cobra + Viper
+- **TUI**: Bubble Tea + Lip Gloss + Huh
+- **SSH**: golang.org/x/crypto/ssh + kevinburke/ssh_config
+- **Testing**: testify

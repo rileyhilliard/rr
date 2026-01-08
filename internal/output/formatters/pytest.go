@@ -94,10 +94,10 @@ func (f *PytestFormatter) Detect(command string, output []byte) int {
 // Regex patterns for parsing pytest output
 var (
 	// Matches: tests/test_example.py::test_pass PASSED [ 33%]
-	pytestResultPattern = regexp.MustCompile(`^(.+?::[\w_]+)\s+(PASSED|FAILED|SKIPPED|ERROR)\s*(?:\[.*\])?$`)
+	pytestResultPattern = regexp.MustCompile(`^(.+?::\w+)\s+(PASSED|FAILED|SKIPPED|ERROR)\s*(?:\[.*\])?$`)
 
 	// Matches the failure header: _________________________________ test_fail _________________________________
-	pytestFailureHeaderPattern = regexp.MustCompile(`^_+\s+([\w_]+)\s+_+$`)
+	pytestFailureHeaderPattern = regexp.MustCompile(`^_+\s+(\w+)\s+_+$`)
 
 	// Matches file:line at end of traceback: tests/test_example.py:5: AssertionError
 	pytestTracebackLocationPattern = regexp.MustCompile(`^(.+?):(\d+):\s+(\w+(?:Error|Exception|Warning)?.*)$`)

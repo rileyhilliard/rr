@@ -59,6 +59,7 @@ go install github.com/rileyhilliard/rr/cmd/rr@latest
 ```bash
 git clone https://github.com/rileyhilliard/rr.git
 cd rr
+make setup    # Install dev dependencies and git hooks
 make build
 ./rr --help
 ```

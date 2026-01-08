@@ -12,9 +12,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
-	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/output"
-	"github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -34,153 +32,26 @@ type RunOptions struct {
 // Run syncs files and executes a command on the remote host.
 // This is the main workflow that ties together all subsystems.
 func Run(opts RunOptions) (int, error) {
-	startTime := time.Now()
-	phaseDisplay := ui.NewPhaseDisplay(os.Stdout)
-
-	// Load config
-	cfgPath, err := config.Find(Config())
-	if err != nil {
-		return 1, err
-	}
-	if cfgPath == "" {
-		return 1, errors.New(errors.ErrConfig,
-			"No config file found",
-			"Run 'rr init' to create a .rr.yaml config file")
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return 1, err
-	}
-
-	if err := config.Validate(cfg); err != nil {
-		return 1, err
-	}
-
-	// Determine working directory
-	workDir := opts.WorkingDir
-	if workDir == "" {
-		workDir, err = os.Getwd()
-		if err != nil {
-			return 1, errors.WrapWithCode(err, errors.ErrExec,
-				"Failed to get working directory",
-				"Check directory permissions")
-		}
-	}
-
-	// Generate project hash for locking
-	projectHash := hashProject(workDir)
-
-	// Create host selector
-	selector := host.NewSelector(cfg.Hosts)
-	defer selector.Close()
-
-	// Enable local fallback if configured
-	selector.SetLocalFallback(cfg.LocalFallback)
-
-	// Set probe timeout (CLI flag overrides config)
-	probeTimeout := cfg.ProbeTimeout
-	if opts.ProbeTimeout > 0 {
-		probeTimeout = opts.ProbeTimeout
-	}
-	if probeTimeout > 0 {
-		selector.SetTimeout(probeTimeout)
-	}
-
-	// Phase 1: Connect
-	connDisplay := ui.NewConnectionDisplay(os.Stdout)
-	connDisplay.SetQuiet(opts.Quiet)
-	connDisplay.Start()
-
-	preferredHost := opts.Host
-	if preferredHost == "" {
-		preferredHost = cfg.Default
-	}
-
-	// Track connection status for output
-	var usedLocalFallback bool
-
-	// Set up event handler for connection progress with visual feedback
-	selector.SetEventHandler(func(event host.ConnectionEvent) {
-		switch event.Type {
-		case host.EventTrying:
-			// Don't show "trying" - only show results
-		case host.EventFailed:
-			// Map probe error to connection status
-			status := mapProbeErrorToStatus(event.Error)
-			connDisplay.AddAttempt(event.Alias, status, event.Latency, event.Message)
-		case host.EventConnected:
-			connDisplay.AddAttempt(event.Alias, ui.StatusSuccess, event.Latency, "")
-		case host.EventLocalFallback:
-			usedLocalFallback = true
-		}
+	// Setup common workflow phases (config, connect, sync, lock)
+	wf, err := SetupWorkflow(WorkflowOptions{
+		Host:         opts.Host,
+		Tag:          opts.Tag,
+		ProbeTimeout: opts.ProbeTimeout,
+		SkipSync:     opts.SkipSync,
+		SkipLock:     opts.SkipLock,
+		WorkingDir:   opts.WorkingDir,
+		Quiet:        opts.Quiet,
 	})
-
-	// Connect - either by tag or by host/default
-	var conn *host.Connection
-	if opts.Tag != "" {
-		conn, err = selector.SelectByTag(opts.Tag)
-	} else {
-		conn, err = selector.Select(preferredHost)
-	}
 	if err != nil {
-		connDisplay.Fail(err.Error())
 		return 1, err
 	}
-
-	// Show connection result
-	if usedLocalFallback {
-		connDisplay.SuccessLocal()
-	} else {
-		connDisplay.Success(conn.Name, conn.Alias)
-	}
-
-	// Phase 2: Sync (unless skipped or local)
-	var syncDuration time.Duration
-	if conn.IsLocal {
-		// Local execution - no sync needed
-		phaseDisplay.RenderSkipped("Sync", "local")
-	} else if !opts.SkipSync {
-		syncStart := time.Now()
-		syncSpinner := ui.NewSpinner("Syncing files")
-		syncSpinner.Start()
-
-		err = sync.Sync(conn, workDir, cfg.Sync, nil)
-		if err != nil {
-			syncSpinner.Fail()
-			return 1, err
-		}
-
-		syncDuration = time.Since(syncStart)
-		syncSpinner.Success()
-		phaseDisplay.RenderSuccess("Files synced", syncDuration)
-	} else {
-		phaseDisplay.RenderSkipped("Sync", "skipped")
-	}
-
-	// Phase 3: Acquire lock (unless disabled or local)
-	var lck *lock.Lock
-	if cfg.Lock.Enabled && !opts.SkipLock && !conn.IsLocal {
-		lockStart := time.Now()
-		lockSpinner := ui.NewSpinner("Acquiring lock")
-		lockSpinner.Start()
-
-		lck, err = lock.Acquire(conn, cfg.Lock, projectHash)
-		if err != nil {
-			lockSpinner.Fail()
-			return 1, err
-		}
-		defer lck.Release() //nolint:errcheck // Lock release errors are non-fatal in cleanup
-
-		lockSpinner.Success()
-		phaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
-	}
+	defer wf.Close()
 
 	// Phase 4: Execute command
-	phaseDisplay.Divider()
+	wf.PhaseDisplay.Divider()
 
 	// Show the command being run
-	phaseDisplay.CommandPrompt(opts.Command)
+	wf.PhaseDisplay.CommandPrompt(opts.Command)
 	fmt.Println()
 
 	// Set up output streaming
@@ -190,14 +61,14 @@ func Run(opts RunOptions) (int, error) {
 	execStart := time.Now()
 	var exitCode int
 
-	if conn.IsLocal {
+	if wf.Conn.IsLocal {
 		// Local execution
-		exitCode, err = exec.ExecuteLocal(opts.Command, workDir, streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		// Remote execution - build command with cd to remote directory
-		remoteDir := config.Expand(conn.Host.Dir)
+		remoteDir := config.Expand(wf.Conn.Host.Dir)
 		fullCmd := fmt.Sprintf("cd %q && %s", remoteDir, opts.Command)
-		exitCode, err = conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = wf.Conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
 
@@ -205,9 +76,9 @@ func Run(opts RunOptions) (int, error) {
 		return 1, err
 	}
 
-	// Release lock early if command completed
-	if lck != nil {
-		lck.Release() //nolint:errcheck // Lock release errors are non-fatal
+	// Release lock early if command completed (wf.Close() will also release, but early release is cleaner)
+	if wf.Lock != nil {
+		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
 
 	// Check for test failures and render summary if available
@@ -240,14 +111,14 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Show final status
-	phaseDisplay.ThinDivider()
-	renderFinalStatus(phaseDisplay, exitCode, time.Since(startTime), execDuration, conn.Alias)
+	wf.PhaseDisplay.ThinDivider()
+	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 
 	return exitCode, nil
 }
 
 // renderFinalStatus displays the final execution status line.
-func renderFinalStatus(pd *ui.PhaseDisplay, exitCode int, totalTime, execTime time.Duration, host string) {
+func renderFinalStatus(_ *ui.PhaseDisplay, exitCode int, totalTime, execTime time.Duration, host string) {
 	var symbol string
 	var symbolColor lipgloss.Color
 

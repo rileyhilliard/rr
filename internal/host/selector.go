@@ -3,6 +3,7 @@ package host
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -136,6 +137,7 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 }
 
 // SelectWithFallback is an alias for Select, which now includes fallback behavior.
+//
 // Deprecated: Use Select instead. This method exists for backward compatibility.
 func (s *Selector) SelectWithFallback(preferred string) (*Connection, error) {
 	return s.Select(preferred)
@@ -233,7 +235,7 @@ func (s *Selector) isConnectionAlive(conn *Connection) bool {
 	if err != nil {
 		return false
 	}
-	session.Close() //nolint:errcheck // Session close error is not meaningful in health check
+	session.Close()
 	return true
 }
 
@@ -243,26 +245,12 @@ func (s *Selector) hostNames() string {
 	for name := range s.hosts {
 		names = append(names, name)
 	}
-	if len(names) == 0 {
-		return "(none)"
-	}
-	result := names[0]
-	for i := 1; i < len(names); i++ {
-		result += ", " + names[i]
-	}
-	return result
+	return joinOrNone(names)
 }
 
 // formatFailedAliases returns a comma-separated list of failed aliases.
 func formatFailedAliases(aliases []string) string {
-	if len(aliases) == 0 {
-		return "(none)"
-	}
-	result := aliases[0]
-	for i := 1; i < len(aliases); i++ {
-		result += ", " + aliases[i]
-	}
-	return result
+	return joinOrNone(aliases)
 }
 
 // QuickSelect is a convenience function that creates a selector, selects a host,
@@ -333,11 +321,11 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 				return s.cached, nil
 			}
 			// Connection is dead, clear cache
-			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
+			s.cached.Close()
 			s.cached = nil
 		} else {
 			// Different host requested, close existing connection
-			s.cached.Close() //nolint:errcheck // Cleanup, error not actionable
+			s.cached.Close()
 			s.cached = nil
 		}
 	}
@@ -448,12 +436,13 @@ func (s *Selector) collectTags() []string {
 
 // formatTags returns a comma-separated list of tags.
 func formatTags(tags []string) string {
-	if len(tags) == 0 {
+	return joinOrNone(tags)
+}
+
+// joinOrNone joins strings with ", " or returns "(none)" for empty slices.
+func joinOrNone(items []string) string {
+	if len(items) == 0 {
 		return "(none)"
 	}
-	result := tags[0]
-	for i := 1; i < len(tags); i++ {
-		result += ", " + tags[i]
-	}
-	return result
+	return strings.Join(items, ", ")
 }

@@ -2,7 +2,6 @@ package output
 
 import (
 	"bytes"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -205,10 +204,6 @@ func TestStreamHandlerStdoutStderr(t *testing.T) {
 
 	stdoutW := h.Stdout()
 	stderrW := h.Stderr()
-
-	// Both should implement io.Writer (compile-time check)
-	_ = io.Writer(stdoutW)
-	_ = io.Writer(stderrW)
 
 	_, err := stdoutW.Write([]byte("out\n"))
 	require.NoError(t, err)

@@ -42,3 +42,7 @@ Thumbs.db
 # Debug files
 debug
 *.log
+
+# Test coverage
+coverage.out
+coverage.html

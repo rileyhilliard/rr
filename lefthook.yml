@@ -1,0 +1,106 @@
+# Lefthook git hooks configuration
+# Install: lefthook install
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    # Auto-fix: format Go files
+    go-fmt:
+      glob: "*.go"
+      run: gofmt -l -w {staged_files}
+      stage_fixed: true
+
+    # Auto-fix: organize imports (optional - skips if goimports not installed)
+    go-imports:
+      glob: "*.go"
+      run: |
+        if command -v goimports >/dev/null 2>&1; then
+          goimports -w {staged_files}
+        elif [ -x "$HOME/go/bin/goimports" ]; then
+          "$HOME/go/bin/goimports" -w {staged_files}
+        elif [ -x "$(go env GOPATH)/bin/goimports" ]; then
+          "$(go env GOPATH)/bin/goimports" -w {staged_files}
+        fi
+      stage_fixed: true
+
+    # Check: go vet for suspicious constructs
+    go-vet:
+      glob: "*.go"
+      run: go vet ./...
+
+    # Auto-fix: tidy go.mod
+    go-mod-tidy:
+      glob: "{go.mod,go.sum}"
+      run: go mod tidy
+      stage_fixed: true
+
+    # Auto-fix: golangci-lint with fixes
+    # Note: runs on ./... because linter needs full package context
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run --fix ./...
+      stage_fixed: true
+
+    # Check: validate YAML syntax (requires python3 with PyYAML)
+    check-yaml:
+      glob: "*.{yaml,yml}"
+      exclude: "completions/.*"
+      run: |
+        if command -v python3 >/dev/null 2>&1; then
+          for file in {staged_files}; do
+            python3 -c "import yaml; yaml.safe_load(open('$file'))" || exit 1
+          done
+        fi
+
+    # Check: validate JSON syntax
+    check-json:
+      glob: "*.json"
+      run: |
+        if command -v python3 >/dev/null 2>&1; then
+          for file in {staged_files}; do
+            python3 -c "import json; json.load(open('$file'))" || exit 1
+          done
+        fi
+
+    # Check: shellcheck for shell scripts
+    shellcheck:
+      glob: "*.sh"
+      run: shellcheck -e SC1091 {staged_files}
+
+commit-msg:
+  commands:
+    # Enforce conventional commit format
+    conventional-commit:
+      run: |
+        MSG=$(cat {1})
+        # Allow merge commits
+        if echo "$MSG" | grep -qE "^Merge "; then
+          exit 0
+        fi
+        # Conventional commit format: type(scope)?: description
+        if ! echo "$MSG" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+"; then
+          echo ""
+          echo "Commit message must follow Conventional Commits format:"
+          echo "  <type>: <description>"
+          echo ""
+          echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+          echo ""
+          echo "Examples:"
+          echo "  feat: add host fallback timeout"
+          echo "  fix(ssh): handle connection timeout"
+          echo "  docs: update README"
+          echo ""
+          exit 1
+        fi
+
+pre-push:
+  parallel: true
+  commands:
+    # Run full test suite before push
+    test:
+      run: go test ./...
+
+    # Run full lint check before push
+    lint:
+      run: golangci-lint run

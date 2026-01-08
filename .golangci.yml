@@ -1,12 +1,31 @@
 version: "2"
 
+run:
+  timeout: 5m
+  tests: true
+
 linters:
   enable:
+    # Default/essential
     - govet
     - errcheck
     - staticcheck
     - unused
     - ineffassign
+
+    # Code quality
+    - gocritic
+    - gocyclo
+    - misspell
+    - unconvert
+    - unparam
+
+    # Security
+    - gosec
+
+    # Style consistency
+    - revive
+    - nolintlint
 
   settings:
     errcheck:
@@ -25,7 +44,67 @@ linters:
         - fmt.Fprint
         - (io.Closer).Close
 
+    gocyclo:
+      min-complexity: 30  # CLI tools often have complex switch statements
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam        # Too noisy for value receivers on small structs
+        - appendCombine    # Style preference, not a bug
+        - ifElseChain      # Style preference
+        - wrapperFunc      # Style preference
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true  # Too noisy for CLI tools
+        - name: increment-decrement
+        - name: var-naming
+          disabled: true  # Intentional shadowing of stdlib errors package
+        - name: var-declaration
+        - name: package-comments
+          disabled: true
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+          disabled: true  # unparam handles this
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    gosec:
+      excludes:
+        - G104  # Audit errors not checked (errcheck handles this)
+        - G204  # Subprocess with variable (expected for CLI that runs user commands)
+        - G301  # Directory permissions 0755 (standard for CLI tools)
+        - G304  # File path from variable (common in CLI tools)
+        - G306  # WriteFile permissions 0644 (standard for config files)
+        - G602  # Slice bounds (false positive in controlled code)
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
   exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
     rules:
       # Allow Close() errors to be ignored in defer statements
       - linters:
@@ -35,7 +114,15 @@ linters:
       - linters:
           - errcheck
         source: "forceRemove\\("
+      # Test files can be more relaxed
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - gosec
+          - errcheck
+          - unparam
 
 formatters:
   enable:
     - gofmt
+    - goimports

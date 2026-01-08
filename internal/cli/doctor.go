@@ -182,7 +182,7 @@ func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error
 		fmt.Println(headerStyle.Render(category))
 
 		// Special handling for HOSTS category to show nested alias results
-		switch category { //nolint:gocritic // if-else chain clearer than tagged switch for string comparison
+		switch category {
 		case "HOSTS":
 			renderHostsCategory(checks, results, indices)
 		case "DEPENDENCIES":
@@ -314,7 +314,7 @@ func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, in
 }
 
 // renderDepsCategory renders the DEPENDENCIES section.
-func renderDepsCategory(checks []doctor.Check, results []doctor.CheckResult, indices []int) {
+func renderDepsCategory(_ []doctor.Check, results []doctor.CheckResult, indices []int) {
 	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)

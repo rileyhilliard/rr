@@ -3,16 +3,14 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
-	"github.com/rileyhilliard/rr/internal/host"
-	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/output"
-	"github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -33,169 +31,39 @@ type TaskOptions struct {
 // RunTask executes a named task from the configuration.
 // This handles the full workflow: connect, sync, lock, execute.
 func RunTask(opts TaskOptions) (int, error) {
-	startTime := time.Now()
-	phaseDisplay := ui.NewPhaseDisplay(os.Stdout)
-
-	// Load config
-	cfgPath, err := config.Find(Config())
-	if err != nil {
-		return 1, err
-	}
-	if cfgPath == "" {
-		return 1, errors.New(errors.ErrConfig,
-			"No config file found",
-			"Run 'rr init' to create a .rr.yaml config file")
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return 1, err
-	}
-
-	if err := config.Validate(cfg); err != nil {
-		return 1, err
-	}
-
-	// Get the task
-	task, mergedEnv, err := config.GetTaskWithMergedEnv(cfg, opts.TaskName, opts.Host)
-	if err != nil {
-		return 1, err
-	}
-
-	// Determine working directory
-	workDir := opts.WorkingDir
-	if workDir == "" {
-		workDir, err = os.Getwd()
-		if err != nil {
-			return 1, errors.WrapWithCode(err, errors.ErrExec,
-				"Failed to get working directory",
-				"Check directory permissions")
-		}
-	}
-
-	// Generate project hash for locking
-	projectHash := hashProject(workDir)
-
-	// Create host selector
-	selector := host.NewSelector(cfg.Hosts)
-	defer selector.Close()
-
-	// Enable local fallback if configured
-	selector.SetLocalFallback(cfg.LocalFallback)
-
-	// Set probe timeout (CLI flag overrides config)
-	probeTimeout := cfg.ProbeTimeout
-	if opts.ProbeTimeout > 0 {
-		probeTimeout = opts.ProbeTimeout
-	}
-	if probeTimeout > 0 {
-		selector.SetTimeout(probeTimeout)
-	}
-
-	// Phase 1: Connect
-	connDisplay := ui.NewConnectionDisplay(os.Stdout)
-	connDisplay.SetQuiet(opts.Quiet)
-	connDisplay.Start()
-
-	preferredHost := opts.Host
-	if preferredHost == "" {
-		preferredHost = cfg.Default
-	}
-
-	// Check if task is allowed on this host
-	if preferredHost != "" && !config.IsTaskHostAllowed(task, preferredHost) {
-		return 1, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Task '%s' is not allowed on host '%s'", opts.TaskName, preferredHost),
-			fmt.Sprintf("This task is restricted to hosts: %s", formatHosts(task.Hosts)))
-	}
-
-	// Track connection status
-	var usedLocalFallback bool
-
-	// Set up event handler for connection progress
-	selector.SetEventHandler(func(event host.ConnectionEvent) {
-		switch event.Type {
-		case host.EventFailed:
-			status := mapProbeErrorToStatus(event.Error)
-			connDisplay.AddAttempt(event.Alias, status, event.Latency, event.Message)
-		case host.EventConnected:
-			connDisplay.AddAttempt(event.Alias, ui.StatusSuccess, event.Latency, "")
-		case host.EventLocalFallback:
-			usedLocalFallback = true
-		}
+	// Setup common workflow phases (config, connect, sync, lock)
+	wf, err := SetupWorkflow(WorkflowOptions{
+		Host:         opts.Host,
+		Tag:          opts.Tag,
+		ProbeTimeout: opts.ProbeTimeout,
+		SkipSync:     opts.SkipSync,
+		SkipLock:     opts.SkipLock,
+		WorkingDir:   opts.WorkingDir,
+		Quiet:        opts.Quiet,
 	})
-
-	// Connect
-	var conn *host.Connection
-	if opts.Tag != "" {
-		conn, err = selector.SelectByTag(opts.Tag)
-	} else {
-		conn, err = selector.Select(preferredHost)
-	}
 	if err != nil {
-		connDisplay.Fail(err.Error())
+		return 1, err
+	}
+	defer wf.Close()
+
+	// Get the task from loaded config
+	task, mergedEnv, err := config.GetTaskWithMergedEnv(wf.Config, opts.TaskName, opts.Host)
+	if err != nil {
 		return 1, err
 	}
 
 	// Verify task is allowed on the connected host
-	if !config.IsTaskHostAllowed(task, conn.Name) {
+	if !config.IsTaskHostAllowed(task, wf.Conn.Name) {
 		return 1, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Task '%s' is not allowed on host '%s'", opts.TaskName, conn.Name),
+			fmt.Sprintf("Task '%s' is not allowed on host '%s'", opts.TaskName, wf.Conn.Name),
 			fmt.Sprintf("This task is restricted to hosts: %s", formatHosts(task.Hosts)))
 	}
 
-	// Show connection result
-	if usedLocalFallback {
-		connDisplay.SuccessLocal()
-	} else {
-		connDisplay.Success(conn.Name, conn.Alias)
-	}
-
-	// Phase 2: Sync (unless skipped or local)
-	var syncDuration time.Duration
-	if conn.IsLocal {
-		phaseDisplay.RenderSkipped("Sync", "local")
-	} else if !opts.SkipSync {
-		syncStart := time.Now()
-		syncSpinner := ui.NewSpinner("Syncing files")
-		syncSpinner.Start()
-
-		err = sync.Sync(conn, workDir, cfg.Sync, nil)
-		if err != nil {
-			syncSpinner.Fail()
-			return 1, err
-		}
-
-		syncDuration = time.Since(syncStart)
-		syncSpinner.Success()
-		phaseDisplay.RenderSuccess("Files synced", syncDuration)
-	} else {
-		phaseDisplay.RenderSkipped("Sync", "skipped")
-	}
-
-	// Phase 3: Acquire lock (unless disabled or local)
-	var lck *lock.Lock
-	if cfg.Lock.Enabled && !opts.SkipLock && !conn.IsLocal {
-		lockStart := time.Now()
-		lockSpinner := ui.NewSpinner("Acquiring lock")
-		lockSpinner.Start()
-
-		lck, err = lock.Acquire(conn, cfg.Lock, projectHash)
-		if err != nil {
-			lockSpinner.Fail()
-			return 1, err
-		}
-		defer lck.Release() //nolint:errcheck // Lock release errors are non-fatal in cleanup
-
-		lockSpinner.Success()
-		phaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
-	}
-
 	// Phase 4: Execute task
-	phaseDisplay.Divider()
+	wf.PhaseDisplay.Divider()
 
 	// Show task info
-	renderTaskHeader(phaseDisplay, opts.TaskName, task)
+	renderTaskHeader(wf.PhaseDisplay, opts.TaskName, task)
 	fmt.Println()
 
 	// Set up output streaming
@@ -206,26 +74,26 @@ func RunTask(opts TaskOptions) (int, error) {
 
 	// Get remote directory for task execution
 	remoteDir := ""
-	if !conn.IsLocal {
-		remoteDir = config.Expand(conn.Host.Dir)
+	if !wf.Conn.IsLocal {
+		remoteDir = config.Expand(wf.Conn.Host.Dir)
 	}
 
 	// Execute the task
-	result, err := exec.ExecuteTask(conn, task, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr())
+	result, err := exec.ExecuteTask(wf.Conn, task, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr())
 	execDuration := time.Since(execStart)
 
 	if err != nil {
 		return 1, err
 	}
 
-	// Release lock early if task completed
-	if lck != nil {
-		lck.Release() //nolint:errcheck // Lock release errors are non-fatal
+	// Release lock early if task completed (wf.Close() will also release, but early release is cleaner)
+	if wf.Lock != nil {
+		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
 
 	// Show summary
-	phaseDisplay.ThinDivider()
-	renderTaskSummary(phaseDisplay, result, opts.TaskName, time.Since(startTime), execDuration, conn.Alias)
+	wf.PhaseDisplay.ThinDivider()
+	renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 
 	return result.ExitCode, nil
 }
@@ -249,7 +117,7 @@ func renderTaskHeader(pd *ui.PhaseDisplay, taskName string, task *config.TaskCon
 }
 
 // renderTaskSummary displays the task execution result.
-func renderTaskSummary(pd *ui.PhaseDisplay, result *exec.TaskResult, taskName string, totalTime, execTime time.Duration, host string) {
+func renderTaskSummary(_ *ui.PhaseDisplay, result *exec.TaskResult, taskName string, totalTime, execTime time.Duration, host string) {
 	var symbol string
 	var symbolColor lipgloss.Color
 
@@ -295,11 +163,7 @@ func formatHosts(hosts []string) string {
 	if len(hosts) == 0 {
 		return "(none)"
 	}
-	result := hosts[0]
-	for i := 1; i < len(hosts); i++ {
-		result += ", " + hosts[i]
-	}
-	return result
+	return strings.Join(hosts, ", ")
 }
 
 // RegisterTaskCommands dynamically registers task commands from config.

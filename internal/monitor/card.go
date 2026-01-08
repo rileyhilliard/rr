@@ -134,7 +134,7 @@ func (m Model) renderGPULine(gpu *GPUMetrics, barWidth int) string {
 }
 
 // renderNetworkLine renders network I/O rates.
-func (m Model) renderNetworkLine(interfaces []NetworkInterface, width int) string {
+func (m Model) renderNetworkLine(interfaces []NetworkInterface, _ int) string {
 	// Sum up all interface bytes for a total rate display
 	// In a real implementation, you'd calculate rate from historical data
 	var totalIn, totalOut int64
