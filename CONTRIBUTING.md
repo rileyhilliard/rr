@@ -17,6 +17,7 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 - Go 1.22 or later
 - lefthook (for git hooks)
 - golangci-lint (for linting)
+- shellcheck (optional, for shell script linting)
 - rsync (installed on both local and remote machines)
 - SSH access to at least one remote host (for integration tests)
 
@@ -35,13 +36,10 @@ This installs lefthook git hooks that run formatting and linting automatically b
 **Manual dependency install (if needed):**
 
 ```bash
-# lefthook (macOS)
-brew install lefthook
+# macOS
+brew install lefthook golangci-lint shellcheck
 
-# golangci-lint (macOS)
-brew install golangci-lint
-
-# Or via Go
+# Or via Go (lefthook and golangci-lint only)
 go install github.com/evilmartians/lefthook@latest
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 ```

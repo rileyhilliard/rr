@@ -63,10 +63,15 @@ pre-commit:
           done
         fi
 
-    # Check: shellcheck for shell scripts
+    # Check: shellcheck for shell scripts (optional - skips if not installed)
     shellcheck:
       glob: "*.sh"
-      run: shellcheck -e SC1091 {staged_files}
+      run: |
+        if command -v shellcheck >/dev/null 2>&1; then
+          shellcheck -e SC1091 {staged_files}
+        else
+          echo "shellcheck not installed, skipping (install with: brew install shellcheck)"
+        fi
 
 commit-msg:
   commands:
