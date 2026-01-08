@@ -63,17 +63,7 @@ call_lefthook()
     then
       devbox run lefthook "$@"
     else
-      echo ""
-      echo "⚠️  Lefthook is not installed!"
-      echo ""
-      echo "Pre-commit hooks are not running. To enable automated linting:"
-      echo ""
-      echo "    make setup-hooks"
-      echo ""
-      echo "Or install manually:"
-      echo ""
-      echo "    brew install lefthook && lefthook install"
-      echo ""
+      echo "Can't find lefthook in PATH"
     fi
   fi
 }

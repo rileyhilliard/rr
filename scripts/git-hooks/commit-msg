@@ -63,17 +63,7 @@ call_lefthook()
     then
       devbox run lefthook "$@"
     else
-      echo ""
-      echo "⚠️  Lefthook is not installed!"
-      echo ""
-      echo "Commit message validation is not running. To enable:"
-      echo ""
-      echo "    make setup-hooks"
-      echo ""
-      echo "Or install manually:"
-      echo ""
-      echo "    brew install lefthook && lefthook install"
-      echo ""
+      echo "Can't find lefthook in PATH"
     fi
   fi
 }

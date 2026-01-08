@@ -89,7 +89,7 @@ func (c *SSHAgentCheck) Run() CheckResult {
 			Fixable:    true,
 		}
 	}
-	conn.Close() //nolint:errcheck // Best-effort close, error not actionable
+	conn.Close()
 
 	// Check how many keys are loaded
 	cmd := exec.Command("ssh-add", "-l")

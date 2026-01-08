@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"os"
 	"testing"
 	"time"
@@ -563,7 +564,7 @@ func containsString(s, substr string) bool {
 
 func containsBytes(s, substr []byte) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
-		if string(s[i:i+len(substr)]) == string(substr) {
+		if bytes.Equal(s[i:i+len(substr)], substr) {
 			return true
 		}
 	}

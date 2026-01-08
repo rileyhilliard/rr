@@ -55,7 +55,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	// SSH handshake
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, address, config)
 	if err != nil {
-		conn.Close() //nolint:errcheck // Best-effort cleanup on error path
+		conn.Close()
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
 			fmt.Sprintf("SSH handshake failed for '%s'", host),
 			suggestionForHandshakeError(err))
@@ -281,7 +281,7 @@ func sshAgentAuth() ssh.AuthMethod {
 // This should be called when the application is shutting down.
 func CloseAgent() {
 	if agentConn != nil {
-		agentConn.Close() //nolint:errcheck // Best-effort cleanup
+		agentConn.Close()
 	}
 }
 

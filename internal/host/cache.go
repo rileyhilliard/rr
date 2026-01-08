@@ -31,7 +31,7 @@ func (c *ConnectionCache) Get(hostName string) *Connection {
 
 	// Verify connection is still alive
 	if !c.isAlive(conn) {
-		conn.Close() //nolint:errcheck // Cleanup, error not actionable
+		conn.Close()
 		delete(c.conns, hostName)
 		return nil
 	}
@@ -47,7 +47,7 @@ func (c *ConnectionCache) Set(hostName string, conn *Connection) {
 
 	// Close existing connection if present
 	if existing, ok := c.conns[hostName]; ok {
-		existing.Close() //nolint:errcheck // Cleanup, error not actionable
+		existing.Close()
 	}
 
 	c.conns[hostName] = conn
@@ -60,7 +60,7 @@ func (c *ConnectionCache) Clear(hostName string) {
 	defer c.mu.Unlock()
 
 	if conn, ok := c.conns[hostName]; ok {
-		conn.Close() //nolint:errcheck // Cleanup, error not actionable
+		conn.Close()
 		delete(c.conns, hostName)
 	}
 }
@@ -72,7 +72,7 @@ func (c *ConnectionCache) CloseAll() {
 	defer c.mu.Unlock()
 
 	for name, conn := range c.conns {
-		conn.Close() //nolint:errcheck // Cleanup, error not actionable
+		conn.Close()
 		delete(c.conns, name)
 	}
 }
@@ -107,7 +107,7 @@ func (c *ConnectionCache) isAlive(conn *Connection) bool {
 	if err != nil {
 		return false
 	}
-	session.Close() //nolint:errcheck // Session close error is not meaningful in health check
+	session.Close()
 	return true
 }
 

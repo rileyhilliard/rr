@@ -92,7 +92,7 @@ func (c *RsyncRemoteCheck) Run() CheckResult {
 
 	// Parse version from output
 	output := string(stdout)
-	if string(stderr) != "" {
+	if len(stderr) != 0 {
 		output += string(stderr)
 	}
 	version := parseRsyncVersion(output)
