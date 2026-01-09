@@ -29,6 +29,7 @@ var (
 	initSkipProbe        bool
 	monitorHostsFlag     string
 	monitorIntervalFlag  string
+	hostAddSkipProbe     bool
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -262,6 +263,81 @@ Examples:
 	},
 }
 
+// hostCmd is the parent command for host management
+var hostCmd = &cobra.Command{
+	Use:   "host",
+	Short: "Manage configured hosts",
+	Long: `Add, remove, and list remote hosts in your configuration.
+
+Similar to 'git remote', this command manages the hosts that rr can connect to.
+Each host can have multiple SSH connection fallbacks (e.g., LAN, Tailscale, VPN).
+
+Examples:
+  rr host list              # List all configured hosts
+  rr host add               # Add a new host interactively
+  rr host remove myserver   # Remove a host`,
+}
+
+// hostAddCmd adds a new host
+var hostAddCmd = &cobra.Command{
+	Use:   "add",
+	Short: "Add a new host",
+	Long: `Add a new remote host to your configuration.
+
+Launches an interactive wizard to configure the host's SSH connections,
+friendly name, and remote directory.
+
+Examples:
+  rr host add
+  rr host add --skip-probe`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return hostAdd(HostAddOptions{
+			SkipProbe: hostAddSkipProbe,
+		})
+	},
+}
+
+// hostRemoveCmd removes a host
+var hostRemoveCmd = &cobra.Command{
+	Use:     "remove [name]",
+	Aliases: []string{"rm"},
+	Short:   "Remove a host",
+	Long: `Remove a host from your configuration.
+
+If no name is provided, shows a picker to select the host to remove.
+If you remove the default host, another host will be selected as the new default.
+
+Examples:
+  rr host remove           # Interactive selection
+  rr host remove myserver
+  rr host rm old-machine`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := ""
+		if len(args) > 0 {
+			name = args[0]
+		}
+		return hostRemove(name)
+	},
+}
+
+// hostListCmd lists all hosts
+var hostListCmd = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List configured hosts",
+	Long: `List all hosts configured in your .rr.yaml file.
+
+Shows each host's name, SSH connections, and whether it's the default.
+
+Examples:
+  rr host list
+  rr host ls`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return hostList()
+	},
+}
+
 func init() {
 	// run command flags
 	runCmd.Flags().StringVar(&runHostFlag, "host", "", "target host name")
@@ -281,7 +357,7 @@ func init() {
 
 	// init command flags
 	initCmd.Flags().StringVar(&initHostFlag, "host", "", "SSH host (user@hostname or SSH config alias)")
-	initCmd.Flags().StringVar(&initRemoteDirFlag, "remote-dir", "", "remote directory path (default: ~/projects/${PROJECT})")
+	initCmd.Flags().StringVar(&initRemoteDirFlag, "remote-dir", "", "remote directory path (default: ~/rr/${PROJECT})")
 	initCmd.Flags().StringVar(&initNameFlag, "name", "", "friendly name for the host (default: extracted from host)")
 	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config without prompting")
 	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "skip interactive prompts, use flags and defaults")
@@ -290,6 +366,14 @@ func init() {
 	// monitor command flags
 	monitorCmd.Flags().StringVar(&monitorHostsFlag, "hosts", "", "filter to specific hosts (comma-separated)")
 	monitorCmd.Flags().StringVar(&monitorIntervalFlag, "interval", "1s", "refresh interval (e.g., 1s, 2s, 5s)")
+
+	// host command flags
+	hostAddCmd.Flags().BoolVar(&hostAddSkipProbe, "skip-probe", false, "skip SSH connection testing")
+
+	// Register host subcommands
+	hostCmd.AddCommand(hostAddCmd)
+	hostCmd.AddCommand(hostRemoveCmd)
+	hostCmd.AddCommand(hostListCmd)
 
 	// Register all commands
 	rootCmd.AddCommand(runCmd)
@@ -301,4 +385,5 @@ func init() {
 	rootCmd.AddCommand(monitorCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(completionCmd)
+	rootCmd.AddCommand(hostCmd)
 }

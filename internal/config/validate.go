@@ -22,6 +22,7 @@ var ReservedTaskNames = map[string]bool{
 	"version":    true,
 	"completion": true,
 	"update":     true,
+	"host":       true,
 }
 
 // ValidationOption controls validation behavior.

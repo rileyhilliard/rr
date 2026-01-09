@@ -24,6 +24,26 @@ func renderCardDivider(width int) string {
 	return cardDividerStyle.Render(divider)
 }
 
+// truncateErrorMsg extracts the most useful part of an error message and truncates to fit.
+func truncateErrorMsg(errMsg string, maxLen int) string {
+	// Extract the most relevant part of the error
+	// Common patterns: "Can't reach 'host' at addr: details" or "dial tcp: timeout"
+	msg := errMsg
+
+	// Look for common patterns and extract useful info
+	if idx := strings.Index(msg, ": "); idx > 0 && idx < len(msg)-2 {
+		// Get the part after the first colon, which usually has more detail
+		msg = msg[idx+2:]
+	}
+
+	// Truncate if too long
+	if len(msg) > maxLen && maxLen > 3 {
+		msg = msg[:maxLen-3] + "..."
+	}
+
+	return msg
+}
+
 // renderCardLine renders a text line with proper background fill.
 // Applies background to the entire line including content and padding.
 func renderCardLine(content string, width int) string {
@@ -57,10 +77,19 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	hostLine := m.renderHostLine(host, status)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
-	// If no metrics available, show placeholder
+	// If no metrics available, show status-appropriate placeholder with error details
 	if metrics == nil {
 		lines = append(lines, renderCardDivider(innerWidth))
-		lines = append(lines, renderCardLine(LabelStyle.Render("  Waiting for data..."), innerWidth))
+		if status == StatusUnreachableState {
+			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
+			// Show error details if available
+			if errMsg, ok := m.errors[host]; ok && errMsg != "" {
+				errDisplay := truncateErrorMsg(errMsg, innerWidth-4)
+				lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
+			}
+		} else {
+			lines = append(lines, renderCardLine(LabelStyle.Render("  Connecting..."), innerWidth))
+		}
 	} else {
 		// Divider after host name
 		lines = append(lines, renderCardDivider(innerWidth))
@@ -297,10 +326,19 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	hostLine := m.renderHostLine(host, status)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
-	// If no metrics available, show placeholder
+	// If no metrics available, show status-appropriate placeholder with error details
 	if metrics == nil {
 		lines = append(lines, renderCardDivider(innerWidth))
-		lines = append(lines, renderCardLine(LabelStyle.Render("  Waiting..."), innerWidth))
+		if status == StatusUnreachableState {
+			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
+			// Show error details if available
+			if errMsg, ok := m.errors[host]; ok && errMsg != "" {
+				errDisplay := truncateErrorMsg(errMsg, innerWidth-4)
+				lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
+			}
+		} else {
+			lines = append(lines, renderCardLine(LabelStyle.Render("  Connecting..."), innerWidth))
+		}
 	} else {
 		lines = append(lines, renderCardDivider(innerWidth))
 
@@ -411,9 +449,13 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 	hostLine := m.renderMinimalHostLine(host, status, innerWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
-	// If no metrics available, show short placeholder
+	// If no metrics available, show status-appropriate placeholder
 	if metrics == nil {
-		lines = append(lines, renderCardLine(LabelStyle.Render("..."), innerWidth))
+		placeholder := "..."
+		if status == StatusUnreachableState {
+			placeholder = "Offline"
+		}
+		lines = append(lines, renderCardLine(LabelStyle.Render(placeholder), innerWidth))
 	} else {
 		lines = append(lines, renderCardDivider(innerWidth))
 		// Single line with CPU and RAM percentages

@@ -90,9 +90,12 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 				hostKeyErr.Suggestion())
 		}
 
+		// Build suggestion, with extra context if we found encrypted keys
+		suggestion := suggestionForHandshakeError(err, settings.encryptedKeys)
+
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
 			fmt.Sprintf("SSH handshake with '%s' didn't go through", host),
-			suggestionForHandshakeError(err))
+			suggestion)
 	}
 
 	client := ssh.NewClient(sshConn, chans, reqs)
@@ -142,10 +145,11 @@ func (c *Client) newSSHSession() (*ssh.Session, error) {
 
 // sshSettings holds resolved SSH connection parameters.
 type sshSettings struct {
-	hostname     string
-	port         string
-	user         string
-	identityFile string
+	hostname      string
+	port          string
+	user          string
+	identityFile  string
+	encryptedKeys []string // Keys that exist but are encrypted
 }
 
 // address returns the host:port string for dialing.
@@ -258,9 +262,9 @@ func resolveSSHSettings(host string) *sshSettings {
 var StrictHostKeyChecking = true
 
 // buildSSHConfig creates an SSH client config with authentication methods.
+// It also populates settings.encryptedKeys with any keys that exist but are encrypted.
 func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
-	var encryptedKeys []string
 
 	// Helper to try loading a key and track encrypted keys
 	tryKeyFile := func(keyPath string) {
@@ -268,7 +272,7 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		if err != nil {
 			var encErr *EncryptedKeyError
 			if stderrors.As(err, &encErr) {
-				encryptedKeys = append(encryptedKeys, keyPath)
+				settings.encryptedKeys = append(settings.encryptedKeys, keyPath)
 			}
 			// Other errors (file not found, etc.) are silently ignored
 			return
@@ -309,14 +313,19 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		msg := "No SSH auth methods available"
 		suggestion := "Check your keys are loaded: ssh-add -l"
 
-		if len(encryptedKeys) > 0 {
-			msg = fmt.Sprintf("Found SSH key(s) but they're encrypted: %s", strings.Join(encryptedKeys, ", "))
-			keyToAdd := encryptedKeys[0]
-			if runtime.GOOS == "darwin" {
-				suggestion = fmt.Sprintf("Add to your agent: ssh-add --apple-use-keychain %s", keyToAdd)
-			} else {
-				suggestion = fmt.Sprintf("Add to your agent: ssh-add %s", keyToAdd)
+		if len(settings.encryptedKeys) > 0 {
+			msg = fmt.Sprintf("Found SSH key(s) but they're encrypted: %s", strings.Join(settings.encryptedKeys, ", "))
+			var sb strings.Builder
+			sb.WriteString("Add your key(s) to the agent:\n")
+			for _, key := range settings.encryptedKeys {
+				if runtime.GOOS == "darwin" {
+					sb.WriteString(fmt.Sprintf("  ssh-add --apple-use-keychain %s\n", key))
+				} else {
+					sb.WriteString(fmt.Sprintf("  ssh-add %s\n", key))
+				}
 			}
+			sb.WriteString("\nNot sure which key? Check with: ssh -v <host>")
+			suggestion = sb.String()
 		}
 
 		return nil, errors.New(errors.ErrSSH, msg, suggestion)
@@ -451,9 +460,23 @@ func suggestionForDialError(err error) string {
 	return "Make sure the host is reachable: ping <host>"
 }
 
-func suggestionForHandshakeError(err error) string {
+func suggestionForHandshakeError(err error, encryptedKeys []string) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "unable to authenticate") || strings.Contains(errStr, "no supported methods") {
+		// If we found encrypted keys, suggest adding them to the agent
+		if len(encryptedKeys) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Your key(s) are encrypted. Add them to the agent:\n")
+			for _, key := range encryptedKeys {
+				if runtime.GOOS == "darwin" {
+					sb.WriteString(fmt.Sprintf("  ssh-add --apple-use-keychain %s\n", key))
+				} else {
+					sb.WriteString(fmt.Sprintf("  ssh-add %s\n", key))
+				}
+			}
+			sb.WriteString("\nNot sure which key? Check with: ssh -v <host>")
+			return sb.String()
+		}
 		return "Auth failed. Check your keys are loaded: ssh-add -l"
 	}
 	if strings.Contains(errStr, "host key") {

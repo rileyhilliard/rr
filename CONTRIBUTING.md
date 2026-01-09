@@ -131,7 +131,7 @@ Your PR must pass these automated checks:
 - **Format check** - Code must be `gofmt` formatted
 - **Lint** - No golangci-lint violations
 - **Tests** - All tests pass on Go 1.22, 1.23, and 1.24
-- **Coverage** - Minimum 80% test coverage
+- **Coverage** - Minimum 50% test coverage
 - **Security** - No known vulnerabilities (govulncheck)
 - **Build** - Binary compiles successfully
 

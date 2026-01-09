@@ -131,7 +131,7 @@ Help:
 These names cannot be used as task names (with helpful error if attempted):
 
 ```
-run, exec, sync, init, setup, status, monitor, doctor, help, version, config
+run, exec, sync, init, setup, status, monitor, doctor, help, version, completion, update, host
 ```
 
 If a user has a task named `run`, we error during config load:
@@ -1196,10 +1196,8 @@ Currently you'd SSH into each machine and run htop manually. `rr monitor` surfac
 rr monitor [flags]
 
 FLAGS
-  -H, --hosts       Comma-separated hosts to monitor (default: all)
-      --interval    Refresh interval (default: 2s)
-      --no-gpu      Skip GPU metrics (faster startup)
-  -q, --quiet       Minimal UI (just the metrics, no borders)
+      --hosts string      Filter to specific hosts (comma-separated)
+      --interval string   Refresh interval (default: 1s)
 ```
 
 **Examples:**
@@ -1832,18 +1830,21 @@ STATUS COMMANDS
   monitor             Real-time dashboard of all host metrics
   doctor              Run diagnostic checks
 
-OPTIONS
-  -c, --config        Path to config file (default: .rr.yaml)
-  -H, --host          Override host selection
-      --no-lock       Skip lock acquisition
-      --force-unlock  Remove existing lock before running
-      --lock-timeout  How long to wait for lock (default: 5m)
-  -n, --dry-run       Show what would happen without doing it
-  -v, --verbose       Verbose output
-  -q, --quiet         Minimal output (errors only)
-      --no-color      Disable colored output
-  -h, --help          Show help
-      --version       Show version
+HOST MANAGEMENT
+  host list           List configured hosts (alias: ls)
+  host add            Add a new host interactively
+  host remove <name>  Remove a host (alias: rm)
+
+MAINTENANCE
+  update              Check for and install latest version
+
+GLOBAL FLAGS
+      --config string                 Config file (default is .rr.yaml)
+      --no-color                      Disable colored output
+      --no-strict-host-key-checking   Disable SSH host key verification (insecure, for CI/automation only)
+  -q, --quiet                         Suppress non-essential output
+  -v, --verbose                       Verbose output
+  -h, --help                          Show help
 
 EXAMPLES
   # Sync and run a command

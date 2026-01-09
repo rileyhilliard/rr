@@ -21,8 +21,10 @@ This document covers all configuration options for `.rr.yaml`.
 
 `rr` searches for configuration in this order:
 
-1. `.rr.yaml` in the current directory
-2. `.rr.yaml` in parent directories (up to filesystem root)
+1. Explicit path via `--config` flag
+2. `.rr.yaml` in the current directory
+3. `.rr.yaml` in parent directories (stops at git root or home directory)
+4. `~/.config/rr/config.yaml` (global defaults)
 
 ## Complete example
 
@@ -154,6 +156,8 @@ hosts:
 | `dir` | string | yes | Working directory on remote. Supports variable expansion. |
 | `tags` | list | no | Tags for filtering with `--tag` flag. |
 | `env` | map | no | Environment variables for commands on this host. |
+| `shell` | string | no | Shell invocation format (e.g., `zsh -l -c`). Default uses `$SHELL -l -c`. |
+| `setup_commands` | list | no | Commands to run before each command (e.g., `source ~/.nvm/nvm.sh`). |
 
 ### SSH connection strings
 
@@ -350,7 +354,7 @@ You cannot name a task after a built-in command. These names are reserved:
 - `run`, `exec`, `sync`
 - `init`, `setup`, `status`
 - `monitor`, `doctor`, `completion`
-- `help`, `version`
+- `help`, `version`, `update`, `host`
 
 ## Output
 
@@ -447,6 +451,28 @@ monitor:
   exclude:
     - dev-machine
     - staging-server
+```
+
+## Environment variables
+
+These environment variables affect `rr` behavior:
+
+| Variable | Description |
+|----------|-------------|
+| `RR_HOST` | SSH host for `rr init` (non-interactive mode). |
+| `RR_HOST_NAME` | Friendly name for the host in `rr init`. |
+| `RR_REMOTE_DIR` | Remote directory path for `rr init`. |
+| `RR_NON_INTERACTIVE` | Set to `true` to skip prompts in `rr init`. |
+| `RR_NO_UPDATE_CHECK` | Set to `1` to disable automatic update checks. |
+
+**Example: non-interactive setup in CI**
+
+```bash
+export RR_HOST=user@build-server
+export RR_HOST_NAME=ci-runner
+export RR_REMOTE_DIR=/home/ci/projects/\${PROJECT}
+export RR_NON_INTERACTIVE=true
+rr init
 ```
 
 ## Duration syntax
