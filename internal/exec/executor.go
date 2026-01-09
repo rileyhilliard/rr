@@ -9,7 +9,7 @@ import (
 )
 
 // commandNotFoundPatterns are regex patterns to detect "command not found" errors
-// from various shells.
+// from various shells. These require exit code 127.
 var commandNotFoundPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)bash: (\S+): command not found`),
 	regexp.MustCompile(`(?i)zsh: command not found: (\S+)`),
@@ -17,6 +17,19 @@ var commandNotFoundPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)-bash: (\S+): No such file or directory`),
 	regexp.MustCompile(`(?i)(\S+): not found`),
 	regexp.MustCompile(`(?i)(\S+): command not found`),
+}
+
+// dependencyNotFoundPatterns detect when a tool (like make) fails because
+// a dependency command isn't available. These can have various exit codes.
+var dependencyNotFoundPatterns = []*regexp.Regexp{
+	// make: go: No such file or directory
+	regexp.MustCompile(`(?i)make: (\S+): No such file or directory`),
+	// npm: 'go' is not recognized as an internal or external command
+	regexp.MustCompile(`(?i)'(\S+)' is not recognized`),
+	// /bin/sh: go: not found (from scripts)
+	regexp.MustCompile(`(?i)/bin/sh: (\S+): not found`),
+	// env: go: No such file or directory (from #!/usr/bin/env go)
+	regexp.MustCompile(`(?i)env: (\S+): No such file or directory`),
 }
 
 // IsCommandNotFound checks if the error output indicates a missing command.
@@ -38,10 +51,28 @@ func IsCommandNotFound(stderr string, exitCode int) (string, bool) {
 	return "", true
 }
 
+// IsDependencyNotFound checks if a tool failed because a dependency command is missing.
+// This catches cases like make failing because 'go' isn't installed.
+// Returns the missing command name and whether it was detected.
+func IsDependencyNotFound(stderr string) (string, bool) {
+	for _, pattern := range dependencyNotFoundPatterns {
+		if matches := pattern.FindStringSubmatch(stderr); len(matches) > 1 {
+			return matches[1], true
+		}
+	}
+	return "", false
+}
+
 // HandleExecError wraps execution errors with helpful suggestions.
 // It detects command-not-found errors and provides actionable fixes.
 func HandleExecError(cmd string, stderr string, exitCode int) error {
+	// Check for direct command-not-found (exit 127)
 	cmdName, notFound := IsCommandNotFound(stderr, exitCode)
+
+	// Also check for dependency-not-found (e.g., make can't find go)
+	if !notFound {
+		cmdName, notFound = IsDependencyNotFound(stderr)
+	}
 
 	if notFound {
 		displayCmd := cmdName
@@ -55,10 +86,28 @@ func HandleExecError(cmd string, stderr string, exitCode int) error {
 			}
 		}
 
-		suggestion := fmt.Sprintf("The command '%s' wasn't found on the remote machine.\n\nPossible fixes:\n1. Install the missing tool on the remote machine\n2. SSH sessions don't source shell config by default.\n   Try: rr run \"source ~/.zshrc && %s\"\n3. Add shell initialization to your .rr.yaml config:\n   hosts:\n     your-host:\n       shell: \"bash -l -c\"   # Use login shell\n       # Or use setup_commands:\n       setup_commands:\n         - source ~/.zshrc", displayCmd, cmd)
+		suggestion := fmt.Sprintf(`'%s' wasn't found in the remote SSH session's PATH.
+
+This can happen if:
+- The tool isn't installed on the remote
+- The tool is installed but not in the login shell's PATH
+- Your shell profile has issues loading in non-interactive mode
+
+Fixes:
+
+1. Install '%s' on the remote machine
+
+2. If installed, verify it's in your PATH:
+   ssh your-remote "which %s"
+
+3. Add explicit PATH via setup_commands:
+   hosts:
+     your-host:
+       setup_commands:
+         - export PATH=/opt/homebrew/bin:$PATH`, displayCmd, displayCmd, displayCmd)
 
 		return errors.New(errors.ErrExec,
-			fmt.Sprintf("'%s' isn't available on the remote", displayCmd),
+			fmt.Sprintf("'%s' not found in PATH on remote", displayCmd),
 			suggestion)
 	}
 
