@@ -44,11 +44,11 @@ func buildLinuxCommand() string {
 // buildDarwinCommand returns the batched metrics command for macOS hosts.
 // Output sections are separated by "---" and include:
 // 0. top output - CPU usage and load averages
-// 1. vm_stat + sysctl hw.memsize - Memory statistics with total memory
+// 1. vm_stat output - Memory statistics
 // 2. netstat output - Network interface statistics
 // 3. ps aux - Process list sorted by CPU (top 16 including header)
 func buildDarwinCommand() string {
-	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ps aux -r 2>/dev/null | head -16`
+	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; echo "---"; netstat -ib; echo "---"; ps aux -r 2>/dev/null | head -16`
 }
 
 // PlatformDetectCommand returns the command to detect the platform type.
