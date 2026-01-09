@@ -74,6 +74,32 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
+			name: "includes SSH ControlMaster options",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg:      config.SyncConfig{},
+			checkArgs: func(t *testing.T, args []string) {
+				// Find the -e flag and check its value
+				foundE := false
+				for i, arg := range args {
+					if arg == "-e" && i+1 < len(args) {
+						sshCmd := args[i+1]
+						foundE = true
+						// Should include ControlMaster options for connection reuse
+						assert.Contains(t, sshCmd, "ControlMaster=auto", "should use ControlMaster=auto")
+						assert.Contains(t, sshCmd, "ControlPath=", "should specify ControlPath")
+						assert.Contains(t, sshCmd, "ControlPersist=", "should specify ControlPersist")
+						break
+					}
+				}
+				assert.True(t, foundE, "expected -e flag with SSH command")
+			},
+		},
+		{
 			name: "with exclude patterns",
 			conn: &host.Connection{
 				Name:  "test-host",

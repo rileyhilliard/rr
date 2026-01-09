@@ -289,7 +289,7 @@ func init() {
 
 	// monitor command flags
 	monitorCmd.Flags().StringVar(&monitorHostsFlag, "hosts", "", "filter to specific hosts (comma-separated)")
-	monitorCmd.Flags().StringVar(&monitorIntervalFlag, "interval", "2s", "refresh interval (e.g., 2s, 5s, 1m)")
+	monitorCmd.Flags().StringVar(&monitorIntervalFlag, "interval", "1s", "refresh interval (e.g., 1s, 2s, 5s)")
 
 	// Register all commands
 	rootCmd.AddCommand(runCmd)

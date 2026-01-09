@@ -15,7 +15,7 @@ import (
 type InlineProgress struct {
 	mu           sync.Mutex
 	label        string
-	percent      float64
+	percent      float64 // Real progress from rsync
 	speed        string
 	eta          string
 	bytes        int64
@@ -26,15 +26,46 @@ type InlineProgress struct {
 	running      bool
 	lastRendered string
 	width        int
+	useFake      bool // Whether to use fake progress animation
 }
 
 // NewInlineProgress creates a new inline progress display.
 func NewInlineProgress(label string, output io.Writer) *InlineProgress {
 	return &InlineProgress{
-		label:  label,
-		output: output,
-		width:  30, // Default progress bar width
+		label:   label,
+		output:  output,
+		width:   30, // Default progress bar width
+		useFake: true,
 	}
+}
+
+// SetUseFakeProgress enables or disables the fake progress animation.
+// When enabled, progress animates with ease-out over 10s to give perceived responsiveness.
+func (p *InlineProgress) SetUseFakeProgress(use bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.useFake = use
+}
+
+// fakeProgressDuration is how long the fake progress takes to reach 99%.
+const fakeProgressDuration = 10 * time.Second
+
+// easeOutQuad applies an ease-out quadratic curve: decelerates toward the end.
+// t should be in range [0, 1], returns value in [0, 1].
+func easeOutQuad(t float64) float64 {
+	return 1 - (1-t)*(1-t)
+}
+
+// calculateFakeProgress returns simulated progress based on elapsed time.
+// Uses ease-out curve over fakeProgressDuration, capping at 99%.
+func (p *InlineProgress) calculateFakeProgress() float64 {
+	elapsed := time.Since(p.startTime)
+	if elapsed >= fakeProgressDuration {
+		return 0.99 // Cap at 99% until real completion
+	}
+	t := float64(elapsed) / float64(fakeProgressDuration)
+	// Ease-out to 99%
+	return easeOutQuad(t) * 0.99
 }
 
 // SetWidth sets the progress bar width.
@@ -113,20 +144,37 @@ func (p *InlineProgress) animate() {
 	}
 }
 
+// effectiveProgress returns the progress to display.
+// Uses the max of real progress and fake progress (if enabled).
+// Must be called with lock held.
+func (p *InlineProgress) effectiveProgressLocked() float64 {
+	if !p.useFake {
+		return p.percent
+	}
+	fake := p.calculateFakeProgress()
+	if p.percent > fake {
+		return p.percent
+	}
+	return fake
+}
+
 func (p *InlineProgress) render() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	// Calculate effective progress (max of real and fake)
+	effectivePercent := p.effectiveProgressLocked()
 
 	// Spinner frame
 	frame := spinnerFrames[int(time.Since(p.startTime).Milliseconds()/100)%len(spinnerFrames)]
 	symbolStyle := lipgloss.NewStyle().Foreground(ColorSecondary)
 
 	// Progress bar
-	bar := p.renderBar()
+	bar := p.renderBarWithPercent(effectivePercent)
 
 	// Percentage
 	pctStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
-	pctStr := pctStyle.Render(fmt.Sprintf("%3.0f%%", p.percent*100))
+	pctStr := pctStyle.Render(fmt.Sprintf("%3.0f%%", effectivePercent*100))
 
 	// Stats line
 	var stats string
@@ -165,8 +213,8 @@ func (p *InlineProgress) render() {
 	p.lastRendered = line
 }
 
-func (p *InlineProgress) renderBar() string {
-	filled := int(p.percent * float64(p.width))
+func (p *InlineProgress) renderBarWithPercent(percent float64) string {
+	filled := int(percent * float64(p.width))
 	if filled > p.width {
 		filled = p.width
 	}
@@ -174,9 +222,9 @@ func (p *InlineProgress) renderBar() string {
 	// Choose color based on progress
 	var barColor lipgloss.Color
 	switch {
-	case p.percent >= 0.8:
+	case percent >= 0.8:
 		barColor = ColorSuccess
-	case p.percent >= 0.5:
+	case percent >= 0.5:
 		barColor = ColorWarning
 	default:
 		barColor = ColorSecondary

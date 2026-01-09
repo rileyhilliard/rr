@@ -30,6 +30,19 @@ type Client struct {
 // matchWarningOnce ensures the SSH config Match directive warning is only shown once per process.
 var matchWarningOnce sync.Once
 
+// WarningHandler is a function that handles warning messages.
+// If nil, warnings are printed to stderr via log.Printf.
+var WarningHandler func(message string)
+
+// emitWarning sends a warning through the configured handler or falls back to log.Printf.
+func emitWarning(message string) {
+	if WarningHandler != nil {
+		WarningHandler(message)
+	} else {
+		log.Printf("Warning: %s", message)
+	}
+}
+
 // Dial establishes an SSH connection to the specified host.
 // The host can be:
 //   - An SSH config alias (e.g., "myserver")
@@ -115,6 +128,13 @@ func (c *Client) NewSession() (Session, error) {
 	return c.Client.NewSession()
 }
 
+// SendRequest sends a global request on the SSH connection.
+// This is a lightweight way to check connection liveness without the overhead
+// of creating a new session (~100-200ms savings).
+func (c *Client) SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error) {
+	return c.Client.SendRequest(name, wantReply, payload)
+}
+
 // newSSHSession creates a new *ssh.Session for internal use by exec methods.
 func (c *Client) newSSHSession() (*ssh.Session, error) {
 	return c.Client.NewSession()
@@ -186,36 +206,47 @@ func resolveSSHSettings(host string) *sshSettings {
 		return settings
 	}
 
-	if matchLine > 0 {
-		matchWarningOnce.Do(func() {
-			log.Printf("Warning: SSH config contains 'Match' directive at line %d. Host entries after this line may not be recognized. Consider using explicit user@host format or moving important hosts before the Match block.", matchLine)
-		})
-	}
-
 	cfg, err := ssh_config.Decode(bytes.NewReader(content))
 	if err != nil {
 		// Decoding failed even after preprocessing, just return defaults
 		return settings
 	}
 
+	// Track if we found any config for this host
+	hostFound := false
+
 	// Get hostname (could be different from alias)
 	if hostname, _ := cfg.Get(host, "HostName"); hostname != "" {
 		settings.hostname = hostname
+		hostFound = true
 	}
 
 	// Get port
 	if port, _ := cfg.Get(host, "Port"); port != "" {
 		settings.port = port
+		hostFound = true
 	}
 
 	// Get user
 	if user, _ := cfg.Get(host, "User"); user != "" {
 		settings.user = user
+		hostFound = true
 	}
 
 	// Get identity file
 	if identity, _ := cfg.Get(host, "IdentityFile"); identity != "" {
 		settings.identityFile = expandPath(identity)
+		hostFound = true
+	}
+
+	// Only warn about Match block if host wasn't found - it might be defined after the Match
+	if matchLine > 0 && !hostFound {
+		matchWarningOnce.Do(func() {
+			emitWarning(fmt.Sprintf(
+				"Host '%s' not found in SSH config (config has a Match block at line %d that may hide later entries). "+
+					"If this host is defined after line %d, move it earlier in ~/.ssh/config.",
+				host, matchLine, matchLine))
+		})
 	}
 
 	return settings

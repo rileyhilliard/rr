@@ -194,14 +194,9 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 
 // connect establishes an SSH connection to the given alias.
 func (s *Selector) connect(hostName, sshAlias string, host config.Host) (*Connection, error) {
-	// Probe and connect
-	latency, err := Probe(sshAlias, s.timeout)
-	if err != nil {
-		return nil, err
-	}
-
-	// Dial returns a connected client
-	client, err := sshutil.Dial(sshAlias, s.timeout)
+	// ProbeAndConnect does a single SSH handshake and returns both the client
+	// and the measured latency, avoiding the previous double-handshake overhead.
+	client, latency, err := ProbeAndConnect(sshAlias, s.timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +211,8 @@ func (s *Selector) connect(hostName, sshAlias string, host config.Host) (*Connec
 }
 
 // isConnectionAlive checks if the cached connection is still usable.
+// Uses a lightweight keep-alive request instead of creating a full session,
+// which avoids the ~100-200ms overhead of session creation.
 func (s *Selector) isConnectionAlive(conn *Connection) bool {
 	if conn == nil {
 		return false
@@ -230,13 +227,12 @@ func (s *Selector) isConnectionAlive(conn *Connection) bool {
 		return false
 	}
 
-	// Try to create a session as a quick health check
-	session, err := conn.Client.NewSession()
-	if err != nil {
-		return false
-	}
-	_ = session.Close()
-	return true
+	// Use SendRequest with "keepalive@openssh.com" for a lightweight check.
+	// This is much faster than NewSession() because it doesn't create a
+	// new channel - it just sends a global request on the existing connection.
+	// The wantReply=true ensures we get a response confirming the connection works.
+	_, _, err := conn.Client.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
 }
 
 // hostNames returns a comma-separated list of configured host names.
