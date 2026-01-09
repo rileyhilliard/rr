@@ -27,6 +27,9 @@ type Client struct {
 	Address string // The resolved address (host:port)
 }
 
+// matchWarningOnce ensures the SSH config Match directive warning is only shown once per process.
+var matchWarningOnce sync.Once
+
 // Dial establishes an SSH connection to the specified host.
 // The host can be:
 //   - An SSH config alias (e.g., "myserver")
@@ -184,7 +187,9 @@ func resolveSSHSettings(host string) *sshSettings {
 	}
 
 	if matchLine > 0 {
-		log.Printf("Warning: SSH config contains 'Match' directive at line %d. Host entries after this line may not be recognized. Consider using explicit user@host format or moving important hosts before the Match block.", matchLine)
+		matchWarningOnce.Do(func() {
+			log.Printf("Warning: SSH config contains 'Match' directive at line %d. Host entries after this line may not be recognized. Consider using explicit user@host format or moving important hosts before the Match block.", matchLine)
+		})
 	}
 
 	cfg, err := ssh_config.Decode(bytes.NewReader(content))
