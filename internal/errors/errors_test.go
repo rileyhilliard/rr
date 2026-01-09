@@ -243,3 +243,106 @@ func TestNewNotImplemented(t *testing.T) {
 	assert.Contains(t, err.Message, "run")
 	assert.Contains(t, err.Message, "not implemented")
 }
+
+func TestExitError(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    int
+		wantMsg string
+	}{
+		{
+			name:    "zero exit code",
+			code:    0,
+			wantMsg: "exit code 0",
+		},
+		{
+			name:    "non-zero exit code",
+			code:    1,
+			wantMsg: "exit code 1",
+		},
+		{
+			name:    "signal exit code",
+			code:    137,
+			wantMsg: "exit code 137",
+		},
+		{
+			name:    "negative exit code",
+			code:    -1,
+			wantMsg: "exit code -1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewExitError(tt.code)
+
+			require.NotNil(t, err)
+			assert.Equal(t, tt.code, err.Code)
+			assert.Equal(t, tt.wantMsg, err.Error())
+		})
+	}
+}
+
+func TestExitError_ImplementsError(t *testing.T) {
+	var err error = NewExitError(42)
+	assert.NotNil(t, err)
+	assert.Contains(t, err.Error(), "42")
+}
+
+func TestGetExitCode(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode int
+		wantOk   bool
+	}{
+		{
+			name:     "ExitError returns code",
+			err:      NewExitError(42),
+			wantCode: 42,
+			wantOk:   true,
+		},
+		{
+			name:     "ExitError with zero",
+			err:      NewExitError(0),
+			wantCode: 0,
+			wantOk:   true,
+		},
+		{
+			name:     "standard error returns false",
+			err:      errors.New("standard error"),
+			wantCode: 0,
+			wantOk:   false,
+		},
+		{
+			name:     "nil error returns false",
+			err:      nil,
+			wantCode: 0,
+			wantOk:   false,
+		},
+		{
+			name:     "structured Error returns false",
+			err:      New(ErrExec, "test", ""),
+			wantCode: 0,
+			wantOk:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, ok := GetExitCode(tt.err)
+			assert.Equal(t, tt.wantOk, ok)
+			assert.Equal(t, tt.wantCode, code)
+		})
+	}
+}
+
+func TestGetExitCode_WrappedError(t *testing.T) {
+	// Test that GetExitCode can unwrap errors
+	exitErr := NewExitError(99)
+
+	// errors.As should work with wrapped errors
+	code, ok := GetExitCode(exitErr)
+	assert.True(t, ok)
+	assert.Equal(t, 99, code)
+}

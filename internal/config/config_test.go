@@ -498,6 +498,256 @@ func TestIsReservedTaskName(t *testing.T) {
 	}
 }
 
+func TestValidateLock(t *testing.T) {
+	tests := []struct {
+		name    string
+		lock    LockConfig
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid defaults",
+			lock:    LockConfig{Enabled: true, Timeout: 5 * time.Minute, Stale: 10 * time.Minute},
+			wantErr: false,
+		},
+		{
+			name:    "disabled lock (no validation needed)",
+			lock:    LockConfig{Enabled: false},
+			wantErr: false,
+		},
+		{
+			name:    "negative timeout",
+			lock:    LockConfig{Enabled: true, Timeout: -1 * time.Second},
+			wantErr: true,
+			errMsg:  "timeout cannot be negative",
+		},
+		{
+			name:    "negative stale",
+			lock:    LockConfig{Enabled: true, Stale: -1 * time.Minute},
+			wantErr: true,
+			errMsg:  "stale cannot be negative",
+		},
+		{
+			name:    "timeout greater than stale",
+			lock:    LockConfig{Enabled: true, Timeout: 10 * time.Minute, Stale: 5 * time.Minute},
+			wantErr: true,
+			errMsg:  "should be less than",
+		},
+		{
+			name:    "zero timeout is allowed",
+			lock:    LockConfig{Enabled: true, Timeout: 0, Stale: 5 * time.Minute},
+			wantErr: false,
+		},
+		{
+			name:    "zero stale is allowed",
+			lock:    LockConfig{Enabled: true, Timeout: 5 * time.Minute, Stale: 0},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLock(tt.lock)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateMonitor(t *testing.T) {
+	validHost := map[string]Host{
+		"mini": {SSH: []string{"mini"}, Dir: "~/test"},
+	}
+
+	tests := []struct {
+		name    string
+		monitor MonitorConfig
+		hosts   map[string]Host
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid defaults",
+			monitor: MonitorConfig{Interval: "2s"},
+			hosts:   validHost,
+			wantErr: false,
+		},
+		{
+			name:    "empty interval (uses default)",
+			monitor: MonitorConfig{Interval: ""},
+			hosts:   validHost,
+			wantErr: false,
+		},
+		{
+			name:    "invalid interval format",
+			monitor: MonitorConfig{Interval: "abc"},
+			hosts:   validHost,
+			wantErr: true,
+			errMsg:  "not a valid duration",
+		},
+		{
+			name:    "valid interval with minutes",
+			monitor: MonitorConfig{Interval: "1m30s"},
+			hosts:   validHost,
+			wantErr: false,
+		},
+		{
+			name: "exclude with empty entry",
+			monitor: MonitorConfig{
+				Interval: "2s",
+				Exclude:  []string{""},
+			},
+			hosts:   validHost,
+			wantErr: true,
+			errMsg:  "empty entry",
+		},
+		{
+			name: "exclude with valid non-existent host (warning only)",
+			monitor: MonitorConfig{
+				Interval: "2s",
+				Exclude:  []string{"nonexistent"},
+			},
+			hosts:   validHost,
+			wantErr: false, // non-existent host is allowed (just a warning)
+		},
+		{
+			name: "invalid cpu threshold warning",
+			monitor: MonitorConfig{
+				Interval: "2s",
+				Thresholds: ThresholdConfig{
+					CPU: ThresholdValues{Warning: 150, Critical: 90},
+				},
+			},
+			hosts:   validHost,
+			wantErr: true,
+			errMsg:  "between 0 and 100",
+		},
+		{
+			name: "warning greater than critical",
+			monitor: MonitorConfig{
+				Interval: "2s",
+				Thresholds: ThresholdConfig{
+					CPU: ThresholdValues{Warning: 95, Critical: 90},
+				},
+			},
+			hosts:   validHost,
+			wantErr: true,
+			errMsg:  "should be less than",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMonitor(tt.monitor, tt.hosts)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateThresholds(t *testing.T) {
+	tests := []struct {
+		name    string
+		metric  string
+		thresh  ThresholdValues
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid thresholds",
+			metric:  "cpu",
+			thresh:  ThresholdValues{Warning: 70, Critical: 90},
+			wantErr: false,
+		},
+		{
+			name:    "zero values (use defaults)",
+			metric:  "ram",
+			thresh:  ThresholdValues{Warning: 0, Critical: 0},
+			wantErr: false,
+		},
+		{
+			name:    "negative warning",
+			metric:  "gpu",
+			thresh:  ThresholdValues{Warning: -10, Critical: 90},
+			wantErr: true,
+			errMsg:  "between 0 and 100",
+		},
+		{
+			name:    "warning over 100",
+			metric:  "cpu",
+			thresh:  ThresholdValues{Warning: 110, Critical: 120},
+			wantErr: true,
+			errMsg:  "between 0 and 100",
+		},
+		{
+			name:    "negative critical",
+			metric:  "ram",
+			thresh:  ThresholdValues{Warning: 50, Critical: -5},
+			wantErr: true,
+			errMsg:  "between 0 and 100",
+		},
+		{
+			name:    "critical over 100",
+			metric:  "gpu",
+			thresh:  ThresholdValues{Warning: 70, Critical: 150},
+			wantErr: true,
+			errMsg:  "between 0 and 100",
+		},
+		{
+			name:    "warning equals critical",
+			metric:  "cpu",
+			thresh:  ThresholdValues{Warning: 80, Critical: 80},
+			wantErr: true,
+			errMsg:  "should be less than",
+		},
+		{
+			name:    "warning greater than critical",
+			metric:  "ram",
+			thresh:  ThresholdValues{Warning: 90, Critical: 80},
+			wantErr: true,
+			errMsg:  "should be less than",
+		},
+		{
+			name:    "only warning set (zero critical is allowed)",
+			metric:  "gpu",
+			thresh:  ThresholdValues{Warning: 70, Critical: 0},
+			wantErr: false,
+		},
+		{
+			name:    "only critical set (zero warning is allowed)",
+			metric:  "cpu",
+			thresh:  ThresholdValues{Warning: 0, Critical: 90},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateThresholds(tt.metric, tt.thresh)
+			if tt.wantErr {
+				assert.Error(t, err)
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestLoadOrDefault(t *testing.T) {
 	// Change to a directory without config
 	dir := t.TempDir()

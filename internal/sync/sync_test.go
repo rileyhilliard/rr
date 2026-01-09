@@ -1,6 +1,9 @@
 package sync
 
 import (
+	"os/exec"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -378,4 +381,124 @@ func TestFormatBytes(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestHandleRsyncError(t *testing.T) {
+	tests := []struct {
+		name         string
+		exitCode     int
+		hostName     string
+		wantContains string
+	}{
+		{
+			name:         "exit code 1 - syntax error",
+			exitCode:     1,
+			hostName:     "testhost",
+			wantContains: "syntax or usage error",
+		},
+		{
+			name:         "exit code 2 - protocol incompatibility",
+			exitCode:     2,
+			hostName:     "testhost",
+			wantContains: "protocol incompatibility",
+		},
+		{
+			name:         "exit code 3 - file selection error",
+			exitCode:     3,
+			hostName:     "testhost",
+			wantContains: "File selection error",
+		},
+		{
+			name:         "exit code 5 - client-server protocol",
+			exitCode:     5,
+			hostName:     "testhost",
+			wantContains: "client-server protocol",
+		},
+		{
+			name:         "exit code 10 - socket I/O",
+			exitCode:     10,
+			hostName:     "testhost",
+			wantContains: "socket I/O",
+		},
+		{
+			name:         "exit code 11 - file I/O",
+			exitCode:     11,
+			hostName:     "testhost",
+			wantContains: "file I/O",
+		},
+		{
+			name:         "exit code 12 - protocol data stream",
+			exitCode:     12,
+			hostName:     "testhost",
+			wantContains: "protocol data stream",
+		},
+		{
+			name:         "exit code 23 - partial transfer",
+			exitCode:     23,
+			hostName:     "testhost",
+			wantContains: "Partial transfer due to error",
+		},
+		{
+			name:         "exit code 24 - vanished source",
+			exitCode:     24,
+			hostName:     "testhost",
+			wantContains: "vanished source files",
+		},
+		{
+			name:         "exit code 255 - SSH failure",
+			exitCode:     255,
+			hostName:     "myserver",
+			wantContains: "SSH connection to 'myserver' failed",
+		},
+		{
+			name:         "unknown exit code",
+			exitCode:     99,
+			hostName:     "testhost",
+			wantContains: "exited with code 99",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a real exec.ExitError by running a command that exits with the code
+			cmd := exec.Command("sh", "-c", "exit "+strconv.Itoa(tt.exitCode))
+			err := cmd.Run()
+			require.Error(t, err, "command should fail with exit code %d", tt.exitCode)
+
+			result := handleRsyncError(err, tt.hostName)
+			assert.Error(t, result)
+			assert.Contains(t, result.Error(), tt.wantContains)
+		})
+	}
+}
+
+func TestHandleRsyncError_NonExitError(t *testing.T) {
+	// Test with a non-ExitError
+	regularErr := assert.AnError
+	result := handleRsyncError(regularErr, "testhost")
+
+	assert.Error(t, result)
+	assert.Contains(t, result.Error(), "rsync failed")
+}
+
+func TestStreamOutput(t *testing.T) {
+	input := "line1\nline2\nline3\n"
+	reader := strings.NewReader(input)
+	var output strings.Builder
+
+	streamOutput(reader, &output)
+
+	// Each line should be written with a newline
+	assert.Contains(t, output.String(), "line1")
+	assert.Contains(t, output.String(), "line2")
+	assert.Contains(t, output.String(), "line3")
+}
+
+func TestStreamOutput_EmptyInput(t *testing.T) {
+	reader := strings.NewReader("")
+	var output strings.Builder
+
+	streamOutput(reader, &output)
+
+	assert.Empty(t, output.String())
 }
