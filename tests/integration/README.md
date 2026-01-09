@@ -1,76 +1,74 @@
-# Integration Test Setup
+# Integration test setup
 
 Integration tests require SSH connectivity to a remote host. This document covers three approaches for setting up a test environment.
 
-## Environment Variables
+## Environment variables
 
-| Variable | Description | Default |
+| Variable | Description | Example |
 |----------|-------------|---------|
-| `RR_TEST_SSH_HOST` | SSH host for testing (format: `host:port` or just `host`) | `localhost` |
-| `RR_TEST_SSH_USER` | SSH user for authentication | Current user |
-| `RR_TEST_SSH_KEY` | Path to SSH private key | `~/.ssh/id_rsa` |
-| `RR_TEST_SKIP_SSH` | Set to `1` to skip SSH-dependent tests | unset |
+| `RR_TEST_SSH_HOST` | SSH host for testing (format: `host:port` or `host`) | `localhost:2222` |
+| `RR_TEST_SSH_USER` | SSH user for authentication | `testuser` |
+| `RR_TEST_SSH_KEY` | Path to SSH private key (for CI/Docker) | `/tmp/rr-ci-ssh-keys/id_ed25519` |
+| `RR_TEST_SKIP_SSH` | Set to `1` to skip SSH-dependent tests | `1` |
 
-## Option 1: Local SSH (macOS/Linux)
+When `RR_TEST_SSH_KEY` is set, tests automatically disable strict host key checking since Docker containers regenerate host keys on each start.
 
-Use your local machine's SSH server for testing.
+## Option 1: Docker SSH server (recommended)
 
-### macOS
+Spin up a disposable SSH server with ephemeral keys. Works locally and in CI.
 
+```bash
+# Start server and generate keys
+./scripts/ci-ssh-server.sh start
+
+# Set env vars and run tests
+eval $(./scripts/ci-ssh-server.sh env)
+go test -v ./tests/integration/... ./pkg/sshutil/...
+
+# Clean up
+./scripts/ci-ssh-server.sh stop
+```
+
+The script uses `linuxserver/openssh-server` on port 2222 with key-based auth (no passwords).
+
+## Option 2: Local SSH (macOS/Linux)
+
+Use your machine's SSH server. Requires SSH enabled locally.
+
+**macOS:**
 1. Enable Remote Login in System Settings > General > Sharing
-2. Run tests with localhost:
-   ```bash
-   RR_TEST_SSH_HOST=localhost go test ./tests/integration/... -v
-   ```
-
-### Linux
-
-1. Install and start OpenSSH server:
-   ```bash
-   sudo apt install openssh-server
-   sudo systemctl start sshd
-   ```
 2. Run tests:
    ```bash
    RR_TEST_SSH_HOST=localhost go test ./tests/integration/... -v
    ```
 
-## Option 2: Docker SSH Server
-
-Spin up a disposable SSH server in Docker. Good for CI or when you don't want to enable local SSH.
-
+**Linux:**
 ```bash
-# Start the test SSH server
-./scripts/test-ssh-server.sh
-
-# Run tests against it
-RR_TEST_SSH_HOST=localhost:2222 go test ./tests/integration/... -v
-
-# Clean up when done
-docker stop rr-test-ssh && docker rm rr-test-ssh
+sudo apt install openssh-server
+sudo systemctl start sshd
+RR_TEST_SSH_HOST=localhost go test ./tests/integration/... -v
 ```
 
-The Docker container uses the `linuxserver/openssh-server` image and exposes SSH on port 2222.
+## Option 3: Skip SSH tests
 
-## Option 3: Skip SSH Tests
-
-If you're working on non-SSH features, skip the integration tests entirely:
+When working on non-SSH features:
 
 ```bash
 RR_TEST_SKIP_SSH=1 go test ./tests/integration/...
 ```
 
-## Running Tests
+## Running tests
 
 ```bash
-# Run with SSH (requires one of the above setups)
-make test-integration
+# Docker approach (recommended)
+./scripts/ci-ssh-server.sh start
+eval $(./scripts/ci-ssh-server.sh env)
+go test -v ./tests/integration/... ./pkg/sshutil/...
+./scripts/ci-ssh-server.sh stop
 
-# Skip SSH tests
-RR_TEST_SKIP_SSH=1 go test ./tests/integration/...
-
-# Verbose output
-RR_TEST_SSH_HOST=localhost go test ./tests/integration/... -v -count=1
+# Or use make targets
+make test-integration    # Requires SSH setup
+RR_TEST_SKIP_SSH=1 make test-integration  # Skip SSH tests
 ```
 
 ## Test Categories

@@ -97,10 +97,20 @@ func resolveSSHSettings(host string) *sshSettings {
 		user: currentUser(),
 	}
 
-	// Parse user@host:port format
+	// Parse user@host:port format first (explicit user takes precedence)
+	explicitUser := false
 	if atIdx := strings.Index(host, "@"); atIdx != -1 {
 		settings.user = host[:atIdx]
 		host = host[atIdx+1:]
+		explicitUser = true
+	}
+
+	// Check for test user override (for CI environments)
+	// Only applies when no explicit user@host format was used
+	if !explicitUser {
+		if testUser := os.Getenv("RR_TEST_SSH_USER"); testUser != "" {
+			settings.user = testUser
+		}
 	}
 
 	if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
@@ -199,6 +209,13 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		authMethods = append(authMethods, agentAuth)
 	}
 
+	// Check for test key override (for CI environments)
+	if testKey := os.Getenv("RR_TEST_SSH_KEY"); testKey != "" {
+		if keyAuth, err := keyFileAuth(testKey); err == nil {
+			authMethods = append(authMethods, keyAuth)
+		}
+	}
+
 	// Try specific identity file from SSH config
 	if settings.identityFile != "" {
 		if keyAuth, err := keyFileAuth(settings.identityFile); err == nil {
@@ -255,6 +272,7 @@ var (
 
 // sshAgentAuth returns an auth method using the SSH agent if available.
 // The agent connection is reused across multiple SSH connections.
+// Returns nil if the agent has no keys loaded.
 func sshAgentAuth() ssh.AuthMethod {
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
@@ -271,6 +289,13 @@ func sshAgentAuth() ssh.AuthMethod {
 	})
 
 	if agentClient == nil {
+		return nil
+	}
+
+	// Only return agent auth if the agent actually has keys.
+	// An empty agent causes auth failures when placed before other methods.
+	signers, err := agentClient.Signers()
+	if err != nil || len(signers) == 0 {
 		return nil
 	}
 

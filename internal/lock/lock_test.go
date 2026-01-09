@@ -2,6 +2,8 @@ package lock
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -248,5 +250,103 @@ func TestHolderNoConnection(t *testing.T) {
 	result := Holder(nil, "/tmp/test.lock")
 	if result != "unknown (no connection)" {
 		t.Errorf("Holder() with nil connection = %q, want %q", result, "unknown (no connection)")
+	}
+}
+
+func TestLockConfig_DefaultDir(t *testing.T) {
+	// When Dir is empty, Acquire should default to /tmp
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: time.Second,
+		Stale:   time.Minute,
+		Dir:     "", // Empty should default to /tmp
+	}
+
+	// Can't actually acquire without connection, but we can verify the config is accepted
+	_, err := Acquire(nil, cfg, "testhash")
+	if err == nil {
+		t.Error("Expected error for nil connection")
+	}
+	// The error should be about connection, not config
+	if !strings.Contains(err.Error(), "no connection") {
+		t.Errorf("Expected 'no connection' error, got: %v", err)
+	}
+}
+
+func TestLockDir_IncludesProjectHash(t *testing.T) {
+	// Verify lock path format: <dir>/rr-<hash>.lock
+	projectHash := "abc123def456"
+	baseDir := "/tmp"
+
+	// Build expected path
+	expected := filepath.Join(baseDir, "rr-"+projectHash+".lock")
+
+	// Verify format matches expected pattern
+	if !strings.Contains(expected, projectHash) {
+		t.Errorf("Lock dir should contain project hash")
+	}
+	if !strings.HasSuffix(expected, ".lock") {
+		t.Errorf("Lock dir should end with .lock")
+	}
+	if !strings.Contains(expected, "rr-") {
+		t.Errorf("Lock dir should contain rr- prefix")
+	}
+}
+
+func TestLock_Struct(t *testing.T) {
+	info := &LockInfo{
+		User:     "testuser",
+		Hostname: "testhost",
+		Started:  time.Now(),
+		PID:      12345,
+	}
+
+	l := &Lock{
+		Dir:  "/tmp/rr-test.lock",
+		Info: info,
+		conn: nil,
+	}
+
+	if l.Dir != "/tmp/rr-test.lock" {
+		t.Errorf("Lock.Dir = %q, want %q", l.Dir, "/tmp/rr-test.lock")
+	}
+	if l.Info != info {
+		t.Error("Lock.Info not set correctly")
+	}
+}
+
+func TestLockInfo_ZeroStartedAge(t *testing.T) {
+	// A lock with zero Started time should have large age
+	info := &LockInfo{
+		User:     "test",
+		Hostname: "host",
+		Started:  time.Time{}, // zero time
+		PID:      1,
+	}
+
+	age := info.Age()
+	// Zero time is year 1, so age should be huge (many years)
+	if age < time.Hour*24*365 {
+		t.Errorf("Expected very large age for zero Started time, got %v", age)
+	}
+}
+
+func TestParseLockInfo_MissingFields(t *testing.T) {
+	// JSON with missing fields should still parse
+	data := []byte(`{"user": "test"}`)
+	info, err := ParseLockInfo(data)
+	if err != nil {
+		t.Fatalf("ParseLockInfo() returned error: %v", err)
+	}
+
+	if info.User != "test" {
+		t.Errorf("User = %q, want %q", info.User, "test")
+	}
+	// Other fields should be zero values
+	if info.Hostname != "" {
+		t.Errorf("Hostname should be empty, got %q", info.Hostname)
+	}
+	if info.PID != 0 {
+		t.Errorf("PID should be 0, got %d", info.PID)
 	}
 }

@@ -1,5 +1,5 @@
 .PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh completions
-.PHONY: setup setup-hooks verify check
+.PHONY: setup setup-hooks verify check ci coverage-check fmt-check
 
 # Build
 build:
@@ -19,8 +19,17 @@ test-integration-no-ssh:
 	RR_TEST_SKIP_SSH=1 go test ./tests/integration/... -v
 
 test-coverage:
-	go test -coverprofile=coverage.out ./...
+	go test -race -coverprofile=coverage.out -covermode=atomic ./...
 	go tool cover -html=coverage.out -o coverage.html
+
+coverage-check:
+	@go test -race -coverprofile=coverage.out -covermode=atomic ./... > /dev/null 2>&1
+	@COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	echo "Total coverage: $$COVERAGE%"; \
+	if [ $$(echo "$$COVERAGE < 80" | bc -l) -eq 1 ]; then \
+		echo "Coverage $$COVERAGE% is below 80% minimum"; \
+		exit 1; \
+	fi
 
 # Linting and formatting
 lint:
@@ -32,6 +41,17 @@ lint-fix:
 fmt:
 	go fmt ./...
 	goimports -w .
+
+fmt-check:
+	@if [ -n "$$(gofmt -l .)" ]; then \
+		echo "Files not formatted:"; \
+		gofmt -l .; \
+		exit 1; \
+	fi
+
+# CI - run the full CI suite locally
+ci: fmt-check lint coverage-check build
+	@echo "All CI checks passed"
 
 # Git hooks (lefthook with fallback warning)
 setup-hooks:

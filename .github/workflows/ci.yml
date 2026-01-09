@@ -5,19 +5,172 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  test:
+    name: Test (Go ${{ matrix.go-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.22', '1.23', '1.24']
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Files not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
       - name: Lint
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1
-      - name: Test
-        run: go test ./...
+
+      - name: Test with coverage
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic -json ./... 2>&1 | tee test-results.json
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## Test Results (Go ${{ matrix.go-version }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Count results from JSON output
+          if [ -f test-results.json ]; then
+            PASSED=$(grep -c '"Action":"pass"' test-results.json 2>/dev/null || echo "0")
+            FAILED=$(grep -c '"Action":"fail"' test-results.json 2>/dev/null || echo "0")
+            echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Add coverage info
+          if [ -f coverage.out ]; then
+            COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Coverage:** $COVERAGE" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage: $COVERAGE%"
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "::error::Coverage $COVERAGE% is below 80% minimum"
+            exit 1
+          fi
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-go${{ matrix.go-version }}
+          path: coverage.out
+          retention-days: 30
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  integration:
+    name: Integration Tests (SSH)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Start SSH test server
+        run: |
+          # Generate SSH key pair
+          mkdir -p /tmp/rr-ci-ssh-keys
+          ssh-keygen -t ed25519 -f /tmp/rr-ci-ssh-keys/id_ed25519 -N "" -C "rr-ci-test" -q
+
+          # Start SSH container with public key auth
+          # Note: linuxserver/openssh-server listens on port 2222 internally
+          docker run -d \
+            --name rr-ci-ssh \
+            -p 2222:2222 \
+            -e PUID=1000 \
+            -e PGID=1000 \
+            -e TZ=UTC \
+            -e USER_NAME=testuser \
+            -e PUBLIC_KEY="$(cat /tmp/rr-ci-ssh-keys/id_ed25519.pub)" \
+            linuxserver/openssh-server
+
+          # Wait for SSH to be ready
+          echo "Waiting for SSH server..."
+          for i in {1..30}; do
+            if nc -z localhost 2222 2>/dev/null; then
+              echo "SSH server is ready"
+              break
+            fi
+            sleep 1
+          done
+
+          # Add to known_hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          # Verify connection
+          ssh -i /tmp/rr-ci-ssh-keys/id_ed25519 \
+              -p 2222 \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              testuser@localhost "echo 'SSH connection successful'"
+
+      - name: Run integration tests
+        env:
+          RR_TEST_SSH_HOST: localhost:2222
+          RR_TEST_SSH_KEY: /tmp/rr-ci-ssh-keys/id_ed25519
+          RR_TEST_SSH_USER: testuser
+        run: |
+          go test -v -race ./tests/integration/... ./pkg/sshutil/...
+
+      - name: Stop SSH server
+        if: always()
+        run: |
+          docker stop rr-ci-ssh || true
+          docker rm rr-ci-ssh || true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
       - name: Build
         run: go build ./cmd/rr
