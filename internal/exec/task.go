@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -29,8 +30,8 @@ type StepResult struct {
 func ExecuteTask(conn *host.Connection, task *config.TaskConfig, env map[string]string, workDir string, stdout, stderr io.Writer) (*TaskResult, error) {
 	if task == nil {
 		return nil, errors.New(errors.ErrExec,
-			"Task is nil",
-			"This is an internal error - task should be validated before execution")
+			"No task provided",
+			"This shouldn't happen - please report this bug!")
 	}
 
 	// Single-command task
@@ -48,8 +49,8 @@ func ExecuteTask(conn *host.Connection, task *config.TaskConfig, env map[string]
 	// Multi-step task
 	if len(task.Steps) == 0 {
 		return nil, errors.New(errors.ErrExec,
-			"Task has no run command or steps",
-			"Add either 'run' or 'steps' to your task configuration")
+			"This task doesn't have anything to run",
+			"Add a 'run' command or 'steps' to your task config.")
 	}
 
 	return executeSteps(conn, task.Steps, env, workDir, stdout, stderr)
@@ -150,8 +151,8 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 	workDir, err := os.Getwd()
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrExec,
-			"Failed to get working directory",
-			"Check directory permissions")
+			"Couldn't figure out the current directory",
+			"Check that the directory still exists and you have access.")
 	}
 
 	// Create a local connection
@@ -162,4 +163,35 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 	}
 
 	return ExecuteTask(conn, task, env, workDir, os.Stdout, os.Stderr)
+}
+
+// BuildRemoteCommand constructs a remote command with shell config, setup commands, and working directory.
+// This is the recommended way to build commands for remote execution with full configuration support.
+func BuildRemoteCommand(cmd string, host *config.Host) string {
+	var parts []string
+
+	// Add setup commands if configured
+	if len(host.SetupCommands) > 0 {
+		parts = append(parts, host.SetupCommands...)
+	}
+
+	// Add cd to working directory
+	if host.Dir != "" {
+		dir := config.Expand(host.Dir)
+		parts = append(parts, fmt.Sprintf("cd %q", dir))
+	}
+
+	// Add the actual command
+	parts = append(parts, cmd)
+
+	// Join all parts with &&
+	fullCmd := strings.Join(parts, " && ")
+
+	// Wrap in shell if configured
+	if host.Shell != "" {
+		// Shell format is "bash -l -c" - we append the quoted command
+		return fmt.Sprintf("%s %q", host.Shell, fullCmd)
+	}
+
+	return fullCmd
 }

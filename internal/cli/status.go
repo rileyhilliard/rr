@@ -59,7 +59,7 @@ func statusCommand() error {
 	if cfgPath == "" {
 		return errors.New(errors.ErrConfig,
 			"No config file found",
-			"Run 'rr init' to create a .rr.yaml config file")
+			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 	}
 
 	cfg, err := config.Load(cfgPath)
@@ -189,63 +189,51 @@ func outputStatusJSON(cfg *config.Config, results map[string]probeResult, select
 	return enc.Encode(output)
 }
 
-// outputStatusText outputs status in human-readable format.
+// outputStatusText outputs status in human-readable format using a table.
 func outputStatusText(cfg *config.Config, results map[string]probeResult, selected *Selected) error {
-	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 
-	fmt.Println("Hosts:")
-
+	// Build table rows
+	var rows []ui.StatusTableRow
 	for name, result := range results {
-		// Determine if the whole host is healthy (at least one alias works)
-		healthy := false
 		for _, alias := range result.Aliases {
-			if alias.Success {
-				healthy = true
-				break
+			row := ui.StatusTableRow{
+				Host:  name,
+				Alias: alias.SSHAlias,
 			}
-		}
 
-		// Host header line
-		if healthy {
-			fmt.Printf("  %s %s\n", successStyle.Render(ui.SymbolComplete), name)
-		} else {
-			fmt.Printf("  %s %s\n", errorStyle.Render(ui.SymbolFail), name)
-		}
-
-		// Individual alias results
-		for _, alias := range result.Aliases {
 			if alias.Success {
-				latency := formatLatency(alias.Latency)
-				fmt.Printf("    %s %s: Connected %s\n",
-					successStyle.Render(ui.SymbolComplete),
-					alias.SSHAlias,
-					mutedStyle.Render(fmt.Sprintf("(%s)", latency)),
-				)
+				row.Status = "ok"
+				row.Latency = formatLatency(alias.Latency)
 			} else {
+				row.Status = "fail"
 				errMsg := "Connection failed"
 				if probeErr, ok := alias.Error.(*host.ProbeError); ok {
 					errMsg = probeErr.Reason.String()
 				} else if alias.Error != nil {
 					errMsg = alias.Error.Error()
 				}
-				// Capitalize first letter
-				if len(errMsg) > 0 {
-					errMsg = string(errMsg[0]-32) + errMsg[1:]
-				}
-				fmt.Printf("    %s %s: %s\n",
-					errorStyle.Render(ui.SymbolFail),
-					alias.SSHAlias,
-					errMsg,
-				)
+				row.Latency = errMsg
 			}
+
+			rows = append(rows, row)
 		}
 	}
 
-	fmt.Println()
+	// Convert selected to table selection
+	var tableSelection *ui.StatusTableSelection
+	if selected != nil {
+		tableSelection = &ui.StatusTableSelection{
+			Host:  selected.Host,
+			Alias: selected.Alias,
+		}
+	}
 
-	// Show default and selected
+	// Render the table
+	fmt.Println(ui.RenderStatusTable(rows, cfg.Default, tableSelection))
+
+	// Show default and selected summary
 	if cfg.Default != "" && cfg.Default != "auto" {
 		fmt.Printf("Default: %s\n", cfg.Default)
 	} else {

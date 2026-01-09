@@ -22,7 +22,11 @@ var (
 	syncProbeTimeoutFlag string
 	syncDryRun           bool
 	initHostFlag         string
+	initRemoteDirFlag    string
+	initNameFlag         string
 	initForce            bool
+	initNonInteractive   bool
+	initSkipProbe        bool
 	monitorHostsFlag     string
 	monitorIntervalFlag  string
 )
@@ -90,12 +94,29 @@ var initCmd = &cobra.Command{
 Creates a .rr.yaml file in the current directory with sensible defaults.
 Guides you through SSH host configuration with interactive prompts.
 
+In non-interactive mode (--non-interactive or CI=true), requires --host flag.
+
+Environment Variables:
+  RR_HOST             SSH host (user@hostname or SSH config alias)
+  RR_HOST_NAME        Friendly name for the host
+  RR_REMOTE_DIR       Remote directory path
+  RR_NON_INTERACTIVE  Set to "true" for non-interactive mode
+
 Examples:
   rr init
   rr init --host myserver
-  rr init --force`,
+  rr init --force
+  rr init --non-interactive --host user@server --remote-dir ~/projects
+  CI=true rr init --host myserver --skip-probe`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return initCommand(initHostFlag, initForce)
+		return initCommand(InitOptions{
+			Host:           initHostFlag,
+			Name:           initNameFlag,
+			Dir:            initRemoteDirFlag,
+			Overwrite:      initForce,
+			NonInteractive: initNonInteractive,
+			SkipProbe:      initSkipProbe,
+		})
 	},
 }
 
@@ -170,13 +191,13 @@ Examples:
 			parsed, err := time.ParseDuration(monitorIntervalFlag)
 			if err != nil {
 				return errors.WrapWithCode(err, errors.ErrConfig,
-					fmt.Sprintf("Invalid interval: %s", monitorIntervalFlag),
-					"Use a valid duration like 2s, 5s, or 1m")
+					fmt.Sprintf("'%s' doesn't look like a valid interval", monitorIntervalFlag),
+					"Try something like 2s, 5s, or 1m.")
 			}
 			if parsed < 500*time.Millisecond {
 				return errors.New(errors.ErrConfig,
-					"Interval too short",
-					"Minimum interval is 500ms to avoid overwhelming hosts")
+					"That interval is too short",
+					"Keep it at 500ms or above to avoid hammering the hosts.")
 			}
 			interval = parsed
 		}
@@ -235,8 +256,8 @@ Examples:
 			return rootCmd.GenPowerShellCompletion(os.Stdout)
 		default:
 			return errors.New(errors.ErrExec,
-				"Unknown shell: "+args[0],
-				"Supported shells: bash, zsh, fish, powershell")
+				fmt.Sprintf("Don't know that shell: %s", args[0]),
+				"Supported: bash, zsh, fish, powershell")
 		}
 	},
 }
@@ -259,8 +280,12 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "show what would be synced without syncing")
 
 	// init command flags
-	initCmd.Flags().StringVar(&initHostFlag, "host", "", "pre-specify SSH host")
-	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config")
+	initCmd.Flags().StringVar(&initHostFlag, "host", "", "SSH host (user@hostname or SSH config alias)")
+	initCmd.Flags().StringVar(&initRemoteDirFlag, "remote-dir", "", "remote directory path (default: ~/projects/${PROJECT})")
+	initCmd.Flags().StringVar(&initNameFlag, "name", "", "friendly name for the host (default: extracted from host)")
+	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config without prompting")
+	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "skip interactive prompts, use flags and defaults")
+	initCmd.Flags().BoolVar(&initSkipProbe, "skip-probe", false, "skip SSH connection testing")
 
 	// monitor command flags
 	monitorCmd.Flags().StringVar(&monitorHostsFlag, "hosts", "", "filter to specific hosts (comma-separated)")

@@ -4,10 +4,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewPool(t *testing.T) {
+	hosts := map[string]config.Host{
+		"test": {SSH: []string{"localhost"}},
+	}
+
 	tests := []struct {
 		name    string
 		timeout time.Duration
@@ -24,9 +29,10 @@ func TestNewPool(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := NewPool(tt.timeout)
+			pool := NewPool(hosts, tt.timeout)
 			assert.NotNil(t, pool)
 			assert.NotNil(t, pool.connections)
+			assert.NotNil(t, pool.hosts)
 			assert.Equal(t, 0, pool.Size())
 
 			if tt.timeout == 0 {
@@ -39,7 +45,8 @@ func TestNewPool(t *testing.T) {
 }
 
 func TestPoolClose(t *testing.T) {
-	pool := NewPool(10 * time.Second)
+	hosts := map[string]config.Host{}
+	pool := NewPool(hosts, 10*time.Second)
 	assert.NotNil(t, pool)
 
 	// Close empty pool should not panic
@@ -48,7 +55,8 @@ func TestPoolClose(t *testing.T) {
 }
 
 func TestPoolCloseOne(t *testing.T) {
-	pool := NewPool(10 * time.Second)
+	hosts := map[string]config.Host{}
+	pool := NewPool(hosts, 10*time.Second)
 	assert.NotNil(t, pool)
 
 	// CloseOne on non-existent alias should not panic
@@ -57,7 +65,8 @@ func TestPoolCloseOne(t *testing.T) {
 }
 
 func TestPoolReturn(t *testing.T) {
-	pool := NewPool(10 * time.Second)
+	hosts := map[string]config.Host{}
+	pool := NewPool(hosts, 10*time.Second)
 	assert.NotNil(t, pool)
 
 	// Return on non-existent alias should not panic
@@ -66,12 +75,14 @@ func TestPoolReturn(t *testing.T) {
 }
 
 func TestPoolSize(t *testing.T) {
-	pool := NewPool(10 * time.Second)
+	hosts := map[string]config.Host{}
+	pool := NewPool(hosts, 10*time.Second)
 	assert.Equal(t, 0, pool.Size())
 }
 
 func TestPoolIsAlive_NilClient(t *testing.T) {
-	pool := NewPool(10 * time.Second)
+	hosts := map[string]config.Host{}
+	pool := NewPool(hosts, 10*time.Second)
 
 	// Nil client should return false
 	assert.False(t, pool.isAlive(nil))
@@ -82,7 +93,8 @@ func TestPoolIsAlive_NilClient(t *testing.T) {
 // the pool behavior without actual connections.
 
 func TestPoolConcurrency(t *testing.T) {
-	pool := NewPool(10 * time.Second)
+	hosts := map[string]config.Host{}
+	pool := NewPool(hosts, 10*time.Second)
 	done := make(chan bool)
 
 	// Concurrent access should not race

@@ -2,7 +2,7 @@ package monitor
 
 import "github.com/charmbracelet/lipgloss"
 
-// Dashboard color palette - GitHub dark theme inspired
+// Dashboard color palette - btop-inspired monochrome with cyan accent
 const (
 	// Background colors
 	ColorDarkBg    = lipgloss.Color("#0d1117")
@@ -19,8 +19,12 @@ const (
 	ColorTextSecondary = lipgloss.Color("#8b949e")
 	ColorTextMuted     = lipgloss.Color("#6e7681")
 
-	// Accent colors
-	ColorAccent = lipgloss.Color("#58a6ff")
+	// Accent colors - cyan for btop-style look
+	ColorAccent    = lipgloss.Color("#00d7d7")
+	ColorAccentDim = lipgloss.Color("#005f5f")
+
+	// Graph colors
+	ColorGraph = lipgloss.Color("#00d7d7")
 )
 
 // Thresholds for metric severity levels
@@ -188,4 +192,99 @@ func CompactProgressBarWithThresholds(width int, percent float64, warning, criti
 	}
 
 	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical)).Render(bar)
+}
+
+// ThinProgressBar renders a minimal line-based progress bar using thin characters.
+// Uses ━ for filled segments and ─ for empty segments.
+func ThinProgressBar(width int, percent float64) string {
+	return ThinProgressBarWithThresholds(width, percent, int(WarningThreshold), int(CriticalThreshold))
+}
+
+// ThinProgressBarWithThresholds renders a thin progress bar with custom thresholds.
+func ThinProgressBarWithThresholds(width int, percent float64, warning, critical int) string {
+	if width < 1 {
+		width = 1
+	}
+
+	// Clamp percentage to 0-100
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	filled := int(percent / 100.0 * float64(width))
+	if filled > width {
+		filled = width
+	}
+
+	bar := ""
+	for i := 0; i < width; i++ {
+		if i < filled {
+			bar += "━"
+		} else {
+			bar += "─"
+		}
+	}
+
+	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical)).Render(bar)
+}
+
+// SectionHeader renders a section header with the title on the left and value on the right.
+// Format: ┌─ Title ────────────────────────────────────── Value ┐
+func SectionHeader(title, value string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+
+	// Build left part: ┌─ Title
+	leftPart := "┌─ " + title + " "
+
+	// Build right part: Value ┐
+	rightPart := " " + value + " ┐"
+
+	// Calculate middle fill width
+	fillWidth := width - len(leftPart) - len(rightPart)
+	if fillWidth < 1 {
+		fillWidth = 1
+	}
+
+	// Build middle with ─ characters
+	middle := ""
+	for i := 0; i < fillWidth; i++ {
+		middle += "─"
+	}
+
+	// Style the parts
+	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	titleStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(ColorTextPrimary).Bold(true)
+
+	return borderStyle.Render("┌─ ") +
+		titleStyle.Render(title) +
+		borderStyle.Render(" "+middle+" ") +
+		valueStyle.Render(value) +
+		borderStyle.Render(" ┐")
+}
+
+// SectionFooter renders the bottom border of a section.
+// Format: └────────────────────────────────────────────────────┘
+func SectionFooter(width int) string {
+	if width < 2 {
+		width = 2
+	}
+
+	middle := ""
+	for i := 0; i < width-2; i++ {
+		middle += "─"
+	}
+
+	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	return borderStyle.Render("└" + middle + "┘")
+}
+
+// SectionBorder renders the left border character for section content.
+func SectionBorder() string {
+	return lipgloss.NewStyle().Foreground(ColorBorder).Render("│")
 }

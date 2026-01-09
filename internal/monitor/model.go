@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -73,6 +74,10 @@ type Model struct {
 	sortOrder  SortOrder
 	viewMode   ViewMode
 	showHelp   bool
+
+	// Detail view viewport for scrollable content
+	detailViewport viewport.Model
+	viewportReady  bool
 }
 
 // tickMsg signals a periodic refresh.
@@ -125,6 +130,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+		// Initialize or resize the detail viewport
+		// Reserve space for header and footer
+		headerHeight := 3
+		footerHeight := 2
+		viewportHeight := m.height - headerHeight - footerHeight
+		if viewportHeight < 1 {
+			viewportHeight = 1
+		}
+
+		if !m.viewportReady {
+			m.detailViewport = viewport.New(m.width, viewportHeight)
+			m.detailViewport.YPosition = headerHeight
+			m.viewportReady = true
+		} else {
+			m.detailViewport.Width = m.width
+			m.detailViewport.Height = viewportHeight
+		}
 
 	case tickMsg:
 		return m, tea.Batch(m.tickCmd(), m.collectCmd())

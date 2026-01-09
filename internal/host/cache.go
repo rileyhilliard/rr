@@ -107,7 +107,7 @@ func (c *ConnectionCache) isAlive(conn *Connection) bool {
 	if err != nil {
 		return false
 	}
-	session.Close()
+	_ = session.Close()
 	return true
 }
 

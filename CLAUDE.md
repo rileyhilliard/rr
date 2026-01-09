@@ -80,7 +80,8 @@ return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if ho
 
 - Use `testify/assert` and `testify/require`
 - Table-driven tests preferred
-- Integration tests use `RR_TEST_SSH_HOST` and `RR_TEST_SKIP_SSH` env vars
+- Integration tests use env vars: `RR_TEST_SSH_HOST`, `RR_TEST_SSH_KEY`, `RR_TEST_SSH_USER`
+- Use `./scripts/ci-ssh-server.sh` for Docker-based SSH testing
 
 ## Config File
 

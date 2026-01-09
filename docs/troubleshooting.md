@@ -147,6 +147,65 @@ if [ -z "$SSH_AUTH_SOCK" ]; then
 fi
 ```
 
+### "SSH config contains Match directive" warning
+
+**Symptom:** Warning appears when connecting about unsupported `Match` directives
+
+**Cause:** The SSH config parser doesn't support OpenSSH's `Match` directives. Host entries after the first `Match` line in your `~/.ssh/config` may not be recognized.
+
+**Fixes:**
+
+1. **Move important Host entries before the Match block** in `~/.ssh/config`:
+   ```
+   # These will be parsed
+   Host myserver
+       HostName 192.168.1.100
+       User deploy
+
+   # Everything after Match may not be recognized by rr
+   Match host *.internal
+       ProxyJump bastion
+   ```
+
+2. **Use explicit `user@hostname` format** in `.rr.yaml` instead of SSH aliases:
+   ```yaml
+   hosts:
+     myserver:
+       ssh:
+         - deploy@192.168.1.100  # Explicit format, doesn't need SSH config
+   ```
+
+### "command not found" on remote
+
+**Symptom:** Commands like `go test` or `npm run` fail with "command not found" even though they work when you SSH manually.
+
+**Cause:** SSH sessions don't source shell config files (`.zshrc`, `.bashrc`) by default, so tools installed via Homebrew or nvm aren't in PATH.
+
+**Fixes:**
+
+1. **Add shell config to `.rr.yaml`** (recommended):
+   ```yaml
+   hosts:
+     myserver:
+       ssh:
+         - user@server
+       dir: ~/projects/${PROJECT}
+       shell: "zsh -l -c"  # Use login shell for full PATH
+   ```
+
+2. **Or use setup_commands** for specific initialization:
+   ```yaml
+   hosts:
+     myserver:
+       setup_commands:
+         - source ~/.nvm/nvm.sh  # Load nvm
+   ```
+
+3. **Or source manually** in the command:
+   ```bash
+   rr run "source ~/.zshrc && go test ./..."
+   ```
+
 ## rsync issues
 
 ### "rsync not found locally"

@@ -86,8 +86,8 @@ func parseDarwinLoadAvg(line string) [3]float64 {
 	return loadAvg
 }
 
-// ParseDarwinMemory parses memory metrics from macOS vm_stat command output.
-// Expected input is from: vm_stat
+// ParseDarwinMemory parses memory metrics from macOS vm_stat and sysctl output.
+// Expected input is from: vm_stat; sysctl hw.memsize
 func ParseDarwinMemory(vmStatOutput string) (*monitor.RAMMetrics, error) {
 	metrics := &monitor.RAMMetrics{}
 	scanner := bufio.NewScanner(strings.NewReader(vmStatOutput))
@@ -98,6 +98,7 @@ func ParseDarwinMemory(vmStatOutput string) (*monitor.RAMMetrics, error) {
 
 	var pagesActive, pagesWired, pagesInactive, pagesSpeculative, pagesFree int64
 	var pagesCompressed, pagesPurgeable, pagesCached int64
+	var totalMemBytes int64
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -114,6 +115,18 @@ func ParseDarwinMemory(vmStatOutput string) (*monitor.RAMMetrics, error) {
 					if err == nil {
 						pageSize = size
 					}
+				}
+			}
+			continue
+		}
+
+		// Parse sysctl hw.memsize output: "hw.memsize: 17179869184"
+		if strings.HasPrefix(line, "hw.memsize:") {
+			parts := strings.Split(line, ":")
+			if len(parts) == 2 {
+				val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+				if err == nil {
+					totalMemBytes = val
 				}
 			}
 			continue
@@ -159,19 +172,23 @@ func ParseDarwinMemory(vmStatOutput string) (*monitor.RAMMetrics, error) {
 	}
 
 	// Calculate memory values
-	// Note: vm_stat doesn't give us total memory directly, we'd need sysctl for that
-	// For now, we calculate what we can from the available data
+	// Used = active + wired + compressed (speculative is part of free)
+	usedPages := pagesActive + pagesWired + pagesCompressed
 
-	usedPages := pagesActive + pagesWired + pagesCompressed + pagesSpeculative
-	availablePages := pagesFree + pagesInactive + pagesPurgeable
-
-	// Total is approximated from used + available
-	totalPages := usedPages + availablePages + pagesInactive
+	// Available = free + inactive + purgeable (memory that can be reclaimed)
+	availablePages := pagesFree + pagesInactive + pagesPurgeable + pagesSpeculative
 
 	metrics.UsedBytes = usedPages * pageSize
-	metrics.TotalBytes = totalPages * pageSize
 	metrics.Available = availablePages * pageSize
 	metrics.Cached = pagesCached * pageSize
+
+	// Use sysctl hw.memsize for accurate total, fall back to calculation if not available
+	if totalMemBytes > 0 {
+		metrics.TotalBytes = totalMemBytes
+	} else {
+		// Fallback: estimate from page counts (less accurate)
+		metrics.TotalBytes = (usedPages + availablePages) * pageSize
+	}
 
 	return metrics, nil
 }

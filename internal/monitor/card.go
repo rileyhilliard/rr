@@ -32,8 +32,8 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	} else {
 		lines = append(lines, "")
 
-		// CPU metrics
-		cpuLine := m.renderCPULine(metrics.CPU, width-4)
+		// CPU metrics with sparkline
+		cpuLine := m.renderCPULineWithSparkline(host, metrics.CPU, width-4)
 		lines = append(lines, cpuLine)
 
 		// RAM metrics
@@ -46,11 +46,16 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 			lines = append(lines, gpuLine)
 		}
 
-		// Network metrics
-		if len(metrics.Network) > 0 {
-			lines = append(lines, "")
-			netLine := m.renderNetworkLine(metrics.Network, width-4)
+		// Network rates (not totals)
+		netLine := m.renderNetworkRateLine(host, width-4)
+		if netLine != "" {
 			lines = append(lines, netLine)
+		}
+
+		// Top processes
+		if len(metrics.Processes) > 0 {
+			topLine := m.renderTopProcessesLine(metrics.Processes, width-4)
+			lines = append(lines, topLine)
 		}
 	}
 
@@ -78,21 +83,95 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(host)
 }
 
-// renderCPULine renders the CPU usage with progress bar.
-func (m Model) renderCPULine(cpu CPUMetrics, barWidth int) string {
+// renderCPULineWithSparkline renders CPU with mini sparkline, bar, and load avg.
+func (m Model) renderCPULineWithSparkline(host string, cpu CPUMetrics, lineWidth int) string {
 	label := LabelStyle.Render("CPU")
 	percent := cpu.Percent
 
-	// Calculate bar width (label + space + bar + space + percentage)
-	actualBarWidth := barWidth - 4 - 6 // "CPU " and " XX.X%"
-	if actualBarWidth < 10 {
-		actualBarWidth = 10
+	// Get CPU history for sparkline
+	cpuHistory := m.history.GetCPUHistory(host, 10)
+	sparkline := ""
+	if len(cpuHistory) > 0 {
+		sparkline = RenderColoredMiniSparkline(cpuHistory, 10)
+	} else {
+		sparkline = strings.Repeat(" ", 10)
 	}
 
-	bar := CompactProgressBar(actualBarWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	// Calculate bar width: lineWidth - "CPU " (4) - sparkline (10) - space (1) - bar - space (1) - "XX.X%" (5) - space (1) - "L:X.XX" (6)
+	barWidth := lineWidth - 4 - 10 - 1 - 1 - 5 - 1 - 6
+	if barWidth < 8 {
+		barWidth = 8
+	}
 
-	return fmt.Sprintf("%s %s %s", label, bar, pctText)
+	bar := CompactProgressBar(barWidth, percent)
+	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	loadText := LabelStyle.Render(fmt.Sprintf("L:%.1f", cpu.LoadAvg[0]))
+
+	return fmt.Sprintf("%s %s %s %s %s", label, sparkline, bar, pctText, loadText)
+}
+
+// renderNetworkRateLine renders network throughput rates.
+func (m Model) renderNetworkRateLine(host string, _ int) string {
+	// Get rates from history
+	inRate, outRate := m.history.GetTotalNetworkRate(host, m.interval.Seconds())
+
+	// Skip if no rate data yet
+	if inRate == 0 && outRate == 0 {
+		return ""
+	}
+
+	inLabel := LabelStyle.Render("NET")
+	downArrow := lipgloss.NewStyle().Foreground(ColorAccent).Render("↓")
+	upArrow := lipgloss.NewStyle().Foreground(ColorAccent).Render("↑")
+
+	inText := ValueStyle.Render(FormatRate(inRate))
+	outText := ValueStyle.Render(FormatRate(outRate))
+
+	return fmt.Sprintf("%s %s%s %s%s", inLabel, downArrow, inText, upArrow, outText)
+}
+
+// renderTopProcessesLine renders top 3 processes by CPU usage.
+func (m Model) renderTopProcessesLine(procs []ProcessInfo, maxWidth int) string {
+	if len(procs) == 0 {
+		return ""
+	}
+
+	label := LabelStyle.Render("TOP")
+	var parts []string
+
+	// Show up to 3 processes
+	count := 3
+	if len(procs) < count {
+		count = len(procs)
+	}
+
+	for i := 0; i < count; i++ {
+		proc := procs[i]
+		// Extract just the command name (first word)
+		cmd := proc.Command
+		if idx := strings.Index(cmd, " "); idx > 0 {
+			cmd = cmd[:idx]
+		}
+		// Truncate long command names
+		if len(cmd) > 8 {
+			cmd = cmd[:8]
+		}
+		// Format: "cmd(XX%)"
+		pctColor := MetricColor(proc.CPU)
+		part := fmt.Sprintf("%s(%s)",
+			cmd,
+			lipgloss.NewStyle().Foreground(pctColor).Render(fmt.Sprintf("%.0f%%", proc.CPU)))
+		parts = append(parts, part)
+	}
+
+	result := fmt.Sprintf("%s %s", label, strings.Join(parts, " "))
+
+	// Truncate if too long
+	if len(result) > maxWidth && maxWidth > 10 {
+		result = result[:maxWidth-2] + ".."
+	}
+
+	return result
 }
 
 // renderRAMLine renders the RAM usage with progress bar.
@@ -131,29 +210,6 @@ func (m Model) renderGPULine(gpu *GPUMetrics, barWidth int) string {
 	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
 
 	return fmt.Sprintf("%s %s %s", label, bar, pctText)
-}
-
-// renderNetworkLine renders network I/O rates.
-func (m Model) renderNetworkLine(interfaces []NetworkInterface, _ int) string {
-	// Sum up all interface bytes for a total rate display
-	// In a real implementation, you'd calculate rate from historical data
-	var totalIn, totalOut int64
-	for _, iface := range interfaces {
-		// Skip loopback
-		if iface.Name == "lo" || iface.Name == "lo0" {
-			continue
-		}
-		totalIn += iface.BytesIn
-		totalOut += iface.BytesOut
-	}
-
-	inLabel := LabelStyle.Render("\u2193")
-	outLabel := LabelStyle.Render("\u2191")
-
-	inText := ValueStyle.Render(formatBytes(totalIn))
-	outText := ValueStyle.Render(formatBytes(totalOut))
-
-	return fmt.Sprintf("%s %s  %s %s", inLabel, inText, outLabel, outText)
 }
 
 // RenderLoadAvg renders the system load average.

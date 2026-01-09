@@ -27,7 +27,7 @@ type Host struct {
 	SSH []string `yaml:"ssh" mapstructure:"ssh"`
 
 	// Dir is the working directory on remote (where files sync to).
-	// Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}.
+	// Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}, and ~.
 	Dir string `yaml:"dir" mapstructure:"dir"`
 
 	// Tags for filtering hosts with --tag flag.
@@ -35,6 +35,15 @@ type Host struct {
 
 	// Env contains environment variables specific to this host.
 	Env map[string]string `yaml:"env" mapstructure:"env"`
+
+	// Shell specifies how to invoke the shell for commands.
+	// Default is "sh -c". Use "bash -l -c" for login shell with full PATH.
+	// Format: "<shell> <flags> <command-flag>" where the command will be appended.
+	Shell string `yaml:"shell,omitempty" mapstructure:"shell"`
+
+	// SetupCommands are run before each command (e.g., "source ~/.zshrc").
+	// These are prepended to the actual command with && separators.
+	SetupCommands []string `yaml:"setup_commands,omitempty" mapstructure:"setup_commands"`
 }
 
 // SyncConfig controls file synchronization behavior.

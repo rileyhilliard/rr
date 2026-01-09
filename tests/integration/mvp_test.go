@@ -99,7 +99,7 @@ func TestConfigValidation(t *testing.T) {
 		}
 		err := config.Validate(cfg)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "No hosts defined")
+		assert.Contains(t, err.Error(), "No hosts set up yet")
 	})
 
 	t.Run("reserved task name fails validation", func(t *testing.T) {
@@ -114,7 +114,7 @@ func TestConfigValidation(t *testing.T) {
 		}
 		err := config.Validate(cfg)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "reserved")
+		assert.Contains(t, err.Error(), "built-in command")
 	})
 }
 
@@ -228,7 +228,7 @@ func TestLockAcquireRequiresConnection(t *testing.T) {
 	// Acquire should fail without a connection
 	_, err := lock.Acquire(nil, cfg, "test-project-hash")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no connection")
+	assert.Contains(t, err.Error(), "Can't grab the lock")
 }
 
 func TestLockInfoCreation(t *testing.T) {

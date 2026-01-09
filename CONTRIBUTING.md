@@ -54,17 +54,19 @@ make test
 
 **Integration tests:**
 
-Integration tests require SSH access to a remote host. See [tests/integration/README.md](tests/integration/README.md) for full setup details.
+Integration tests require SSH access. See [tests/integration/README.md](tests/integration/README.md) for full setup.
 
 ```bash
-# Option 1: Skip SSH-dependent tests (when working on non-SSH features)
+# Option 1: Docker SSH server (recommended)
+./scripts/ci-ssh-server.sh start
+eval $(./scripts/ci-ssh-server.sh env)
+go test -v ./tests/integration/... ./pkg/sshutil/...
+./scripts/ci-ssh-server.sh stop
+
+# Option 2: Skip SSH tests (when working on non-SSH features)
 RR_TEST_SKIP_SSH=1 go test ./tests/integration/...
 
-# Option 2: Use Docker SSH server
-./scripts/test-ssh-server.sh
-RR_TEST_SSH_HOST=localhost:2222 go test ./tests/integration/... -v
-
-# Option 3: Use local SSH (requires SSH enabled on your machine)
+# Option 3: Local SSH (requires SSH enabled on your machine)
 RR_TEST_SSH_HOST=localhost make test-integration
 ```
 
@@ -78,6 +80,7 @@ make lint
 
 ```bash
 make verify    # Runs lint + test
+make ci        # Full CI suite (format, lint, coverage, build)
 ```
 
 ## Code style guidelines
@@ -117,9 +120,29 @@ return fmt.Errorf("something went wrong")
 
 1. Fork the repo and create a branch from `main`
 2. Make your changes with clear, focused commits
-3. Ensure `make verify` passes (runs lint + tests)
+3. Ensure `make ci` passes (runs format, lint, coverage, build)
 4. Update documentation if you changed behavior
 5. Open a PR with a clear description of what and why
+
+### CI checks
+
+Your PR must pass these automated checks:
+
+- **Format check** - Code must be `gofmt` formatted
+- **Lint** - No golangci-lint violations
+- **Tests** - All tests pass on Go 1.22, 1.23, and 1.24
+- **Coverage** - Minimum 80% test coverage
+- **Security** - No known vulnerabilities (govulncheck)
+- **Build** - Binary compiles successfully
+
+### Branch protection
+
+The `main` branch has these protections enabled:
+
+- Require PR reviews before merging
+- Require all CI status checks to pass
+- Require branches to be up to date before merging
+- Dismiss stale reviews when new commits are pushed
 
 ### Commit messages
 

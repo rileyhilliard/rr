@@ -34,7 +34,7 @@ func Sync(opts SyncOptions) error {
 	if cfgPath == "" {
 		return errors.New(errors.ErrConfig,
 			"No config file found",
-			"Run 'rr init' to create a .rr.yaml config file")
+			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 	}
 
 	cfg, err := config.Load(cfgPath)
@@ -52,8 +52,8 @@ func Sync(opts SyncOptions) error {
 		workDir, err = os.Getwd()
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrExec,
-				"Failed to get working directory",
-				"Check directory permissions")
+				"Can't figure out what directory you're in",
+				"This is unusual - check your directory permissions.")
 		}
 	}
 
@@ -138,8 +138,8 @@ func syncCommand(hostFlag, tagFlag, probeTimeoutFlag string, dryRun bool) error 
 		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("Invalid probe timeout: %s", probeTimeoutFlag),
-				"Use a valid duration like 5s, 2m, or 500ms")
+				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
+				"Try something like 5s, 2m, or 500ms.")
 		}
 	}
 

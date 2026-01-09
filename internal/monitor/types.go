@@ -9,6 +9,7 @@ type HostMetrics struct {
 	RAM       RAMMetrics
 	GPU       *GPUMetrics // nil if no GPU
 	Network   []NetworkInterface
+	Processes []ProcessInfo
 	System    SystemInfo
 }
 
@@ -44,6 +45,16 @@ type NetworkInterface struct {
 	BytesOut   int64
 	PacketsIn  int64
 	PacketsOut int64
+}
+
+// ProcessInfo contains information about a running process.
+type ProcessInfo struct {
+	PID     int
+	User    string
+	CPU     float64 // percentage
+	Memory  float64 // percentage
+	Time    string  // elapsed time (format varies by platform)
+	Command string  // truncated command line
 }
 
 // SystemInfo contains general system information.

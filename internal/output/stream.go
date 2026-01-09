@@ -20,13 +20,19 @@ type StreamHandler struct {
 	// Stats tracking
 	stdoutLines int
 	stderrLines int
+
+	// Captured stderr content for post-execution analysis.
+	// Limited to prevent memory issues with large output.
+	stderrCapture []byte
+	maxCapture    int
 }
 
 // NewStreamHandler creates a handler that writes to the given stdout/stderr.
 func NewStreamHandler(stdout, stderr io.Writer) *StreamHandler {
 	return &StreamHandler{
-		stdout: stdout,
-		stderr: stderr,
+		stdout:     stdout,
+		stderr:     stderr,
+		maxCapture: 4096, // Capture first 4KB of stderr for analysis
 	}
 }
 
@@ -97,6 +103,16 @@ func (h *StreamHandler) WriteStderr(line string) error {
 
 	h.stderrLines++
 
+	// Capture stderr content for post-execution analysis (limited)
+	if len(h.stderrCapture) < h.maxCapture {
+		remaining := h.maxCapture - len(h.stderrCapture)
+		lineBytes := []byte(line + "\n")
+		if len(lineBytes) > remaining {
+			lineBytes = lineBytes[:remaining]
+		}
+		h.stderrCapture = append(h.stderrCapture, lineBytes...)
+	}
+
 	processedLine := line
 	if h.formatter != nil {
 		processedLine = h.formatter.ProcessLine(line)
@@ -104,6 +120,13 @@ func (h *StreamHandler) WriteStderr(line string) error {
 
 	_, err := h.stderr.Write([]byte(processedLine + "\n"))
 	return err
+}
+
+// GetStderrCapture returns the captured stderr content for analysis.
+func (h *StreamHandler) GetStderrCapture() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return string(h.stderrCapture)
 }
 
 // streamWriter wraps the handler to implement io.Writer.

@@ -228,7 +228,7 @@ func TestExecuteTask_NilTask(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "nil")
+	assert.Contains(t, err.Error(), "No task provided")
 }
 
 func TestExecuteTask_EmptyTask(t *testing.T) {
@@ -240,7 +240,7 @@ func TestExecuteTask_EmptyTask(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "no run command or steps")
+	assert.Contains(t, err.Error(), "doesn't have anything to run")
 }
 
 func TestBuildEnvPrefix(t *testing.T) {

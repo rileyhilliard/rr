@@ -1,6 +1,9 @@
 package monitor
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 // SortOrder defines how hosts are sorted in the dashboard.
 type SortOrder int
@@ -41,88 +44,156 @@ const (
 	ViewDetail
 )
 
-// Key bindings as constants for consistency.
-const (
-	KeyQuit        = "q"
-	KeyQuitAlt     = "ctrl+c"
-	KeyRefresh     = "r"
-	KeyCycleSort   = "s"
-	KeySelectPrev  = "up"
-	KeySelectPrevK = "k"
-	KeySelectNext  = "down"
-	KeySelectNextJ = "j"
-	KeySelectFirst = "home"
-	KeySelectLast  = "end"
-	KeyExpand      = "enter"
-	KeyCollapse    = "esc"
-	KeyToggleHelp  = "?"
-)
+// keyMap defines all keyboard shortcuts for the monitor dashboard.
+type keyMap struct {
+	Quit        key.Binding
+	Refresh     key.Binding
+	CycleSort   key.Binding
+	SelectPrev  key.Binding
+	SelectNext  key.Binding
+	SelectFirst key.Binding
+	SelectLast  key.Binding
+	Expand      key.Binding
+	Collapse    key.Binding
+	ToggleHelp  key.Binding
+}
+
+// ShortHelp returns the short help view.
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Quit, k.Refresh, k.CycleSort, k.ToggleHelp}
+}
+
+// FullHelp returns the full help view.
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.SelectPrev, k.SelectNext, k.SelectFirst, k.SelectLast},
+		{k.Expand, k.Collapse},
+		{k.Quit, k.Refresh, k.CycleSort, k.ToggleHelp},
+	}
+}
+
+// keys is the default keybinding configuration.
+var keys = keyMap{
+	Quit: key.NewBinding(
+		key.WithKeys("q", "ctrl+c"),
+		key.WithHelp("q", "quit"),
+	),
+	Refresh: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "refresh"),
+	),
+	CycleSort: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "sort"),
+	),
+	SelectPrev: key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "prev"),
+	),
+	SelectNext: key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "next"),
+	),
+	SelectFirst: key.NewBinding(
+		key.WithKeys("home"),
+		key.WithHelp("home", "first"),
+	),
+	SelectLast: key.NewBinding(
+		key.WithKeys("end"),
+		key.WithHelp("end", "last"),
+	),
+	Expand: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "expand"),
+	),
+	Collapse: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "collapse"),
+	),
+	ToggleHelp: key.NewBinding(
+		key.WithKeys("?"),
+		key.WithHelp("?", "help"),
+	),
+}
 
 // HandleKeyMsg processes keyboard input and returns updated model state and command.
 // Returns true if the key was handled, false otherwise.
 func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
-	key := msg.String()
-
 	// Help toggle takes priority
-	if key == KeyToggleHelp {
+	if key.Matches(msg, keys.ToggleHelp) {
 		m.showHelp = !m.showHelp
 		return true, nil
 	}
 
 	// If help is showing, Esc closes it
-	if m.showHelp && key == KeyCollapse {
+	if m.showHelp && key.Matches(msg, keys.Collapse) {
 		m.showHelp = false
 		return true, nil
 	}
 
 	// Detail view: Esc returns to list
-	if m.viewMode == ViewDetail && key == KeyCollapse {
+	if m.viewMode == ViewDetail && key.Matches(msg, keys.Collapse) {
 		m.viewMode = ViewList
+		// Reset viewport position when leaving detail view
+		m.detailViewport.GotoTop()
 		return true, nil
 	}
 
-	switch key {
-	case KeyQuit, KeyQuitAlt:
+	// In detail view, j/k and arrow keys scroll the viewport
+	if m.viewMode == ViewDetail && m.viewportReady {
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		if cmd != nil {
+			return true, cmd
+		}
+	}
+
+	switch {
+	case key.Matches(msg, keys.Quit):
 		m.quitting = true
 		return true, tea.Quit
 
-	case KeyRefresh:
+	case key.Matches(msg, keys.Refresh):
 		return true, m.collectCmd()
 
-	case KeyCycleSort:
+	case key.Matches(msg, keys.CycleSort):
 		m.sortOrder = m.sortOrder.Next()
 		m.sortHosts()
 		return true, nil
 
-	case KeySelectPrev, KeySelectPrevK:
-		if m.selected > 0 {
+	case key.Matches(msg, keys.SelectPrev):
+		if m.viewMode == ViewList && m.selected > 0 {
 			m.selected--
 		}
 		return true, nil
 
-	case KeySelectNext, KeySelectNextJ:
-		if m.selected < len(m.hosts)-1 {
+	case key.Matches(msg, keys.SelectNext):
+		if m.viewMode == ViewList && m.selected < len(m.hosts)-1 {
 			m.selected++
 		}
 		return true, nil
 
-	case KeySelectFirst:
-		m.selected = 0
+	case key.Matches(msg, keys.SelectFirst):
+		if m.viewMode == ViewList {
+			m.selected = 0
+		}
 		return true, nil
 
-	case KeySelectLast:
-		if len(m.hosts) > 0 {
+	case key.Matches(msg, keys.SelectLast):
+		if m.viewMode == ViewList && len(m.hosts) > 0 {
 			m.selected = len(m.hosts) - 1
 		}
 		return true, nil
 
-	case KeyExpand:
+	case key.Matches(msg, keys.Expand):
 		if m.viewMode == ViewList && len(m.hosts) > 0 {
 			m.viewMode = ViewDetail
+			// Reset viewport position when entering detail view
+			m.detailViewport.GotoTop()
 		}
 		return true, nil
 
-	case KeyCollapse:
+	case key.Matches(msg, keys.Collapse):
 		m.viewMode = ViewList
 		return true, nil
 	}

@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
@@ -12,6 +13,7 @@ import (
 type Pool struct {
 	mu          sync.Mutex
 	connections map[string]*poolEntry
+	hosts       map[string]config.Host
 	timeout     time.Duration
 }
 
@@ -22,19 +24,21 @@ type poolEntry struct {
 	lastUsed time.Time
 }
 
-// NewPool creates a new SSH connection pool.
-func NewPool(timeout time.Duration) *Pool {
+// NewPool creates a new SSH connection pool with host configurations.
+func NewPool(hosts map[string]config.Host, timeout time.Duration) *Pool {
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
 	return &Pool{
 		connections: make(map[string]*poolEntry),
+		hosts:       hosts,
 		timeout:     timeout,
 	}
 }
 
 // Get retrieves an existing connection for the given alias, or creates a new one.
 // If the connection is stale or broken, it will be replaced with a fresh connection.
+// The alias is looked up in the hosts config to get the actual SSH addresses to try.
 func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 	p.mu.Lock()
 	entry, exists := p.connections[alias]
@@ -52,20 +56,40 @@ func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 		p.remove(alias)
 	}
 
-	// Create new connection
-	client, err := sshutil.Dial(alias, p.timeout)
-	if err != nil {
-		return nil, err
+	// Look up the host config to get SSH addresses
+	host, ok := p.hosts[alias]
+	if !ok || len(host.SSH) == 0 {
+		// Fall back to using alias directly (for backwards compatibility or simple configs)
+		client, err := sshutil.Dial(alias, p.timeout)
+		if err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.connections[alias] = &poolEntry{
+			client:   client,
+			lastUsed: time.Now(),
+		}
+		p.mu.Unlock()
+		return client, nil
 	}
 
-	p.mu.Lock()
-	p.connections[alias] = &poolEntry{
-		client:   client,
-		lastUsed: time.Now(),
+	// Try each SSH address in order until one succeeds
+	var lastErr error
+	for _, sshAddr := range host.SSH {
+		client, err := sshutil.Dial(sshAddr, p.timeout)
+		if err == nil {
+			p.mu.Lock()
+			p.connections[alias] = &poolEntry{
+				client:   client,
+				lastUsed: time.Now(),
+			}
+			p.mu.Unlock()
+			return client, nil
+		}
+		lastErr = err
 	}
-	p.mu.Unlock()
 
-	return client, nil
+	return nil, lastErr
 }
 
 // GetWithPlatform retrieves a connection and its detected platform.
@@ -157,7 +181,8 @@ func (p *Pool) isAlive(client *sshutil.Client) bool {
 	}
 
 	// Try to open a session as a connectivity test
-	session, err := client.NewSession()
+	// Use embedded ssh.Client's NewSession directly for full session capabilities
+	session, err := client.Client.NewSession()
 	if err != nil {
 		return false
 	}
@@ -167,7 +192,8 @@ func (p *Pool) isAlive(client *sshutil.Client) bool {
 
 // detectPlatform runs uname to determine the OS type.
 func (p *Pool) detectPlatform(client *sshutil.Client) (Platform, error) {
-	session, err := client.NewSession()
+	// Use embedded ssh.Client's NewSession directly for full session capabilities
+	session, err := client.Client.NewSession()
 	if err != nil {
 		return PlatformUnknown, err
 	}

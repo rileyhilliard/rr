@@ -1,10 +1,14 @@
 package sshutil
 
 import (
+	"bytes"
+	stderrors "errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +27,9 @@ type Client struct {
 	Address string // The resolved address (host:port)
 }
 
+// matchWarningOnce ensures the SSH config Match directive warning is only shown once per process.
+var matchWarningOnce sync.Once
+
 // Dial establishes an SSH connection to the specified host.
 // The host can be:
 //   - An SSH config alias (e.g., "myserver")
@@ -38,9 +45,14 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	// Build SSH client config
 	config, err := buildSSHConfig(settings)
 	if err != nil {
+		// If buildSSHConfig already returned a structured error, pass it through
+		var rrErr *errors.Error
+		if stderrors.As(err, &rrErr) {
+			return nil, err
+		}
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to configure SSH for '%s'", host),
-			"Check your SSH keys and SSH agent: ssh-add -l")
+			fmt.Sprintf("Couldn't set up SSH for '%s'", host),
+			"Check your keys are loaded: ssh-add -l")
 	}
 
 	// Dial with timeout
@@ -48,7 +60,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to connect to '%s' (%s)", host, address),
+			fmt.Sprintf("Can't reach '%s' at %s", host, address),
 			suggestionForDialError(err))
 	}
 
@@ -56,8 +68,17 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, address, config)
 	if err != nil {
 		conn.Close()
+
+		// Check for host key mismatch error (provides detailed suggestion)
+		var hostKeyErr *HostKeyMismatchError
+		if stderrors.As(err, &hostKeyErr) {
+			return nil, errors.New(errors.ErrSSH,
+				hostKeyErr.Error(),
+				hostKeyErr.Suggestion())
+		}
+
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("SSH handshake failed for '%s'", host),
+			fmt.Sprintf("SSH handshake with '%s' didn't go through", host),
 			suggestionForHandshakeError(err))
 	}
 
@@ -75,6 +96,28 @@ func (c *Client) Close() error {
 		return nil
 	}
 	return c.Client.Close()
+}
+
+// GetHost returns the original host/alias used to connect.
+func (c *Client) GetHost() string {
+	return c.Host
+}
+
+// GetAddress returns the resolved host:port address.
+func (c *Client) GetAddress() string {
+	return c.Address
+}
+
+// NewSession creates a new SSH session.
+// This satisfies the SSHClient interface for liveness checks.
+// Note: The exec methods use c.Client.NewSession() directly to get the full *ssh.Session.
+func (c *Client) NewSession() (Session, error) {
+	return c.Client.NewSession()
+}
+
+// newSSHSession creates a new *ssh.Session for internal use by exec methods.
+func (c *Client) newSSHSession() (*ssh.Session, error) {
+	return c.Client.NewSession()
 }
 
 // sshSettings holds resolved SSH connection parameters.
@@ -97,10 +140,20 @@ func resolveSSHSettings(host string) *sshSettings {
 		user: currentUser(),
 	}
 
-	// Parse user@host:port format
+	// Parse user@host:port format first (explicit user takes precedence)
+	explicitUser := false
 	if atIdx := strings.Index(host, "@"); atIdx != -1 {
 		settings.user = host[:atIdx]
 		host = host[atIdx+1:]
+		explicitUser = true
+	}
+
+	// Check for test user override (for CI environments)
+	// Only applies when no explicit user@host format was used
+	if !explicitUser {
+		if testUser := os.Getenv("RR_TEST_SSH_USER"); testUser != "" {
+			settings.user = testUser
+		}
 	}
 
 	if colonIdx := strings.LastIndex(host, ":"); colonIdx != -1 {
@@ -123,31 +176,46 @@ func resolveSSHSettings(host string) *sshSettings {
 
 	// Try to load from SSH config
 	sshConfigPath := filepath.Join(homeDir(), ".ssh", "config")
-	f, err := os.Open(sshConfigPath)
-	if err == nil {
-		defer f.Close()
-		cfg, err := ssh_config.Decode(f)
-		if err == nil {
-			// Get hostname (could be different from alias)
-			if hostname, _ := cfg.Get(host, "HostName"); hostname != "" {
-				settings.hostname = hostname
-			}
 
-			// Get port
-			if port, _ := cfg.Get(host, "Port"); port != "" {
-				settings.port = port
-			}
+	// First, try to preprocess the config to handle Match directives
+	// The kevinburke/ssh_config library doesn't support Match, so we need to
+	// strip them out and only parse content before the first Match block
+	content, matchLine, err := preprocessSSHConfig(sshConfigPath)
+	if err != nil {
+		// Config doesn't exist or can't be read, that's fine
+		return settings
+	}
 
-			// Get user
-			if user, _ := cfg.Get(host, "User"); user != "" {
-				settings.user = user
-			}
+	if matchLine > 0 {
+		matchWarningOnce.Do(func() {
+			log.Printf("Warning: SSH config contains 'Match' directive at line %d. Host entries after this line may not be recognized. Consider using explicit user@host format or moving important hosts before the Match block.", matchLine)
+		})
+	}
 
-			// Get identity file
-			if identity, _ := cfg.Get(host, "IdentityFile"); identity != "" {
-				settings.identityFile = expandPath(identity)
-			}
-		}
+	cfg, err := ssh_config.Decode(bytes.NewReader(content))
+	if err != nil {
+		// Decoding failed even after preprocessing, just return defaults
+		return settings
+	}
+
+	// Get hostname (could be different from alias)
+	if hostname, _ := cfg.Get(host, "HostName"); hostname != "" {
+		settings.hostname = hostname
+	}
+
+	// Get port
+	if port, _ := cfg.Get(host, "Port"); port != "" {
+		settings.port = port
+	}
+
+	// Get user
+	if user, _ := cfg.Get(host, "User"); user != "" {
+		settings.user = user
+	}
+
+	// Get identity file
+	if identity, _ := cfg.Get(host, "IdentityFile"); identity != "" {
+		settings.identityFile = expandPath(identity)
 	}
 
 	return settings
@@ -158,52 +226,38 @@ func resolveSSHSettings(host string) *sshSettings {
 // When false, host key verification is skipped (insecure, for CI/automation).
 var StrictHostKeyChecking = true
 
-// hostKeyCallback is cached to avoid re-parsing known_hosts on every connection.
-var (
-	hostKeyCallback     ssh.HostKeyCallback
-	hostKeyCallbackOnce sync.Once
-	hostKeyCallbackErr  error
-)
-
-// getHostKeyCallback returns a cached host key callback that reads from known_hosts.
-func getHostKeyCallback() (ssh.HostKeyCallback, error) {
-	hostKeyCallbackOnce.Do(func() {
-		knownHostsPath := filepath.Join(homeDir(), ".ssh", "known_hosts")
-
-		// Check if known_hosts exists
-		if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
-			// Create an empty known_hosts file if it doesn't exist
-			dir := filepath.Dir(knownHostsPath)
-			if err := os.MkdirAll(dir, 0700); err != nil {
-				hostKeyCallbackErr = fmt.Errorf("failed to create .ssh directory: %w", err)
-				return
-			}
-			if err := os.WriteFile(knownHostsPath, []byte{}, 0600); err != nil {
-				hostKeyCallbackErr = fmt.Errorf("failed to create known_hosts: %w", err)
-				return
-			}
-		}
-
-		hostKeyCallback, hostKeyCallbackErr = knownhosts.New(knownHostsPath)
-	})
-
-	return hostKeyCallback, hostKeyCallbackErr
-}
-
 // buildSSHConfig creates an SSH client config with authentication methods.
 func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
+	var encryptedKeys []string
+
+	// Helper to try loading a key and track encrypted keys
+	tryKeyFile := func(keyPath string) {
+		keyAuth, err := keyFileAuth(keyPath)
+		if err != nil {
+			var encErr *EncryptedKeyError
+			if stderrors.As(err, &encErr) {
+				encryptedKeys = append(encryptedKeys, keyPath)
+			}
+			// Other errors (file not found, etc.) are silently ignored
+			return
+		}
+		authMethods = append(authMethods, keyAuth)
+	}
 
 	// Try SSH agent first (most common and convenient)
 	if agentAuth := sshAgentAuth(); agentAuth != nil {
 		authMethods = append(authMethods, agentAuth)
 	}
 
+	// Check for test key override (for CI environments)
+	if testKey := os.Getenv("RR_TEST_SSH_KEY"); testKey != "" {
+		tryKeyFile(testKey)
+	}
+
 	// Try specific identity file from SSH config
 	if settings.identityFile != "" {
-		if keyAuth, err := keyFileAuth(settings.identityFile); err == nil {
-			authMethods = append(authMethods, keyAuth)
-		}
+		tryKeyFile(settings.identityFile)
 	}
 
 	// Try default key files
@@ -217,20 +271,32 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		if keyPath == settings.identityFile {
 			continue // Already tried this one
 		}
-		if keyAuth, err := keyFileAuth(keyPath); err == nil {
-			authMethods = append(authMethods, keyAuth)
-		}
+		tryKeyFile(keyPath)
 	}
 
 	if len(authMethods) == 0 {
-		return nil, fmt.Errorf("no SSH authentication methods available")
+		msg := "No SSH auth methods available"
+		suggestion := "Check your keys are loaded: ssh-add -l"
+
+		if len(encryptedKeys) > 0 {
+			msg = fmt.Sprintf("Found SSH key(s) but they're encrypted: %s", strings.Join(encryptedKeys, ", "))
+			keyToAdd := encryptedKeys[0]
+			if runtime.GOOS == "darwin" {
+				suggestion = fmt.Sprintf("Add to your agent: ssh-add --apple-use-keychain %s", keyToAdd)
+			} else {
+				suggestion = fmt.Sprintf("Add to your agent: ssh-add %s", keyToAdd)
+			}
+		}
+
+		return nil, errors.New(errors.ErrSSH, msg, suggestion)
 	}
 
 	// Determine host key callback
 	var hostKeyCallback ssh.HostKeyCallback
 	if StrictHostKeyChecking {
+		knownHostsPath := filepath.Join(homeDir(), ".ssh", "known_hosts")
 		var err error
-		hostKeyCallback, err = getHostKeyCallback()
+		hostKeyCallback, err = createHostKeyCallback(knownHostsPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load known_hosts: %w", err)
 		}
@@ -255,6 +321,7 @@ var (
 
 // sshAgentAuth returns an auth method using the SSH agent if available.
 // The agent connection is reused across multiple SSH connections.
+// Returns nil if the agent has no keys loaded.
 func sshAgentAuth() ssh.AuthMethod {
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
@@ -274,6 +341,13 @@ func sshAgentAuth() ssh.AuthMethod {
 		return nil
 	}
 
+	// Only return agent auth if the agent actually has keys.
+	// An empty agent causes auth failures when placed before other methods.
+	signers, err := agentClient.Signers()
+	if err != nil || len(signers) == 0 {
+		return nil
+	}
+
 	return ssh.PublicKeysCallback(agentClient.Signers)
 }
 
@@ -286,6 +360,7 @@ func CloseAgent() {
 }
 
 // keyFileAuth returns an auth method using a private key file.
+// Returns EncryptedKeyError if the key requires a passphrase.
 func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
@@ -294,9 +369,12 @@ func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 
 	signer, err := ssh.ParsePrivateKey(key)
 	if err != nil {
-		// Key might be encrypted - passphrase-protected keys must be loaded via ssh-agent
-		if strings.Contains(err.Error(), "encrypted") || strings.Contains(err.Error(), "passphrase") {
-			return nil, fmt.Errorf("encrypted key at %s requires ssh-agent: ssh-add %s", keyPath, keyPath)
+		// Check if key is encrypted (requires passphrase)
+		// This can be detected either from the error message or by checking PEM headers
+		if strings.Contains(err.Error(), "encrypted") ||
+			strings.Contains(err.Error(), "passphrase") ||
+			isEncryptedPEM(key) {
+			return nil, &EncryptedKeyError{Path: keyPath}
 		}
 		return nil, err
 	}
@@ -331,24 +409,141 @@ func expandPath(path string) string {
 func suggestionForDialError(err error) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "connection refused") {
-		return "Is the SSH server running? Check: ssh <host>"
+		return "Is SSH running on that box? Try: ssh <host>"
 	}
 	if strings.Contains(errStr, "no route to host") || strings.Contains(errStr, "network is unreachable") {
-		return "Host is not reachable. Check your network connection."
+		return "Can't route to the host. Check your network connection."
 	}
 	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "i/o timeout") {
-		return "Connection timed out. Check if host is online and firewall allows SSH."
+		return "Connection timed out. Host might be offline or blocked by a firewall."
 	}
-	return "Check if the host is reachable: ping <host>"
+	return "Make sure the host is reachable: ping <host>"
 }
 
 func suggestionForHandshakeError(err error) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "unable to authenticate") || strings.Contains(errStr, "no supported methods") {
-		return "Authentication failed. Check your SSH keys: ssh-add -l"
+		return "Auth failed. Check your keys are loaded: ssh-add -l"
 	}
 	if strings.Contains(errStr, "host key") {
-		return "Host key verification failed. Run: ssh <host> to accept the key."
+		return "Host key issue. Try connecting manually first: ssh <host>"
 	}
-	return "SSH handshake failed. Try connecting manually: ssh <host>"
+	return "Something went wrong during SSH setup. Try: ssh <host>"
+}
+
+// EncryptedKeyError is returned when an SSH key requires a passphrase.
+type EncryptedKeyError struct {
+	Path string
+}
+
+func (e *EncryptedKeyError) Error() string {
+	return fmt.Sprintf("SSH key at %s is encrypted (passphrase protected)", e.Path)
+}
+
+// HostKeyMismatchError provides helpful context when known_hosts verification fails.
+type HostKeyMismatchError struct {
+	Hostname     string
+	ReceivedType string
+	KnownHosts   string
+	Want         []knownhosts.KnownKey
+}
+
+func (e *HostKeyMismatchError) Error() string {
+	return fmt.Sprintf("host key mismatch for %s: server sent %s key", e.Hostname, e.ReceivedType)
+}
+
+// Suggestion returns actionable steps to fix the host key mismatch.
+func (e *HostKeyMismatchError) Suggestion() string {
+	host := e.Hostname
+	// Strip port if present (e.g., "host:22" -> "host")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+
+	var wantTypes []string
+	for _, k := range e.Want {
+		wantTypes = append(wantTypes, k.Key.Type())
+	}
+	wantStr := "unknown"
+	if len(wantTypes) > 0 {
+		wantStr = strings.Join(wantTypes, ", ")
+	}
+
+	return fmt.Sprintf(
+		"The server's host key doesn't match what's in known_hosts.\n"+
+			"  Known types: %s\n"+
+			"  Server sent: %s\n\n"+
+			"  To update known_hosts with all key types:\n"+
+			"    ssh-keyscan -t rsa,ecdsa,ed25519 %s >> %s\n\n"+
+			"  Or remove the old entry:\n"+
+			"    ssh-keygen -R %s",
+		wantStr, e.ReceivedType, host, e.KnownHosts, host)
+}
+
+// preprocessSSHConfig reads the SSH config and returns content up to the first Match directive.
+// Returns the original content if no Match directive is found.
+// Also returns the line number where Match was found (0 if not found).
+func preprocessSSHConfig(configPath string) ([]byte, int, error) {
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var result []string
+	matchLine := 0
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Match directive check (case insensitive)
+		if strings.HasPrefix(strings.ToLower(trimmed), "match ") {
+			matchLine = i + 1 // 1-indexed line number
+			break
+		}
+		result = append(result, line)
+	}
+
+	return []byte(strings.Join(result, "\n")), matchLine, nil
+}
+
+// isEncryptedPEM checks if PEM data contains encryption markers.
+func isEncryptedPEM(data []byte) bool {
+	return bytes.Contains(data, []byte("ENCRYPTED")) ||
+		bytes.Contains(data, []byte("Proc-Type: 4,ENCRYPTED"))
+}
+
+// createHostKeyCallback wraps the knownhosts callback to provide better error messages.
+func createHostKeyCallback(knownHostsPath string) (ssh.HostKeyCallback, error) {
+	// Check if known_hosts exists, create if it doesn't
+	if _, err := os.Stat(knownHostsPath); os.IsNotExist(err) {
+		dir := filepath.Dir(knownHostsPath)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, fmt.Errorf("failed to create .ssh directory: %w", err)
+		}
+		if err := os.WriteFile(knownHostsPath, []byte{}, 0600); err != nil {
+			return nil, fmt.Errorf("failed to create known_hosts: %w", err)
+		}
+	}
+
+	callback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := callback(hostname, remote, key)
+		if err != nil {
+			// Check if this is a key mismatch error from knownhosts
+			var keyErr *knownhosts.KeyError
+			if stderrors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+				return &HostKeyMismatchError{
+					Hostname:     hostname,
+					ReceivedType: key.Type(),
+					KnownHosts:   knownHostsPath,
+					Want:         keyErr.Want,
+				}
+			}
+		}
+		return err
+	}, nil
 }

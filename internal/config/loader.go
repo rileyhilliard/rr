@@ -25,12 +25,12 @@ func Load(path string) (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		if os.IsNotExist(err) {
 			return nil, errors.WrapWithCode(err, errors.ErrConfig,
-				"Config file not found",
-				"Run 'rr init' to create a config file, or specify one with --config")
+				"Can't find the config file",
+				"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 		}
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
-			"Failed to read config file",
-			"Check the file exists and is valid YAML")
+			"Couldn't read the config file",
+			"Something's off with your .rr.yaml. Check that it's valid YAML.")
 	}
 
 	return parseConfig(v, path)
@@ -49,12 +49,12 @@ func Find(explicit string) (string, error) {
 		if _, err := os.Stat(explicit); err != nil {
 			if os.IsNotExist(err) {
 				return "", errors.WrapWithCode(err, errors.ErrConfig,
-					"Specified config file not found: "+explicit,
-					"Check the path is correct")
+					"Can't find config file at "+explicit,
+					"Double-check that path - it doesn't seem to exist.")
 			}
 			return "", errors.WrapWithCode(err, errors.ErrConfig,
-				"Cannot access config file: "+explicit,
-				"Check file permissions")
+				"Can't access config file at "+explicit,
+				"Looks like a permissions issue. Check you have read access.")
 		}
 		return explicit, nil
 	}
@@ -63,8 +63,8 @@ func Find(explicit string) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", errors.WrapWithCode(err, errors.ErrConfig,
-			"Cannot determine current directory",
-			"Check directory permissions")
+			"Can't figure out what directory you're in",
+			"This is unusual - check your directory permissions.")
 	}
 
 	localConfig := filepath.Join(cwd, ConfigFileName)
@@ -137,8 +137,8 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 	// Unmarshal into config
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
-			"Invalid config format",
-			"Check the YAML syntax in "+path)
+			"Config file has some issues",
+			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
 	// Expand variables in host directories
