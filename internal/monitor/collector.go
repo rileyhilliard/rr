@@ -23,7 +23,7 @@ type Collector struct {
 func NewCollector(hosts map[string]config.Host) *Collector {
 	return &Collector{
 		hosts:   hosts,
-		pool:    NewPool(10 * time.Second),
+		pool:    NewPool(hosts, 10*time.Second),
 		timeout: 30 * time.Second,
 	}
 }
@@ -142,7 +142,7 @@ func (c *Collector) parseOutput(platform Platform, output string) (*HostMetrics,
 }
 
 // parseLinuxOutput parses Linux metrics from the batched command output.
-// Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi
+// Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi, 5=ps aux
 func (c *Collector) parseLinuxOutput(metrics *HostMetrics, sections []string) (*HostMetrics, error) {
 	if len(sections) >= 2 {
 		procStat := strings.TrimSpace(sections[0])
@@ -178,11 +178,19 @@ func (c *Collector) parseLinuxOutput(metrics *HostMetrics, sections []string) (*
 		}
 	}
 
+	if len(sections) >= 6 {
+		psOutput := strings.TrimSpace(sections[5])
+		procs, err := parseProcesses(psOutput)
+		if err == nil {
+			metrics.Processes = procs
+		}
+	}
+
 	return metrics, nil
 }
 
 // parseDarwinOutput parses macOS metrics from the batched command output.
-// Sections: 0=top, 1=vm_stat, 2=netstat
+// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ps aux
 func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (*HostMetrics, error) {
 	if len(sections) >= 1 {
 		topOutput := strings.TrimSpace(sections[0])
@@ -205,6 +213,14 @@ func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (
 		network, err := parseDarwinNetwork(netstatOutput)
 		if err == nil {
 			metrics.Network = network
+		}
+	}
+
+	if len(sections) >= 4 {
+		psOutput := strings.TrimSpace(sections[3])
+		procs, err := parseProcesses(psOutput)
+		if err == nil {
+			metrics.Processes = procs
 		}
 	}
 
@@ -703,4 +719,62 @@ func parseDarwinNetwork(netstatOutput string) ([]NetworkInterface, error) {
 	}
 
 	return interfaces, nil
+}
+
+// parseProcesses parses ps aux output into a slice of ProcessInfo.
+// Works for both Linux and macOS ps aux output formats.
+// ps aux columns: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+func parseProcesses(output string) ([]ProcessInfo, error) {
+	var procs []ProcessInfo
+	scanner := bufio.NewScanner(strings.NewReader(output))
+
+	// Skip header line (USER PID %CPU %MEM ...)
+	scanner.Scan()
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		if len(fields) < 11 {
+			continue
+		}
+
+		pid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+
+		cpu, err := strconv.ParseFloat(fields[2], 64)
+		if err != nil {
+			cpu = 0
+		}
+
+		mem, err := strconv.ParseFloat(fields[3], 64)
+		if err != nil {
+			mem = 0
+		}
+
+		// TIME is typically at index 9, COMMAND starts at index 10
+		timeStr := fields[9]
+		command := strings.Join(fields[10:], " ")
+
+		// Truncate command to reasonable length
+		if len(command) > 50 {
+			command = command[:47] + "..."
+		}
+
+		procs = append(procs, ProcessInfo{
+			PID:     pid,
+			User:    fields[0],
+			CPU:     cpu,
+			Memory:  mem,
+			Time:    timeStr,
+			Command: command,
+		})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error scanning ps output: %w", err)
+	}
+
+	return procs, nil
 }

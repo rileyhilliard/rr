@@ -2,7 +2,7 @@ package monitor
 
 import "github.com/charmbracelet/lipgloss"
 
-// Dashboard color palette - GitHub dark theme inspired
+// Dashboard color palette - btop-inspired monochrome with cyan accent
 const (
 	// Background colors
 	ColorDarkBg    = lipgloss.Color("#0d1117")
@@ -19,8 +19,12 @@ const (
 	ColorTextSecondary = lipgloss.Color("#8b949e")
 	ColorTextMuted     = lipgloss.Color("#6e7681")
 
-	// Accent colors
-	ColorAccent = lipgloss.Color("#58a6ff")
+	// Accent colors - cyan for btop-style look
+	ColorAccent    = lipgloss.Color("#00d7d7")
+	ColorAccentDim = lipgloss.Color("#005f5f")
+
+	// Graph colors
+	ColorGraph = lipgloss.Color("#00d7d7")
 )
 
 // Thresholds for metric severity levels

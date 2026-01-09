@@ -150,6 +150,73 @@ func (h *History) GetNetworkHistory(alias, iface string, count int) (bytesIn, by
 	return netHist.bytesIn.getLast(count), netHist.bytesOut.getLast(count)
 }
 
+// NetworkRate represents calculated network throughput for an interface.
+type NetworkRate struct {
+	Interface      string
+	BytesInPerSec  float64
+	BytesOutPerSec float64
+}
+
+// GetNetworkRates calculates network throughput rates for all interfaces of a host.
+// The intervalSec parameter is the time between samples (typically the refresh interval).
+// Returns rates in bytes per second.
+func (h *History) GetNetworkRates(alias string, intervalSec float64) []NetworkRate {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	hist, ok := h.hosts[alias]
+	if !ok || intervalSec <= 0 {
+		return nil
+	}
+
+	var rates []NetworkRate
+	for ifaceName, netHist := range hist.network {
+		// Get last 2 samples to calculate delta
+		inHist := netHist.bytesIn.getLast(2)
+		outHist := netHist.bytesOut.getLast(2)
+
+		// Need at least 2 samples to calculate rate
+		if len(inHist) < 2 || len(outHist) < 2 {
+			continue
+		}
+
+		// Calculate bytes per second from delta
+		// inHist[0] is older, inHist[1] is newer
+		inDelta := inHist[1] - inHist[0]
+		outDelta := outHist[1] - outHist[0]
+
+		// Handle counter wraparound or reset (negative delta)
+		if inDelta < 0 {
+			inDelta = 0
+		}
+		if outDelta < 0 {
+			outDelta = 0
+		}
+
+		rates = append(rates, NetworkRate{
+			Interface:      ifaceName,
+			BytesInPerSec:  inDelta / intervalSec,
+			BytesOutPerSec: outDelta / intervalSec,
+		})
+	}
+
+	return rates
+}
+
+// GetTotalNetworkRate returns the combined throughput across all non-loopback interfaces.
+func (h *History) GetTotalNetworkRate(alias string, intervalSec float64) (bytesInPerSec, bytesOutPerSec float64) {
+	rates := h.GetNetworkRates(alias, intervalSec)
+	for _, r := range rates {
+		// Skip loopback
+		if r.Interface == "lo" || r.Interface == "lo0" {
+			continue
+		}
+		bytesInPerSec += r.BytesInPerSec
+		bytesOutPerSec += r.BytesOutPerSec
+	}
+	return
+}
+
 // Clear removes all history for the specified host.
 func (h *History) Clear(alias string) {
 	h.mu.Lock()

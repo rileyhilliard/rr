@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -18,10 +19,21 @@ var (
 				Padding(0, 1).
 				MarginBottom(1)
 
+	detailSectionTitleStyle = lipgloss.NewStyle().
+				Foreground(ColorAccent).
+				Bold(true)
+
 	detailValueStyle = lipgloss.NewStyle().
 				Foreground(ColorTextPrimary)
+)
 
-	sparklineChars = []rune{'_', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+// ProcSortOrder determines how processes are sorted in the table.
+type ProcSortOrder int
+
+const (
+	ProcSortByCPU ProcSortOrder = iota
+	ProcSortByMemory
+	ProcSortByPID
 )
 
 // renderDetailView renders the expanded single-host detail view.
@@ -56,27 +68,61 @@ func (m Model) renderDetailView() string {
 		return detailContainerStyle.Render(b.String())
 	}
 
-	// CPU Section
+	// CPU Section with braille graph
 	cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
 	b.WriteString(cpuSection)
 	b.WriteString("\n")
 
-	// RAM Section
-	ramSection := m.renderDetailRAMSection(metrics.RAM, contentWidth)
-	b.WriteString(ramSection)
-	b.WriteString("\n")
+	// Two-column layout for RAM and Network if wide enough
+	halfWidth := (contentWidth - 2) / 2
+	if contentWidth >= 80 {
+		ramSection := m.renderDetailRAMSection(host, metrics.RAM, halfWidth)
+		netSection := m.renderDetailNetworkSection(host, metrics.Network, halfWidth)
+
+		// Join side by side
+		ramLines := strings.Split(ramSection, "\n")
+		netLines := strings.Split(netSection, "\n")
+
+		// Pad to same height
+		maxLines := len(ramLines)
+		if len(netLines) > maxLines {
+			maxLines = len(netLines)
+		}
+		for len(ramLines) < maxLines {
+			ramLines = append(ramLines, strings.Repeat(" ", halfWidth))
+		}
+		for len(netLines) < maxLines {
+			netLines = append(netLines, strings.Repeat(" ", halfWidth))
+		}
+
+		for i := 0; i < maxLines; i++ {
+			b.WriteString(ramLines[i])
+			b.WriteString(" ")
+			b.WriteString(netLines[i])
+			b.WriteString("\n")
+		}
+	} else {
+		// Single column for narrow terminals
+		ramSection := m.renderDetailRAMSection(host, metrics.RAM, contentWidth)
+		b.WriteString(ramSection)
+		b.WriteString("\n")
+
+		netSection := m.renderDetailNetworkSection(host, metrics.Network, contentWidth)
+		b.WriteString(netSection)
+		b.WriteString("\n")
+	}
 
 	// GPU Section (if present)
 	if metrics.GPU != nil {
-		gpuSection := m.renderDetailGPUSection(metrics.GPU, contentWidth)
+		gpuSection := m.renderDetailGPUSection(host, metrics.GPU, contentWidth)
 		b.WriteString(gpuSection)
 		b.WriteString("\n")
 	}
 
-	// Network Section
-	if len(metrics.Network) > 0 {
-		netSection := m.renderDetailNetworkSection(metrics.Network, contentWidth)
-		b.WriteString(netSection)
+	// Process Table Section
+	if len(metrics.Processes) > 0 {
+		procSection := m.renderDetailProcessSection(metrics.Processes, contentWidth)
+		b.WriteString(procSection)
 		b.WriteString("\n")
 	}
 
@@ -114,54 +160,48 @@ func (m Model) renderDetailHeader(host string, status HostStatus) string {
 	return fmt.Sprintf("%s  %s", hostTitle, statusText)
 }
 
-// renderDetailCPUSection renders the CPU section with history sparkline.
+// renderDetailCPUSection renders the CPU section with braille history graph.
 func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) string {
 	var lines []string
 
-	// Section title
-	titleStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	lines = append(lines, titleStyle.Render("CPU"))
+	lines = append(lines, detailSectionTitleStyle.Render("CPU"))
 	lines = append(lines, "")
 
-	// Current usage with large progress bar
-	barWidth := width - 20
-	if barWidth < 20 {
-		barWidth = 20
-	}
-	bar := ProgressBar(barWidth, cpu.Percent)
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
-	lines = append(lines, fmt.Sprintf("  Usage: %s %s", bar, pctText))
-
-	// Load average
-	loadLine := fmt.Sprintf("  Load:  %.2f, %.2f, %.2f (1m, 5m, 15m)",
-		cpu.LoadAvg[0], cpu.LoadAvg[1], cpu.LoadAvg[2])
-	lines = append(lines, LabelStyle.Render(loadLine))
-
-	// Cores if available
-	if cpu.Cores > 0 {
-		coresLine := fmt.Sprintf("  Cores: %d", cpu.Cores)
-		lines = append(lines, LabelStyle.Render(coresLine))
+	// Braille graph - 2 rows high for higher resolution
+	graphWidth := width - 20
+	if graphWidth < 20 {
+		graphWidth = 20
 	}
 
-	// History sparkline
-	history := m.history.GetCPUHistory(host, 30)
+	history := m.history.GetCPUHistory(host, graphWidth*2)
 	if len(history) > 0 {
-		lines = append(lines, "")
-		sparkline := renderSparkline(history, width-4)
-		lines = append(lines, fmt.Sprintf("  %s", sparkline))
-		lines = append(lines, LabelStyle.Render("  History (30 samples)"))
+		graph := RenderBrailleSparkline(history, graphWidth, 2, ColorGraph)
+		for _, line := range strings.Split(graph, "\n") {
+			lines = append(lines, "  "+line)
+		}
 	}
+
+	// Current usage with percentage
+	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%.1f%%", cpu.Percent))
+	lines = append(lines, fmt.Sprintf("  Current: %s", pctText))
+
+	// Load average and cores on same line
+	loadText := fmt.Sprintf("Load: %.2f / %.2f / %.2f", cpu.LoadAvg[0], cpu.LoadAvg[1], cpu.LoadAvg[2])
+	coresText := ""
+	if cpu.Cores > 0 {
+		coresText = fmt.Sprintf("  Cores: %d", cpu.Cores)
+	}
+	lines = append(lines, "  "+LabelStyle.Render(loadText+coresText))
 
 	content := strings.Join(lines, "\n")
 	return detailSectionStyle.Width(width).Render(content)
 }
 
-// renderDetailRAMSection renders the RAM section with breakdown.
-func (m Model) renderDetailRAMSection(ram RAMMetrics, width int) string {
+// renderDetailRAMSection renders the RAM section with sparkline.
+func (m Model) renderDetailRAMSection(host string, ram RAMMetrics, width int) string {
 	var lines []string
 
-	titleStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	lines = append(lines, titleStyle.Render("Memory"))
+	lines = append(lines, detailSectionTitleStyle.Render("Memory"))
 	lines = append(lines, "")
 
 	// Calculate percentage
@@ -170,65 +210,68 @@ func (m Model) renderDetailRAMSection(ram RAMMetrics, width int) string {
 		percent = float64(ram.UsedBytes) / float64(ram.TotalBytes) * 100
 	}
 
-	// Main progress bar
-	barWidth := width - 20
-	if barWidth < 20 {
-		barWidth = 20
+	// Mini sparkline from history
+	ramHistory := m.history.GetRAMHistory(host, 20)
+	if len(ramHistory) > 0 {
+		sparkline := RenderColoredMiniSparkline(ramHistory, 20)
+		lines = append(lines, "  "+sparkline)
 	}
-	bar := ProgressBar(barWidth, percent)
+
+	// Progress bar
+	barWidth := width - 14
+	if barWidth < 10 {
+		barWidth = 10
+	}
+	bar := CompactProgressBar(barWidth, percent)
 	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
-	lines = append(lines, fmt.Sprintf("  Usage: %s %s", bar, pctText))
+	lines = append(lines, fmt.Sprintf("  %s %s", bar, pctText))
 
-	// Memory breakdown
-	usedText := fmt.Sprintf("  Used:      %s", formatBytes(ram.UsedBytes))
-	availText := fmt.Sprintf("  Available: %s", formatBytes(ram.Available))
-	cachedText := fmt.Sprintf("  Cached:    %s", formatBytes(ram.Cached))
-	totalText := fmt.Sprintf("  Total:     %s", formatBytes(ram.TotalBytes))
+	// Memory breakdown - compact format
+	usedStr := formatBytes(ram.UsedBytes)
+	totalStr := formatBytes(ram.TotalBytes)
+	lines = append(lines, LabelStyle.Render(fmt.Sprintf("  %s / %s", usedStr, totalStr)))
 
-	lines = append(lines, LabelStyle.Render(usedText))
-	lines = append(lines, LabelStyle.Render(availText))
-	lines = append(lines, LabelStyle.Render(cachedText))
-	lines = append(lines, LabelStyle.Render(totalText))
+	if ram.Available > 0 {
+		lines = append(lines, LabelStyle.Render(fmt.Sprintf("  Avail: %s", formatBytes(ram.Available))))
+	}
 
 	content := strings.Join(lines, "\n")
 	return detailSectionStyle.Width(width).Render(content)
 }
 
 // renderDetailGPUSection renders GPU details including VRAM, temp, and power.
-func (m Model) renderDetailGPUSection(gpu *GPUMetrics, width int) string {
+func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) string {
 	var lines []string
 
-	titleStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	lines = append(lines, titleStyle.Render("GPU"))
+	lines = append(lines, detailSectionTitleStyle.Render("GPU"))
 	lines = append(lines, "")
 
 	// GPU name
 	if gpu.Name != "" {
 		lines = append(lines, fmt.Sprintf("  %s", detailValueStyle.Render(gpu.Name)))
-		lines = append(lines, "")
 	}
 
-	// Utilization progress bar
-	barWidth := width - 20
-	if barWidth < 20 {
-		barWidth = 20
+	// GPU history sparkline
+	gpuHistory := m.history.GetGPUHistory(host, 20)
+	if len(gpuHistory) > 0 {
+		sparkline := RenderColoredMiniSparkline(gpuHistory, 20)
+		lines = append(lines, "  "+sparkline)
 	}
-	bar := ProgressBar(barWidth, gpu.Percent)
-	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
-	lines = append(lines, fmt.Sprintf("  Usage: %s %s", bar, pctText))
+
+	// Utilization
+	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%.1f%%", gpu.Percent))
+	lines = append(lines, fmt.Sprintf("  Usage: %s", pctText))
 
 	// VRAM
 	if gpu.MemoryTotal > 0 {
 		vramPercent := float64(gpu.MemoryUsed) / float64(gpu.MemoryTotal) * 100
-		vramBar := ProgressBar(barWidth, vramPercent)
-		vramPct := MetricStyle(vramPercent).Render(fmt.Sprintf("%5.1f%%", vramPercent))
-		lines = append(lines, fmt.Sprintf("  VRAM:  %s %s", vramBar, vramPct))
-
-		vramDetail := fmt.Sprintf("         %s / %s", formatBytes(gpu.MemoryUsed), formatBytes(gpu.MemoryTotal))
-		lines = append(lines, LabelStyle.Render(vramDetail))
+		vramPct := MetricStyle(vramPercent).Render(fmt.Sprintf("%.1f%%", vramPercent))
+		vramStr := fmt.Sprintf("%s / %s", formatBytes(gpu.MemoryUsed), formatBytes(gpu.MemoryTotal))
+		lines = append(lines, fmt.Sprintf("  VRAM: %s (%s)", vramPct, LabelStyle.Render(vramStr)))
 	}
 
-	// Temperature
+	// Temperature and Power on same line
+	extras := []string{}
 	if gpu.Temperature > 0 {
 		tempColor := ColorHealthy
 		if gpu.Temperature >= 80 {
@@ -237,56 +280,109 @@ func (m Model) renderDetailGPUSection(gpu *GPUMetrics, width int) string {
 			tempColor = ColorWarning
 		}
 		tempStyle := lipgloss.NewStyle().Foreground(tempColor)
-		tempText := fmt.Sprintf("  Temp:  %s", tempStyle.Render(fmt.Sprintf("%d C", gpu.Temperature)))
-		lines = append(lines, tempText)
+		extras = append(extras, tempStyle.Render(fmt.Sprintf("%dC", gpu.Temperature)))
 	}
-
-	// Power
 	if gpu.PowerWatts > 0 {
-		powerText := fmt.Sprintf("  Power: %dW", gpu.PowerWatts)
-		lines = append(lines, LabelStyle.Render(powerText))
+		extras = append(extras, LabelStyle.Render(fmt.Sprintf("%dW", gpu.PowerWatts)))
+	}
+	if len(extras) > 0 {
+		lines = append(lines, "  "+strings.Join(extras, " | "))
 	}
 
 	content := strings.Join(lines, "\n")
 	return detailSectionStyle.Width(width).Render(content)
 }
 
-// renderDetailNetworkSection renders network interfaces with per-interface stats.
-func (m Model) renderDetailNetworkSection(interfaces []NetworkInterface, width int) string {
+// renderDetailNetworkSection renders network with rates and per-interface sparklines.
+func (m Model) renderDetailNetworkSection(host string, interfaces []NetworkInterface, width int) string {
 	var lines []string
 
-	titleStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	lines = append(lines, titleStyle.Render("Network"))
+	lines = append(lines, detailSectionTitleStyle.Render("Network"))
 	lines = append(lines, "")
 
-	// Filter out loopback and show each interface
+	// Get total rates
+	inRate, outRate := m.history.GetTotalNetworkRate(host, m.interval.Seconds())
+
+	// Total throughput with arrows
+	downArrow := lipgloss.NewStyle().Foreground(ColorAccent).Render("↓")
+	upArrow := lipgloss.NewStyle().Foreground(ColorAccent).Render("↑")
+	lines = append(lines, fmt.Sprintf("  %s %s  %s %s",
+		downArrow, ValueStyle.Render(FormatRate(inRate)),
+		upArrow, ValueStyle.Render(FormatRate(outRate))))
+
+	// Per-interface breakdown (skip loopback)
 	for _, iface := range interfaces {
 		if iface.Name == "lo" || iface.Name == "lo0" {
 			continue
 		}
 
-		// Interface name
-		ifaceName := lipgloss.NewStyle().Foreground(ColorTextPrimary).Bold(true).Render(iface.Name)
-		lines = append(lines, fmt.Sprintf("  %s", ifaceName))
-
-		// Traffic stats with arrows
-		inArrow := lipgloss.NewStyle().Foreground(ColorHealthy).Render("\u2193")  // down arrow
-		outArrow := lipgloss.NewStyle().Foreground(ColorWarning).Render("\u2191") // up arrow
-
-		trafficLine := fmt.Sprintf("    %s %s  %s %s",
-			inArrow, formatBytes(iface.BytesIn),
-			outArrow, formatBytes(iface.BytesOut))
-		lines = append(lines, trafficLine)
-
-		// Packet counts
-		packetsLine := fmt.Sprintf("    Packets: %d in, %d out", iface.PacketsIn, iface.PacketsOut)
-		lines = append(lines, LabelStyle.Render(packetsLine))
-		lines = append(lines, "")
+		// Interface name with traffic
+		ifaceName := LabelStyle.Render(iface.Name + ":")
+		inText := formatBytes(iface.BytesIn)
+		outText := formatBytes(iface.BytesOut)
+		lines = append(lines, fmt.Sprintf("  %s ↓%s ↑%s", ifaceName, inText, outText))
 	}
 
-	// Remove trailing empty line
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	content := strings.Join(lines, "\n")
+	return detailSectionStyle.Width(width).Render(content)
+}
+
+// renderDetailProcessSection renders the process table.
+func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string {
+	var lines []string
+
+	lines = append(lines, detailSectionTitleStyle.Render("Processes (sorted by CPU)"))
+	lines = append(lines, "")
+
+	// Sort by CPU (already should be, but ensure)
+	sorted := make([]ProcessInfo, len(procs))
+	copy(sorted, procs)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].CPU > sorted[j].CPU
+	})
+
+	// Header
+	headerStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
+	header := fmt.Sprintf("  %-6s %-10s %6s %6s  %s", "PID", "USER", "CPU%", "MEM%", "COMMAND")
+	lines = append(lines, headerStyle.Render(header))
+
+	// Show up to 10 processes
+	maxProcs := 10
+	if len(sorted) < maxProcs {
+		maxProcs = len(sorted)
+	}
+
+	for i := 0; i < maxProcs; i++ {
+		proc := sorted[i]
+
+		// Truncate user and command
+		user := proc.User
+		if len(user) > 10 {
+			user = user[:9] + "+"
+		}
+
+		cmd := proc.Command
+		cmdWidth := width - 36
+		if cmdWidth < 10 {
+			cmdWidth = 10
+		}
+		if len(cmd) > cmdWidth {
+			cmd = cmd[:cmdWidth-3] + "..."
+		}
+
+		// Color CPU and MEM based on thresholds
+		cpuColor := MetricColor(proc.CPU)
+		memColor := MetricColor(proc.Memory)
+		cpuStyle := lipgloss.NewStyle().Foreground(cpuColor)
+		memStyle := lipgloss.NewStyle().Foreground(memColor)
+
+		line := fmt.Sprintf("  %-6d %-10s %s %s  %s",
+			proc.PID,
+			user,
+			cpuStyle.Render(fmt.Sprintf("%5.1f%%", proc.CPU)),
+			memStyle.Render(fmt.Sprintf("%5.1f%%", proc.Memory)),
+			cmd)
+		lines = append(lines, line)
 	}
 
 	content := strings.Join(lines, "\n")
@@ -295,60 +391,6 @@ func (m Model) renderDetailNetworkSection(interfaces []NetworkInterface, width i
 
 // renderDetailFooter renders navigation hints for the detail view.
 func (m Model) renderDetailFooter() string {
-	hints := []string{"Esc back", "r refresh", "q quit"}
-	return FooterStyle.Render(strings.Join(hints, " | "))
-}
-
-// renderSparkline converts a slice of values into a sparkline string.
-func renderSparkline(values []float64, maxWidth int) string {
-	if len(values) == 0 {
-		return ""
-	}
-
-	// Limit to maxWidth characters
-	if len(values) > maxWidth {
-		values = values[len(values)-maxWidth:]
-	}
-
-	// Find min and max for scaling
-	minVal, maxVal := values[0], values[0]
-	for _, v := range values {
-		if v < minVal {
-			minVal = v
-		}
-		if v > maxVal {
-			maxVal = v
-		}
-	}
-
-	// For percentage values (0-100), use fixed range
-	if maxVal <= 100 && minVal >= 0 {
-		minVal = 0
-		maxVal = 100
-	}
-
-	// Build the sparkline
-	var result strings.Builder
-	for _, v := range values {
-		// Map value to sparkline character index
-		var idx int
-		if maxVal == minVal {
-			idx = len(sparklineChars) / 2
-		} else {
-			normalized := (v - minVal) / (maxVal - minVal)
-			idx = int(normalized * float64(len(sparklineChars)-1))
-		}
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= len(sparklineChars) {
-			idx = len(sparklineChars) - 1
-		}
-		result.WriteRune(sparklineChars[idx])
-	}
-
-	// Color based on the last (most recent) value
-	lastVal := values[len(values)-1]
-	color := MetricColor(lastVal)
-	return lipgloss.NewStyle().Foreground(color).Render(result.String())
+	hints := []string{"Esc:back", "?:help", "q:quit"}
+	return FooterStyle.Render(strings.Join(hints, "  "))
 }

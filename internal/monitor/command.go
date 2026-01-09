@@ -31,22 +31,24 @@ func BuildMetricsCommand(platform Platform) string {
 
 // buildLinuxCommand returns the batched metrics command for Linux hosts.
 // Output sections are separated by "---" and include:
-// 1. /proc/stat - CPU statistics
-// 2. /proc/loadavg - Load averages
-// 3. /proc/meminfo - Memory information
-// 4. /proc/net/dev - Network interface statistics
-// 5. nvidia-smi output - GPU metrics (optional, fails silently if not available)
+// 0. /proc/stat - CPU statistics
+// 1. /proc/loadavg - Load averages
+// 2. /proc/meminfo - Memory information
+// 3. /proc/net/dev - Network interface statistics
+// 4. nvidia-smi output - GPU metrics (optional, fails silently if not available)
+// 5. ps aux - Process list sorted by CPU (top 16 including header)
 func buildLinuxCommand() string {
-	return `cat /proc/stat; echo "---"; cat /proc/loadavg; echo "---"; cat /proc/meminfo; echo "---"; cat /proc/net/dev; echo "---"; nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null || true`
+	return `cat /proc/stat; echo "---"; cat /proc/loadavg; echo "---"; cat /proc/meminfo; echo "---"; cat /proc/net/dev; echo "---"; nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null || true; echo "---"; ps aux --sort=-%cpu 2>/dev/null | head -16 || ps aux 2>/dev/null | head -16`
 }
 
 // buildDarwinCommand returns the batched metrics command for macOS hosts.
 // Output sections are separated by "---" and include:
-// 1. top output - CPU usage and load averages
-// 2. vm_stat output - Memory statistics
-// 3. netstat output - Network interface statistics
+// 0. top output - CPU usage and load averages
+// 1. vm_stat output - Memory statistics
+// 2. netstat output - Network interface statistics
+// 3. ps aux - Process list sorted by CPU (top 16 including header)
 func buildDarwinCommand() string {
-	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; echo "---"; netstat -ib`
+	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; echo "---"; netstat -ib; echo "---"; ps aux -r 2>/dev/null | head -16`
 }
 
 // PlatformDetectCommand returns the command to detect the platform type.
