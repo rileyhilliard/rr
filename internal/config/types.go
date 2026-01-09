@@ -37,7 +37,8 @@ type Host struct {
 	Env map[string]string `yaml:"env" mapstructure:"env"`
 
 	// Shell specifies how to invoke the shell for commands.
-	// Default is "sh -c". Use "bash -l -c" for login shell with full PATH.
+	// Default uses $SHELL -l -c (user's login shell) to ensure PATH is set up.
+	// Use "sh -c" for minimal shell without profile loading.
 	// Format: "<shell> <flags> <command-flag>" where the command will be appended.
 	Shell string `yaml:"shell,omitempty" mapstructure:"shell"`
 

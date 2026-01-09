@@ -165,6 +165,12 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 	return ExecuteTask(conn, task, env, workDir, os.Stdout, os.Stderr)
 }
 
+// DefaultShell is used when no shell is configured.
+// Uses $SHELL (user's default shell) with login mode (-l) to ensure PATH is set up.
+// The -c flag keeps it non-interactive, avoiding oh-my-zsh update prompts etc.
+// Falls back to /bin/sh if $SHELL is unset.
+const DefaultShell = "${SHELL:-/bin/sh} -l -c"
+
 // BuildRemoteCommand constructs a remote command with shell config, setup commands, and working directory.
 // This is the recommended way to build commands for remote execution with full configuration support.
 func BuildRemoteCommand(cmd string, host *config.Host) string {
@@ -187,11 +193,11 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	// Join all parts with &&
 	fullCmd := strings.Join(parts, " && ")
 
-	// Wrap in shell if configured
-	if host.Shell != "" {
-		// Shell format is "bash -l -c" - we append the quoted command
-		return fmt.Sprintf("%s %q", host.Shell, fullCmd)
+	// Wrap in shell (use default login shell if not configured)
+	shell := host.Shell
+	if shell == "" {
+		shell = DefaultShell
 	}
-
-	return fullCmd
+	// Shell format is "bash -l -c" - we append the quoted command
+	return fmt.Sprintf("%s %q", shell, fullCmd)
 }
