@@ -3,7 +3,8 @@ package monitor
 import "sync"
 
 // DefaultHistorySize is the default number of data points to retain per metric.
-const DefaultHistorySize = 60
+// With a 1-second refresh interval, 600 points gives 10 minutes of history.
+const DefaultHistorySize = 600
 
 // History manages metric history for multiple hosts using ring buffers.
 // It provides thread-safe access to historical data for sparkline rendering.
@@ -215,6 +216,97 @@ func (h *History) GetTotalNetworkRate(alias string, intervalSec float64) (bytesI
 		bytesOutPerSec += r.BytesOutPerSec
 	}
 	return
+}
+
+// GetNetworkRateHistory returns historical network rate values as percentages (0-100).
+// Uses log scale to make small rates visible. Returns combined in+out rates.
+func (h *History) GetNetworkRateHistory(alias string, count int, intervalSec float64) []float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	hist, ok := h.hosts[alias]
+	if !ok || intervalSec <= 0 {
+		return nil
+	}
+
+	// Find any interface to get history length
+	var totalInHist, totalOutHist []float64
+	first := true
+
+	for ifaceName, netHist := range hist.network {
+		// Skip loopback
+		if ifaceName == "lo" || ifaceName == "lo0" {
+			continue
+		}
+
+		inHist := netHist.bytesIn.getLast(count + 1) // +1 to calculate deltas
+		outHist := netHist.bytesOut.getLast(count + 1)
+
+		if len(inHist) < 2 {
+			continue
+		}
+
+		if first {
+			totalInHist = make([]float64, len(inHist)-1)
+			totalOutHist = make([]float64, len(outHist)-1)
+			first = false
+		}
+
+		// Sum up deltas from all interfaces
+		for i := 1; i < len(inHist) && i <= len(totalInHist); i++ {
+			inDelta := inHist[i] - inHist[i-1]
+			outDelta := outHist[i] - outHist[i-1]
+			if inDelta < 0 {
+				inDelta = 0
+			}
+			if outDelta < 0 {
+				outDelta = 0
+			}
+			totalInHist[i-1] += inDelta / intervalSec
+			totalOutHist[i-1] += outDelta / intervalSec
+		}
+	}
+
+	if len(totalInHist) == 0 {
+		return nil
+	}
+
+	// Convert to percentage using log scale
+	result := make([]float64, len(totalInHist))
+	for i := range totalInHist {
+		totalRate := totalInHist[i] + totalOutHist[i]
+		result[i] = networkRateToPercent(totalRate)
+	}
+
+	return result
+}
+
+// networkRateToPercent converts a network rate (bytes/sec) to a percentage (0-100).
+// Uses log scale so small rates are visible.
+func networkRateToPercent(bytesPerSec float64) float64 {
+	if bytesPerSec <= 0 {
+		return 0
+	}
+	if bytesPerSec > 100*1024*1024 { // > 100 MB/s
+		return 100
+	}
+	if bytesPerSec > 10*1024*1024 { // > 10 MB/s
+		return 80 + (bytesPerSec-10*1024*1024)/(90*1024*1024)*20
+	}
+	if bytesPerSec > 1024*1024 { // > 1 MB/s
+		return 60 + (bytesPerSec-1024*1024)/(9*1024*1024)*20
+	}
+	if bytesPerSec > 100*1024 { // > 100 KB/s
+		return 40 + (bytesPerSec-100*1024)/(924*1024)*20
+	}
+	if bytesPerSec > 10*1024 { // > 10 KB/s
+		return 20 + (bytesPerSec-10*1024)/(90*1024)*20
+	}
+	if bytesPerSec > 1024 { // > 1 KB/s
+		return 5 + (bytesPerSec-1024)/(9*1024)*15
+	}
+	// < 1 KB/s
+	return bytesPerSec / 1024 * 5
 }
 
 // Clear removes all history for the specified host.

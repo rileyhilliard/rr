@@ -95,8 +95,7 @@ func TestInlineProgressRenderBar(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		p.percent = tt.percent
-		bar := p.renderBar()
+		bar := p.renderBarWithPercent(tt.percent)
 
 		// Count filled characters (█)
 		filledCount := strings.Count(bar, "█")
@@ -158,4 +157,69 @@ func TestProgressWriterNoPassthrough(t *testing.T) {
 
 	// Progress should still be updated
 	assert.InDelta(t, 0.25, p.percent, 0.01)
+}
+
+func TestEaseOutQuad(t *testing.T) {
+	// At t=0, should be 0
+	assert.Equal(t, 0.0, easeOutQuad(0.0))
+
+	// At t=1, should be 1
+	assert.Equal(t, 1.0, easeOutQuad(1.0))
+
+	// At t=0.5, should be 0.75 (ease-out decelerates toward end)
+	assert.Equal(t, 0.75, easeOutQuad(0.5))
+
+	// Verify it's monotonically increasing
+	prev := 0.0
+	for i := 0.0; i <= 1.0; i += 0.1 {
+		val := easeOutQuad(i)
+		assert.GreaterOrEqual(t, val, prev, "easeOutQuad should be monotonically increasing")
+		prev = val
+	}
+}
+
+func TestFakeProgressCapsAt99(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewInlineProgress("Test", &buf)
+	p.startTime = time.Now().Add(-15 * time.Second) // 15 seconds ago
+
+	fake := p.calculateFakeProgress()
+
+	// After 10+ seconds, should cap at 99%
+	assert.Equal(t, 0.99, fake)
+}
+
+func TestEffectiveProgressUsesMaxOfRealAndFake(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewInlineProgress("Test", &buf)
+	p.useFake = true
+	p.startTime = time.Now().Add(-5 * time.Second) // 5 seconds ago
+
+	// Real progress is 0, fake should be > 0
+	p.percent = 0
+	p.mu.Lock()
+	effective := p.effectiveProgressLocked()
+	p.mu.Unlock()
+	assert.Greater(t, effective, 0.0, "With real=0, should use fake progress")
+
+	// Real progress is higher than fake, should use real
+	p.percent = 0.95
+	p.mu.Lock()
+	effective = p.effectiveProgressLocked()
+	p.mu.Unlock()
+	assert.Equal(t, 0.95, effective, "Should use real progress when it's higher")
+}
+
+func TestFakeProgressDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewInlineProgress("Test", &buf)
+	p.SetUseFakeProgress(false)
+	p.startTime = time.Now().Add(-5 * time.Second)
+
+	p.percent = 0.1
+	p.mu.Lock()
+	effective := p.effectiveProgressLocked()
+	p.mu.Unlock()
+
+	assert.Equal(t, 0.1, effective, "With fake disabled, should only use real progress")
 }

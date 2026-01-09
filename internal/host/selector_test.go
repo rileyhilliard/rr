@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	sshmock "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 )
 
 // skipIfNoSSH skips the test if SSH tests are disabled.
@@ -1019,5 +1020,50 @@ func TestSelector_SelectByTag_LocalFallback(t *testing.T) {
 
 	if conn.Name != "local" {
 		t.Errorf("conn.Name = %q, want 'local'", conn.Name)
+	}
+}
+
+func TestSelector_isConnectionAlive_NilConnection(t *testing.T) {
+	selector := NewSelector(nil)
+
+	if selector.isConnectionAlive(nil) {
+		t.Error("isConnectionAlive(nil) should return false")
+	}
+}
+
+func TestSelector_isConnectionAlive_NilClient(t *testing.T) {
+	selector := NewSelector(nil)
+
+	conn := &Connection{
+		Name:    "test",
+		IsLocal: false,
+		Client:  nil,
+	}
+
+	if selector.isConnectionAlive(conn) {
+		t.Error("isConnectionAlive should return false when Client is nil")
+	}
+}
+
+func TestSelector_isConnectionAlive_WithMockClient(t *testing.T) {
+	selector := NewSelector(nil)
+	mockClient := sshmock.NewMockClient("testhost")
+
+	conn := &Connection{
+		Name:    "test",
+		IsLocal: false,
+		Client:  mockClient,
+	}
+
+	// Mock client should return true when connection is open
+	if !selector.isConnectionAlive(conn) {
+		t.Error("isConnectionAlive should return true for open mock connection")
+	}
+
+	// After closing, should return false
+	mockClient.Close()
+
+	if selector.isConnectionAlive(conn) {
+		t.Error("isConnectionAlive should return false after connection is closed")
 	}
 }

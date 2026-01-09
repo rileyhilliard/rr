@@ -271,3 +271,31 @@ func TestHelpers_WithDirs(t *testing.T) {
 	assert.True(t, client.GetFS().IsDir("/a/b"))
 	assert.True(t, client.GetFS().IsDir("/c/d/e"))
 }
+
+func TestMockClient_SendRequest(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Should succeed when connection is open
+	accepted, payload, err := client.SendRequest("keepalive@openssh.com", true, nil)
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	assert.Nil(t, payload)
+
+	// Should work with arbitrary request names
+	accepted, _, err = client.SendRequest("test-request", true, []byte("test payload"))
+	require.NoError(t, err)
+	assert.True(t, accepted)
+}
+
+func TestMockClient_SendRequest_AfterClose(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Close the connection
+	err := client.Close()
+	require.NoError(t, err)
+
+	// SendRequest should fail after close
+	_, _, err = client.SendRequest("keepalive@openssh.com", true, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "closed")
+}

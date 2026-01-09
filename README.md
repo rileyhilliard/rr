@@ -78,11 +78,29 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 
 ## What it actually does
 
-1. **Host fallback**: You list multiple SSH aliases per host. `rr` tries them in order until one works. Useful when you're sometimes on LAN, sometimes on VPN.
+1. **Smart connection failover**: `rr` tries SSH connections in order and picks the first one that's reachable AND not busy. This handles three scenarios automatically:
+
+   ```yaml
+   hosts:
+     gpu-box:
+       ssh:
+         - 192.168.1.50       # LAN - fastest, try first
+         - gpu-tailscale      # Tailscale - works from anywhere
+         - user@backup-gpu    # Different machine - last resort
+   ```
+
+   | Where you are | What happens |
+   |---------------|--------------|
+   | Home office (LAN) | Uses `192.168.1.50` (fastest) |
+   | Coffee shop | LAN fails, uses Tailscale automatically |
+   | gpu-box is busy | Skips to `backup-gpu` |
+   | gpu-box is offline | Same - falls back down the list |
+
+   No manual switching. Run `rr run "make test"` from anywhere and it figures out how to reach your code.
 
 2. **File sync**: Wraps rsync with sane defaults. Excludes `.git`, `node_modules`, etc. Preserves remote-only directories so you don't nuke your venv every sync.
 
-3. **Locking**: Creates a lock file on the remote before running commands. If someone else has the lock, you wait. No more stepping on each other's test runs.
+3. **Locking**: Creates a lock file on the remote before running commands. If someone else has the lock, `rr` either waits or falls back to another host (see above).
 
 4. **Output formatting**: Auto-detects pytest, jest, go test, cargo and formats failures nicely. You can turn this off if you hate it.
 

@@ -1,6 +1,10 @@
 package monitor
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // Dashboard color palette - btop-inspired monochrome with cyan accent
 const (
@@ -49,9 +53,8 @@ var (
 			Foreground(ColorTextMuted).
 			Padding(0, 1)
 
-	// Card styles
+	// Card styles - no background set here, each line handles its own
 	CardStyle = lipgloss.NewStyle().
-			Background(ColorSurfaceBg).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorBorder).
 			Padding(0, 1).
@@ -238,23 +241,21 @@ func SectionHeader(title, value string, width int) string {
 		width = 10
 	}
 
-	// Build left part: ┌─ Title
-	leftPart := "┌─ " + title + " "
+	// Calculate visible widths using lipgloss.Width for ANSI-aware measurement
+	// Left: "┌─ " (3 chars) + title + " " (1 char)
+	leftWidth := 3 + lipgloss.Width(title) + 1
 
-	// Build right part: Value ┐
-	rightPart := " " + value + " ┐"
+	// Right: " " (1 char) + value + " ┐" (2 chars)
+	rightWidth := 1 + lipgloss.Width(value) + 2
 
 	// Calculate middle fill width
-	fillWidth := width - len(leftPart) - len(rightPart)
+	fillWidth := width - leftWidth - rightWidth
 	if fillWidth < 1 {
 		fillWidth = 1
 	}
 
 	// Build middle with ─ characters
-	middle := ""
-	for i := 0; i < fillWidth; i++ {
-		middle += "─"
-	}
+	middle := strings.Repeat("─", fillWidth)
 
 	// Style the parts
 	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
@@ -275,10 +276,8 @@ func SectionFooter(width int) string {
 		width = 2
 	}
 
-	middle := ""
-	for i := 0; i < width-2; i++ {
-		middle += "─"
-	}
+	// └ and ┘ are each 1 display character
+	middle := strings.Repeat("─", width-2)
 
 	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	return borderStyle.Render("└" + middle + "┘")
@@ -287,4 +286,28 @@ func SectionFooter(width int) string {
 // SectionBorder renders the left border character for section content.
 func SectionBorder() string {
 	return lipgloss.NewStyle().Foreground(ColorBorder).Render("│")
+}
+
+// SectionContentLine renders a content line with left and right borders, properly padded to width.
+// Format: │ content                                              │
+func SectionContentLine(content string, width int) string {
+	if width < 4 {
+		width = 4
+	}
+
+	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+
+	// Calculate the visible width of the content (accounting for ANSI codes)
+	contentWidth := lipgloss.Width(content)
+
+	// Inner width is total width minus the borders and padding: "│ " on left and " │" on right
+	innerWidth := width - 4
+
+	// Pad content to fill the inner width
+	padding := innerWidth - contentWidth
+	if padding < 0 {
+		padding = 0
+	}
+
+	return borderStyle.Render("│") + " " + content + strings.Repeat(" ", padding) + " " + borderStyle.Render("│")
 }

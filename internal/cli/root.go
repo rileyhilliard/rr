@@ -146,6 +146,9 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noStrictHostKeyCheck, "no-strict-host-key-checking", false,
 		"disable SSH host key verification (insecure, for CI/automation only)")
 
+	// Set up styled warning handler for sshutil package
+	sshutil.WarningHandler = ui.PrintWarning
+
 	// Set up a pre-run hook to apply global flags
 	originalPreRun := rootCmd.PersistentPreRun
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {

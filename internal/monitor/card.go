@@ -7,6 +7,36 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Card layout constants
+const (
+	cardGraphHeight = 2  // braille graph rows
+	cardMinBarWidth = 10 // minimum graph width
+)
+
+// cardDividerStyle creates a subtle divider line with matching background
+var cardDividerStyle = lipgloss.NewStyle().
+	Foreground(ColorBorder).
+	Background(ColorSurfaceBg)
+
+// renderCardDivider creates a subtle thin divider line
+func renderCardDivider(width int) string {
+	divider := strings.Repeat("─", width)
+	return cardDividerStyle.Render(divider)
+}
+
+// renderCardLine renders a text line with proper background fill.
+// Applies background to the entire line including content and padding.
+func renderCardLine(content string, width int) string {
+	contentWidth := lipgloss.Width(content)
+	padding := ""
+	if width > contentWidth {
+		padding = strings.Repeat(" ", width-contentWidth)
+	}
+	// Apply background to entire line (content + padding)
+	lineStyle := lipgloss.NewStyle().Background(ColorSurfaceBg)
+	return lineStyle.Render(content + padding)
+}
+
 // renderCard renders a single host card with metrics.
 func (m Model) renderCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
@@ -18,44 +48,46 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		style = CardSelectedStyle.Width(width)
 	}
 
+	// Inner width for content (account for card padding)
+	innerWidth := width - 4
+
 	var lines []string
 
 	// Host name with status indicator
 	hostLine := m.renderHostLine(host, status)
-	lines = append(lines, hostLine)
+	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show placeholder
 	if metrics == nil {
-		lines = append(lines, "")
-		lines = append(lines, LabelStyle.Render("  Waiting for data..."))
-		lines = append(lines, "")
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, renderCardLine(LabelStyle.Render("  Waiting for data..."), innerWidth))
 	} else {
-		lines = append(lines, "")
+		// Divider after host name
+		lines = append(lines, renderCardDivider(innerWidth))
 
-		// CPU metrics with sparkline
-		cpuLine := m.renderCPULineWithSparkline(host, metrics.CPU, width-4)
-		lines = append(lines, cpuLine)
+		// CPU metrics with braille graph
+		cpuLines := m.renderCardCPUSection(host, metrics.CPU, innerWidth)
+		lines = append(lines, cpuLines...)
 
-		// RAM metrics
-		ramLine := m.renderRAMLine(metrics.RAM, width-4)
-		lines = append(lines, ramLine)
+		// Divider before RAM
+		lines = append(lines, renderCardDivider(innerWidth))
 
-		// GPU metrics (if available)
-		if metrics.GPU != nil {
-			gpuLine := m.renderGPULine(metrics.GPU, width-4)
-			lines = append(lines, gpuLine)
-		}
+		// RAM metrics with braille graph
+		ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
+		lines = append(lines, ramLines...)
 
-		// Network rates (not totals)
-		netLine := m.renderNetworkRateLine(host, width-4)
+		// Network rates (with divider if present)
+		netLine := m.renderCardNetworkLine(host, innerWidth)
 		if netLine != "" {
-			lines = append(lines, netLine)
+			lines = append(lines, renderCardDivider(innerWidth))
+			lines = append(lines, renderCardLine(netLine, innerWidth))
 		}
 
-		// Top processes
+		// Top process (with divider if present)
 		if len(metrics.Processes) > 0 {
-			topLine := m.renderTopProcessesLine(metrics.Processes, width-4)
-			lines = append(lines, topLine)
+			lines = append(lines, renderCardDivider(innerWidth))
+			topLine := m.renderCardTopProcess(metrics.Processes, innerWidth)
+			lines = append(lines, renderCardLine(topLine, innerWidth))
 		}
 	}
 
@@ -83,36 +115,98 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(host)
 }
 
-// renderCPULineWithSparkline renders CPU with mini sparkline, bar, and load avg.
-func (m Model) renderCPULineWithSparkline(host string, cpu CPUMetrics, lineWidth int) string {
+// renderCardCPUSection renders CPU with a braille sparkline graph.
+// Returns multiple lines: header line + graph rows.
+func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) []string {
+	var lines []string
+
+	// Header line: "CPU" label + right-aligned percentage and load
 	label := LabelStyle.Render("CPU")
-	percent := cpu.Percent
-
-	// Get CPU history for sparkline
-	cpuHistory := m.history.GetCPUHistory(host, 10)
-	sparkline := ""
-	if len(cpuHistory) > 0 {
-		sparkline = RenderColoredMiniSparkline(cpuHistory, 10)
-	} else {
-		sparkline = strings.Repeat(" ", 10)
-	}
-
-	// Calculate bar width: lineWidth - "CPU " (4) - sparkline (10) - space (1) - bar - space (1) - "XX.X%" (5) - space (1) - "L:X.XX" (6)
-	barWidth := lineWidth - 4 - 10 - 1 - 1 - 5 - 1 - 6
-	if barWidth < 8 {
-		barWidth = 8
-	}
-
-	bar := CompactProgressBar(barWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
 	loadText := LabelStyle.Render(fmt.Sprintf("L:%.1f", cpu.LoadAvg[0]))
 
-	return fmt.Sprintf("%s %s %s %s %s", label, sparkline, bar, pctText, loadText)
+	// Right side content
+	rightContent := pctText + " " + loadText
+	rightWidth := lipgloss.Width(rightContent)
+
+	// Calculate padding for right alignment
+	padding := ""
+	if lineWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + rightContent
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Graph width
+	graphWidth := lineWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	// Braille graph
+	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
+	if len(cpuHistory) > 0 {
+		graph := RenderBrailleSparkline(cpuHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graphLines := strings.Split(graph, "\n")
+		for _, gl := range graphLines {
+			lines = append(lines, renderCardLine(gl, lineWidth))
+		}
+	} else {
+		// Show gradient bar while collecting history
+		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
 }
 
-// renderNetworkRateLine renders network throughput rates.
-func (m Model) renderNetworkRateLine(host string, _ int) string {
-	// Get rates from history
+// renderCardRAMSection renders RAM with a braille sparkline graph.
+func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) []string {
+	var lines []string
+
+	var percent float64
+	if ram.TotalBytes > 0 {
+		percent = float64(ram.UsedBytes) / float64(ram.TotalBytes) * 100
+	}
+
+	// Header line: "RAM" label + right-aligned percentage
+	label := LabelStyle.Render("RAM")
+	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+
+	// Calculate padding for right alignment
+	rightWidth := lipgloss.Width(pctText)
+	padding := ""
+	if lineWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + pctText
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Graph width
+	graphWidth := lineWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	// Braille graph
+	ramHistory := m.history.GetRAMHistory(host, DefaultHistorySize)
+	if len(ramHistory) > 0 {
+		graph := RenderBrailleSparkline(ramHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graphLines := strings.Split(graph, "\n")
+		for _, gl := range graphLines {
+			lines = append(lines, renderCardLine(gl, lineWidth))
+		}
+	} else {
+		// Show gradient bar while collecting history
+		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
+}
+
+// renderCardNetworkLine renders network throughput rates in a single line.
+func (m Model) renderCardNetworkLine(host string, lineWidth int) string {
 	inRate, outRate := m.history.GetTotalNetworkRate(host, m.interval.Seconds())
 
 	// Skip if no rate data yet
@@ -120,96 +214,61 @@ func (m Model) renderNetworkRateLine(host string, _ int) string {
 		return ""
 	}
 
-	inLabel := LabelStyle.Render("NET")
+	label := LabelStyle.Render("NET")
 	downArrow := lipgloss.NewStyle().Foreground(ColorAccent).Render("↓")
 	upArrow := lipgloss.NewStyle().Foreground(ColorAccent).Render("↑")
 
 	inText := ValueStyle.Render(FormatRate(inRate))
 	outText := ValueStyle.Render(FormatRate(outRate))
 
-	return fmt.Sprintf("%s %s%s %s%s", inLabel, downArrow, inText, upArrow, outText)
+	// Right-align the rates
+	rightContent := downArrow + inText + " " + upArrow + outText
+	rightWidth := lipgloss.Width(rightContent)
+	padding := ""
+	if lineWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	}
+
+	return label + padding + rightContent
 }
 
-// renderTopProcessesLine renders top 3 processes by CPU usage.
-func (m Model) renderTopProcessesLine(procs []ProcessInfo, maxWidth int) string {
+// renderCardTopProcess renders the top process by CPU in a single line.
+func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
 	if len(procs) == 0 {
 		return ""
 	}
 
 	label := LabelStyle.Render("TOP")
-	var parts []string
+	proc := procs[0]
 
-	// Show up to 3 processes
-	count := 3
-	if len(procs) < count {
-		count = len(procs)
+	// Extract command name (first path component or word)
+	cmd := proc.Command
+	if idx := strings.LastIndex(cmd, "/"); idx >= 0 {
+		cmd = cmd[idx+1:]
+	}
+	if idx := strings.Index(cmd, " "); idx > 0 {
+		cmd = cmd[:idx]
 	}
 
-	for i := 0; i < count; i++ {
-		proc := procs[i]
-		// Extract just the command name (first word)
-		cmd := proc.Command
-		if idx := strings.Index(cmd, " "); idx > 0 {
-			cmd = cmd[:idx]
-		}
-		// Truncate long command names
-		if len(cmd) > 8 {
-			cmd = cmd[:8]
-		}
-		// Format: "cmd(XX%)"
-		pctColor := MetricColor(proc.CPU)
-		part := fmt.Sprintf("%s(%s)",
-			cmd,
-			lipgloss.NewStyle().Foreground(pctColor).Render(fmt.Sprintf("%.0f%%", proc.CPU)))
-		parts = append(parts, part)
+	// Format percentage with color
+	pctColor := MetricColor(proc.CPU)
+	pctText := lipgloss.NewStyle().Foreground(pctColor).Render(fmt.Sprintf("%.0f%%", proc.CPU))
+
+	// Truncate command if needed (leave room for label + padding + cmd(pct))
+	maxCmdLen := 15
+	if len(cmd) > maxCmdLen {
+		cmd = cmd[:maxCmdLen-2] + ".."
 	}
 
-	result := fmt.Sprintf("%s %s", label, strings.Join(parts, " "))
-
-	// Truncate if too long
-	if len(result) > maxWidth && maxWidth > 10 {
-		result = result[:maxWidth-2] + ".."
+	// Right-align: "cmd(pct)"
+	rightContent := cmd + "(" + pctText + ")"
+	rightWidth := lipgloss.Width(rightContent)
+	padding := ""
+	if maxWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", maxWidth-lipgloss.Width(label)-rightWidth)
 	}
 
-	return result
-}
-
-// renderRAMLine renders the RAM usage with progress bar.
-func (m Model) renderRAMLine(ram RAMMetrics, barWidth int) string {
-	label := LabelStyle.Render("RAM")
-
-	var percent float64
-	if ram.TotalBytes > 0 {
-		percent = float64(ram.UsedBytes) / float64(ram.TotalBytes) * 100
-	}
-
-	// Calculate bar width
-	actualBarWidth := barWidth - 4 - 6
-	if actualBarWidth < 10 {
-		actualBarWidth = 10
-	}
-
-	bar := CompactProgressBar(actualBarWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
-
-	return fmt.Sprintf("%s %s %s", label, bar, pctText)
-}
-
-// renderGPULine renders the GPU usage with progress bar.
-func (m Model) renderGPULine(gpu *GPUMetrics, barWidth int) string {
-	label := LabelStyle.Render("GPU")
-	percent := gpu.Percent
-
-	// Calculate bar width
-	actualBarWidth := barWidth - 4 - 6
-	if actualBarWidth < 10 {
-		actualBarWidth = 10
-	}
-
-	bar := CompactProgressBar(actualBarWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
-
-	return fmt.Sprintf("%s %s %s", label, bar, pctText)
+	return label + padding + rightContent
 }
 
 // RenderLoadAvg renders the system load average.
@@ -220,7 +279,7 @@ func RenderLoadAvg(loadAvg [3]float64) string {
 }
 
 // renderCompactCard renders a compact card for terminals 80-120 columns wide.
-// Shows inline metrics with abbreviated labels and small progress bars.
+// Uses the same braille graph layout as full cards but with smaller graphs.
 func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
@@ -231,33 +290,106 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		style = CardSelectedStyle.Width(width)
 	}
 
+	innerWidth := width - 4
 	var lines []string
 
 	// Host name with status indicator
 	hostLine := m.renderHostLine(host, status)
-	lines = append(lines, hostLine)
+	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show placeholder
 	if metrics == nil {
-		lines = append(lines, LabelStyle.Render("  Waiting..."))
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, renderCardLine(LabelStyle.Render("  Waiting..."), innerWidth))
 	} else {
-		// CPU with compact bar
-		cpuLine := m.renderCompactCPULine(metrics.CPU, width-4)
-		lines = append(lines, cpuLine)
+		lines = append(lines, renderCardDivider(innerWidth))
 
-		// RAM with compact bar
-		ramLine := m.renderCompactRAMLine(metrics.RAM, width-4)
-		lines = append(lines, ramLine)
+		// CPU with single-row sparkline
+		cpuLines := m.renderCompactCPUSection(host, metrics.CPU, innerWidth)
+		lines = append(lines, cpuLines...)
 
-		// GPU only if available and space permits
-		if metrics.GPU != nil && width >= 50 {
-			gpuLine := m.renderCompactGPULine(metrics.GPU, width-4)
-			lines = append(lines, gpuLine)
-		}
+		lines = append(lines, renderCardDivider(innerWidth))
+
+		// RAM with single-row sparkline
+		ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
+		lines = append(lines, ramLines...)
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderCompactCPUSection renders CPU with a single-row braille graph for compact mode.
+func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth int) []string {
+	var lines []string
+
+	label := LabelStyle.Render("CPU")
+	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
+
+	// Right-aligned percentage
+	rightWidth := lipgloss.Width(pctText)
+	padding := ""
+	if lineWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + pctText
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Single-row braille graph
+	graphWidth := lineWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
+	if len(cpuHistory) > 0 {
+		graph := RenderBrailleSparkline(cpuHistory, graphWidth, 1, ColorGraph)
+		lines = append(lines, renderCardLine(graph, lineWidth))
+	} else {
+		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
+}
+
+// renderCompactRAMSection renders RAM with a single-row braille graph for compact mode.
+func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth int) []string {
+	var lines []string
+
+	var percent float64
+	if ram.TotalBytes > 0 {
+		percent = float64(ram.UsedBytes) / float64(ram.TotalBytes) * 100
+	}
+
+	label := LabelStyle.Render("RAM")
+	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+
+	// Right-aligned percentage
+	rightWidth := lipgloss.Width(pctText)
+	padding := ""
+	if lineWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + pctText
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Single-row braille graph
+	graphWidth := lineWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	ramHistory := m.history.GetRAMHistory(host, DefaultHistorySize)
+	if len(ramHistory) > 0 {
+		graph := RenderBrailleSparkline(ramHistory, graphWidth, 1, ColorGraph)
+		lines = append(lines, renderCardLine(graph, lineWidth))
+	} else {
+		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
 }
 
 // renderMinimalCard renders a minimal card for terminals < 80 columns.
@@ -272,76 +404,25 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 		style = CardSelectedStyle.Width(width)
 	}
 
+	innerWidth := width - 4
 	var lines []string
 
 	// Host name with status indicator (abbreviated if necessary)
-	hostLine := m.renderMinimalHostLine(host, status, width-4)
-	lines = append(lines, hostLine)
+	hostLine := m.renderMinimalHostLine(host, status, innerWidth)
+	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show short placeholder
 	if metrics == nil {
-		lines = append(lines, LabelStyle.Render("..."))
+		lines = append(lines, renderCardLine(LabelStyle.Render("..."), innerWidth))
 	} else {
+		lines = append(lines, renderCardDivider(innerWidth))
 		// Single line with CPU and RAM percentages
-		metricsLine := m.renderMinimalMetricsLine(metrics, width-4)
-		lines = append(lines, metricsLine)
+		metricsLine := m.renderMinimalMetricsLine(metrics, innerWidth)
+		lines = append(lines, renderCardLine(metricsLine, innerWidth))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
-}
-
-// renderCompactCPULine renders CPU with a smaller progress bar for compact mode.
-func (m Model) renderCompactCPULine(cpu CPUMetrics, lineWidth int) string {
-	label := LabelStyle.Render("CPU")
-	percent := cpu.Percent
-
-	// Smaller bar for compact mode
-	barWidth := lineWidth - 12 // "CPU " + " XX.X%"
-	if barWidth < 8 {
-		barWidth = 8
-	}
-
-	bar := CompactProgressBar(barWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
-
-	return fmt.Sprintf("%s %s %s", label, bar, pctText)
-}
-
-// renderCompactRAMLine renders RAM with a smaller progress bar for compact mode.
-func (m Model) renderCompactRAMLine(ram RAMMetrics, lineWidth int) string {
-	label := LabelStyle.Render("RAM")
-
-	var percent float64
-	if ram.TotalBytes > 0 {
-		percent = float64(ram.UsedBytes) / float64(ram.TotalBytes) * 100
-	}
-
-	barWidth := lineWidth - 12
-	if barWidth < 8 {
-		barWidth = 8
-	}
-
-	bar := CompactProgressBar(barWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
-
-	return fmt.Sprintf("%s %s %s", label, bar, pctText)
-}
-
-// renderCompactGPULine renders GPU with a smaller progress bar for compact mode.
-func (m Model) renderCompactGPULine(gpu *GPUMetrics, lineWidth int) string {
-	label := LabelStyle.Render("GPU")
-	percent := gpu.Percent
-
-	barWidth := lineWidth - 12
-	if barWidth < 8 {
-		barWidth = 8
-	}
-
-	bar := CompactProgressBar(barWidth, percent)
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
-
-	return fmt.Sprintf("%s %s %s", label, bar, pctText)
 }
 
 // renderMinimalHostLine renders the hostname, truncating if necessary.

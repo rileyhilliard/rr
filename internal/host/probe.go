@@ -66,17 +66,24 @@ func (e *ProbeError) Unwrap() error {
 // Returns the total latency (TCP + SSH handshake time) on success.
 // Returns a ProbeError with categorized failure reason on error.
 func Probe(sshAlias string, timeout time.Duration) (time.Duration, error) {
+	_, latency, err := ProbeAndConnect(sshAlias, timeout)
+	return latency, err
+}
+
+// ProbeAndConnect tests connectivity and returns the connected client.
+// This avoids the double-handshake problem where Probe() would connect,
+// measure latency, close the connection, then the caller would dial again.
+// Returns the connected client, latency, and any error.
+func ProbeAndConnect(sshAlias string, timeout time.Duration) (*sshutil.Client, time.Duration, error) {
 	start := time.Now()
 
-	// Connect and perform SSH handshake
 	client, err := sshutil.Dial(sshAlias, timeout)
 	if err != nil {
-		return 0, categorizeProbeError(sshAlias, err)
+		return nil, 0, categorizeProbeError(sshAlias, err)
 	}
-	defer client.Close()
 
 	latency := time.Since(start)
-	return latency, nil
+	return client, latency, nil
 }
 
 // ProbeTCP performs only a TCP connection test without SSH handshake.

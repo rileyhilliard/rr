@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -60,4 +63,13 @@ func InfoStyle() lipgloss.Style {
 // MutedStyle returns a style for muted/secondary text.
 func MutedStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(ColorMuted)
+}
+
+// SymbolWarning is the warning symbol (⚠)
+const SymbolWarning = "⚠"
+
+// PrintWarning prints a styled warning message to stderr.
+func PrintWarning(message string) {
+	style := lipgloss.NewStyle().Foreground(ColorWarning)
+	fmt.Fprintf(os.Stderr, "%s %s\n", style.Render(SymbolWarning), style.Render(message))
 }
