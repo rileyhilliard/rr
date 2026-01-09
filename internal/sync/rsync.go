@@ -15,8 +15,8 @@ func FindRsync() (string, error) {
 	path, err := exec.LookPath("rsync")
 	if err != nil {
 		return "", errors.New(errors.ErrSync,
-			"rsync not found on local system",
-			"Install rsync: brew install rsync (macOS) or apt install rsync (Linux)")
+			"rsync isn't installed locally",
+			"Grab it with: brew install rsync (macOS) or apt install rsync (Linux)")
 	}
 	return path, nil
 }
@@ -32,8 +32,8 @@ func Version() (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		return "", errors.WrapWithCode(err, errors.ErrSync,
-			"Failed to get rsync version",
-			"Check that rsync is installed correctly")
+			"Couldn't get rsync version",
+			"Make sure rsync is installed correctly.")
 	}
 
 	// First line typically contains version info like:
@@ -44,8 +44,8 @@ func Version() (string, error) {
 	}
 
 	return "", errors.New(errors.ErrSync,
-		"Unable to parse rsync version output",
-		"Run 'rsync --version' to check installation")
+		"Couldn't parse the rsync version output",
+		"Try running 'rsync --version' to check your installation.")
 }
 
 // CheckRemote verifies that rsync is available on the remote host.
@@ -53,20 +53,20 @@ func CheckRemote(conn *host.Connection) error {
 	if conn == nil || conn.Client == nil {
 		return errors.New(errors.ErrSync,
 			"No active SSH connection",
-			"Establish a connection to the remote host first")
+			"Connect to the remote host first.")
 	}
 
 	// Check if rsync exists on remote using Exec
 	_, _, exitCode, err := conn.Client.Exec("which rsync")
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to check for rsync on remote",
-			"Check your SSH connection")
+			"Couldn't check for rsync on the remote",
+			"Check your SSH connection.")
 	}
 	if exitCode != 0 {
 		return errors.New(errors.ErrSync,
-			fmt.Sprintf("rsync not found on remote host '%s'", conn.Name),
-			"Install rsync on the remote: apt install rsync (Debian/Ubuntu) or yum install rsync (RHEL)")
+			fmt.Sprintf("rsync isn't installed on %s", conn.Name),
+			"Install it on the remote: apt install rsync (Debian/Ubuntu) or yum install rsync (RHEL)")
 	}
 
 	return nil

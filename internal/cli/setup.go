@@ -22,8 +22,8 @@ type SetupOptions struct {
 func Setup(opts SetupOptions) error {
 	if opts.Host == "" {
 		return errors.New(errors.ErrConfig,
-			"No host specified",
-			"Usage: rr setup <host>")
+			"Which host should I set up?",
+			"Usage: rr setup <host>  (e.g., rr setup user@myserver)")
 	}
 
 	fmt.Printf("Setting up SSH for '%s'\n\n", opts.Host)
@@ -37,8 +37,8 @@ func Setup(opts SetupOptions) error {
 
 		if opts.NonInteractive {
 			return errors.New(errors.ErrSSH,
-				"No SSH keys found",
-				"Generate a key first: ssh-keygen -t ed25519")
+				"No SSH keys on this machine",
+				"Generate one first: ssh-keygen -t ed25519")
 		}
 
 		// Offer to generate a key
@@ -53,8 +53,8 @@ func Setup(opts SetupOptions) error {
 
 		if err := form.Run(); err != nil {
 			return errors.WrapWithCode(err, errors.ErrSSH,
-				"Failed to get user input",
-				"")
+				"Couldn't get your input",
+				"Your terminal might not support the prompts.")
 		}
 
 		if !generateKey {
@@ -80,8 +80,8 @@ func Setup(opts SetupOptions) error {
 	selectedKey = setup.GetPreferredKey()
 	if selectedKey == nil {
 		return errors.New(errors.ErrSSH,
-			"No usable SSH keys found",
-			"Generate a key: ssh-keygen -t ed25519")
+			"Couldn't find any usable SSH keys",
+			"Generate one: ssh-keygen -t ed25519")
 	}
 
 	fmt.Printf("%s Using SSH key: %s (%s)\n", ui.SymbolSuccess, selectedKey.Path, selectedKey.Type)
@@ -114,8 +114,8 @@ func Setup(opts SetupOptions) error {
 
 				if formErr := form.Run(); formErr != nil {
 					return errors.WrapWithCode(formErr, errors.ErrSSH,
-						"Failed to get user input",
-						"")
+						"Couldn't get your input",
+						"Your terminal might not support the prompts.")
 				}
 
 				if copyKey {
@@ -130,8 +130,8 @@ func Setup(opts SetupOptions) error {
 		}
 
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Cannot connect to '%s'", opts.Host),
-			"Check that the host is reachable and SSH is running")
+			fmt.Sprintf("Can't connect to %s", opts.Host),
+			"Make sure the host is up and SSH is running.")
 	}
 
 	spinner.Success()
@@ -164,8 +164,8 @@ func Setup(opts SetupOptions) error {
 
 			if formErr := form.Run(); formErr != nil {
 				return errors.WrapWithCode(formErr, errors.ErrSSH,
-					"Failed to get user input",
-					"")
+					"Couldn't get your input",
+					"Your terminal might not support the prompts.")
 			}
 
 			if copyKey {

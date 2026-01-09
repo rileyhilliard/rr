@@ -16,8 +16,8 @@ func CopyKey(host string, keyPath string) error {
 		key := GetPreferredKey()
 		if key == nil {
 			return errors.New(errors.ErrSSH,
-				"No SSH keys found",
-				"Generate a key first with 'rr setup' or 'ssh-keygen -t ed25519'")
+				"No SSH keys on this machine",
+				"Generate one first: rr setup or ssh-keygen -t ed25519")
 		}
 		keyPath = key.Path
 	}
@@ -32,8 +32,8 @@ func CopyKey(host string, keyPath string) error {
 	sshCopyIDPath, err := exec.LookPath("ssh-copy-id")
 	if err != nil {
 		return errors.New(errors.ErrSSH,
-			"ssh-copy-id not found",
-			"Install OpenSSH or manually copy the public key to the remote host")
+			"Can't find ssh-copy-id",
+			"Install OpenSSH, or copy the key manually.")
 	}
 
 	// Run ssh-copy-id
@@ -45,22 +45,22 @@ func CopyKey(host string, keyPath string) error {
 		// Check for common error patterns
 		if strings.Contains(outputStr, "Permission denied") {
 			return errors.New(errors.ErrSSH,
-				fmt.Sprintf("Permission denied copying key to '%s'", host),
-				"Check the password/credentials for the remote host and try again")
+				fmt.Sprintf("Permission denied on %s", host),
+				"Double-check the password or credentials and try again.")
 		}
 		if strings.Contains(outputStr, "Connection refused") {
 			return errors.New(errors.ErrSSH,
-				fmt.Sprintf("Connection refused to '%s'", host),
-				"Check that SSH server is running on the remote host")
+				fmt.Sprintf("Connection refused to %s", host),
+				"Make sure SSH is running on the remote machine.")
 		}
 		if strings.Contains(outputStr, "Could not resolve hostname") {
 			return errors.New(errors.ErrSSH,
-				fmt.Sprintf("Cannot resolve hostname '%s'", host),
-				"Check the hostname and your network connection")
+				fmt.Sprintf("Can't resolve hostname %s", host),
+				"Check the hostname and your network connection.")
 		}
 
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to copy SSH key to '%s': %s", host, outputStr),
+			fmt.Sprintf("Couldn't copy SSH key to %s: %s", host, outputStr),
 			"Try manually: ssh-copy-id -i "+pubKeyPath+" "+host)
 	}
 
@@ -115,8 +115,8 @@ func TestPasswordlessAuth(host string) (bool, error) {
 
 		// Other error (network, etc)
 		return false, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("SSH connection to '%s' failed", host),
-			"Check that the host is reachable: ping "+host)
+			fmt.Sprintf("SSH connection to %s failed", host),
+			"Make sure the host is reachable: ping "+host)
 	}
 
 	return strings.TrimSpace(string(output)) == "ok", nil

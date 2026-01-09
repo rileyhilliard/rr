@@ -55,8 +55,8 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Verify task is allowed on the connected host
 	if !config.IsTaskHostAllowed(task, wf.Conn.Name) {
 		return 1, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Task '%s' is not allowed on host '%s'", opts.TaskName, wf.Conn.Name),
-			fmt.Sprintf("This task is restricted to hosts: %s", formatHosts(task.Hosts)))
+			fmt.Sprintf("Task '%s' can't run on host '%s'", opts.TaskName, wf.Conn.Name),
+			fmt.Sprintf("This task is restricted to: %s", formatHosts(task.Hosts)))
 	}
 
 	// Phase 4: Execute task
@@ -250,8 +250,8 @@ func runTaskCommand(taskName, hostFlag, tagFlag, probeTimeoutFlag string) error 
 		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("Invalid probe timeout: %s", probeTimeoutFlag),
-				"Use a valid duration like 5s, 2m, or 500ms")
+				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
+				"Try something like 5s, 2m, or 500ms.")
 		}
 	}
 

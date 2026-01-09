@@ -46,21 +46,21 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrSync,
-				"Failed to capture rsync output",
-				"Try running rsync manually to diagnose")
+				"Couldn't capture rsync output",
+				"Try running rsync manually to see what's happening.")
 		}
 
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrSync,
-				"Failed to capture rsync stderr",
-				"Try running rsync manually to diagnose")
+				"Couldn't capture rsync stderr",
+				"Try running rsync manually to see what's happening.")
 		}
 
 		if err := cmd.Start(); err != nil {
 			return errors.WrapWithCode(err, errors.ErrSync,
-				"Failed to start rsync",
-				"Check that rsync is installed and the paths are valid")
+				"Couldn't start rsync",
+				"Make sure rsync is installed and the paths are valid.")
 		}
 
 		// Stream stdout (progress info)
@@ -77,7 +77,7 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrSync,
 				fmt.Sprintf("rsync failed: %s", strings.TrimSpace(string(output))),
-				"Check that the remote directory exists and you have write permissions")
+				"Check that the remote directory exists and you have write permissions.")
 		}
 	}
 
@@ -90,7 +90,7 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	if conn == nil {
 		return nil, errors.New(errors.ErrSync,
 			"No connection provided",
-			"Establish a connection to the remote host first")
+			"Connect to the remote host first.")
 	}
 
 	// Ensure localDir ends with / so rsync syncs contents, not directory itself

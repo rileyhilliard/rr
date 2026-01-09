@@ -251,10 +251,10 @@ func TestSuggestionForDialError(t *testing.T) {
 		errMsg   string
 		contains string
 	}{
-		{"connection refused", "Is the SSH server running"},
-		{"no route to host", "not reachable"},
+		{"connection refused", "Is SSH running"},
+		{"no route to host", "Can't route"},
 		{"i/o timeout", "timed out"},
-		{"random error", "Check if the host is reachable"},
+		{"random error", "Make sure the host is reachable"},
 	}
 
 	for _, tt := range tests {
@@ -273,9 +273,9 @@ func TestSuggestionForHandshakeError(t *testing.T) {
 		errMsg   string
 		contains string
 	}{
-		{"unable to authenticate", "Authentication failed"},
-		{"host key verification", "Host key verification failed"},
-		{"random error", "SSH handshake failed"},
+		{"unable to authenticate", "Auth failed"},
+		{"host key verification", "Host key issue"},
+		{"random error", "went wrong during SSH"},
 	}
 
 	for _, tt := range tests {

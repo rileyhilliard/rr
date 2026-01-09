@@ -37,7 +37,7 @@ func TestSyncCommand_InvalidProbeTimeout(t *testing.T) {
 	err := syncCommand("", "", "invalid-duration", false)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid probe timeout")
+	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
 }
 
 func TestSyncCommand_ValidProbeTimeoutFormats(t *testing.T) {

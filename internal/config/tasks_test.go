@@ -45,7 +45,7 @@ func TestGetTask_NotFound(t *testing.T) {
 	task, err := GetTask(cfg, "nonexistent")
 	require.Error(t, err)
 	assert.Nil(t, task)
-	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), "No task named")
 	assert.Contains(t, err.Error(), "nonexistent")
 }
 
@@ -53,7 +53,7 @@ func TestGetTask_NilConfig(t *testing.T) {
 	task, err := GetTask(nil, "test")
 	require.Error(t, err)
 	assert.Nil(t, task)
-	assert.Contains(t, err.Error(), "nil")
+	assert.Contains(t, err.Error(), "hasn't been loaded")
 }
 
 func TestGetTask_NoTasks(t *testing.T) {

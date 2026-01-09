@@ -85,7 +85,7 @@ func TestParseDarwinMemory(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name: "typical vm_stat output - Apple Silicon",
+			name: "typical vm_stat output - Apple Silicon with sysctl",
 			vmStatOut: `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                               50000.
 Pages active:                            200000.
@@ -102,16 +102,17 @@ Pages purged:                           1000000.
 File-backed pages:                        80000.
 Anonymous pages:                         180000.
 Pages stored in compressor:               30000.
-Pages occupied by compressor:             25000.`,
-			// Used = active(200000) + wired(150000) + compressor(25000) + speculative(10000) = 385000 pages
-			// Available = free(50000) + inactive(100000) + purgeable(20000) = 170000 pages
-			// Total approx = used + available + inactive = 385000 + 170000 + 100000 = 655000 pages
-			wantUsed:   385000 * 16384, // pages * page_size
+Pages occupied by compressor:             25000.
+hw.memsize: 17179869184`,
+			// Used = active(200000) + wired(150000) + compressor(25000) = 375000 pages
+			// (speculative is now part of available, not used)
+			wantUsed:   375000 * 16384, // pages * page_size
+			wantTotal:  17179869184,    // 16 GB from sysctl
 			wantCached: 80000 * 16384,  // file-backed pages
 			wantErr:    false,
 		},
 		{
-			name: "vm_stat output - Intel Mac",
+			name: "vm_stat output - Intel Mac without sysctl",
 			vmStatOut: `Mach Virtual Memory Statistics: (page size of 4096 bytes)
 Pages free:                              100000.
 Pages active:                            500000.
@@ -121,8 +122,11 @@ Pages wired down:                        300000.
 Pages purgeable:                          30000.
 File-backed pages:                       100000.
 Pages occupied by compressor:             50000.`,
-			// Used = 500000 + 300000 + 50000 + 50000 = 900000 pages
-			wantUsed:   900000 * 4096,
+			// Used = 500000 + 300000 + 50000 = 850000 pages (no speculative)
+			// Available = 100000 + 200000 + 30000 + 50000 = 380000 pages
+			// Total fallback = (850000 + 380000) * 4096 = 5,038,080,000
+			wantUsed:   850000 * 4096,
+			wantTotal:  (850000 + 380000) * 4096, // fallback calculation
 			wantCached: 100000 * 4096,
 			wantErr:    false,
 		},
@@ -147,8 +151,10 @@ Pages occupied by compressor:             50000.`,
 			require.NotNil(t, metrics)
 			assert.Equal(t, tt.wantUsed, metrics.UsedBytes)
 			assert.Equal(t, tt.wantCached, metrics.Cached)
-			// Total and Available should be positive (or zero for empty)
-			assert.GreaterOrEqual(t, metrics.TotalBytes, int64(0))
+			if tt.wantTotal > 0 {
+				assert.Equal(t, tt.wantTotal, metrics.TotalBytes)
+			}
+			// Available should be positive (or zero for empty)
 			assert.GreaterOrEqual(t, metrics.Available, int64(0))
 		})
 	}

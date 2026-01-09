@@ -126,7 +126,7 @@ func TestMonitorConfigValidation(t *testing.T) {
 		}
 		err := config.Validate(cfg)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not a valid duration")
+		assert.Contains(t, err.Error(), "doesn't look like a valid duration")
 	})
 
 	t.Run("warning greater than critical", func(t *testing.T) {
@@ -143,7 +143,7 @@ func TestMonitorConfigValidation(t *testing.T) {
 		err := config.Validate(cfg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "warning")
-		assert.Contains(t, err.Error(), "should be less than critical")
+		assert.Contains(t, err.Error(), "is higher than critical")
 	})
 
 	t.Run("threshold out of range", func(t *testing.T) {
@@ -159,7 +159,7 @@ func TestMonitorConfigValidation(t *testing.T) {
 		}
 		err := config.Validate(cfg)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "between 0 and 100")
+		assert.Contains(t, err.Error(), "needs to be 0-100")
 	})
 
 	t.Run("empty exclude entry", func(t *testing.T) {

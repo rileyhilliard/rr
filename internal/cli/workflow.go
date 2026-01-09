@@ -10,6 +10,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"golang.org/x/term"
 )
 
 // WorkflowOptions configures workflow setup behavior.
@@ -46,52 +47,46 @@ func (w *WorkflowContext) Close() {
 	}
 }
 
-// SetupWorkflow performs the common workflow phases: load config, connect, sync, and lock.
-// Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
-func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
-	ctx := &WorkflowContext{
-		StartTime:    time.Now(),
-		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
-	}
-
-	// Load config
+// loadAndValidateConfig loads and validates the config file.
+func loadAndValidateConfig(ctx *WorkflowContext) error {
 	cfgPath, err := config.Find(Config())
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if cfgPath == "" {
-		return nil, errors.New(errors.ErrConfig,
+		return errors.New(errors.ErrConfig,
 			"No config file found",
-			"Run 'rr init' to create a .rr.yaml config file")
+			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 	}
 
 	ctx.Config, err = config.Load(cfgPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	if err := config.Validate(ctx.Config); err != nil {
-		return nil, err
-	}
+	return config.Validate(ctx.Config)
+}
 
-	// Determine working directory
+// setupWorkDir determines the working directory.
+func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 	ctx.WorkDir = opts.WorkingDir
 	if ctx.WorkDir == "" {
+		var err error
 		ctx.WorkDir, err = os.Getwd()
 		if err != nil {
-			return nil, errors.WrapWithCode(err, errors.ErrExec,
-				"Failed to get working directory",
-				"Check directory permissions")
+			return errors.WrapWithCode(err, errors.ErrExec,
+				"Can't figure out what directory you're in",
+				"This is unusual - check your directory permissions.")
 		}
 	}
+	return nil
+}
 
-	// Create host selector
+// setupHostSelector creates and configures the host selector.
+func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 	ctx.selector = host.NewSelector(ctx.Config.Hosts)
-
-	// Enable local fallback if configured
 	ctx.selector.SetLocalFallback(ctx.Config.LocalFallback)
 
-	// Set probe timeout (CLI flag overrides config)
 	probeTimeout := ctx.Config.ProbeTimeout
 	if opts.ProbeTimeout > 0 {
 		probeTimeout = opts.ProbeTimeout
@@ -99,8 +94,38 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	if probeTimeout > 0 {
 		ctx.selector.SetTimeout(probeTimeout)
 	}
+}
 
-	// Phase 1: Connect
+// selectHostInteractively shows a host picker if needed.
+func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet bool) (string, error) {
+	if preferredHost != "" || ctx.selector.HostCount() <= 1 || quiet || !term.IsTerminal(int(os.Stdin.Fd())) {
+		return preferredHost, nil
+	}
+
+	hostInfos := ctx.selector.HostInfo(ctx.Config.Default)
+	uiHosts := make([]ui.HostInfo, len(hostInfos))
+	for i, h := range hostInfos {
+		uiHosts[i] = ui.HostInfo{
+			Name:    h.Name,
+			SSH:     h.SSH,
+			Dir:     h.Dir,
+			Tags:    h.Tags,
+			Default: h.Default,
+		}
+	}
+
+	selected, err := ui.PickHost(uiHosts)
+	if err != nil {
+		return "", errors.WrapWithCode(err, errors.ErrExec, "Host selection failed", "Try again or use --host flag")
+	}
+	if selected == nil {
+		return "", errors.New(errors.ErrExec, "No host selected", "Use --host flag to specify a host")
+	}
+	return selected.Name, nil
+}
+
+// connectPhase handles the connection phase of the workflow.
+func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	connDisplay := ui.NewConnectionDisplay(os.Stdout)
 	connDisplay.SetQuiet(opts.Quiet)
 	connDisplay.Start()
@@ -108,6 +133,13 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	preferredHost := opts.Host
 	if preferredHost == "" {
 		preferredHost = ctx.Config.Default
+	}
+
+	// Interactive host selection
+	var err error
+	preferredHost, err = selectHostInteractively(ctx, preferredHost, opts.Quiet)
+	if err != nil {
+		return err
 	}
 
 	// Track connection status for output
@@ -134,8 +166,7 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	}
 	if err != nil {
 		connDisplay.Fail(err.Error())
-		ctx.Close()
-		return nil, err
+		return err
 	}
 
 	// Show connection result
@@ -145,43 +176,121 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}
 
-	// Phase 2: Sync (unless skipped or local)
+	return nil
+}
+
+// syncPhase handles the file sync phase of the workflow.
+func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	if ctx.Conn.IsLocal {
 		ctx.PhaseDisplay.RenderSkipped("Sync", "local")
-	} else if !opts.SkipSync {
-		syncStart := time.Now()
-		syncSpinner := ui.NewSpinner("Syncing files")
-		syncSpinner.Start()
-
-		err = sync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, nil)
-		if err != nil {
-			syncSpinner.Fail()
-			ctx.Close()
-			return nil, err
-		}
-
-		syncSpinner.Success()
-		ctx.PhaseDisplay.RenderSuccess("Files synced", time.Since(syncStart))
-	} else {
+		return nil
+	}
+	if opts.SkipSync {
 		ctx.PhaseDisplay.RenderSkipped("Sync", "skipped")
+		return nil
 	}
 
-	// Phase 3: Acquire lock (unless disabled or local)
-	if ctx.Config.Lock.Enabled && !opts.SkipLock && !ctx.Conn.IsLocal {
-		lockStart := time.Now()
-		lockSpinner := ui.NewSpinner("Acquiring lock")
-		lockSpinner.Start()
+	syncStart := time.Now()
 
-		projectHash := hashProject(ctx.WorkDir)
-		ctx.Lock, err = lock.Acquire(ctx.Conn, ctx.Config.Lock, projectHash)
-		if err != nil {
-			lockSpinner.Fail()
-			ctx.Close()
-			return nil, err
-		}
+	if !opts.Quiet {
+		return syncWithProgress(ctx, syncStart)
+	}
+	return syncQuiet(ctx, syncStart)
+}
 
-		lockSpinner.Success()
-		ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+// syncWithProgress syncs files with progress bar display.
+func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
+	syncProgress := ui.NewInlineProgress("Syncing files", os.Stdout)
+	progressWriter := ui.NewProgressWriter(syncProgress, nil)
+	syncProgress.Start()
+
+	err := sync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, progressWriter)
+	if err != nil {
+		syncProgress.Fail()
+		return err
+	}
+
+	syncProgress.Success()
+	ctx.PhaseDisplay.RenderSuccess("Files synced", time.Since(syncStart))
+	return nil
+}
+
+// syncQuiet syncs files with minimal output (spinner only).
+func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
+	syncSpinner := ui.NewSpinner("Syncing files")
+	syncSpinner.Start()
+
+	err := sync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, nil)
+	if err != nil {
+		syncSpinner.Fail()
+		return err
+	}
+
+	syncSpinner.Success()
+	ctx.PhaseDisplay.RenderSuccess("Files synced", time.Since(syncStart))
+	return nil
+}
+
+// lockPhase handles the lock acquisition phase of the workflow.
+func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if !ctx.Config.Lock.Enabled || opts.SkipLock || ctx.Conn.IsLocal {
+		return nil
+	}
+
+	lockStart := time.Now()
+	lockSpinner := ui.NewSpinner("Acquiring lock")
+	lockSpinner.Start()
+
+	projectHash := hashProject(ctx.WorkDir)
+	var err error
+	ctx.Lock, err = lock.Acquire(ctx.Conn, ctx.Config.Lock, projectHash)
+	if err != nil {
+		lockSpinner.Fail()
+		return err
+	}
+
+	lockSpinner.Success()
+	ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+	return nil
+}
+
+// SetupWorkflow performs the common workflow phases: load config, connect, sync, and lock.
+// Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
+func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
+	ctx := &WorkflowContext{
+		StartTime:    time.Now(),
+		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
+	}
+
+	// Load and validate config
+	if err := loadAndValidateConfig(ctx); err != nil {
+		return nil, err
+	}
+
+	// Determine working directory
+	if err := setupWorkDir(ctx, opts); err != nil {
+		return nil, err
+	}
+
+	// Create host selector
+	setupHostSelector(ctx, opts)
+
+	// Phase 1: Connect
+	if err := connectPhase(ctx, opts); err != nil {
+		ctx.Close()
+		return nil, err
+	}
+
+	// Phase 2: Sync
+	if err := syncPhase(ctx, opts); err != nil {
+		ctx.Close()
+		return nil, err
+	}
+
+	// Phase 3: Acquire lock
+	if err := lockPhase(ctx, opts); err != nil {
+		ctx.Close()
+		return nil, err
 	}
 
 	return ctx, nil

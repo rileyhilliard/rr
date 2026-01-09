@@ -94,7 +94,7 @@ func TestHandleExecError_CommandNotFound(t *testing.T) {
 	err := HandleExecError("go test ./...", "bash: go: command not found", 127)
 
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "Command not found: go")
+	assert.Contains(t, err.Error(), "'go' isn't available on the remote")
 	assert.Contains(t, err.Error(), "Possible fixes")
 	assert.Contains(t, err.Error(), "source ~/.zshrc")
 }
@@ -110,5 +110,5 @@ func TestHandleExecError_ExtractsCommandFromInput(t *testing.T) {
 	err := HandleExecError("rustup show", "some error", 127)
 
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "Command not found: rustup")
+	assert.Contains(t, err.Error(), "'rustup' isn't available on the remote")
 }

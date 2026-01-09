@@ -191,13 +191,13 @@ Examples:
 			parsed, err := time.ParseDuration(monitorIntervalFlag)
 			if err != nil {
 				return errors.WrapWithCode(err, errors.ErrConfig,
-					fmt.Sprintf("Invalid interval: %s", monitorIntervalFlag),
-					"Use a valid duration like 2s, 5s, or 1m")
+					fmt.Sprintf("'%s' doesn't look like a valid interval", monitorIntervalFlag),
+					"Try something like 2s, 5s, or 1m.")
 			}
 			if parsed < 500*time.Millisecond {
 				return errors.New(errors.ErrConfig,
-					"Interval too short",
-					"Minimum interval is 500ms to avoid overwhelming hosts")
+					"That interval is too short",
+					"Keep it at 500ms or above to avoid hammering the hosts.")
 			}
 			interval = parsed
 		}
@@ -256,8 +256,8 @@ Examples:
 			return rootCmd.GenPowerShellCompletion(os.Stdout)
 		default:
 			return errors.New(errors.ErrExec,
-				"Unknown shell: "+args[0],
-				"Supported shells: bash, zsh, fish, powershell")
+				fmt.Sprintf("Don't know that shell: %s", args[0]),
+				"Supported: bash, zsh, fish, powershell")
 		}
 	},
 }

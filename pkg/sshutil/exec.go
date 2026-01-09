@@ -16,8 +16,8 @@ func (c *Client) Exec(cmd string) (stdout, stderr []byte, exitCode int, err erro
 	session, err := c.newSSHSession()
 	if err != nil {
 		return nil, nil, -1, errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to create SSH session",
-			"Connection may have been closed. Try reconnecting.")
+			"Couldn't create an SSH session",
+			"The connection might have dropped. Try reconnecting.")
 	}
 	defer session.Close()
 
@@ -33,8 +33,8 @@ func (c *Client) Exec(cmd string) (stdout, stderr []byte, exitCode int, err erro
 			err = nil // Command ran, just had non-zero exit
 		} else {
 			return nil, nil, -1, errors.WrapWithCode(err, errors.ErrExec,
-				fmt.Sprintf("Failed to execute command: %s", cmd),
-				"Check if the command exists on the remote host.")
+				fmt.Sprintf("Couldn't run: %s", cmd),
+				"Make sure the command exists on the remote.")
 		}
 	}
 
@@ -48,8 +48,8 @@ func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int,
 	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to create SSH session",
-			"Connection may have been closed. Try reconnecting.")
+			"Couldn't create an SSH session",
+			"The connection might have dropped. Try reconnecting.")
 	}
 	defer session.Close()
 
@@ -63,8 +63,8 @@ func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int,
 			exitCode = exitErr.ExitStatus()
 		} else {
 			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
-				fmt.Sprintf("Failed to execute command: %s", cmd),
-				"Check if the command exists on the remote host.")
+				fmt.Sprintf("Couldn't run: %s", cmd),
+				"Make sure the command exists on the remote.")
 		}
 	}
 
@@ -78,8 +78,8 @@ func (c *Client) ExecPTY(cmd string, stdout, stderr io.Writer) (exitCode int, er
 	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to create SSH session",
-			"Connection may have been closed. Try reconnecting.")
+			"Couldn't create an SSH session",
+			"The connection might have dropped. Try reconnecting.")
 	}
 	defer session.Close()
 
@@ -92,8 +92,8 @@ func (c *Client) ExecPTY(cmd string, stdout, stderr io.Writer) (exitCode int, er
 
 	if err := session.RequestPty("xterm", 80, 40, modes); err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to allocate PTY",
-			"The remote host may not support pseudo-terminals.")
+			"Couldn't allocate a PTY",
+			"The remote might not support pseudo-terminals.")
 	}
 
 	session.Stdout = stdout
@@ -106,8 +106,8 @@ func (c *Client) ExecPTY(cmd string, stdout, stderr io.Writer) (exitCode int, er
 			exitCode = exitErr.ExitStatus()
 		} else {
 			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
-				fmt.Sprintf("Failed to execute command: %s", cmd),
-				"Check if the command exists on the remote host.")
+				fmt.Sprintf("Couldn't run: %s", cmd),
+				"Make sure the command exists on the remote.")
 		}
 	}
 
@@ -120,8 +120,8 @@ func (c *Client) ExecInteractive(cmd string, stdin io.Reader, stdout, stderr io.
 	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to create SSH session",
-			"Connection may have been closed. Try reconnecting.")
+			"Couldn't create an SSH session",
+			"The connection might have dropped. Try reconnecting.")
 	}
 	defer session.Close()
 
@@ -136,8 +136,8 @@ func (c *Client) ExecInteractive(cmd string, stdin io.Reader, stdout, stderr io.
 			exitCode = exitErr.ExitStatus()
 		} else {
 			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
-				fmt.Sprintf("Failed to execute command: %s", cmd),
-				"Check if the command exists on the remote host.")
+				fmt.Sprintf("Couldn't run: %s", cmd),
+				"Make sure the command exists on the remote.")
 		}
 	}
 
@@ -164,8 +164,8 @@ func (c *Client) Shell(stdin io.Reader, stdout, stderr io.Writer) error {
 
 	if err := session.RequestPty("xterm-256color", 80, 24, modes); err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to allocate PTY for shell",
-			"The remote host may not support pseudo-terminals.")
+			"Couldn't allocate a PTY for the shell",
+			"The remote might not support pseudo-terminals.")
 	}
 
 	session.Stdin = stdin
@@ -174,8 +174,8 @@ func (c *Client) Shell(stdin io.Reader, stdout, stderr io.Writer) error {
 
 	if err := session.Shell(); err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to start shell",
-			"Check if your user has shell access on the remote host.")
+			"Couldn't start the shell",
+			"Make sure your user has shell access on the remote.")
 	}
 
 	return session.Wait()

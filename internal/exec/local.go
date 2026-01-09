@@ -38,8 +38,8 @@ func ExecuteLocal(cmd string, workDir string, stdout, stderr io.Writer) (exitCod
 		}
 		// Actual execution failure
 		return -1, errors.WrapWithCode(runErr, errors.ErrExec,
-			"Failed to execute local command",
-			"Check that the command exists and is executable")
+			"Couldn't run the command locally",
+			"Make sure the command exists and is executable.")
 	}
 
 	return 0, nil
@@ -69,8 +69,8 @@ func ExecuteLocalWithInput(cmd string, workDir string, stdin io.Reader, stdout, 
 			return exitErr.ExitCode(), nil
 		}
 		return -1, errors.WrapWithCode(runErr, errors.ErrExec,
-			"Failed to execute local command",
-			"Check that the command exists and is executable")
+			"Couldn't run the command locally",
+			"Make sure the command exists and is executable.")
 	}
 
 	return 0, nil
@@ -94,21 +94,21 @@ func ExecuteLocalCapture(cmd string, workDir string) (stdout, stderr []byte, exi
 	stdoutPipe, err := command.StdoutPipe()
 	if err != nil {
 		return nil, nil, -1, errors.WrapWithCode(err, errors.ErrExec,
-			"Failed to create stdout pipe",
-			"This is an internal error")
+			"Couldn't create stdout pipe",
+			"This shouldn't happen - please report this bug!")
 	}
 
 	stderrPipe, err := command.StderrPipe()
 	if err != nil {
 		return nil, nil, -1, errors.WrapWithCode(err, errors.ErrExec,
-			"Failed to create stderr pipe",
-			"This is an internal error")
+			"Couldn't create stderr pipe",
+			"This shouldn't happen - please report this bug!")
 	}
 
 	if err := command.Start(); err != nil {
 		return nil, nil, -1, errors.WrapWithCode(err, errors.ErrExec,
-			"Failed to start local command",
-			"Check that the command exists and is executable")
+			"Couldn't start the command",
+			"Make sure the command exists and is executable.")
 	}
 
 	// Read all output

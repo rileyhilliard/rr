@@ -51,8 +51,8 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 			return nil, err
 		}
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to configure SSH for '%s'", host),
-			"Check your SSH keys and SSH agent: ssh-add -l")
+			fmt.Sprintf("Couldn't set up SSH for '%s'", host),
+			"Check your keys are loaded: ssh-add -l")
 	}
 
 	// Dial with timeout
@@ -60,7 +60,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to connect to '%s' (%s)", host, address),
+			fmt.Sprintf("Can't reach '%s' at %s", host, address),
 			suggestionForDialError(err))
 	}
 
@@ -78,7 +78,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 		}
 
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("SSH handshake failed for '%s'", host),
+			fmt.Sprintf("SSH handshake with '%s' didn't go through", host),
 			suggestionForHandshakeError(err))
 	}
 
@@ -275,16 +275,16 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	}
 
 	if len(authMethods) == 0 {
-		msg := "no SSH authentication methods available"
-		suggestion := "Check your SSH keys and SSH agent: ssh-add -l"
+		msg := "No SSH auth methods available"
+		suggestion := "Check your keys are loaded: ssh-add -l"
 
 		if len(encryptedKeys) > 0 {
-			msg = fmt.Sprintf("SSH key(s) found but encrypted: %s", strings.Join(encryptedKeys, ", "))
+			msg = fmt.Sprintf("Found SSH key(s) but they're encrypted: %s", strings.Join(encryptedKeys, ", "))
 			keyToAdd := encryptedKeys[0]
 			if runtime.GOOS == "darwin" {
-				suggestion = fmt.Sprintf("Add to SSH agent with: ssh-add --apple-use-keychain %s", keyToAdd)
+				suggestion = fmt.Sprintf("Add to your agent: ssh-add --apple-use-keychain %s", keyToAdd)
 			} else {
-				suggestion = fmt.Sprintf("Add to SSH agent with: ssh-add %s", keyToAdd)
+				suggestion = fmt.Sprintf("Add to your agent: ssh-add %s", keyToAdd)
 			}
 		}
 
@@ -409,26 +409,26 @@ func expandPath(path string) string {
 func suggestionForDialError(err error) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "connection refused") {
-		return "Is the SSH server running? Check: ssh <host>"
+		return "Is SSH running on that box? Try: ssh <host>"
 	}
 	if strings.Contains(errStr, "no route to host") || strings.Contains(errStr, "network is unreachable") {
-		return "Host is not reachable. Check your network connection."
+		return "Can't route to the host. Check your network connection."
 	}
 	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "i/o timeout") {
-		return "Connection timed out. Check if host is online and firewall allows SSH."
+		return "Connection timed out. Host might be offline or blocked by a firewall."
 	}
-	return "Check if the host is reachable: ping <host>"
+	return "Make sure the host is reachable: ping <host>"
 }
 
 func suggestionForHandshakeError(err error) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "unable to authenticate") || strings.Contains(errStr, "no supported methods") {
-		return "Authentication failed. Check your SSH keys: ssh-add -l"
+		return "Auth failed. Check your keys are loaded: ssh-add -l"
 	}
 	if strings.Contains(errStr, "host key") {
-		return "Host key verification failed. Run: ssh <host> to accept the key."
+		return "Host key issue. Try connecting manually first: ssh <host>"
 	}
-	return "SSH handshake failed. Try connecting manually: ssh <host>"
+	return "Something went wrong during SSH setup. Try: ssh <host>"
 }
 
 // EncryptedKeyError is returned when an SSH key requires a passphrase.

@@ -21,7 +21,7 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 	if cfgPath == "" {
 		return errors.New(errors.ErrConfig,
 			"No config file found",
-			"Run 'rr init' to create a .rr.yaml config file")
+			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 	}
 
 	cfg, err := config.Load(cfgPath)
@@ -39,15 +39,15 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 		hosts = filterHosts(cfg.Hosts, hostsFilter)
 		if len(hosts) == 0 {
 			return errors.New(errors.ErrConfig,
-				fmt.Sprintf("No matching hosts found for filter: %s", hostsFilter),
-				"Check your host names or remove the --hosts filter")
+				fmt.Sprintf("No hosts match '%s'", hostsFilter),
+				"Double-check your host names or try without the --hosts filter.")
 		}
 	}
 
 	if len(hosts) == 0 {
 		return errors.New(errors.ErrConfig,
-			"No hosts configured",
-			"Add hosts to your .rr.yaml config file")
+			"No hosts set up yet",
+			"Add some hosts to your .rr.yaml config file first.")
 	}
 
 	// Create collector from filtered hosts

@@ -92,7 +92,7 @@ output:
 func TestLoadNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/path/.rr.yaml")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Config file not found")
+	assert.Contains(t, err.Error(), "Can't find the config file")
 }
 
 func TestFind(t *testing.T) {
@@ -270,7 +270,7 @@ func TestValidate(t *testing.T) {
 				Hosts:   map[string]Host{},
 			},
 			wantErr: true,
-			errMsg:  "No hosts defined",
+			errMsg:  "No hosts set up yet",
 		},
 		{
 			name: "no hosts with AllowNoHosts option",
@@ -290,7 +290,7 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "newer than supported",
+			errMsg:  "from the future",
 		},
 		{
 			name: "default host not found",
@@ -302,7 +302,7 @@ func TestValidate(t *testing.T) {
 				Default: "nonexistent",
 			},
 			wantErr: true,
-			errMsg:  "not found",
+			errMsg:  "doesn't exist",
 		},
 		{
 			name: "reserved task name",
@@ -316,7 +316,7 @@ func TestValidate(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "reserved command name",
+			errMsg:  "built-in command",
 		},
 	}
 
@@ -539,19 +539,19 @@ func TestValidateLock(t *testing.T) {
 			name:    "negative timeout",
 			lock:    LockConfig{Enabled: true, Timeout: -1 * time.Second},
 			wantErr: true,
-			errMsg:  "timeout cannot be negative",
+			errMsg:  "can't be negative",
 		},
 		{
 			name:    "negative stale",
 			lock:    LockConfig{Enabled: true, Stale: -1 * time.Minute},
 			wantErr: true,
-			errMsg:  "stale cannot be negative",
+			errMsg:  "can't be negative",
 		},
 		{
 			name:    "timeout greater than stale",
 			lock:    LockConfig{Enabled: true, Timeout: 10 * time.Minute, Stale: 5 * time.Minute},
 			wantErr: true,
-			errMsg:  "should be less than",
+			errMsg:  "is longer than",
 		},
 		{
 			name:    "zero timeout is allowed",
@@ -609,7 +609,7 @@ func TestValidateMonitor(t *testing.T) {
 			monitor: MonitorConfig{Interval: "abc"},
 			hosts:   validHost,
 			wantErr: true,
-			errMsg:  "not a valid duration",
+			errMsg:  "doesn't look like a valid duration",
 		},
 		{
 			name:    "valid interval with minutes",
@@ -646,7 +646,7 @@ func TestValidateMonitor(t *testing.T) {
 			},
 			hosts:   validHost,
 			wantErr: true,
-			errMsg:  "between 0 and 100",
+			errMsg:  "needs to be 0-100",
 		},
 		{
 			name: "warning greater than critical",
@@ -658,7 +658,7 @@ func TestValidateMonitor(t *testing.T) {
 			},
 			hosts:   validHost,
 			wantErr: true,
-			errMsg:  "should be less than",
+			errMsg:  "is higher than critical",
 		},
 	}
 
@@ -702,42 +702,42 @@ func TestValidateThresholds(t *testing.T) {
 			metric:  "gpu",
 			thresh:  ThresholdValues{Warning: -10, Critical: 90},
 			wantErr: true,
-			errMsg:  "between 0 and 100",
+			errMsg:  "needs to be 0-100",
 		},
 		{
 			name:    "warning over 100",
 			metric:  "cpu",
 			thresh:  ThresholdValues{Warning: 110, Critical: 120},
 			wantErr: true,
-			errMsg:  "between 0 and 100",
+			errMsg:  "needs to be 0-100",
 		},
 		{
 			name:    "negative critical",
 			metric:  "ram",
 			thresh:  ThresholdValues{Warning: 50, Critical: -5},
 			wantErr: true,
-			errMsg:  "between 0 and 100",
+			errMsg:  "needs to be 0-100",
 		},
 		{
 			name:    "critical over 100",
 			metric:  "gpu",
 			thresh:  ThresholdValues{Warning: 70, Critical: 150},
 			wantErr: true,
-			errMsg:  "between 0 and 100",
+			errMsg:  "needs to be 0-100",
 		},
 		{
 			name:    "warning equals critical",
 			metric:  "cpu",
 			thresh:  ThresholdValues{Warning: 80, Critical: 80},
 			wantErr: true,
-			errMsg:  "should be less than",
+			errMsg:  "is higher than critical",
 		},
 		{
 			name:    "warning greater than critical",
 			metric:  "ram",
 			thresh:  ThresholdValues{Warning: 90, Critical: 80},
 			wantErr: true,
-			errMsg:  "should be less than",
+			errMsg:  "is higher than critical",
 		},
 		{
 			name:    "only warning set (zero critical is allowed)",

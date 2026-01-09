@@ -155,8 +155,8 @@ func TestGenerateKey_InvalidKeyType(t *testing.T) {
 	err := GenerateKey(keyPath, "invalid_type")
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid key type")
-	assert.Contains(t, err.Error(), "Supported types")
+	assert.Contains(t, err.Error(), "isn't a valid key type")
+	assert.Contains(t, err.Error(), "Pick from")
 }
 
 func TestGenerateKey_ExistingKey(t *testing.T) {
@@ -170,7 +170,7 @@ func TestGenerateKey_ExistingKey(t *testing.T) {
 	err = GenerateKey(keyPath, "ed25519")
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Key already exists")
+	assert.Contains(t, err.Error(), "already a key at")
 }
 
 func TestGenerateKey_EmptyTypeDefaultsToEd25519(t *testing.T) {
@@ -188,7 +188,7 @@ func TestGenerateKey_EmptyTypeDefaultsToEd25519(t *testing.T) {
 
 	// Should fail with "already exists", not "invalid type"
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Key already exists")
+	assert.Contains(t, err.Error(), "already a key at")
 	assert.NotContains(t, err.Error(), "Invalid key type")
 }
 
@@ -213,7 +213,7 @@ func TestGenerateKey_TildeExpansion(t *testing.T) {
 		// Key exists, test tilde expansion works
 		err := GenerateKey("~/.ssh/id_ed25519", "ed25519")
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Key already exists")
+		assert.Contains(t, err.Error(), "already a key at")
 	}
 }
 

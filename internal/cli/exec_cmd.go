@@ -13,8 +13,8 @@ import (
 func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
-			"No command specified",
-			"Usage: rr exec <command>")
+			"What should I run?",
+			"Usage: rr exec <command>  (e.g., rr exec \"ls -la\")")
 	}
 
 	// Parse probe timeout if provided
@@ -24,8 +24,8 @@ func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) erro
 		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("Invalid probe timeout: %s", probeTimeoutFlag),
-				"Use a valid duration like 5s, 2m, or 500ms")
+				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
+				"Try something like 5s, 2m, or 500ms.")
 		}
 	}
 

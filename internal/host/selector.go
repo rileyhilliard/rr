@@ -167,8 +167,8 @@ func (s *Selector) GetCached() *Connection {
 func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 	if len(s.hosts) == 0 {
 		return "", config.Host{}, errors.New(errors.ErrConfig,
-			"No hosts configured",
-			"Add host configurations to your .rr.yaml file")
+			"No hosts set up yet",
+			"You need at least one remote machine. Add one under 'hosts:' in .rr.yaml or run 'rr init'.")
 	}
 
 	// If preferred is specified, use that
@@ -176,8 +176,8 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 		host, ok := s.hosts[preferred]
 		if !ok {
 			return "", config.Host{}, errors.New(errors.ErrConfig,
-				fmt.Sprintf("Host '%s' not found in configuration", preferred),
-				fmt.Sprintf("Available hosts: %s", s.hostNames()))
+				fmt.Sprintf("Host '%s' doesn't exist", preferred),
+				fmt.Sprintf("Did you mean one of these? %s", s.hostNames()))
 		}
 		return preferred, host, nil
 	}
@@ -277,12 +277,12 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 
 	if len(matchingHosts) == 0 {
 		availableTags := s.collectTags()
-		hint := "Check your host configurations in .rr.yaml"
+		hint := "Add tags to your hosts in .rr.yaml."
 		if len(availableTags) > 0 {
 			hint = fmt.Sprintf("Available tags: %s", formatTags(availableTags))
 		}
 		return nil, errors.New(errors.ErrConfig,
-			fmt.Sprintf("No hosts found with tag '%s'", tag),
+			fmt.Sprintf("No hosts have the '%s' tag", tag),
 			hint)
 	}
 
@@ -338,8 +338,8 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 
 	if len(host.SSH) == 0 {
 		return nil, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Host '%s' has no SSH aliases configured", hostName),
-			"Add at least one SSH alias to the host configuration")
+			fmt.Sprintf("Host '%s' needs at least one SSH connection", hostName),
+			"Add something like 'user@hostname' under the 'ssh:' section for this host.")
 	}
 
 	// Try each SSH alias in order (fallback chain)
@@ -404,8 +404,8 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 
 	// Build detailed error message listing all failed aliases
 	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
-		fmt.Sprintf("All SSH aliases failed for host '%s': %s", hostName, formatFailedAliases(failedAliases)),
-		"Check your network connection and SSH configuration, or enable local_fallback in .rr.yaml")
+		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(failedAliases)),
+		"The remote might be offline, or there could be a network/firewall issue. You can also set 'local_fallback: true' in .rr.yaml to run locally when remotes are down.")
 }
 
 // hasTag checks if the tags slice contains the specified tag.
@@ -445,4 +445,45 @@ func joinOrNone(items []string) string {
 		return "(none)"
 	}
 	return strings.Join(items, ", ")
+}
+
+// HostInfo returns information about all configured hosts.
+// This is useful for interactive host selection UIs.
+func (s *Selector) HostInfo(defaultHost string) []HostInfoItem {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	items := make([]HostInfoItem, 0, len(s.hosts))
+	for name, host := range s.hosts {
+		items = append(items, HostInfoItem{
+			Name:    name,
+			SSH:     host.SSH,
+			Dir:     host.Dir,
+			Tags:    host.Tags,
+			Default: name == defaultHost,
+		})
+	}
+
+	// Sort by name for consistent ordering
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Name < items[j].Name
+	})
+
+	return items
+}
+
+// HostInfoItem contains information about a host for display purposes.
+type HostInfoItem struct {
+	Name    string   // Host name from config
+	SSH     []string // SSH aliases
+	Dir     string   // Remote directory
+	Tags    []string // Tags for filtering
+	Default bool     // Whether this is the default host
+}
+
+// HostCount returns the number of configured hosts.
+func (s *Selector) HostCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.hosts)
 }

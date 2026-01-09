@@ -102,8 +102,8 @@ func GenerateKey(path string, keyType string) error {
 	}
 	if !validTypes[keyType] {
 		return errors.New(errors.ErrSSH,
-			fmt.Sprintf("Invalid key type: %s", keyType),
-			"Supported types: ed25519 (recommended), rsa, ecdsa")
+			fmt.Sprintf("'%s' isn't a valid key type", keyType),
+			"Pick from: ed25519 (recommended), rsa, ecdsa")
 	}
 
 	// Expand path
@@ -111,8 +111,8 @@ func GenerateKey(path string, keyType string) error {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrSSH,
-				"Failed to determine home directory",
-				"Set HOME environment variable")
+				"Can't figure out your home directory",
+				"Make sure your HOME environment variable is set.")
 		}
 		path = filepath.Join(home, path[1:])
 	}
@@ -121,15 +121,15 @@ func GenerateKey(path string, keyType string) error {
 	sshDir := filepath.Dir(path)
 	if err := os.MkdirAll(sshDir, 0700); err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to create SSH directory: %s", sshDir),
-			"Check permissions on home directory")
+			fmt.Sprintf("Couldn't create the SSH directory at %s", sshDir),
+			"Check that you have write permissions in your home directory.")
 	}
 
 	// Check if key already exists
 	if _, err := os.Stat(path); err == nil {
 		return errors.New(errors.ErrSSH,
-			fmt.Sprintf("Key already exists at %s", path),
-			"Choose a different path or delete the existing key")
+			fmt.Sprintf("There's already a key at %s", path),
+			"Pick a different path or delete the existing key first.")
 	}
 
 	// Generate key using ssh-keygen
@@ -149,15 +149,15 @@ func GenerateKey(path string, keyType string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Failed to generate SSH key: %s", strings.TrimSpace(string(output))),
-			"Ensure ssh-keygen is installed and accessible")
+			fmt.Sprintf("Key generation failed: %s", strings.TrimSpace(string(output))),
+			"Make sure ssh-keygen is installed.")
 	}
 
 	// Verify the key was created
 	if _, err := os.Stat(path); err != nil {
 		return errors.New(errors.ErrSSH,
-			"Key generation completed but key file not found",
-			"Check disk space and permissions")
+			"Key generation ran but the file didn't appear",
+			"Check disk space and directory permissions.")
 	}
 
 	return nil

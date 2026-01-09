@@ -17,25 +17,25 @@ const (
 func GetTask(cfg *Config, name string) (*TaskConfig, error) {
 	if cfg == nil {
 		return nil, errors.New(errors.ErrConfig,
-			"Configuration is nil",
-			"Load configuration before looking up tasks")
+			"Config hasn't been loaded yet",
+			"This is unexpected - load a config before looking up tasks.")
 	}
 
 	if cfg.Tasks == nil {
 		return nil, errors.New(errors.ErrConfig,
-			"No tasks defined in configuration",
-			"Define tasks in your .rr.yaml under 'tasks:'")
+			"No tasks defined in config",
+			"Add some tasks to your .rr.yaml under 'tasks:' or just run commands directly with 'rr run'.")
 	}
 
 	task, ok := cfg.Tasks[name]
 	if !ok {
 		available := getTaskNames(cfg.Tasks)
-		hint := "Check available tasks in your .rr.yaml"
+		hint := "Check your .rr.yaml for available tasks."
 		if len(available) > 0 {
 			hint = fmt.Sprintf("Available tasks: %s", formatList(available))
 		}
 		return nil, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Task '%s' not found", name),
+			fmt.Sprintf("No task named '%s'", name),
 			hint)
 	}
 

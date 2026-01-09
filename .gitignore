@@ -46,3 +46,7 @@ debug
 # Test coverage
 coverage.out
 coverage.html
+
+plans/
+reports/
+.rr.yaml

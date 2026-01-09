@@ -40,8 +40,8 @@ type Lock struct {
 func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (*Lock, error) {
 	if conn == nil || conn.Client == nil {
 		return nil, errors.New(errors.ErrLock,
-			"Cannot acquire lock: no connection",
-			"Establish an SSH connection first")
+			"Can't grab the lock without a connection",
+			"Connect to the remote host first.")
 	}
 
 	// Build lock directory path: <dir>/rr-<projectHash>.lock/
@@ -59,8 +59,8 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 	info, err := NewLockInfo()
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrLock,
-			"Failed to create lock info",
-			"Check hostname and user environment")
+			"Couldn't create lock info",
+			"Check your hostname and user environment variables.")
 	}
 
 	// Ensure the parent directory exists (e.g., /tmp/rr-locks)
@@ -71,13 +71,13 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 		_, stderr, exitCode, err := conn.Client.Exec(mkdirParentCmd)
 		if err != nil {
 			return nil, errors.WrapWithCode(err, errors.ErrLock,
-				"Failed to create lock parent directory",
-				"Check SSH connection")
+				"Couldn't create the lock directory",
+				"Check your SSH connection.")
 		}
 		if exitCode != 0 {
 			return nil, errors.New(errors.ErrLock,
-				fmt.Sprintf("Failed to create lock parent directory: %s", baseDir),
-				fmt.Sprintf("Error: %s", strings.TrimSpace(string(stderr))))
+				fmt.Sprintf("Couldn't create lock directory at %s", baseDir),
+				fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(stderr))))
 		}
 	}
 
@@ -93,8 +93,8 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 			holder := readLockHolder(conn.Client, infoFile)
 			debugf("timeout after %d iterations, elapsed=%s, holder=%s", iteration, elapsed, holder)
 			return nil, errors.New(errors.ErrLock,
-				fmt.Sprintf("Timed out waiting for lock after %s", cfg.Timeout),
-				fmt.Sprintf("Lock held by: %s. Consider using --force-unlock or wait for it to release.", holder))
+				fmt.Sprintf("Lock timeout after %s - someone else is using this remote", cfg.Timeout),
+				fmt.Sprintf("Held by: %s. Wait for them to finish or use --force-unlock if it's stale.", holder))
 		}
 
 		// Check for stale lock
@@ -118,8 +118,8 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 
 		if err != nil {
 			return nil, errors.WrapWithCode(err, errors.ErrLock,
-				"Failed to execute lock command",
-				"Check SSH connection")
+				"Lock command failed",
+				"Check your SSH connection.")
 		}
 
 		if exitCode == 0 {
@@ -130,8 +130,8 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 				// Clean up the lock dir if we can't write info
 				forceRemove(conn.Client, lockDir)
 				return nil, errors.WrapWithCode(err, errors.ErrLock,
-					"Failed to serialize lock info",
-					"This shouldn't happen")
+					"Couldn't serialize lock info",
+					"This is unexpected - please report this bug!")
 			}
 
 			// Write the info file
@@ -141,8 +141,8 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 				// Clean up and report error
 				forceRemove(conn.Client, lockDir)
 				return nil, errors.New(errors.ErrLock,
-					"Failed to write lock info file",
-					"Check disk space and permissions on remote")
+					"Couldn't write the lock info file",
+					"Check disk space and permissions on the remote.")
 			}
 
 			debugf("lock acquired successfully: %s", lockDir)
@@ -173,8 +173,8 @@ func (l *Lock) Release() error {
 func ForceRelease(conn *host.Connection, lockDir string) error {
 	if conn == nil || conn.Client == nil {
 		return errors.New(errors.ErrLock,
-			"Cannot force release lock: no connection",
-			"Establish an SSH connection first")
+			"Can't force release without a connection",
+			"Connect to the remote host first.")
 	}
 
 	return forceRemove(conn.Client, lockDir)
@@ -239,13 +239,13 @@ func forceRemove(client sshutil.SSHClient, dir string) error {
 	debugf("forceRemove: exitCode=%d, stderr=%q, err=%v", exitCode, string(stderr), err)
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrLock,
-			fmt.Sprintf("Failed to remove lock directory: %s", dir),
-			"Check SSH connection")
+			fmt.Sprintf("Couldn't remove lock directory at %s", dir),
+			"Check your SSH connection.")
 	}
 	if exitCode != 0 {
 		return errors.New(errors.ErrLock,
-			fmt.Sprintf("Failed to remove lock directory: %s", dir),
-			fmt.Sprintf("Error: %s", string(stderr)))
+			fmt.Sprintf("Couldn't remove lock directory at %s", dir),
+			fmt.Sprintf("Remote error: %s", string(stderr)))
 	}
 	return nil
 }
