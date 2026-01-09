@@ -140,7 +140,7 @@ func collectNonInteractiveValues(opts InitOptions) (*initConfigValues, error) {
 	}
 	vals.remoteDir = opts.Dir
 	if vals.remoteDir == "" {
-		vals.remoteDir = "~/rr/${PROJECT}"
+		vals.remoteDir = "${HOME}/rr/${PROJECT}"
 	}
 	return vals, nil
 }
@@ -216,7 +216,7 @@ func getAllSelectedSSHHosts(machines []machineConfig) []string {
 // collectInteractiveValues collects config values interactively.
 func collectInteractiveValues() (*initConfigValues, error) {
 	vals := &initConfigValues{
-		remoteDir: "~/rr/${PROJECT}", // Default, will prompt at end
+		remoteDir: "${HOME}/rr/${PROJECT}", // Default, will prompt at end
 	}
 
 	// Machine loop - collect one or more machines
@@ -397,7 +397,7 @@ func promptRemoteDir(remoteDir *string) error {
 			huh.NewInput().
 				Title("Remote directory").
 				Description("Where files sync to on all machines (supports ${PROJECT}, ${USER}, ${HOME})").
-				Placeholder("~/rr/${PROJECT}").
+				Placeholder("${HOME}/rr/${PROJECT}").
 				Value(remoteDir).
 				Validate(func(s string) error {
 					if strings.TrimSpace(s) == "" {
