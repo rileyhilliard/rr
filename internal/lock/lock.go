@@ -2,6 +2,8 @@ package lock
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -11,6 +13,18 @@ import (
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
+
+// debugEnabled returns true if debug logging is enabled via RR_DEBUG env var.
+func debugEnabled() bool {
+	return os.Getenv("RR_DEBUG") != ""
+}
+
+// debugf logs a formatted message if debug is enabled.
+func debugf(format string, args ...interface{}) {
+	if debugEnabled() {
+		log.Printf("[lock] "+format, args...)
+	}
+}
 
 // Lock represents an acquired distributed lock on a remote host.
 type Lock struct {
@@ -38,6 +52,9 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
 	infoFile := filepath.Join(lockDir, "info.json")
 
+	debugf("attempting to acquire lock: dir=%s, timeout=%s, stale=%s", lockDir, cfg.Timeout, cfg.Stale)
+	debugf("using connection: host=%s, address=%s", conn.Client.GetHost(), conn.Client.GetAddress())
+
 	// Create our lock info
 	info, err := NewLockInfo()
 	if err != nil {
@@ -46,14 +63,35 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 			"Check hostname and user environment")
 	}
 
+	// Ensure the parent directory exists (e.g., /tmp/rr-locks)
+	// This is done once before the retry loop since parent creation is idempotent
+	if baseDir != "/tmp" {
+		mkdirParentCmd := fmt.Sprintf("mkdir -p %q", baseDir)
+		debugf("ensuring parent directory exists: %s", mkdirParentCmd)
+		_, stderr, exitCode, err := conn.Client.Exec(mkdirParentCmd)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrLock,
+				"Failed to create lock parent directory",
+				"Check SSH connection")
+		}
+		if exitCode != 0 {
+			return nil, errors.New(errors.ErrLock,
+				fmt.Sprintf("Failed to create lock parent directory: %s", baseDir),
+				fmt.Sprintf("Error: %s", strings.TrimSpace(string(stderr))))
+		}
+	}
+
 	startTime := time.Now()
+	iteration := 0
 
 	for {
+		iteration++
 		// Check if we've exceeded the timeout
 		elapsed := time.Since(startTime)
 		if elapsed > cfg.Timeout {
 			// Try to read who holds the lock for a better error message
 			holder := readLockHolder(conn.Client, infoFile)
+			debugf("timeout after %d iterations, elapsed=%s, holder=%s", iteration, elapsed, holder)
 			return nil, errors.New(errors.ErrLock,
 				fmt.Sprintf("Timed out waiting for lock after %s", cfg.Timeout),
 				fmt.Sprintf("Lock held by: %s. Consider using --force-unlock or wait for it to release.", holder))
@@ -61,16 +99,23 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 
 		// Check for stale lock
 		if isLockStale(conn.Client, infoFile, cfg.Stale) {
+			debugf("detected stale lock, attempting removal")
 			// Remove stale lock
 			if err := forceRemove(conn.Client, lockDir); err == nil {
+				debugf("stale lock removed successfully")
 				// Stale lock removed, try again immediately
 				continue
 			}
+			debugf("failed to remove stale lock: %v", err)
 		}
 
 		// Try to acquire lock using mkdir (atomic operation)
 		// mkdir will fail if the directory already exists
-		_, _, exitCode, err := conn.Client.Exec(fmt.Sprintf("mkdir %q 2>/dev/null", lockDir))
+		mkdirCmd := fmt.Sprintf("mkdir %q", lockDir)
+		debugf("iteration %d: executing mkdir command: %s", iteration, mkdirCmd)
+		stdout, stderr, exitCode, err := conn.Client.Exec(mkdirCmd)
+		debugf("mkdir result: exitCode=%d, stdout=%q, stderr=%q, err=%v", exitCode, string(stdout), string(stderr), err)
+
 		if err != nil {
 			return nil, errors.WrapWithCode(err, errors.ErrLock,
 				"Failed to execute lock command",
@@ -78,6 +123,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 		}
 
 		if exitCode == 0 {
+			debugf("lock directory created successfully, writing info file")
 			// Lock acquired, write our info
 			infoJSON, err := info.Marshal()
 			if err != nil {
@@ -99,6 +145,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 					"Check disk space and permissions on remote")
 			}
 
+			debugf("lock acquired successfully: %s", lockDir)
 			return &Lock{
 				Dir:  lockDir,
 				Info: info,
@@ -107,6 +154,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 		}
 
 		// Lock is held by someone else, wait before retrying
+		debugf("mkdir failed (exitCode=%d), lock may be held by another process, waiting 2s before retry", exitCode)
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -148,17 +196,23 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 	}
 
 	// Read the info file and check the started time
-	stdout, _, exitCode, err := client.Exec(fmt.Sprintf("cat %q 2>/dev/null", infoFile))
+	catCmd := fmt.Sprintf("cat %q", infoFile)
+	stdout, _, exitCode, err := client.Exec(catCmd)
+	debugf("isLockStale: cmd=%q, exitCode=%d, err=%v", catCmd, exitCode, err)
 	if err != nil || exitCode != 0 {
+		debugf("isLockStale: cannot read info file, assuming not stale")
 		return false // Can't read, assume not stale
 	}
 
 	info, err := ParseLockInfo(stdout)
 	if err != nil {
+		debugf("isLockStale: failed to parse lock info: %v", err)
 		return false
 	}
 
-	return info.Age() > staleThreshold
+	isStale := info.Age() > staleThreshold
+	debugf("isLockStale: age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
+	return isStale
 }
 
 // readLockHolder reads the lock info file and returns a description of the holder.
@@ -179,7 +233,10 @@ func readLockHolder(client sshutil.SSHClient, infoFile string) string {
 
 // forceRemove removes a directory and all its contents.
 func forceRemove(client sshutil.SSHClient, dir string) error {
-	_, stderr, exitCode, err := client.Exec(fmt.Sprintf("rm -rf %q", dir))
+	rmCmd := fmt.Sprintf("rm -rf %q", dir)
+	debugf("forceRemove: executing %s", rmCmd)
+	_, stderr, exitCode, err := client.Exec(rmCmd)
+	debugf("forceRemove: exitCode=%d, stderr=%q, err=%v", exitCode, string(stderr), err)
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrLock,
 			fmt.Sprintf("Failed to remove lock directory: %s", dir),

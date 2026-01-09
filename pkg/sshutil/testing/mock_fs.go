@@ -18,11 +18,16 @@ type MockFS struct {
 }
 
 // NewMockFS creates a new empty mock filesystem.
+// Common system directories like /tmp are pre-created to match real systems.
 func NewMockFS() *MockFS {
-	return &MockFS{
+	fs := &MockFS{
 		files: make(map[string][]byte),
 		dirs:  make(map[string]struct{}),
 	}
+	// Pre-create common system directories that always exist on real systems
+	fs.dirs["/tmp"] = struct{}{}
+	fs.dirs["/var"] = struct{}{}
+	return fs
 }
 
 // Mkdir creates a directory. Returns error if directory already exists.
