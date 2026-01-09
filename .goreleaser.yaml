@@ -20,11 +20,13 @@ builds:
       - -X main.date={{.Date}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
+    overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     files:
       - README.md
       - LICENSE
@@ -41,18 +43,21 @@ changelog:
       - '^test:'
       - '^chore:'
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: rr
+    binaries:
+      - rr
+    homepage: https://github.com/rileyhilliard/rr
+    description: Sync code and run commands on remote machines
+    url:
+      verified: github.com/rileyhilliard/rr/
+    repository:
       owner: rileyhilliard
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: https://github.com/rileyhilliard/rr
-    description: Sync code and run commands on remote machines
-    license: MIT
-    install: |
-      bin.install "rr"
-      bash_completion.install "completions/rr.bash" => "rr"
-      zsh_completion.install "completions/_rr"
-      fish_completion.install "completions/rr.fish"
-    test: |
-      system "#{bin}/rr", "--version"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/rr"]
+          end

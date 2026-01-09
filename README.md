@@ -26,8 +26,8 @@ This rsyncs your project to the remote host, runs `make test`, and streams the o
 # macOS/Linux
 curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
 
-# Homebrew
-brew install rileyhilliard/tap/rr
+# Homebrew (macOS)
+brew install --cask rileyhilliard/tap/rr
 
 # Go
 go install github.com/rileyhilliard/rr/cmd/rr@latest
