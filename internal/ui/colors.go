@@ -34,3 +34,30 @@ const (
 	ColorSecondary lipgloss.Color = "4" // Blue
 	ColorMuted     lipgloss.Color = "8" // Gray (bright black)
 )
+
+// Style helpers for common text styling
+
+// SuccessStyle returns a style for success messages.
+func SuccessStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(ColorSuccess)
+}
+
+// ErrorStyle returns a style for error messages.
+func ErrorStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(ColorError)
+}
+
+// WarningStyle returns a style for warning messages.
+func WarningStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(ColorWarning)
+}
+
+// InfoStyle returns a style for informational messages.
+func InfoStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(ColorInfo)
+}
+
+// MutedStyle returns a style for muted/secondary text.
+func MutedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(ColorMuted)
+}

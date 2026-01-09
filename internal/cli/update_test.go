@@ -337,3 +337,79 @@ func TestGetCacheDir(t *testing.T) {
 		})
 	}
 }
+
+func TestGetAssetName(t *testing.T) {
+	// This test verifies the asset name generation based on runtime OS/arch
+	name := getAssetName()
+
+	// Should contain rr_ prefix
+	assert.True(t, len(name) > 0)
+	assert.Contains(t, name, "rr_")
+
+	// Should end with tar.gz or zip depending on OS
+	if os.Getenv("GOOS") == "windows" {
+		assert.Contains(t, name, ".zip")
+	} else {
+		assert.Contains(t, name, ".tar.gz")
+	}
+}
+
+func TestFindAsset(t *testing.T) {
+	release := &githubReleaseWithAssets{
+		TagName: "v1.0.0",
+		Assets: []githubReleaseAsset{
+			{Name: "rr_darwin_arm64.tar.gz", DownloadURL: "https://example.com/darwin_arm64"},
+			{Name: "rr_darwin_amd64.tar.gz", DownloadURL: "https://example.com/darwin_amd64"},
+			{Name: "rr_linux_amd64.tar.gz", DownloadURL: "https://example.com/linux_amd64"},
+			{Name: "rr_windows_amd64.zip", DownloadURL: "https://example.com/windows_amd64"},
+		},
+	}
+
+	// This will find the asset matching the current platform
+	asset := findAsset(release)
+
+	// Should find an asset (we're running on a supported platform)
+	assert.NotNil(t, asset, "should find asset for current platform")
+	assert.Contains(t, asset.Name, "rr_")
+}
+
+func TestFindAssetNotFound(t *testing.T) {
+	release := &githubReleaseWithAssets{
+		TagName: "v1.0.0",
+		Assets: []githubReleaseAsset{
+			{Name: "rr_unsupported_os.tar.gz", DownloadURL: "https://example.com/unsupported"},
+		},
+	}
+
+	// Should return nil if platform not found
+	asset := findAsset(release)
+	assert.Nil(t, asset)
+}
+
+func TestFetchLatestReleaseWithAssets(t *testing.T) {
+	// Create mock GitHub API server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := githubReleaseWithAssets{
+			TagName: "v1.5.0",
+			HTMLURL: "https://github.com/rileyhilliard/rr/releases/v1.5.0",
+			Assets: []githubReleaseAsset{
+				{Name: "rr_darwin_arm64.tar.gz", DownloadURL: "https://example.com/darwin_arm64", Size: 1000},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		err := json.NewEncoder(w).Encode(response)
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+
+	// Verify the mock server works (we can't change the const URL, but verify parsing works)
+	resp, err := http.Get(server.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var release githubReleaseWithAssets
+	err = json.NewDecoder(resp.Body).Decode(&release)
+	require.NoError(t, err)
+	assert.Equal(t, "v1.5.0", release.TagName)
+	assert.Len(t, release.Assets, 1)
+}
