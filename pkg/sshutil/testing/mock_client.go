@@ -2,9 +2,7 @@ package testing
 
 import (
 	"errors"
-	"fmt"
 	"io"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -184,39 +182,11 @@ func (m *MockClient) parseAndExecute(cmd string) (stdout, stderr []byte, exitCod
 	return nil, nil, 0, nil
 }
 
-// handleMkdir processes: mkdir [-p] "path" or mkdir [-p] path
+// handleMkdir processes: mkdir "path" or mkdir path
 func (m *MockClient) handleMkdir(cmd string) ([]byte, []byte, int, error) {
-	args := strings.TrimPrefix(cmd, "mkdir ")
-	args = strings.TrimSpace(args)
-
-	// Check for -p flag
-	createParents := false
-	if strings.HasPrefix(args, "-p ") {
-		createParents = true
-		args = strings.TrimPrefix(args, "-p ")
-		args = strings.TrimSpace(args)
-	}
-
-	path := extractPath(args)
+	path := extractPath(strings.TrimPrefix(cmd, "mkdir "))
 	if path == "" {
 		return nil, []byte("mkdir: missing operand"), 1, nil
-	}
-
-	if createParents {
-		// mkdir -p: create all parent directories, don't fail if exists
-		err := m.fs.MkdirAll(path)
-		if err != nil {
-			return nil, []byte("mkdir: cannot create directory: " + err.Error()), 1, nil
-		}
-		return nil, nil, 0, nil
-	}
-
-	// Regular mkdir: check parent exists first (simulates real mkdir behavior)
-	parent := filepath.Dir(path)
-	if parent != "" && parent != "/" && parent != "." {
-		if !m.fs.IsDir(parent) {
-			return nil, []byte(fmt.Sprintf("mkdir: cannot create directory '%s': No such file or directory", path)), 1, nil
-		}
 	}
 
 	err := m.fs.Mkdir(path)

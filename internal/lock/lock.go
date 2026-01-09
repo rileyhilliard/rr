@@ -233,10 +233,7 @@ func readLockHolder(client sshutil.SSHClient, infoFile string) string {
 
 // forceRemove removes a directory and all its contents.
 func forceRemove(client sshutil.SSHClient, dir string) error {
-	rmCmd := fmt.Sprintf("rm -rf %q", dir)
-	debugf("forceRemove: executing %s", rmCmd)
-	_, stderr, exitCode, err := client.Exec(rmCmd)
-	debugf("forceRemove: exitCode=%d, stderr=%q, err=%v", exitCode, string(stderr), err)
+	_, stderr, exitCode, err := client.Exec(fmt.Sprintf("rm -rf %q", dir))
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrLock,
 			fmt.Sprintf("Couldn't remove lock directory at %s", dir),
