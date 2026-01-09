@@ -454,3 +454,219 @@ func TestClient_Struct(t *testing.T) {
 		t.Errorf("Address = %q, want '192.168.1.100:22'", c.Address)
 	}
 }
+
+// Tests for Match directive handling
+
+func TestPreprocessSSHConfig_NoMatch(t *testing.T) {
+	// Create a temp SSH config without Match directive
+	tmpDir := t.TempDir()
+	configPath := tmpDir + "/config"
+	configContent := `Host myserver
+    HostName 192.168.1.100
+    User admin
+
+Host otherserver
+    HostName 10.0.0.1
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	content, matchLine, err := preprocessSSHConfig(configPath)
+	if err != nil {
+		t.Fatalf("preprocessSSHConfig failed: %v", err)
+	}
+
+	if matchLine != 0 {
+		t.Errorf("matchLine = %d, want 0 (no Match directive)", matchLine)
+	}
+
+	// Content should be unchanged
+	if string(content) != configContent {
+		t.Errorf("Content was modified when there's no Match directive")
+	}
+}
+
+func TestPreprocessSSHConfig_WithMatch(t *testing.T) {
+	// Create a temp SSH config with Match directive
+	tmpDir := t.TempDir()
+	configPath := tmpDir + "/config"
+	configContent := `Host myserver
+    HostName 192.168.1.100
+    User admin
+
+Match host *.example.com
+    User special
+
+Host aftermatch
+    HostName 10.0.0.1
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	content, matchLine, err := preprocessSSHConfig(configPath)
+	if err != nil {
+		t.Fatalf("preprocessSSHConfig failed: %v", err)
+	}
+
+	if matchLine != 5 {
+		t.Errorf("matchLine = %d, want 5", matchLine)
+	}
+
+	// Content should not include Match directive or anything after it
+	if bytes.Contains(content, []byte("Match")) {
+		t.Errorf("Content still contains Match directive")
+	}
+	if bytes.Contains(content, []byte("aftermatch")) {
+		t.Errorf("Content still contains host after Match")
+	}
+	if !bytes.Contains(content, []byte("myserver")) {
+		t.Errorf("Content missing host before Match")
+	}
+}
+
+func TestPreprocessSSHConfig_MatchCaseInsensitive(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := tmpDir + "/config"
+	configContent := `Host myserver
+    HostName 192.168.1.100
+
+MATCH host *.example.com
+    User special
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	_, matchLine, err := preprocessSSHConfig(configPath)
+	if err != nil {
+		t.Fatalf("preprocessSSHConfig failed: %v", err)
+	}
+
+	if matchLine != 4 {
+		t.Errorf("matchLine = %d, want 4 (case insensitive Match detection)", matchLine)
+	}
+}
+
+// Tests for encrypted key error
+
+func TestEncryptedKeyError(t *testing.T) {
+	err := &EncryptedKeyError{Path: "/home/user/.ssh/id_rsa"}
+
+	// Check error message
+	errMsg := err.Error()
+	if !containsSubstring(errMsg, "/home/user/.ssh/id_rsa") {
+		t.Errorf("Error message missing key path: %s", errMsg)
+	}
+	if !containsSubstring(errMsg, "encrypted") {
+		t.Errorf("Error message missing 'encrypted': %s", errMsg)
+	}
+}
+
+func TestIsEncryptedPEM(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected bool
+	}{
+		{
+			name:     "encrypted PEM header",
+			data:     []byte("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,xxx\n"),
+			expected: true,
+		},
+		{
+			name:     "ENCRYPTED marker",
+			data:     []byte("-----BEGIN ENCRYPTED PRIVATE KEY-----\n"),
+			expected: true,
+		},
+		{
+			name:     "unencrypted key",
+			data:     []byte("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQ...\n"),
+			expected: false,
+		},
+		{
+			name:     "empty data",
+			data:     []byte{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEncryptedPEM(tt.data)
+			if got != tt.expected {
+				t.Errorf("isEncryptedPEM() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// Tests for host key mismatch error
+
+func TestHostKeyMismatchError_Error(t *testing.T) {
+	err := &HostKeyMismatchError{
+		Hostname:     "example.com:22",
+		ReceivedType: "ssh-ed25519",
+		KnownHosts:   "/home/user/.ssh/known_hosts",
+	}
+
+	errMsg := err.Error()
+	if !containsSubstring(errMsg, "example.com") {
+		t.Errorf("Error message missing hostname: %s", errMsg)
+	}
+	if !containsSubstring(errMsg, "ssh-ed25519") {
+		t.Errorf("Error message missing key type: %s", errMsg)
+	}
+}
+
+func TestHostKeyMismatchError_Suggestion(t *testing.T) {
+	err := &HostKeyMismatchError{
+		Hostname:     "example.com:22",
+		ReceivedType: "ssh-ed25519",
+		KnownHosts:   "/home/user/.ssh/known_hosts",
+	}
+
+	suggestion := err.Suggestion()
+
+	// Should include ssh-keyscan command
+	if !containsSubstring(suggestion, "ssh-keyscan") {
+		t.Errorf("Suggestion missing ssh-keyscan command: %s", suggestion)
+	}
+
+	// Should include the hostname (without port)
+	if !containsSubstring(suggestion, "ssh-keyscan -t rsa,ecdsa,ed25519 example.com") {
+		t.Errorf("Suggestion missing proper ssh-keyscan command: %s", suggestion)
+	}
+
+	// Should include ssh-keygen -R command
+	if !containsSubstring(suggestion, "ssh-keygen -R example.com") {
+		t.Errorf("Suggestion missing ssh-keygen -R command: %s", suggestion)
+	}
+
+	// Should mention the known_hosts path
+	if !containsSubstring(suggestion, "/home/user/.ssh/known_hosts") {
+		t.Errorf("Suggestion missing known_hosts path: %s", suggestion)
+	}
+
+	// Should mention the received key type
+	if !containsSubstring(suggestion, "ssh-ed25519") {
+		t.Errorf("Suggestion missing received key type: %s", suggestion)
+	}
+}
+
+func TestHostKeyMismatchError_SuggestionWithoutPort(t *testing.T) {
+	// Test with hostname that doesn't have a port
+	err := &HostKeyMismatchError{
+		Hostname:     "example.com",
+		ReceivedType: "ssh-rsa",
+		KnownHosts:   "/home/user/.ssh/known_hosts",
+	}
+
+	suggestion := err.Suggestion()
+
+	// Should still include the hostname correctly
+	if !containsSubstring(suggestion, "ssh-keyscan -t rsa,ecdsa,ed25519 example.com") {
+		t.Errorf("Suggestion with portless hostname incorrect: %s", suggestion)
+	}
+}
