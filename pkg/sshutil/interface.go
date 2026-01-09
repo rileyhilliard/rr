@@ -30,6 +30,11 @@ type SSHClient interface {
 	// NewSession creates a new SSH session for command execution or liveness checks.
 	// The returned session should be closed after use.
 	NewSession() (Session, error)
+
+	// SendRequest sends a global request on the SSH connection.
+	// Used for lightweight operations like keep-alive checks without creating a session.
+	// Returns whether the request was accepted, the response payload, and any error.
+	SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error)
 }
 
 // Session represents an SSH session that can be closed.

@@ -22,6 +22,55 @@ import (
 
 const brailleBase = '\u2800'
 
+// sparklineBlocks are block characters for 8-level vertical resolution (lowest to highest).
+var sparklineBlocks = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+// findMinMax returns the minimum and maximum values in a slice.
+// For percentage data (all values 0-100), returns fixed range 0-100.
+func findMinMax(data []float64) (minVal, maxVal float64, isPercentage bool) {
+	if len(data) == 0 {
+		return 0, 100, true
+	}
+
+	minVal, maxVal = data[0], data[0]
+	for _, v := range data {
+		if v < minVal {
+			minVal = v
+		}
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+
+	// For percentage data (0-100), use fixed range for consistent scaling
+	isPercentage = maxVal <= 100 && minVal >= 0
+	if isPercentage {
+		minVal = 0
+		maxVal = 100
+	}
+
+	return minVal, maxVal, isPercentage
+}
+
+// normalizeValue converts a value to 0-1 range given min/max bounds.
+func normalizeValue(val, minVal, maxVal float64) float64 {
+	if maxVal > minVal {
+		return (val - minVal) / (maxVal - minVal)
+	}
+	return 0.5
+}
+
+// clampInt clamps an integer to a range [0, maxVal].
+func clampInt(val, maxVal int) int {
+	if val < 0 {
+		return 0
+	}
+	if val > maxVal {
+		return maxVal
+	}
+	return val
+}
+
 // brailleDots maps row/column to the bit offset for braille pattern
 // [row][col] where row is 0-3 (top to bottom) and col is 0-1 (left to right)
 var brailleDots = [4][2]uint8{
@@ -34,103 +83,125 @@ var brailleDots = [4][2]uint8{
 // RenderBrailleSparkline renders a sparkline graph using braille characters.
 // Each character represents 2 horizontal data points with 4 vertical levels.
 // This gives much higher resolution than standard block characters.
+// Colors transition from green to yellow to red based on value (btop-style gradient).
 //
 // Parameters:
 //   - data: values to plot (will be normalized to 0-100 range if not already)
 //   - width: number of braille characters (each represents 2 data points)
 //   - height: number of rows (each row represents 4 vertical levels)
-//   - color: lipgloss color for the graph
-func RenderBrailleSparkline(data []float64, width, height int, color lipgloss.Color) string {
+//   - baseColor: fallback color (used for non-percentage data)
+func RenderBrailleSparkline(data []float64, width, height int, baseColor lipgloss.Color) string {
 	if len(data) == 0 || width <= 0 || height <= 0 {
 		return ""
 	}
 
-	// Find min/max for scaling
-	minVal, maxVal := data[0], data[0]
-	for _, v := range data {
-		if v < minVal {
-			minVal = v
-		}
-		if v > maxVal {
-			maxVal = v
-		}
-	}
-
-	// For percentage data (0-100), use fixed range
-	if maxVal <= 100 && minVal >= 0 {
-		minVal = 0
-		maxVal = 100
-	}
-
-	// Total vertical resolution: height rows * 4 dots per row
+	minVal, maxVal, isPercentage := findMinMax(data)
 	totalDots := height * 4
+	targetPoints := width * 2
 
-	// Resample data to fit width*2 horizontal points
-	resampled := resampleData(data, width*2)
+	// Only downsample if we have more data than display width.
+	// If we have less data, use it directly (graph fills from right).
+	resampled := data
+	if len(data) > targetPoints {
+		resampled = resampleData(data, targetPoints)
+	}
 
-	// Create the braille grid: rows of characters
-	// Each row is height braille chars tall
+	// Create the braille grid
 	grid := make([][]rune, height)
 	for i := range grid {
 		grid[i] = make([]rune, width)
 		for j := range grid[i] {
-			grid[i][j] = brailleBase // Start with empty braille
+			grid[i][j] = brailleBase
 		}
+	}
+
+	// Track the max value for each character column (for coloring)
+	colMaxValues := make([]float64, width)
+
+	// Right-align data when we have less than full width
+	horizOffset := targetPoints - len(resampled)
+	if horizOffset < 0 {
+		horizOffset = 0
 	}
 
 	// Plot each data point
 	for i, val := range resampled {
-		// Normalize value to 0-1
-		var normalized float64
-		if maxVal > minVal {
-			normalized = (val - minVal) / (maxVal - minVal)
-		} else {
-			normalized = 0.5
-		}
+		normalized := normalizeValue(val, minVal, maxVal)
+		dotHeight := clampInt(int(normalized*float64(totalDots)), totalDots)
 
-		// Convert to dot height (0 to totalDots)
-		dotHeight := int(normalized * float64(totalDots))
-		if dotHeight > totalDots {
-			dotHeight = totalDots
-		}
-		if dotHeight < 0 {
-			dotHeight = 0
-		}
-
-		// Which character column (each braille char has 2 columns)
-		charCol := i / 2
+		// Which character column (apply offset to right-align)
+		charCol := (i + horizOffset) / 2
 		if charCol >= width {
 			continue
 		}
 
+		// Track max value for this column
+		if val > colMaxValues[charCol] {
+			colMaxValues[charCol] = val
+		}
+
 		// Which sub-column within the braille char (0 or 1)
-		subCol := i % 2
+		subCol := (i + horizOffset) % 2
 
 		// Fill dots from bottom up
 		for dot := 0; dot < dotHeight; dot++ {
-			// Which row (from bottom)
 			row := height - 1 - (dot / 4)
 			if row < 0 {
 				continue
 			}
-
-			// Which sub-row within the braille char (0-3, but inverted since we go bottom-up)
 			subRow := 3 - (dot % 4)
-
-			// Set the appropriate bit
 			bitOffset := brailleDots[subRow][subCol]
 			grid[row][charCol] |= rune(1 << bitOffset)
 		}
 	}
 
-	// Convert grid to string
+	// Convert grid to string with per-column coloring
 	var lines []string
-	style := lipgloss.NewStyle().Foreground(color)
-	for _, row := range grid {
-		lines = append(lines, style.Render(string(row)))
+	for rowIdx, row := range grid {
+		var lineBuilder strings.Builder
+		for colIdx, char := range row {
+			// Determine color based on value at this column
+			var color lipgloss.Color
+			if isPercentage {
+				color = MetricColor(colMaxValues[colIdx])
+			} else {
+				color = baseColor
+			}
+
+			// For rows near the top, use the threshold color of the row height
+			// This creates a gradient effect where higher parts of the graph are more red
+			if isPercentage && char != brailleBase {
+				// Calculate what percentage this row represents
+				rowFromBottom := height - 1 - rowIdx
+				rowPercent := float64(rowFromBottom+1) / float64(height) * 100
+				// Blend between column value color and row threshold color
+				rowColor := MetricColor(rowPercent)
+				// Use the more severe color
+				if colorSeverity(rowColor) > colorSeverity(color) {
+					color = rowColor
+				}
+			}
+
+			// Apply both foreground and background color
+			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
+			lineBuilder.WriteString(style.Render(string(char)))
+		}
+		lines = append(lines, lineBuilder.String())
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// colorSeverity returns a numeric severity for color comparison (higher = more severe)
+func colorSeverity(c lipgloss.Color) int {
+	switch c {
+	case ColorCritical:
+		return 2
+	case ColorWarning:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // RenderMiniSparkline renders a single-row sparkline using block characters.
@@ -144,47 +215,14 @@ func RenderMiniSparkline(data []float64, width int) string {
 		return ""
 	}
 
-	// Block characters for 8 levels
-	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
-
-	// Find min/max for scaling
-	minVal, maxVal := data[0], data[0]
-	for _, v := range data {
-		if v < minVal {
-			minVal = v
-		}
-		if v > maxVal {
-			maxVal = v
-		}
-	}
-
-	// For percentage data, use fixed range
-	if maxVal <= 100 && minVal >= 0 {
-		minVal = 0
-		maxVal = 100
-	}
-
-	// Resample data to fit width
+	minVal, maxVal, _ := findMinMax(data)
 	resampled := resampleData(data, width)
 
 	var result strings.Builder
 	for _, val := range resampled {
-		var normalized float64
-		if maxVal > minVal {
-			normalized = (val - minVal) / (maxVal - minVal)
-		} else {
-			normalized = 0.5
-		}
-
-		// Map to block character (0-7)
-		idx := int(normalized * float64(len(blocks)-1))
-		if idx >= len(blocks) {
-			idx = len(blocks) - 1
-		}
-		if idx < 0 {
-			idx = 0
-		}
-		result.WriteRune(blocks[idx])
+		normalized := normalizeValue(val, minVal, maxVal)
+		idx := clampInt(int(normalized*float64(len(sparklineBlocks)-1)), len(sparklineBlocks)-1)
+		result.WriteRune(sparklineBlocks[idx])
 	}
 
 	return result.String()
@@ -211,33 +249,15 @@ func RenderCleanSparkline(data []float64, width int, color lipgloss.Color) strin
 		return ""
 	}
 
-	// Block characters for 8 levels (from lowest to highest)
-	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
-
-	// For percentage data (0-100), use fixed range
+	// Always use percentage range for clean sparklines
 	minVal, maxVal := 0.0, 100.0
-
-	// Resample data to fit width
 	resampled := resampleData(data, width)
 
 	var result strings.Builder
 	for _, val := range resampled {
-		var normalized float64
-		if maxVal > minVal {
-			normalized = (val - minVal) / (maxVal - minVal)
-		} else {
-			normalized = 0.5
-		}
-
-		// Map to block character (0-7)
-		idx := int(normalized * float64(len(blocks)-1))
-		if idx >= len(blocks) {
-			idx = len(blocks) - 1
-		}
-		if idx < 0 {
-			idx = 0
-		}
-		result.WriteRune(blocks[idx])
+		normalized := normalizeValue(val, minVal, maxVal)
+		idx := clampInt(int(normalized*float64(len(sparklineBlocks)-1)), len(sparklineBlocks)-1)
+		result.WriteRune(sparklineBlocks[idx])
 	}
 
 	return lipgloss.NewStyle().Foreground(color).Render(result.String())
@@ -251,23 +271,15 @@ func RenderTimeSeriesGraph(data []float64, width, height int, color lipgloss.Col
 		return ""
 	}
 
-	// For percentage data, use fixed 0-100 range
+	// Always use percentage range
 	minVal, maxVal := 0.0, 100.0
-
-	// Resample data to fit width
 	resampled := resampleData(data, width)
 
-	// Build the graph row by row, from top to bottom
-	// Each row represents a threshold band
 	rows := make([]strings.Builder, height)
-
-	// Characters for drawing: full block for filled, space for empty
-	// We use different intensities for a gradient effect
 	fillChars := []rune{'█', '▓', '▒', '░'}
 
 	for col, val := range resampled {
-		// Normalize value to 0-1
-		normalized := (val - minVal) / (maxVal - minVal)
+		normalized := normalizeValue(val, minVal, maxVal)
 		if normalized > 1 {
 			normalized = 1
 		}
@@ -316,7 +328,47 @@ func RenderTimeSeriesGraph(data []float64, width, height int, color lipgloss.Col
 	return strings.Join(lines, "\n")
 }
 
-// resampleData resamples data to the target size using linear interpolation.
+// RenderGradientBar renders a horizontal bar with gradient fill.
+// Colors transition from green to yellow to red based on position (btop-style).
+func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
+	if width < 1 {
+		width = 1
+	}
+
+	// Clamp percentage
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	filled := int(percent / 100.0 * float64(width))
+	if filled > width {
+		filled = width
+	}
+
+	var result strings.Builder
+	for i := 0; i < width; i++ {
+		if i < filled {
+			// Color based on position in the bar (gradient effect)
+			posPercent := float64(i+1) / float64(width) * 100
+			color := MetricColor(posPercent)
+			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
+			result.WriteString(style.Render("█"))
+		} else {
+			// Empty portion - use muted color
+			style := lipgloss.NewStyle().Foreground(ColorTextMuted).Background(ColorSurfaceBg)
+			result.WriteString(style.Render("░"))
+		}
+	}
+
+	return result.String()
+}
+
+// resampleData resamples data to the target size.
+// When downsampling (compressing), uses max-based sampling to preserve peaks/spikes.
+// When upsampling (expanding), uses linear interpolation.
 func resampleData(data []float64, targetSize int) []float64 {
 	if len(data) == 0 || targetSize <= 0 {
 		return nil
@@ -336,7 +388,35 @@ func resampleData(data []float64, targetSize int) []float64 {
 		return result
 	}
 
-	// Linear interpolation
+	// Downsampling: use max within each bucket to preserve peaks
+	if len(data) > targetSize {
+		bucketSize := float64(len(data)) / float64(targetSize)
+		for i := 0; i < targetSize; i++ {
+			start := int(float64(i) * bucketSize)
+			end := int(float64(i+1) * bucketSize)
+			if end > len(data) {
+				end = len(data)
+			}
+			if start >= end {
+				start = end - 1
+			}
+			if start < 0 {
+				start = 0
+			}
+
+			// Find max in this bucket
+			maxVal := data[start]
+			for j := start + 1; j < end; j++ {
+				if data[j] > maxVal {
+					maxVal = data[j]
+				}
+			}
+			result[i] = maxVal
+		}
+		return result
+	}
+
+	// Upsampling: linear interpolation
 	scale := float64(len(data)-1) / float64(targetSize-1)
 	for i := 0; i < targetSize; i++ {
 		pos := float64(i) * scale

@@ -30,6 +30,19 @@ type Client struct {
 // matchWarningOnce ensures the SSH config Match directive warning is only shown once per process.
 var matchWarningOnce sync.Once
 
+// WarningHandler is a function that handles warning messages.
+// If nil, warnings are printed to stderr via log.Printf.
+var WarningHandler func(message string)
+
+// emitWarning sends a warning through the configured handler or falls back to log.Printf.
+func emitWarning(message string) {
+	if WarningHandler != nil {
+		WarningHandler(message)
+	} else {
+		log.Printf("Warning: %s", message)
+	}
+}
+
 // Dial establishes an SSH connection to the specified host.
 // The host can be:
 //   - An SSH config alias (e.g., "myserver")
@@ -77,9 +90,12 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 				hostKeyErr.Suggestion())
 		}
 
+		// Build suggestion, with extra context if we found encrypted keys
+		suggestion := suggestionForHandshakeError(err, settings.encryptedKeys)
+
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
 			fmt.Sprintf("SSH handshake with '%s' didn't go through", host),
-			suggestionForHandshakeError(err))
+			suggestion)
 	}
 
 	client := ssh.NewClient(sshConn, chans, reqs)
@@ -115,6 +131,13 @@ func (c *Client) NewSession() (Session, error) {
 	return c.Client.NewSession()
 }
 
+// SendRequest sends a global request on the SSH connection.
+// This is a lightweight way to check connection liveness without the overhead
+// of creating a new session (~100-200ms savings).
+func (c *Client) SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error) {
+	return c.Client.SendRequest(name, wantReply, payload)
+}
+
 // newSSHSession creates a new *ssh.Session for internal use by exec methods.
 func (c *Client) newSSHSession() (*ssh.Session, error) {
 	return c.Client.NewSession()
@@ -122,10 +145,11 @@ func (c *Client) newSSHSession() (*ssh.Session, error) {
 
 // sshSettings holds resolved SSH connection parameters.
 type sshSettings struct {
-	hostname     string
-	port         string
-	user         string
-	identityFile string
+	hostname      string
+	port          string
+	user          string
+	identityFile  string
+	encryptedKeys []string // Keys that exist but are encrypted
 }
 
 // address returns the host:port string for dialing.
@@ -186,36 +210,47 @@ func resolveSSHSettings(host string) *sshSettings {
 		return settings
 	}
 
-	if matchLine > 0 {
-		matchWarningOnce.Do(func() {
-			log.Printf("Warning: SSH config contains 'Match' directive at line %d. Host entries after this line may not be recognized. Consider using explicit user@host format or moving important hosts before the Match block.", matchLine)
-		})
-	}
-
 	cfg, err := ssh_config.Decode(bytes.NewReader(content))
 	if err != nil {
 		// Decoding failed even after preprocessing, just return defaults
 		return settings
 	}
 
+	// Track if we found any config for this host
+	hostFound := false
+
 	// Get hostname (could be different from alias)
 	if hostname, _ := cfg.Get(host, "HostName"); hostname != "" {
 		settings.hostname = hostname
+		hostFound = true
 	}
 
 	// Get port
 	if port, _ := cfg.Get(host, "Port"); port != "" {
 		settings.port = port
+		hostFound = true
 	}
 
 	// Get user
 	if user, _ := cfg.Get(host, "User"); user != "" {
 		settings.user = user
+		hostFound = true
 	}
 
 	// Get identity file
 	if identity, _ := cfg.Get(host, "IdentityFile"); identity != "" {
 		settings.identityFile = expandPath(identity)
+		hostFound = true
+	}
+
+	// Only warn about Match block if host wasn't found - it might be defined after the Match
+	if matchLine > 0 && !hostFound {
+		matchWarningOnce.Do(func() {
+			emitWarning(fmt.Sprintf(
+				"Host '%s' not found in SSH config (config has a Match block at line %d that may hide later entries). "+
+					"If this host is defined after line %d, move it earlier in ~/.ssh/config.",
+				host, matchLine, matchLine))
+		})
 	}
 
 	return settings
@@ -227,9 +262,9 @@ func resolveSSHSettings(host string) *sshSettings {
 var StrictHostKeyChecking = true
 
 // buildSSHConfig creates an SSH client config with authentication methods.
+// It also populates settings.encryptedKeys with any keys that exist but are encrypted.
 func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
-	var encryptedKeys []string
 
 	// Helper to try loading a key and track encrypted keys
 	tryKeyFile := func(keyPath string) {
@@ -237,7 +272,7 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		if err != nil {
 			var encErr *EncryptedKeyError
 			if stderrors.As(err, &encErr) {
-				encryptedKeys = append(encryptedKeys, keyPath)
+				settings.encryptedKeys = append(settings.encryptedKeys, keyPath)
 			}
 			// Other errors (file not found, etc.) are silently ignored
 			return
@@ -278,14 +313,19 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		msg := "No SSH auth methods available"
 		suggestion := "Check your keys are loaded: ssh-add -l"
 
-		if len(encryptedKeys) > 0 {
-			msg = fmt.Sprintf("Found SSH key(s) but they're encrypted: %s", strings.Join(encryptedKeys, ", "))
-			keyToAdd := encryptedKeys[0]
-			if runtime.GOOS == "darwin" {
-				suggestion = fmt.Sprintf("Add to your agent: ssh-add --apple-use-keychain %s", keyToAdd)
-			} else {
-				suggestion = fmt.Sprintf("Add to your agent: ssh-add %s", keyToAdd)
+		if len(settings.encryptedKeys) > 0 {
+			msg = fmt.Sprintf("Found SSH key(s) but they're encrypted: %s", strings.Join(settings.encryptedKeys, ", "))
+			var sb strings.Builder
+			sb.WriteString("Add your key(s) to the agent:\n")
+			for _, key := range settings.encryptedKeys {
+				if runtime.GOOS == "darwin" {
+					sb.WriteString(fmt.Sprintf("  ssh-add --apple-use-keychain %s\n", key))
+				} else {
+					sb.WriteString(fmt.Sprintf("  ssh-add %s\n", key))
+				}
 			}
+			sb.WriteString("\nNot sure which key? Check with: ssh -v <host>")
+			suggestion = sb.String()
 		}
 
 		return nil, errors.New(errors.ErrSSH, msg, suggestion)
@@ -420,9 +460,23 @@ func suggestionForDialError(err error) string {
 	return "Make sure the host is reachable: ping <host>"
 }
 
-func suggestionForHandshakeError(err error) string {
+func suggestionForHandshakeError(err error, encryptedKeys []string) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "unable to authenticate") || strings.Contains(errStr, "no supported methods") {
+		// If we found encrypted keys, suggest adding them to the agent
+		if len(encryptedKeys) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Your key(s) are encrypted. Add them to the agent:\n")
+			for _, key := range encryptedKeys {
+				if runtime.GOOS == "darwin" {
+					sb.WriteString(fmt.Sprintf("  ssh-add --apple-use-keychain %s\n", key))
+				} else {
+					sb.WriteString(fmt.Sprintf("  ssh-add %s\n", key))
+				}
+			}
+			sb.WriteString("\nNot sure which key? Check with: ssh -v <host>")
+			return sb.String()
+		}
 		return "Auth failed. Check your keys are loaded: ssh-add -l"
 	}
 	if strings.Contains(errStr, "host key") {

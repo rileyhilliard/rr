@@ -279,13 +279,19 @@ func TestSuggestionForHandshakeError(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		suggestion := suggestionForHandshakeError(errFromString(tt.errMsg))
+		suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), nil)
 		if suggestion == "" {
 			t.Errorf("suggestionForHandshakeError(%q) returned empty string", tt.errMsg)
 		}
 		if !containsSubstring(suggestion, tt.contains) {
 			t.Errorf("suggestionForHandshakeError(%q) = %q, want to contain %q", tt.errMsg, suggestion, tt.contains)
 		}
+	}
+
+	// Test with encrypted keys
+	suggestion := suggestionForHandshakeError(errFromString("unable to authenticate"), []string{"/path/to/key"})
+	if !containsSubstring(suggestion, "ssh-add") || !containsSubstring(suggestion, "/path/to/key") {
+		t.Errorf("suggestionForHandshakeError with encrypted keys should suggest ssh-add, got: %q", suggestion)
 	}
 }
 

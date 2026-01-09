@@ -133,6 +133,19 @@ func (m *MockClient) NewSession() (sshutil.Session, error) {
 	return &mockSession{}, nil
 }
 
+// SendRequest simulates sending a global request on the SSH connection.
+// Used for lightweight connection liveness checks.
+func (m *MockClient) SendRequest(name string, wantReply bool, payload []byte) (bool, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.closed {
+		return false, nil, errors.New("connection closed")
+	}
+	// Mock always accepts requests when connection is open
+	return true, nil, nil
+}
+
 // parseAndExecute handles common shell commands used by rr.
 func (m *MockClient) parseAndExecute(cmd string) (stdout, stderr []byte, exitCode int, err error) {
 	// Strip common redirects

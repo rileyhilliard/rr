@@ -17,7 +17,9 @@ This guide covers common issues and their solutions.
 The `rr doctor` command checks your setup and reports issues:
 
 ```bash
-rr doctor
+rr doctor           # Run all diagnostic checks
+rr doctor --fix     # Attempt automatic fixes where possible
+rr doctor --json    # Output diagnostics in JSON format (for scripts)
 ```
 
 Example output:
@@ -462,11 +464,11 @@ rr sync --dry-run
 ### Verify config parsing
 
 ```bash
-# Show effective config (coming soon)
-rr config show
-
-# For now, check YAML syntax
+# Check YAML syntax
 cat .rr.yaml | python3 -c "import yaml, sys; yaml.safe_load(sys.stdin)"
+
+# Or use yq if installed
+yq . .rr.yaml
 ```
 
 ### Still stuck?

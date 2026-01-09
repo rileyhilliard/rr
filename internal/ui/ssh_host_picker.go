@@ -94,9 +94,17 @@ func NewSSHHostPickerModel(hosts []SSHHostInfo) SSHHostPickerModel {
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
 		Foreground(lipgloss.Color(string(ColorMuted)))
 
-	l := list.New(items, delegate, 0, 0)
-	l.Title = "Select an SSH host from your config"
-	l.SetShowStatusBar(true)
+	// Calculate a reasonable height based on number of items
+	// Each item is ~2 lines (title + description), plus title, status bar, help
+	maxVisibleItems := 8
+	if len(hosts) < maxVisibleItems {
+		maxVisibleItems = len(hosts)
+	}
+	listHeight := maxVisibleItems*2 + 4 // items + chrome
+
+	l := list.New(items, delegate, 80, listHeight)
+	l.Title = "Select an SSH host"
+	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 	l.Styles.Title = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(string(ColorPrimary))).
@@ -113,7 +121,7 @@ func NewSSHHostPickerModel(hosts []SSHHostInfo) SSHHostPickerModel {
 		list:   l,
 		hosts:  hosts,
 		width:  80,
-		height: 15,
+		height: listHeight,
 	}
 }
 
@@ -150,9 +158,9 @@ func (m SSHHostPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		// Only adjust width, keep height fixed to avoid full-screen behavior
 		m.width = msg.Width
-		m.height = msg.Height
-		m.list.SetSize(msg.Width, msg.Height-2)
+		m.list.SetWidth(msg.Width)
 	}
 
 	var cmd tea.Cmd

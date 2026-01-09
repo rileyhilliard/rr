@@ -63,6 +63,7 @@ type Model struct {
 	hosts      []string
 	metrics    map[string]*HostMetrics
 	status     map[string]HostStatus
+	errors     map[string]string // Last error message per host for diagnostics
 	selected   int
 	collector  *Collector
 	history    *History
@@ -86,6 +87,7 @@ type tickMsg time.Time
 // metricsMsg carries new metrics from the collector.
 type metricsMsg struct {
 	metrics map[string]*HostMetrics
+	errors  map[string]string // Connection errors per host
 	time    time.Time
 }
 
@@ -104,6 +106,7 @@ func NewModel(collector *Collector, interval time.Duration) Model {
 		hosts:     hosts,
 		metrics:   make(map[string]*HostMetrics),
 		status:    status,
+		errors:    make(map[string]string),
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
 		interval:  interval,
@@ -154,7 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case metricsMsg:
 		m.lastUpdate = msg.time
-		m.updateMetrics(msg.metrics)
+		m.updateMetrics(msg.metrics, msg.errors)
 	}
 
 	return m, nil
@@ -178,19 +181,24 @@ func (m Model) tickCmd() tea.Cmd {
 // collectCmd returns a command that collects metrics from all hosts.
 func (m Model) collectCmd() tea.Cmd {
 	return func() tea.Msg {
-		metrics := m.collector.Collect()
+		metrics, errors := m.collector.Collect()
 		return metricsMsg{
 			metrics: metrics,
+			errors:  errors,
 			time:    time.Now(),
 		}
 	}
 }
 
 // updateMetrics updates the model with new metrics and determines host status.
-func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics) {
+func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[string]string) {
 	for alias, metrics := range newMetrics {
 		if metrics == nil {
 			m.status[alias] = StatusUnreachableState
+			// Store error message if available
+			if errMsg, ok := newErrors[alias]; ok {
+				m.errors[alias] = errMsg
+			}
 			continue
 		}
 
@@ -200,6 +208,8 @@ func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics) {
 		// Determine status based on collection latency
 		// If metrics are fresh, host is connected
 		m.status[alias] = StatusConnectedState
+		// Clear any previous error
+		delete(m.errors, alias)
 	}
 }
 

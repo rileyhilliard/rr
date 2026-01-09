@@ -71,12 +71,16 @@ func extractHostname(sshHost string) string {
 	return sshHost
 }
 
+// machineConfig holds configuration for a single machine.
+type machineConfig struct {
+	name     string   // Friendly name (config key)
+	sshHosts []string // Connection fallbacks for this machine
+}
+
 // initConfigValues holds the collected configuration values.
 type initConfigValues struct {
-	sshHost      string
-	remoteDir    string
-	hostName     string
-	fallbackHost string
+	machines  []machineConfig // All machines configured
+	remoteDir string          // Shared across all machines
 }
 
 // checkExistingConfig checks for existing config and prompts for overwrite.
@@ -121,82 +125,294 @@ func collectNonInteractiveValues(opts InitOptions) (*initConfigValues, error) {
 			"Pass --host, set RR_HOST env var, or drop the --non-interactive flag to use the prompts.")
 	}
 
-	vals := &initConfigValues{sshHost: opts.Host}
+	machineName := opts.Name
+	if machineName == "" {
+		machineName = extractHostname(opts.Host)
+	}
+
+	vals := &initConfigValues{
+		machines: []machineConfig{
+			{
+				name:     machineName,
+				sshHosts: []string{opts.Host},
+			},
+		},
+	}
 	vals.remoteDir = opts.Dir
 	if vals.remoteDir == "" {
-		vals.remoteDir = "~/projects/${PROJECT}"
-	}
-	vals.hostName = opts.Name
-	if vals.hostName == "" {
-		vals.hostName = extractHostname(opts.Host)
+		vals.remoteDir = "~/rr/${PROJECT}"
 	}
 	return vals, nil
 }
 
-// trySSHHostPicker shows the SSH config host picker if available.
-// Returns selected host info, cancelled flag, and any error.
-func trySSHHostPicker() (sshHost, hostName string, cancelled bool) {
+// getSSHHostsForPicker returns SSH hosts formatted for the picker, optionally excluding some.
+func getSSHHostsForPicker(exclude ...string) []ui.SSHHostInfo {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return "", "", false
+		return nil
 	}
 
 	sshHosts, err := sshutil.ParseSSHConfig()
 	if err != nil || len(sshHosts) == 0 {
-		return "", "", false
+		return nil
 	}
 
-	// Convert to UI format
-	uiHosts := make([]ui.SSHHostInfo, len(sshHosts))
-	for i, h := range sshHosts {
-		uiHosts[i] = ui.SSHHostInfo{
+	// Build exclusion set
+	excludeSet := make(map[string]bool)
+	for _, e := range exclude {
+		excludeSet[e] = true
+	}
+
+	// Convert to UI format, filtering out excluded hosts
+	var uiHosts []ui.SSHHostInfo
+	for _, h := range sshHosts {
+		if excludeSet[h.Alias] {
+			continue
+		}
+		uiHosts = append(uiHosts, ui.SSHHostInfo{
 			Alias:       h.Alias,
 			Hostname:    h.Hostname,
 			User:        h.User,
 			Port:        h.Port,
 			Description: h.Description(),
-		}
+		})
+	}
+	return uiHosts
+}
+
+// trySSHHostPicker shows the SSH config host picker if available.
+// Returns the selected SSH host string and cancelled flag.
+// exclude optionally filters out hosts (e.g., the already-selected primary).
+func trySSHHostPicker(exclude ...string) (sshHost string, cancelled bool) {
+	uiHosts := getSSHHostsForPicker(exclude...)
+	if len(uiHosts) == 0 {
+		return "", false
 	}
 
 	fmt.Println("Found hosts in your SSH config:")
 	selected, wasCancelled, pickerErr := ui.PickSSHHost(uiHosts)
 	if pickerErr != nil {
 		fmt.Printf("Picker error: %v, falling back to manual entry\n", pickerErr)
-		return "", "", false
+		return "", false
 	}
 	if wasCancelled {
 		fmt.Println("Cancelled.")
-		return "", "", true
+		return "", true
 	}
 	if selected != nil {
-		return selected.Alias, selected.Alias, false
+		return selected.Alias, false
 	}
-	return "", "", false
+	return "", false
+}
+
+// getAllSelectedSSHHosts returns all SSH hosts selected across all machines.
+func getAllSelectedSSHHosts(machines []machineConfig) []string {
+	var all []string
+	for _, m := range machines {
+		all = append(all, m.sshHosts...)
+	}
+	return all
 }
 
 // collectInteractiveValues collects config values interactively.
 func collectInteractiveValues() (*initConfigValues, error) {
-	vals := &initConfigValues{}
-
-	// Try SSH host picker first
-	var cancelled bool
-	vals.sshHost, vals.hostName, cancelled = trySSHHostPicker()
-	if cancelled {
-		return nil, nil // User cancelled
+	vals := &initConfigValues{
+		remoteDir: "~/rr/${PROJECT}", // Default, will prompt at end
 	}
 
-	// Prompt for SSH host if not selected from picker
-	if vals.sshHost == "" {
-		if err := promptSSHHost(&vals.sshHost); err != nil {
+	// Machine loop - collect one or more machines
+	for {
+		allSelected := getAllSelectedSSHHosts(vals.machines)
+
+		machine, cancelled, err := collectMachineConfig(allSelected)
+		if err != nil {
 			return nil, err
+		}
+		if cancelled {
+			if len(vals.machines) == 0 {
+				return nil, nil // User cancelled on first machine
+			}
+			break // User cancelled adding more, but we have at least one
+		}
+
+		vals.machines = append(vals.machines, *machine)
+
+		// Ask if they want to add another machine
+		if !promptAddAnotherMachine() {
+			break
 		}
 	}
 
-	// Get remaining config values
-	if err := promptRemainingValues(vals); err != nil {
+	// Prompt for remote directory (shared across all machines)
+	if err := promptRemoteDir(&vals.remoteDir); err != nil {
 		return nil, err
 	}
 
 	return vals, nil
+}
+
+// collectMachineConfig collects configuration for a single machine.
+// Returns the machine config, cancelled flag, and any error.
+func collectMachineConfig(excludeSSHHosts []string) (*machineConfig, bool, error) {
+	machine := &machineConfig{}
+
+	// Get primary SSH connection for this machine
+	primaryHost, cancelled := trySSHHostPicker(excludeSSHHosts...)
+	if cancelled {
+		return nil, true, nil
+	}
+
+	// Prompt for SSH host if not selected from picker
+	if primaryHost == "" {
+		if err := promptSSHHost(&primaryHost); err != nil {
+			return nil, false, err
+		}
+	}
+	machine.sshHosts = []string{primaryHost}
+
+	// Prompt for friendly machine name
+	hostname := extractHostname(primaryHost)
+	if !isIPAddress(hostname) {
+		machine.name = hostname
+	}
+
+	if err := promptMachineName(&machine.name); err != nil {
+		return nil, false, err
+	}
+
+	// Prompt for additional connections to THIS machine (inner loop)
+	allExcluded := make([]string, 0, len(excludeSSHHosts)+len(machine.sshHosts))
+	allExcluded = append(allExcluded, excludeSSHHosts...)
+	allExcluded = append(allExcluded, machine.sshHosts...)
+	if err := promptAdditionalConnections(machine, allExcluded); err != nil {
+		return nil, false, err
+	}
+
+	return machine, false, nil
+}
+
+// promptMachineName prompts for a friendly name for the machine.
+func promptMachineName(name *string) error {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Name for this machine").
+				Description("A friendly name to identify this machine in your config").
+				Placeholder("gpu-box").
+				Value(name).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("machine name is required")
+					}
+					if strings.ContainsAny(s, " \t\n") {
+						return fmt.Errorf("machine name cannot contain whitespace")
+					}
+					return nil
+				}),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't get your input",
+			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+	}
+	return nil
+}
+
+// promptAdditionalConnections prompts for additional SSH connections to the same machine.
+func promptAdditionalConnections(machine *machineConfig, excludeSSHHosts []string) error {
+	for {
+		var addMore bool
+		confirmForm := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Add another connection to %s?", machine.name)).
+					Description("Same machine via Tailscale, VPN, etc.").
+					Value(&addMore),
+			),
+		)
+		if err := confirmForm.Run(); err != nil {
+			return errors.WrapWithCode(err, errors.ErrConfig,
+				"Couldn't get your input",
+				"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+		}
+
+		if !addMore {
+			return nil
+		}
+
+		// Try SSH host picker (excluding all already-selected hosts)
+		allExcluded := make([]string, 0, len(excludeSSHHosts)+len(machine.sshHosts))
+		allExcluded = append(allExcluded, excludeSSHHosts...)
+		allExcluded = append(allExcluded, machine.sshHosts...)
+		newHost, cancelled := trySSHHostPicker(allExcluded...)
+		if cancelled {
+			continue // User cancelled picker, ask again
+		}
+
+		if newHost == "" {
+			// No picker available or user chose manual entry
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Next SSH connection").
+						Description("Another way to reach this same machine").
+						Placeholder("tailscale-hostname or user@vpn-ip").
+						Value(&newHost),
+				),
+			)
+			if err := form.Run(); err != nil {
+				return errors.WrapWithCode(err, errors.ErrConfig,
+					"Couldn't get your input",
+					"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+			}
+		}
+
+		if newHost != "" {
+			machine.sshHosts = append(machine.sshHosts, newHost)
+		}
+	}
+}
+
+// promptAddAnotherMachine asks if the user wants to add another machine.
+func promptAddAnotherMachine() bool {
+	var addMore bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Add another machine?").
+				Description("A different computer that can run your jobs").
+				Value(&addMore),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return false
+	}
+	return addMore
+}
+
+// promptRemoteDir prompts for the remote directory.
+func promptRemoteDir(remoteDir *string) error {
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Remote directory").
+				Description("Where files sync to on all machines (supports ${PROJECT}, ${USER}, ${HOME})").
+				Placeholder("~/rr/${PROJECT}").
+				Value(remoteDir).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("remote directory is required")
+					}
+					return nil
+				}),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't get your input",
+			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+	}
+	return nil
 }
 
 // promptSSHHost prompts for SSH host input.
@@ -224,53 +440,17 @@ func promptSSHHost(sshHost *string) error {
 	return nil
 }
 
-// promptRemainingValues prompts for host name, fallback, and remote dir.
-func promptRemainingValues(vals *initConfigValues) error {
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Host name").
-				Description("A friendly name for this host in your config").
-				Placeholder("gpu-box").
-				Value(&vals.hostName).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("host name is required")
-					}
-					if strings.ContainsAny(s, " \t\n") {
-						return fmt.Errorf("host name cannot contain whitespace")
-					}
-					return nil
-				}),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Fallback SSH host (optional)").
-				Description("Alternative connection for when primary is unavailable").
-				Placeholder("user@backup-server (leave empty to skip)").
-				Value(&vals.fallbackHost),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Remote directory").
-				Description("Where files sync to on remote (supports ${PROJECT}, ${USER}, ${HOME})").
-				Placeholder("~/projects/${PROJECT}").
-				Value(&vals.remoteDir).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("remote directory is required")
-					}
-					return nil
-				}),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't get your input",
-			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+// isIPAddress returns true if the string looks like an IP address.
+func isIPAddress(s string) bool {
+	// Simple check: if it's all digits and dots, it's likely an IPv4
+	// Also handle IPv6 which contains colons
+	for _, c := range s {
+		if c != '.' && c != ':' && (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
 	}
-	return nil
+	// Must have at least one separator to be an IP
+	return strings.Contains(s, ".") || strings.Contains(s, ":")
 }
 
 // testConnection tests the SSH connection and handles failure.
@@ -317,16 +497,18 @@ func testConnection(sshHost string, opts InitOptions) error {
 func writeConfig(configPath string, vals *initConfigValues) error {
 	cfg := config.DefaultConfig()
 
-	sshList := []string{vals.sshHost}
-	if vals.fallbackHost != "" {
-		sshList = append(sshList, vals.fallbackHost)
+	// Add all machines to config
+	for _, machine := range vals.machines {
+		cfg.Hosts[machine.name] = config.Host{
+			SSH: machine.sshHosts,
+			Dir: vals.remoteDir,
+		}
 	}
 
-	cfg.Hosts[vals.hostName] = config.Host{
-		SSH: sshList,
-		Dir: vals.remoteDir,
+	// First machine added is the default
+	if len(vals.machines) > 0 {
+		cfg.Default = vals.machines[0].name
 	}
-	cfg.Default = vals.hostName
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -384,9 +566,9 @@ func Init(opts InitOptions) error {
 		return nil // User cancelled
 	}
 
-	// Test connection before saving (unless --skip-probe)
-	if !opts.SkipProbe {
-		if err := testConnection(vals.sshHost, opts); err != nil {
+	// Test connection to first machine before saving (unless --skip-probe)
+	if !opts.SkipProbe && len(vals.machines) > 0 && len(vals.machines[0].sshHosts) > 0 {
+		if err := testConnection(vals.machines[0].sshHosts[0], opts); err != nil {
 			return err
 		}
 	}

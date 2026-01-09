@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,10 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 )
+
+// controlSocketDir is the directory for SSH ControlMaster sockets.
+// Using /tmp for cross-platform compatibility.
+var controlSocketDir = filepath.Join(os.TempDir(), "rr-ssh")
 
 // Sync transfers files from localDir to the remote host using rsync.
 // Progress output is streamed to the progress writer if provided.
@@ -33,6 +38,10 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 	if err != nil {
 		return err
 	}
+
+	// Ensure the SSH control socket directory exists for ControlMaster
+	// Non-fatal if it fails: rsync will still work, just without connection reuse
+	_ = os.MkdirAll(controlSocketDir, 0700)
 
 	args, err := BuildArgs(conn, localDir, cfg)
 	if err != nil {
@@ -112,6 +121,15 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 		"--delete", // delete files on remote not in source
 		"--force",  // force deletion of non-empty dirs
 	}
+
+	// Use SSH ControlMaster to reuse existing connections.
+	// This avoids a second SSH handshake when we already have an active connection.
+	// ControlPath uses a hash of the host to create unique socket files.
+	// ControlMaster=auto: reuse existing socket or create new one if needed.
+	// ControlPersist=60: keep the socket alive for 60s after last use.
+	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60",
+		controlSocketDir)
+	args = append(args, "-e", sshCmd)
 
 	// Add progress info flag for parsing
 	args = append(args, "--info=progress2")
