@@ -13,7 +13,7 @@ import (
 // Returns stdout, stderr, exit code, and any error.
 // Exit code is -1 if the command couldn't be executed at all.
 func (c *Client) Exec(cmd string) (stdout, stderr []byte, exitCode int, err error) {
-	session, err := c.NewSession()
+	session, err := c.newSSHSession()
 	if err != nil {
 		return nil, nil, -1, errors.WrapWithCode(err, errors.ErrSSH,
 			"Failed to create SSH session",
@@ -45,7 +45,7 @@ func (c *Client) Exec(cmd string) (stdout, stderr []byte, exitCode int, err erro
 // Returns the exit code and any error.
 // Exit code is -1 if the command couldn't be executed at all.
 func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
-	session, err := c.NewSession()
+	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
 			"Failed to create SSH session",
@@ -75,7 +75,7 @@ func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int,
 // This is useful for commands that expect an interactive terminal.
 // Returns the exit code and any error.
 func (c *Client) ExecPTY(cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
-	session, err := c.NewSession()
+	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
 			"Failed to create SSH session",
@@ -117,7 +117,7 @@ func (c *Client) ExecPTY(cmd string, stdout, stderr io.Writer) (exitCode int, er
 // ExecInteractive runs a command with full stdin/stdout/stderr handling.
 // This allows for interactive commands where input is needed.
 func (c *Client) ExecInteractive(cmd string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error) {
-	session, err := c.NewSession()
+	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
 			"Failed to create SSH session",
@@ -147,7 +147,7 @@ func (c *Client) ExecInteractive(cmd string, stdin io.Reader, stdout, stderr io.
 // Shell starts an interactive shell session.
 // The caller is responsible for handling stdin/stdout/stderr.
 func (c *Client) Shell(stdin io.Reader, stdout, stderr io.Writer) error {
-	session, err := c.NewSession()
+	session, err := c.newSSHSession()
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
 			"Failed to create SSH session",

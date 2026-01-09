@@ -89,7 +89,8 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	// Build and execute the batched metrics command
 	cmd := BuildMetricsCommand(platform)
 
-	session, err := client.NewSession()
+	// Use embedded ssh.Client's NewSession directly for full session capabilities
+	session, err := client.Client.NewSession()
 	if err != nil {
 		c.pool.CloseOne(alias)
 		return nil, err

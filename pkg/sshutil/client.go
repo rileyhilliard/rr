@@ -77,6 +77,28 @@ func (c *Client) Close() error {
 	return c.Client.Close()
 }
 
+// GetHost returns the original host/alias used to connect.
+func (c *Client) GetHost() string {
+	return c.Host
+}
+
+// GetAddress returns the resolved host:port address.
+func (c *Client) GetAddress() string {
+	return c.Address
+}
+
+// NewSession creates a new SSH session.
+// This satisfies the SSHClient interface for liveness checks.
+// Note: The exec methods use c.Client.NewSession() directly to get the full *ssh.Session.
+func (c *Client) NewSession() (Session, error) {
+	return c.Client.NewSession()
+}
+
+// newSSHSession creates a new *ssh.Session for internal use by exec methods.
+func (c *Client) newSSHSession() (*ssh.Session, error) {
+	return c.Client.NewSession()
+}
+
 // sshSettings holds resolved SSH connection parameters.
 type sshSettings struct {
 	hostname     string

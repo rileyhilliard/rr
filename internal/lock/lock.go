@@ -142,7 +142,7 @@ func Holder(conn *host.Connection, lockDir string) string {
 }
 
 // isLockStale checks if the lock's info file is older than the stale threshold.
-func isLockStale(client *sshutil.Client, infoFile string, staleThreshold time.Duration) bool {
+func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.Duration) bool {
 	if staleThreshold <= 0 {
 		return false
 	}
@@ -162,7 +162,7 @@ func isLockStale(client *sshutil.Client, infoFile string, staleThreshold time.Du
 }
 
 // readLockHolder reads the lock info file and returns a description of the holder.
-func readLockHolder(client *sshutil.Client, infoFile string) string {
+func readLockHolder(client sshutil.SSHClient, infoFile string) string {
 	stdout, _, exitCode, err := client.Exec(fmt.Sprintf("cat %q 2>/dev/null", infoFile))
 	if err != nil || exitCode != 0 {
 		return "unknown"
@@ -178,7 +178,7 @@ func readLockHolder(client *sshutil.Client, infoFile string) string {
 }
 
 // forceRemove removes a directory and all its contents.
-func forceRemove(client *sshutil.Client, dir string) error {
+func forceRemove(client sshutil.SSHClient, dir string) error {
 	_, stderr, exitCode, err := client.Exec(fmt.Sprintf("rm -rf %q", dir))
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrLock,

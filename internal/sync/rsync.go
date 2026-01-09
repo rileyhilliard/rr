@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -57,19 +56,14 @@ func CheckRemote(conn *host.Connection) error {
 			"Establish a connection to the remote host first")
 	}
 
-	session, err := conn.Client.NewSession()
+	// Check if rsync exists on remote using Exec
+	_, _, exitCode, err := conn.Client.Exec("which rsync")
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to create SSH session",
+			"Failed to check for rsync on remote",
 			"Check your SSH connection")
 	}
-	defer session.Close()
-
-	// Check if rsync exists on remote
-	var stderr bytes.Buffer
-	session.Stderr = &stderr
-	err = session.Run("which rsync")
-	if err != nil {
+	if exitCode != 0 {
 		return errors.New(errors.ErrSync,
 			fmt.Sprintf("rsync not found on remote host '%s'", conn.Name),
 			"Install rsync on the remote: apt install rsync (Debian/Ubuntu) or yum install rsync (RHEL)")

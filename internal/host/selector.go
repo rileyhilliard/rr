@@ -64,12 +64,12 @@ const DefaultProbeTimeout = 5 * time.Second
 // Connection represents an established SSH connection to a host,
 // or a local execution context when IsLocal is true.
 type Connection struct {
-	Name    string          // The host name from config (e.g., "gpu-box")
-	Alias   string          // The SSH alias used to connect (e.g., "gpu-local")
-	Client  *sshutil.Client // The active SSH client (nil for local connections)
-	Host    config.Host     // The host configuration
-	Latency time.Duration   // Connection latency from probe
-	IsLocal bool            // True when falling back to local execution
+	Name    string            // The host name from config (e.g., "gpu-box")
+	Alias   string            // The SSH alias used to connect (e.g., "gpu-local")
+	Client  sshutil.SSHClient // The active SSH client (nil for local connections)
+	Host    config.Host       // The host configuration
+	Latency time.Duration     // Connection latency from probe
+	IsLocal bool              // True when falling back to local execution
 }
 
 // Close closes the SSH connection.
@@ -235,7 +235,7 @@ func (s *Selector) isConnectionAlive(conn *Connection) bool {
 	if err != nil {
 		return false
 	}
-	session.Close()
+	_ = session.Close()
 	return true
 }
 

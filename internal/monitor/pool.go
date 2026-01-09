@@ -157,7 +157,8 @@ func (p *Pool) isAlive(client *sshutil.Client) bool {
 	}
 
 	// Try to open a session as a connectivity test
-	session, err := client.NewSession()
+	// Use embedded ssh.Client's NewSession directly for full session capabilities
+	session, err := client.Client.NewSession()
 	if err != nil {
 		return false
 	}
@@ -167,7 +168,8 @@ func (p *Pool) isAlive(client *sshutil.Client) bool {
 
 // detectPlatform runs uname to determine the OS type.
 func (p *Pool) detectPlatform(client *sshutil.Client) (Platform, error) {
-	session, err := client.NewSession()
+	// Use embedded ssh.Client's NewSession directly for full session capabilities
+	session, err := client.Client.NewSession()
 	if err != nil {
 		return PlatformUnknown, err
 	}
