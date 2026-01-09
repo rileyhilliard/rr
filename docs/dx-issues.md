@@ -124,15 +124,16 @@ export PATH="/opt/homebrew/bin:$PATH"
 
 **Root Cause:** `~` is not expanded when used in `dir` or `remote_dir` config values.
 
-**Workaround:** Use absolute paths:
+**Workaround:** Use `${HOME}` instead of `~`, or use absolute paths:
 ```yaml
 hosts:
   myhost:
-    dir: /Users/username/rr-sync/project  # Works
+    dir: ${HOME}/rr/project               # Works (default since v0.4)
+    dir: /Users/username/rr-sync/project  # Also works
     # dir: ~/rr-sync/project              # Doesn't work
 ```
 
-**Recommended Fix:** Expand `~` to `$HOME` when parsing config.
+**Status:** `rr init` now defaults to `${HOME}/rr/${PROJECT}` which works correctly.
 
 ### 8. Missing Dependency Handling
 

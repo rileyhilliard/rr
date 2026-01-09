@@ -321,5 +321,5 @@ func TestInit_NonInteractive_DefaultRemoteDir(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
 	require.NoError(t, err)
 	// Default remote dir should be used
-	assert.Contains(t, string(content), "~/rr/${PROJECT}")
+	assert.Contains(t, string(content), "${HOME}/rr/${PROJECT}")
 }
