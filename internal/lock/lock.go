@@ -81,6 +81,24 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 		}
 	}
 
+	// Ensure the parent directory exists (e.g., /tmp/rr-locks)
+	// This is done once before the retry loop since parent creation is idempotent
+	if baseDir != "/tmp" {
+		mkdirParentCmd := fmt.Sprintf("mkdir -p %q", baseDir)
+		debugf("ensuring parent directory exists: %s", mkdirParentCmd)
+		_, stderr, exitCode, err := conn.Client.Exec(mkdirParentCmd)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrLock,
+				"Failed to create lock parent directory",
+				"Check SSH connection")
+		}
+		if exitCode != 0 {
+			return nil, errors.New(errors.ErrLock,
+				fmt.Sprintf("Failed to create lock parent directory: %s", baseDir),
+				fmt.Sprintf("Error: %s", strings.TrimSpace(string(stderr))))
+		}
+	}
+
 	startTime := time.Now()
 	iteration := 0
 
@@ -233,7 +251,10 @@ func readLockHolder(client sshutil.SSHClient, infoFile string) string {
 
 // forceRemove removes a directory and all its contents.
 func forceRemove(client sshutil.SSHClient, dir string) error {
-	_, stderr, exitCode, err := client.Exec(fmt.Sprintf("rm -rf %q", dir))
+	rmCmd := fmt.Sprintf("rm -rf %q", dir)
+	debugf("forceRemove: executing %s", rmCmd)
+	_, stderr, exitCode, err := client.Exec(rmCmd)
+	debugf("forceRemove: exitCode=%d, stderr=%q, err=%v", exitCode, string(stderr), err)
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrLock,
 			fmt.Sprintf("Couldn't remove lock directory at %s", dir),

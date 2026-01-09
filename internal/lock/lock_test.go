@@ -603,3 +603,135 @@ func TestAcquire_CustomDir(t *testing.T) {
 	assert.True(t, mock.GetFS().IsDir("/var/locks/rr-xyz789.lock"))
 	assert.Equal(t, "/var/locks/rr-xyz789.lock", lock.Dir)
 }
+
+// TestAcquire_CreatesParentDirectory tests that lock acquisition creates
+// the parent directory if it doesn't exist (e.g., /tmp/rr-locks).
+func TestAcquire_CreatesParentDirectory(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Use a nested custom directory that doesn't exist
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp/rr-locks", // This directory doesn't exist initially
+	}
+
+	// Verify parent doesn't exist before acquire
+	assert.False(t, mock.GetFS().IsDir("/tmp/rr-locks"))
+
+	lock, err := Acquire(conn, cfg, "testproject")
+	require.NoError(t, err)
+
+	// Verify parent was created
+	assert.True(t, mock.GetFS().IsDir("/tmp/rr-locks"))
+	// Verify lock dir was created
+	assert.True(t, mock.GetFS().IsDir("/tmp/rr-locks/rr-testproject.lock"))
+	assert.Equal(t, "/tmp/rr-locks/rr-testproject.lock", lock.Dir)
+
+	// Cleanup
+	err = lock.Release()
+	require.NoError(t, err)
+	assert.False(t, mock.GetFS().Exists("/tmp/rr-locks/rr-testproject.lock"))
+}
+
+// TestAcquire_ParentDirFailure tests error handling when parent directory
+// creation fails (e.g., permission denied).
+func TestAcquire_ParentDirFailure(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Set up mock to fail on mkdir -p for the parent
+	mock.SetCommandResponse(`mkdir -p "/nonexistent/path"`, sshtesting.CommandResponse{
+		Stderr:   []byte("mkdir: cannot create directory: Permission denied"),
+		ExitCode: 1,
+	})
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 100 * time.Millisecond,
+		Stale:   10 * time.Minute,
+		Dir:     "/nonexistent/path",
+	}
+
+	_, err := Acquire(conn, cfg, "test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Failed to create lock parent directory")
+}
+
+// TestAcquire_MkdirFailsWithoutParent tests that mkdir fails correctly
+// when the parent directory doesn't exist (simulating real mkdir behavior).
+func TestAcquire_MkdirFailsWithoutParent(t *testing.T) {
+	// Create a mock that doesn't auto-create /tmp
+	mock := sshtesting.NewMockClient("testhost")
+	// Manually clear /tmp to simulate a system without it
+	mock.GetFS().Remove("/tmp")
+
+	conn := &host.Connection{
+		Name:   "testhost",
+		Alias:  "testhost",
+		Client: mock,
+	}
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 100 * time.Millisecond,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp", // /tmp doesn't exist in this mock
+	}
+
+	// With /tmp removed, mkdir /tmp/rr-xxx.lock should fail
+	_, err := Acquire(conn, cfg, "test")
+	require.Error(t, err)
+	// Should timeout because mkdir keeps failing
+	assert.Contains(t, err.Error(), "Timed out")
+}
+
+// TestAcquire_LockLifecycle tests the complete lock lifecycle:
+// acquire -> verify -> release -> verify released
+func TestAcquire_LockLifecycle(t *testing.T) {
+	conn1, mock := newMockConnection("testhost")
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	// First acquire should succeed
+	lock1, err := Acquire(conn1, cfg, "lifecycle-test")
+	require.NoError(t, err)
+	require.NotNil(t, lock1)
+
+	// Verify lock directory exists
+	assert.True(t, mock.GetFS().IsDir("/tmp/rr-lifecycle-test.lock"))
+	assert.True(t, mock.GetFS().IsFile("/tmp/rr-lifecycle-test.lock/info.json"))
+
+	// Second acquire on same project should timeout (lock is held)
+	conn2 := &host.Connection{
+		Name:   "testhost",
+		Alias:  "testhost",
+		Client: mock,
+	}
+	cfg2 := cfg
+	cfg2.Timeout = 100 * time.Millisecond
+
+	_, err = Acquire(conn2, cfg2, "lifecycle-test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Timed out")
+
+	// Release the lock
+	err = lock1.Release()
+	require.NoError(t, err)
+
+	// Verify lock directory is gone
+	assert.False(t, mock.GetFS().Exists("/tmp/rr-lifecycle-test.lock"))
+
+	// Third acquire should now succeed
+	lock3, err := Acquire(conn2, cfg, "lifecycle-test")
+	require.NoError(t, err)
+	require.NotNil(t, lock3)
+
+	// Cleanup
+	lock3.Release()
+}
