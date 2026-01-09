@@ -34,9 +34,11 @@ func (c *Collector) SetTimeout(timeout time.Duration) {
 }
 
 // Collect gathers metrics from all configured hosts in parallel.
-// Returns a map of alias -> metrics. Hosts that fail to connect will have nil metrics.
-func (c *Collector) Collect() map[string]*HostMetrics {
+// Returns a map of alias -> metrics and a map of alias -> error message.
+// Hosts that fail to connect will have nil metrics and an error message.
+func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string) {
 	results := make(map[string]*HostMetrics)
+	errors := make(map[string]string)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -49,19 +51,20 @@ func (c *Collector) Collect() map[string]*HostMetrics {
 			defer cancel()
 
 			metrics, err := c.collectOneWithContext(ctx, alias)
-			if err != nil {
-				// Log error but continue - don't block other hosts
-				metrics = nil
-			}
 
 			mu.Lock()
+			if err != nil {
+				// Store error message for diagnostics
+				errors[alias] = err.Error()
+				metrics = nil
+			}
 			results[alias] = metrics
 			mu.Unlock()
 		}(alias)
 	}
 
 	wg.Wait()
-	return results
+	return results, errors
 }
 
 // CollectOne gathers metrics from a single host.

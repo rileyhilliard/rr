@@ -108,7 +108,13 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 
 ```bash
 rr monitor              # TUI dashboard showing CPU/RAM/GPU across hosts
-rr completion bash      # Shell completions (also zsh, fish)
+rr status               # Show connection and sync status
+rr host list            # List configured hosts
+rr host add             # Add a new host interactively
+rr host remove mini     # Remove a host from config
+rr update               # Update rr to latest version
+rr update --check       # Just check if update is available
+rr completion bash      # Shell completions (also zsh, fish, powershell)
 ```
 
 ## Docs
