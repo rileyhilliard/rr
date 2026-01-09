@@ -71,6 +71,50 @@ func extractHostname(sshHost string) string {
 	return sshHost
 }
 
+// getInitDefaults returns InitOptions populated from environment variables.
+func getInitDefaults() InitOptions {
+	nonInteractive := os.Getenv("RR_NON_INTERACTIVE") == "true" || os.Getenv("CI") != ""
+	return InitOptions{
+		Host:           os.Getenv("RR_HOST"),
+		Name:           os.Getenv("RR_HOST_NAME"),
+		Dir:            os.Getenv("RR_REMOTE_DIR"),
+		NonInteractive: nonInteractive,
+	}
+}
+
+// mergeInitOptions merges command-line options with environment defaults.
+// Command-line flags take precedence over environment variables.
+func mergeInitOptions(opts InitOptions) InitOptions {
+	defaults := getInitDefaults()
+
+	// Command-line flags override env vars
+	if opts.Host == "" {
+		opts.Host = defaults.Host
+	}
+	if opts.Name == "" {
+		opts.Name = defaults.Name
+	}
+	if opts.Dir == "" {
+		opts.Dir = defaults.Dir
+	}
+	// NonInteractive is true if either flag or env var is set
+	if defaults.NonInteractive {
+		opts.NonInteractive = true
+	}
+
+	return opts
+}
+
+// extractHostname extracts the hostname from an SSH connection string.
+// user@hostname -> hostname
+// hostname -> hostname
+func extractHostname(sshHost string) string {
+	if idx := strings.LastIndex(sshHost, "@"); idx != -1 {
+		return sshHost[idx+1:]
+	}
+	return sshHost
+}
+
 // initConfigValues holds the collected configuration values.
 type initConfigValues struct {
 	sshHost      string
@@ -87,10 +131,74 @@ func checkExistingConfig(configPath string, opts InitOptions) (bool, error) {
 	}
 
 	if opts.NonInteractive {
-		return false, errors.New(errors.ErrConfig,
-			fmt.Sprintf("There's already a config file at %s", configPath),
-			"Use --force to overwrite it.")
-	}
+		// Use provided values or sensible defaults
+		sshHost = opts.Host
+		if sshHost == "" {
+			return errors.New(errors.ErrConfig,
+				"SSH host is required in non-interactive mode",
+				"Provide --host flag, set RR_HOST env var, or run interactively")
+		}
+		remoteDir = opts.Dir
+		if remoteDir == "" {
+			remoteDir = "~/projects/${PROJECT}"
+		}
+		hostName = opts.Name
+		if hostName == "" {
+			hostName = extractHostname(sshHost)
+		}
+	} else {
+		// Interactive prompts using huh
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("SSH host or alias").
+					Description("Enter hostname, user@host, or SSH config alias").
+					Placeholder("myserver or user@192.168.1.100").
+					Value(&sshHost).
+					Validate(func(s string) error {
+						if strings.TrimSpace(s) == "" {
+							return fmt.Errorf("SSH host is required")
+						}
+						return nil
+					}),
+			),
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Host name").
+					Description("A friendly name for this host in your config").
+					Placeholder("gpu-box").
+					Value(&hostName).
+					Validate(func(s string) error {
+						if strings.TrimSpace(s) == "" {
+							return fmt.Errorf("host name is required")
+						}
+						if strings.ContainsAny(s, " \t\n") {
+							return fmt.Errorf("host name cannot contain whitespace")
+						}
+						return nil
+					}),
+			),
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Fallback SSH host (optional)").
+					Description("Alternative connection for when primary is unavailable").
+					Placeholder("user@backup-server (leave empty to skip)").
+					Value(&fallbackHost),
+			),
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Remote directory").
+					Description("Where files sync to on remote (supports ${PROJECT}, ${USER}, ${HOME})").
+					Placeholder("~/projects/${PROJECT}").
+					Value(&remoteDir).
+					Validate(func(s string) error {
+						if strings.TrimSpace(s) == "" {
+							return fmt.Errorf("remote directory is required")
+						}
+						return nil
+					}),
+			),
+		)
 
 	var overwrite bool
 	form := huh.NewForm(
@@ -157,133 +265,49 @@ func trySSHHostPicker() (sshHost, hostName string, cancelled bool) {
 		}
 	}
 
-	fmt.Println("Found hosts in your SSH config:")
-	selected, wasCancelled, pickerErr := ui.PickSSHHost(uiHosts)
-	if pickerErr != nil {
-		fmt.Printf("Picker error: %v, falling back to manual entry\n", pickerErr)
-		return "", "", false
-	}
-	if wasCancelled {
-		fmt.Println("Cancelled.")
-		return "", "", true
-	}
-	if selected != nil {
-		return selected.Alias, selected.Alias, false
-	}
-	return "", "", false
-}
-
-// collectInteractiveValues collects config values interactively.
-func collectInteractiveValues() (*initConfigValues, error) {
-	vals := &initConfigValues{}
-
-	// Try SSH host picker first
-	var cancelled bool
-	vals.sshHost, vals.hostName, cancelled = trySSHHostPicker()
-	if cancelled {
-		return nil, nil // User cancelled
-	}
-
-	// Prompt for SSH host if not selected from picker
-	if vals.sshHost == "" {
-		if err := promptSSHHost(&vals.sshHost); err != nil {
-			return nil, err
-		}
-	}
-
-	// Get remaining config values
-	if err := promptRemainingValues(vals); err != nil {
-		return nil, err
-	}
-
-	return vals, nil
-}
-
-// promptSSHHost prompts for SSH host input.
-func promptSSHHost(sshHost *string) error {
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("SSH host or alias").
-				Description("Enter hostname, user@host, or SSH config alias").
-				Placeholder("myserver or user@192.168.1.100").
-				Value(sshHost).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("SSH host is required")
-					}
-					return nil
-				}),
-		),
-	)
-	if err := form.Run(); err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't get your input",
-			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
-	}
-	return nil
-}
-
-// promptRemainingValues prompts for host name, fallback, and remote dir.
-func promptRemainingValues(vals *initConfigValues) error {
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Host name").
-				Description("A friendly name for this host in your config").
-				Placeholder("gpu-box").
-				Value(&vals.hostName).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("host name is required")
-					}
-					if strings.ContainsAny(s, " \t\n") {
-						return fmt.Errorf("host name cannot contain whitespace")
-					}
-					return nil
-				}),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Fallback SSH host (optional)").
-				Description("Alternative connection for when primary is unavailable").
-				Placeholder("user@backup-server (leave empty to skip)").
-				Value(&vals.fallbackHost),
-		),
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Remote directory").
-				Description("Where files sync to on remote (supports ${PROJECT}, ${USER}, ${HOME})").
-				Placeholder("~/projects/${PROJECT}").
-				Value(&vals.remoteDir).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("remote directory is required")
-					}
-					return nil
-				}),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't get your input",
-			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
-	}
-	return nil
-}
-
-// testConnection tests the SSH connection and handles failure.
-func testConnection(sshHost string, opts InitOptions) error {
-	fmt.Println()
-	spinner := ui.NewSpinner("Testing connection to " + sshHost)
-	spinner.Start()
-
-	_, err := host.Probe(sshHost, 10*time.Second)
-	if err == nil {
-		spinner.Success()
+	// Test connection before saving (unless --skip-probe)
+	if !opts.SkipProbe {
 		fmt.Println()
-		return nil
+		spinner := ui.NewSpinner("Testing connection to " + sshHost)
+		spinner.Start()
+
+		_, err := host.Probe(sshHost, 10*time.Second)
+		if err != nil {
+			spinner.Fail()
+
+			// Connection failed, but still offer to save config
+			var saveAnyway bool
+			if !opts.NonInteractive {
+				fmt.Printf("\n%s Connection to '%s' failed: %v\n\n", ui.SymbolFail, sshHost, err)
+
+				form := huh.NewForm(
+					huh.NewGroup(
+						huh.NewConfirm().
+							Title("Save config anyway? (You can fix the connection later)").
+							Value(&saveAnyway),
+					),
+				)
+
+				if formErr := form.Run(); formErr != nil {
+					return errors.WrapWithCode(err, errors.ErrSSH,
+						fmt.Sprintf("Connection to '%s' failed", sshHost),
+						"Check that the host is reachable: ssh "+sshHost)
+				}
+
+				if !saveAnyway {
+					return errors.WrapWithCode(err, errors.ErrSSH,
+						fmt.Sprintf("Connection to '%s' failed", sshHost),
+						"Check that the host is reachable: ssh "+sshHost)
+				}
+			} else {
+				return errors.WrapWithCode(err, errors.ErrSSH,
+					fmt.Sprintf("Connection to '%s' failed", sshHost),
+					"Check that the host is reachable, or use --skip-probe: ssh "+sshHost)
+			}
+		} else {
+			spinner.Success()
+			fmt.Println()
+		}
 	}
 
 	spinner.Fail()
@@ -355,43 +379,6 @@ func writeConfig(configPath string, vals *initConfigValues) error {
 	fmt.Println("  rr doctor     - Check configuration")
 
 	return nil
-}
-
-// Init creates a new .rr.yaml configuration file.
-func Init(opts InitOptions) error {
-	configPath := filepath.Join(".", config.ConfigFileName)
-
-	// Check for existing config
-	proceed, err := checkExistingConfig(configPath, opts)
-	if err != nil {
-		return err
-	}
-	if !proceed {
-		return nil
-	}
-
-	// Collect configuration values
-	var vals *initConfigValues
-	if opts.NonInteractive {
-		vals, err = collectNonInteractiveValues(opts)
-	} else {
-		vals, err = collectInteractiveValues()
-	}
-	if err != nil {
-		return err
-	}
-	if vals == nil {
-		return nil // User cancelled
-	}
-
-	// Test connection before saving (unless --skip-probe)
-	if !opts.SkipProbe {
-		if err := testConnection(vals.sshHost, opts); err != nil {
-			return err
-		}
-	}
-
-	return writeConfig(configPath, vals)
 }
 
 // initCommand is the implementation called by the cobra command.

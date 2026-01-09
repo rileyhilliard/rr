@@ -187,7 +187,7 @@ func TestInit_NonInteractive_RequiresHost(t *testing.T) {
 
 	err = Init(opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Need an SSH host")
+	assert.Contains(t, err.Error(), "SSH host is required")
 }
 
 func TestInit_NonInteractive_Success(t *testing.T) {
@@ -267,7 +267,7 @@ func TestInit_NonInteractive_ConfigExists(t *testing.T) {
 
 	err = Init(opts)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already a config file")
+	assert.Contains(t, err.Error(), "already exists")
 }
 
 func TestInit_NonInteractive_ForceOverwrite(t *testing.T) {
