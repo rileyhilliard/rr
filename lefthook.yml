@@ -47,7 +47,7 @@ pre-commit:
       glob: "*.{yaml,yml}"
       exclude: "completions/.*"
       run: |
-        if command -v python3 >/dev/null 2>&1; then
+        if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
           for file in {staged_files}; do
             python3 -c "import yaml; yaml.safe_load(open('$file'))" || exit 1
           done
@@ -109,3 +109,15 @@ pre-push:
     # Run full lint check before push
     lint:
       run: golangci-lint run
+
+    # Check coverage threshold (50% minimum)
+    coverage:
+      run: |
+        go test -race -coverprofile=coverage.out -covermode=atomic ./... > /dev/null 2>&1
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+        echo "Total coverage: $COVERAGE%"
+        if [ $(echo "$COVERAGE < 50" | bc -l) -eq 1 ]; then
+          echo "Coverage $COVERAGE% is below 50% minimum"
+          exit 1
+        fi
+        rm -f coverage.out

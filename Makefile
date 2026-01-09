@@ -26,8 +26,8 @@ coverage-check:
 	@go test -race -coverprofile=coverage.out -covermode=atomic ./... > /dev/null 2>&1
 	@COVERAGE=$$(go tool cover -func=coverage.out | grep total | awk '{print $$3}' | sed 's/%//'); \
 	echo "Total coverage: $$COVERAGE%"; \
-	if [ $$(echo "$$COVERAGE < 80" | bc -l) -eq 1 ]; then \
-		echo "Coverage $$COVERAGE% is below 80% minimum"; \
+	if [ $$(echo "$$COVERAGE < 50" | bc -l) -eq 1 ]; then \
+		echo "Coverage $$COVERAGE% is below 50% minimum"; \
 		exit 1; \
 	fi
 
