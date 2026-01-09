@@ -81,24 +81,6 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (
 		}
 	}
 
-	// Ensure the parent directory exists (e.g., /tmp/rr-locks)
-	// This is done once before the retry loop since parent creation is idempotent
-	if baseDir != "/tmp" {
-		mkdirParentCmd := fmt.Sprintf("mkdir -p %q", baseDir)
-		debugf("ensuring parent directory exists: %s", mkdirParentCmd)
-		_, stderr, exitCode, err := conn.Client.Exec(mkdirParentCmd)
-		if err != nil {
-			return nil, errors.WrapWithCode(err, errors.ErrLock,
-				"Failed to create lock parent directory",
-				"Check SSH connection")
-		}
-		if exitCode != 0 {
-			return nil, errors.New(errors.ErrLock,
-				fmt.Sprintf("Failed to create lock parent directory: %s", baseDir),
-				fmt.Sprintf("Error: %s", strings.TrimSpace(string(stderr))))
-		}
-	}
-
 	startTime := time.Now()
 	iteration := 0
 

@@ -167,50 +167,6 @@ func validateShellFormat(hostName, shell string) error {
 		return fmt.Errorf("host '%s' shell should end with a flag like '-c'. Got '%s' - try 'bash -l -c' or 'zsh -c'", hostName, shell)
 	}
 
-	// Validate remote path (allows ~ for remote shell expansion)
-	if err := validateRemotePath(name, "dir", host.Dir); err != nil {
-		return err
-	}
-
-	// Validate shell format if specified
-	if host.Shell != "" {
-		if err := validateShellFormat(name, host.Shell); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// validateRemotePath checks for common remote path configuration mistakes.
-// Note: Tilde (~) is ALLOWED in remote paths - the remote shell expands it.
-// Only ${VAR} variables should be expanded locally before sending to remote.
-func validateRemotePath(hostName, fieldName, path string) error {
-	// Check for unexpanded variables (these should be expanded locally)
-	if strings.Contains(path, "${") {
-		return fmt.Errorf("host '%s': %s contains unexpanded variable (%s)", hostName, fieldName, path)
-	}
-
-	// Note: ~ and relative paths are allowed for remote paths
-	// The remote shell will handle tilde expansion
-	// Relative paths are relative to SSH user's home directory
-
-	return nil
-}
-
-// validateShellFormat checks that the shell configuration looks correct.
-func validateShellFormat(hostName, shell string) error {
-	// Shell should end with a command flag like "-c"
-	parts := strings.Fields(shell)
-	if len(parts) == 0 {
-		return fmt.Errorf("host '%s': shell is empty", hostName)
-	}
-
-	lastPart := parts[len(parts)-1]
-	if !strings.HasPrefix(lastPart, "-") {
-		return fmt.Errorf("host '%s': shell format should end with command flag (e.g., '-c'). Got: '%s'. Try 'bash -l -c' or 'zsh -c'", hostName, shell)
-	}
-
 	return nil
 }
 

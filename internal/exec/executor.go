@@ -58,7 +58,7 @@ func HandleExecError(cmd string, stderr string, exitCode int) error {
 		suggestion := fmt.Sprintf("The command '%s' wasn't found on the remote machine.\n\nPossible fixes:\n1. Install the missing tool on the remote machine\n2. SSH sessions don't source shell config by default.\n   Try: rr run \"source ~/.zshrc && %s\"\n3. Add shell initialization to your .rr.yaml config:\n   hosts:\n     your-host:\n       shell: \"bash -l -c\"   # Use login shell\n       # Or use setup_commands:\n       setup_commands:\n         - source ~/.zshrc", displayCmd, cmd)
 
 		return errors.New(errors.ErrExec,
-			fmt.Sprintf("Command not found: %s", displayCmd),
+			fmt.Sprintf("'%s' isn't available on the remote", displayCmd),
 			suggestion)
 	}
 

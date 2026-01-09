@@ -60,8 +60,8 @@ func CheckRemote(conn *host.Connection) error {
 	_, _, exitCode, err := conn.Client.Exec("which rsync")
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			"Failed to check for rsync on remote",
-			"Check your SSH connection")
+			"Couldn't check for rsync on the remote",
+			"Check your SSH connection.")
 	}
 	if exitCode != 0 {
 		return errors.New(errors.ErrSync,

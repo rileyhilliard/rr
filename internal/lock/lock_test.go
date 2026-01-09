@@ -420,7 +420,7 @@ func TestAcquire_AlreadyHeld_TimesOut(t *testing.T) {
 
 	_, err := Acquire(conn, cfg, "abc123")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Timed out")
+	assert.Contains(t, err.Error(), "Lock timeout")
 	assert.Contains(t, err.Error(), "other@otherhost")
 }
 
@@ -655,7 +655,7 @@ func TestAcquire_ParentDirFailure(t *testing.T) {
 
 	_, err := Acquire(conn, cfg, "test")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed to create lock parent directory")
+	assert.Contains(t, err.Error(), "Couldn't create lock directory")
 }
 
 // TestAcquire_MkdirFailsWithoutParent tests that mkdir fails correctly
@@ -683,7 +683,7 @@ func TestAcquire_MkdirFailsWithoutParent(t *testing.T) {
 	_, err := Acquire(conn, cfg, "test")
 	require.Error(t, err)
 	// Should timeout because mkdir keeps failing
-	assert.Contains(t, err.Error(), "Timed out")
+	assert.Contains(t, err.Error(), "Lock timeout")
 }
 
 // TestAcquire_LockLifecycle tests the complete lock lifecycle:
@@ -718,7 +718,7 @@ func TestAcquire_LockLifecycle(t *testing.T) {
 
 	_, err = Acquire(conn2, cfg2, "lifecycle-test")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Timed out")
+	assert.Contains(t, err.Error(), "Lock timeout")
 
 	// Release the lock
 	err = lock1.Release()
