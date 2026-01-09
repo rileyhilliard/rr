@@ -91,7 +91,8 @@ func TestIsCommandNotFound(t *testing.T) {
 }
 
 func TestHandleExecError_CommandNotFound(t *testing.T) {
-	err := HandleExecError("go test ./...", "bash: go: command not found", 127)
+	// Pass nil client to get generic suggestion
+	err := HandleExecError("go test ./...", "bash: go: command not found", 127, nil, "")
 
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "'go' not found in PATH on remote")
@@ -101,7 +102,7 @@ func TestHandleExecError_CommandNotFound(t *testing.T) {
 
 func TestHandleExecError_NotCommandNotFound(t *testing.T) {
 	// Non-127 exit code with unrelated error should return nil
-	err := HandleExecError("go test ./...", "tests failed", 1)
+	err := HandleExecError("go test ./...", "tests failed", 1, nil, "")
 	assert.Nil(t, err)
 }
 
@@ -169,7 +170,7 @@ func TestIsDependencyNotFound(t *testing.T) {
 
 func TestHandleExecError_DependencyNotFound(t *testing.T) {
 	// make failing because go isn't in PATH (exit code 2, not 127)
-	err := HandleExecError("make test", "make: go: No such file or directory\nmake: *** [test] Error 1", 2)
+	err := HandleExecError("make test", "make: go: No such file or directory\nmake: *** [test] Error 1", 2, nil, "")
 
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "'go' not found in PATH on remote")
@@ -179,7 +180,7 @@ func TestHandleExecError_DependencyNotFound(t *testing.T) {
 
 func TestHandleExecError_ExtractsCommandFromInput(t *testing.T) {
 	// When stderr doesn't match patterns, extract from command
-	err := HandleExecError("rustup show", "some error", 127)
+	err := HandleExecError("rustup show", "some error", 127, nil, "")
 
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "'rustup' not found in PATH on remote")

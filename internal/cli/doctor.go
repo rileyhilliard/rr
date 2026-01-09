@@ -5,23 +5,27 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/doctor"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/spf13/cobra"
 )
 
 var (
 	doctorJSON bool
 	doctorFix  bool
+	doctorPath bool
 )
 
 func init() {
 	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false, "output in JSON format")
 	doctorCmd.Flags().BoolVar(&doctorFix, "fix", false, "attempt automatic fixes where possible")
+	doctorCmd.Flags().BoolVar(&doctorPath, "path", false, "check PATH differences between login and interactive shells")
 }
 
 // DoctorOutput represents the JSON output for doctor command.
@@ -58,6 +62,17 @@ func doctorCommand() error {
 	// Collect all checks
 	checks := collectChecks(cfgPath, cfg)
 
+	// If --path flag, establish connections and add PATH checks
+	var pathClients map[string]sshutil.SSHClient
+	if doctorPath && cfg != nil && len(cfg.Hosts) > 0 {
+		pathClients = establishPathConnections(cfg)
+		defer closePathConnections(pathClients)
+
+		if len(pathClients) > 0 {
+			checks = append(checks, doctor.NewPathChecks(pathClients)...)
+		}
+	}
+
 	// Run checks
 	results := doctor.RunAll(checks)
 
@@ -71,6 +86,32 @@ func doctorCommand() error {
 	}
 
 	return outputDoctorText(checks, results)
+}
+
+// establishPathConnections connects to hosts for PATH checking.
+func establishPathConnections(cfg *config.Config) map[string]sshutil.SSHClient {
+	clients := make(map[string]sshutil.SSHClient)
+
+	for name, hostCfg := range cfg.Hosts {
+		if len(hostCfg.SSH) == 0 {
+			continue
+		}
+
+		// Try first SSH alias
+		client, err := sshutil.Dial(hostCfg.SSH[0], 10*time.Second)
+		if err == nil {
+			clients[name] = client
+		}
+	}
+
+	return clients
+}
+
+// closePathConnections closes all SSH clients.
+func closePathConnections(clients map[string]sshutil.SSHClient) {
+	for _, client := range clients {
+		client.Close()
+	}
 }
 
 // collectChecks gathers all diagnostic checks based on available config.
@@ -152,6 +193,8 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 }
 
 // outputDoctorText outputs results in human-readable format.
+//
+//nolint:unparam // error return reserved for future use
 func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error {
 	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
@@ -164,7 +207,7 @@ func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error
 	fmt.Println()
 
 	// Group checks by category
-	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "REMOTE"}
+	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "PATH", "REMOTE"}
 	grouped := make(map[string][]int) // category -> indices
 
 	for i, check := range checks {

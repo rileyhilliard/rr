@@ -65,7 +65,8 @@ func IsDependencyNotFound(stderr string) (string, bool) {
 
 // HandleExecError wraps execution errors with helpful suggestions.
 // It detects command-not-found errors and provides actionable fixes.
-func HandleExecError(cmd string, stderr string, exitCode int) error {
+// If client and hostName are provided, it probes the remote for better suggestions.
+func HandleExecError(cmd string, stderr string, exitCode int, client SSHExecer, hostName string) error {
 	// Check for direct command-not-found (exit 127)
 	cmdName, notFound := IsCommandNotFound(stderr, exitCode)
 
@@ -74,19 +75,36 @@ func HandleExecError(cmd string, stderr string, exitCode int) error {
 		cmdName, notFound = IsDependencyNotFound(stderr)
 	}
 
-	if notFound {
-		displayCmd := cmdName
-		if displayCmd == "" {
-			// Try to extract first word of command as the executable name
-			parts := strings.Fields(cmd)
-			if len(parts) > 0 {
-				displayCmd = parts[0]
-			} else {
-				displayCmd = "command"
+	if !notFound {
+		return nil
+	}
+
+	displayCmd := cmdName
+	if displayCmd == "" {
+		// Try to extract first word of command as the executable name
+		parts := strings.Fields(cmd)
+		if len(parts) > 0 {
+			displayCmd = parts[0]
+		} else {
+			displayCmd = "command"
+		}
+	}
+
+	// If we have an SSH client, probe for better suggestions
+	if client != nil {
+		probeResult, err := ProbeCommandPath(client, displayCmd)
+		if err == nil && probeResult != nil {
+			suggestion := GenerateSetupSuggestion(probeResult, hostName)
+			if suggestion != "" {
+				return errors.New(errors.ErrExec,
+					fmt.Sprintf("'%s' not found in PATH on remote", displayCmd),
+					suggestion)
 			}
 		}
+	}
 
-		suggestion := fmt.Sprintf(`'%s' wasn't found in the remote SSH session's PATH.
+	// Fallback to generic suggestion
+	suggestion := fmt.Sprintf(`'%s' wasn't found in the remote SSH session's PATH.
 
 This can happen if:
 - The tool isn't installed on the remote
@@ -106,10 +124,7 @@ Fixes:
        setup_commands:
          - export PATH=/opt/homebrew/bin:$PATH`, displayCmd, displayCmd, displayCmd)
 
-		return errors.New(errors.ErrExec,
-			fmt.Sprintf("'%s' not found in PATH on remote", displayCmd),
-			suggestion)
-	}
-
-	return nil
+	return errors.New(errors.ErrExec,
+		fmt.Sprintf("'%s' not found in PATH on remote", displayCmd),
+		suggestion)
 }

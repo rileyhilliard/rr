@@ -82,7 +82,12 @@ func Run(opts RunOptions) (int, error) {
 	// Check for command-not-found and other special exit codes
 	if exitCode != 0 {
 		// Check for command not found (exit code 127)
-		if execErr := exec.HandleExecError(opts.Command, streamHandler.GetStderrCapture(), exitCode); execErr != nil {
+		// Pass SSH client for PATH probing if available (remote execution only)
+		var sshClient exec.SSHExecer
+		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+			sshClient = wf.Conn.Client
+		}
+		if execErr := exec.HandleExecError(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name); execErr != nil {
 			fmt.Println()
 			fmt.Println(execErr.Error())
 		} else if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {

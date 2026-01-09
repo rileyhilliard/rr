@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
@@ -462,6 +464,10 @@ func testConnection(sshHost string, opts InitOptions) error {
 	_, err := host.Probe(sshHost, 10*time.Second)
 	if err == nil {
 		spinner.Success()
+
+		// Check for PATH differences (non-blocking warning)
+		checkPATHDifference(sshHost)
+
 		fmt.Println()
 		return nil
 	}
@@ -491,6 +497,78 @@ func testConnection(sshHost string, opts InitOptions) error {
 			"Make sure the host is up and SSH is working: ssh "+sshHost)
 	}
 	return nil
+}
+
+// checkPATHDifference checks if login and interactive shell PATH differ.
+// This is a non-blocking warning to help users understand potential issues.
+func checkPATHDifference(sshHost string) {
+	// Connect for PATH check
+	client, err := sshutil.Dial(sshHost, 10*time.Second)
+	if err != nil {
+		return // Silent fail - connection already verified
+	}
+	defer client.Close()
+
+	diff, err := exec.GetPATHDifference(client)
+	if err != nil || len(diff.InterOnly) == 0 {
+		return // No differences or error - nothing to report
+	}
+
+	// Warn about PATH differences
+	warnStyle := lipgloss.NewStyle().Foreground(ui.ColorWarning)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	fmt.Println()
+	fmt.Printf("%s PATH Difference Detected\n", warnStyle.Render(ui.SymbolWarning))
+	fmt.Println()
+	fmt.Println(mutedStyle.Render("  Your interactive shell has additional PATH directories that won't"))
+	fmt.Println(mutedStyle.Render("  be available when rr runs commands (login shell mode):"))
+	fmt.Println()
+
+	// Show up to 5 directories
+	displayCount := len(diff.InterOnly)
+	if displayCount > 5 {
+		displayCount = 5
+	}
+	for _, dir := range diff.InterOnly[:displayCount] {
+		fmt.Printf("    %s\n", mutedStyle.Render(dir))
+	}
+	if len(diff.InterOnly) > 5 {
+		fmt.Printf("    %s\n", mutedStyle.Render(fmt.Sprintf("... and %d more", len(diff.InterOnly)-5)))
+	}
+
+	fmt.Println()
+	fmt.Println(mutedStyle.Render("  You may want to add setup_commands to your config later:"))
+	fmt.Println(mutedStyle.Render("    setup_commands:"))
+
+	// Generate suggestion with up to 3 paths
+	exportCount := len(diff.InterOnly)
+	if exportCount > 3 {
+		exportCount = 3
+	}
+	pathParts := make([]string, exportCount)
+	for i := 0; i < exportCount; i++ {
+		pathParts[i] = toHomeRelativePath(diff.InterOnly[i])
+	}
+	fmt.Printf("      %s\n", mutedStyle.Render(fmt.Sprintf("- export PATH=%s:$PATH", strings.Join(pathParts, ":"))))
+}
+
+// toHomeRelativePath converts absolute paths to $HOME-relative for portability.
+func toHomeRelativePath(path string) string {
+	prefixes := []string{"/Users/", "/home/", "/root"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			rest := path[len(prefix):]
+			if prefix == "/root" {
+				return "$HOME" + rest
+			}
+			if idx := strings.Index(rest, "/"); idx != -1 {
+				return "$HOME" + rest[idx:]
+			}
+			return "$HOME"
+		}
+	}
+	return path
 }
 
 // writeConfig writes the configuration file.
