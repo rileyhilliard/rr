@@ -257,7 +257,7 @@ func TestValidate(t *testing.T) {
 			config: &Config{
 				Version: 1,
 				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "~/projects/test"},
+					"mini": {SSH: []string{"mini"}, Dir: "/home/user/projects/test"},
 				},
 				Default: "mini",
 			},
@@ -286,7 +286,7 @@ func TestValidate(t *testing.T) {
 			config: &Config{
 				Version: CurrentConfigVersion + 1,
 				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "~/test"},
+					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
 				},
 			},
 			wantErr: true,
@@ -297,7 +297,7 @@ func TestValidate(t *testing.T) {
 			config: &Config{
 				Version: 1,
 				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "~/test"},
+					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
 				},
 				Default: "nonexistent",
 			},
@@ -309,7 +309,7 @@ func TestValidate(t *testing.T) {
 			config: &Config{
 				Version: 1,
 				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "~/test"},
+					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
 				},
 				Tasks: map[string]TaskConfig{
 					"init": {Run: "echo hello"},
@@ -342,23 +342,43 @@ func TestValidateHost(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid host",
-			host:    Host{SSH: []string{"mini-local", "mini"}, Dir: "~/projects/test"},
+			name:    "valid host with absolute path",
+			host:    Host{SSH: []string{"mini-local", "mini"}, Dir: "/home/user/projects/test"},
 			wantErr: false,
 		},
 		{
 			name:    "missing ssh",
-			host:    Host{Dir: "~/projects/test"},
+			host:    Host{Dir: "/home/user/projects/test"},
 			wantErr: true,
 		},
 		{
 			name:    "empty ssh entry",
-			host:    Host{SSH: []string{"mini", ""}, Dir: "~/projects/test"},
+			host:    Host{SSH: []string{"mini", ""}, Dir: "/home/user/projects/test"},
 			wantErr: true,
 		},
 		{
 			name:    "missing dir",
 			host:    Host{SSH: []string{"mini"}},
+			wantErr: true,
+		},
+		{
+			name:    "tilde in remote path (allowed for remote shell expansion)",
+			host:    Host{SSH: []string{"mini"}, Dir: "~/projects/test"},
+			wantErr: false, // Tilde is allowed - remote shell expands it
+		},
+		{
+			name:    "unexpanded variable in path",
+			host:    Host{SSH: []string{"mini"}, Dir: "/home/${USER}/projects"},
+			wantErr: true,
+		},
+		{
+			name:    "valid shell format",
+			host:    Host{SSH: []string{"mini"}, Dir: "/home/user/project", Shell: "bash -l -c"},
+			wantErr: false,
+		},
+		{
+			name:    "invalid shell format without flag",
+			host:    Host{SSH: []string{"mini"}, Dir: "/home/user/project", Shell: "bash"},
 			wantErr: true,
 		},
 	}

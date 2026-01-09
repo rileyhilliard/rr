@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -162,4 +163,35 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 	}
 
 	return ExecuteTask(conn, task, env, workDir, os.Stdout, os.Stderr)
+}
+
+// BuildRemoteCommand constructs a remote command with shell config, setup commands, and working directory.
+// This is the recommended way to build commands for remote execution with full configuration support.
+func BuildRemoteCommand(cmd string, host *config.Host) string {
+	var parts []string
+
+	// Add setup commands if configured
+	if len(host.SetupCommands) > 0 {
+		parts = append(parts, host.SetupCommands...)
+	}
+
+	// Add cd to working directory
+	if host.Dir != "" {
+		dir := config.Expand(host.Dir)
+		parts = append(parts, fmt.Sprintf("cd %q", dir))
+	}
+
+	// Add the actual command
+	parts = append(parts, cmd)
+
+	// Join all parts with &&
+	fullCmd := strings.Join(parts, " && ")
+
+	// Wrap in shell if configured
+	if host.Shell != "" {
+		// Shell format is "bash -l -c" - we append the quoted command
+		return fmt.Sprintf("%s %q", host.Shell, fullCmd)
+	}
+
+	return fullCmd
 }

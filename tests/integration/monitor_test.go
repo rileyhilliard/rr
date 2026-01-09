@@ -96,7 +96,7 @@ monitor:
 
 func TestMonitorConfigValidation(t *testing.T) {
 	baseHosts := map[string]config.Host{
-		"test": {SSH: []string{"test.local"}, Dir: "~/test"},
+		"test": {SSH: []string{"test.local"}, Dir: "/home/user/test"},
 	}
 
 	t.Run("valid monitor config", func(t *testing.T) {

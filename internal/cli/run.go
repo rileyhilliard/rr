@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
@@ -65,9 +64,8 @@ func Run(opts RunOptions) (int, error) {
 		// Local execution
 		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
-		// Remote execution - build command with cd to remote directory
-		remoteDir := config.Expand(wf.Conn.Host.Dir)
-		fullCmd := fmt.Sprintf("cd %q && %s", remoteDir, opts.Command)
+		// Remote execution - build command with shell config, setup commands, and working directory
+		fullCmd := exec.BuildRemoteCommand(opts.Command, &wf.Conn.Host)
 		exitCode, err = wf.Conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
@@ -81,9 +79,14 @@ func Run(opts RunOptions) (int, error) {
 		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
 
-	// Check for test failures and render summary if available
+	// Check for command-not-found and other special exit codes
 	if exitCode != 0 {
-		if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
+		// Check for command not found (exit code 127)
+		if execErr := exec.HandleExecError(opts.Command, streamHandler.GetStderrCapture(), exitCode); execErr != nil {
+			fmt.Println()
+			fmt.Println(execErr.Error())
+		} else if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
+			// Check for test failures and render summary if available
 			failures := provider.GetTestFailures()
 			if len(failures) > 0 {
 				passed, failed, skipped, errors := provider.GetTestCounts()

@@ -7,11 +7,43 @@ import (
 	"strings"
 )
 
+// ExpandTilde replaces ~ or ~/path with the user's home directory.
+// Does not support ~username syntax - just ~ for the current user.
+// Use this for LOCAL paths only. Remote paths should keep ~ for the remote shell.
+func ExpandTilde(path string) string {
+	if path == "" {
+		return path
+	}
+
+	// Handle ~/path
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path // Return unchanged if we can't get home
+		}
+		return filepath.Join(home, path[2:])
+	}
+
+	// Handle standalone ~
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+
+	return path
+}
+
 // Expand replaces variables in a string with their values.
 // Supported variables:
 //   - ${PROJECT} - git repo name or directory name
 //   - ${USER}    - current username
 //   - ${HOME}    - user's home directory
+//
+// Note: Does NOT expand ~ - use ExpandTilde for local paths if needed.
+// Remote paths (like host.Dir) should keep ~ for remote shell expansion.
 func Expand(s string) string {
 	if s == "" {
 		return s
