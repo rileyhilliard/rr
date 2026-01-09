@@ -22,7 +22,11 @@ var (
 	syncProbeTimeoutFlag string
 	syncDryRun           bool
 	initHostFlag         string
+	initRemoteDirFlag    string
+	initNameFlag         string
 	initForce            bool
+	initNonInteractive   bool
+	initSkipProbe        bool
 	monitorHostsFlag     string
 	monitorIntervalFlag  string
 )
@@ -90,12 +94,29 @@ var initCmd = &cobra.Command{
 Creates a .rr.yaml file in the current directory with sensible defaults.
 Guides you through SSH host configuration with interactive prompts.
 
+In non-interactive mode (--non-interactive or CI=true), requires --host flag.
+
+Environment Variables:
+  RR_HOST             SSH host (user@hostname or SSH config alias)
+  RR_HOST_NAME        Friendly name for the host
+  RR_REMOTE_DIR       Remote directory path
+  RR_NON_INTERACTIVE  Set to "true" for non-interactive mode
+
 Examples:
   rr init
   rr init --host myserver
-  rr init --force`,
+  rr init --force
+  rr init --non-interactive --host user@server --remote-dir ~/projects
+  CI=true rr init --host myserver --skip-probe`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return initCommand(initHostFlag, initForce)
+		return initCommand(InitOptions{
+			Host:           initHostFlag,
+			Name:           initNameFlag,
+			Dir:            initRemoteDirFlag,
+			Overwrite:      initForce,
+			NonInteractive: initNonInteractive,
+			SkipProbe:      initSkipProbe,
+		})
 	},
 }
 
@@ -259,8 +280,12 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "show what would be synced without syncing")
 
 	// init command flags
-	initCmd.Flags().StringVar(&initHostFlag, "host", "", "pre-specify SSH host")
-	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config")
+	initCmd.Flags().StringVar(&initHostFlag, "host", "", "SSH host (user@hostname or SSH config alias)")
+	initCmd.Flags().StringVar(&initRemoteDirFlag, "remote-dir", "", "remote directory path (default: ~/projects/${PROJECT})")
+	initCmd.Flags().StringVar(&initNameFlag, "name", "", "friendly name for the host (default: extracted from host)")
+	initCmd.Flags().BoolVarP(&initForce, "force", "f", false, "overwrite existing config without prompting")
+	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "skip interactive prompts, use flags and defaults")
+	initCmd.Flags().BoolVar(&initSkipProbe, "skip-probe", false, "skip SSH connection testing")
 
 	// monitor command flags
 	monitorCmd.Flags().StringVar(&monitorHostsFlag, "hosts", "", "filter to specific hosts (comma-separated)")

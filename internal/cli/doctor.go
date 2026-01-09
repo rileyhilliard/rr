@@ -294,20 +294,22 @@ func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, in
 					mutedStyle.Render(fmt.Sprintf("(%s)", latency)),
 				)
 			} else {
-				errMsg := "Connection failed"
-				if probeErr, ok := aliasResult.Error.(*host.ProbeError); ok {
-					errMsg = capitalizeFirst(probeErr.Reason.String())
-				}
+				errMsg := formatProbeError(aliasResult.Error)
 				fmt.Printf("    %s %s: %s\n",
 					errorStyle.Render(ui.SymbolFail),
 					aliasResult.SSHAlias,
 					errMsg,
 				)
+				// Show suggestion for this specific error
+				suggestion := getSSHErrorSuggestion(aliasResult.Error, aliasResult.SSHAlias)
+				for _, line := range strings.Split(suggestion, "\n") {
+					fmt.Printf("      %s\n", mutedStyle.Render(line))
+				}
 			}
 		}
 
-		// Suggestion if failed
-		if result.Status == doctor.StatusFail && result.Suggestion != "" {
+		// General suggestion if all aliases failed (only show if not already shown per-alias)
+		if result.Status == doctor.StatusFail && result.Suggestion != "" && len(check.Results) == 0 {
 			fmt.Printf("\n    %s\n", mutedStyle.Render(result.Suggestion))
 		}
 	}
@@ -362,6 +364,61 @@ func pluralSuffix(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// formatProbeError formats a probe error for display.
+// For known error types, returns a user-friendly description.
+// For unknown errors, returns the actual error message instead of "Unknown error".
+func formatProbeError(err error) string {
+	if err == nil {
+		return "Connection failed"
+	}
+
+	probeErr, ok := err.(*host.ProbeError)
+	if !ok {
+		// Not a ProbeError, just return the error message
+		return capitalizeFirst(err.Error())
+	}
+
+	// For unknown errors, show the actual cause instead of "unknown error"
+	if probeErr.Reason == host.ProbeFailUnknown {
+		if probeErr.Cause != nil {
+			return capitalizeFirst(probeErr.Cause.Error())
+		}
+		return "Connection failed"
+	}
+
+	// For known error types, return the friendly description
+	return capitalizeFirst(probeErr.Reason.String())
+}
+
+// getSSHErrorSuggestion returns an actionable suggestion for an SSH error.
+func getSSHErrorSuggestion(err error, alias string) string {
+	// Extract host from alias (remove user@ prefix if present)
+	hostPart := alias
+	if idx := strings.Index(alias, "@"); idx != -1 {
+		hostPart = alias[idx+1:]
+	}
+
+	probeErr, ok := err.(*host.ProbeError)
+	if !ok {
+		return fmt.Sprintf("Try connecting directly: ssh %s", alias)
+	}
+
+	switch probeErr.Reason {
+	case host.ProbeFailRefused:
+		return fmt.Sprintf("SSH server may not be running. Try: ssh %s", alias)
+	case host.ProbeFailTimeout:
+		return fmt.Sprintf("Host may be offline or blocked by firewall. Try: ping %s", hostPart)
+	case host.ProbeFailUnreachable:
+		return fmt.Sprintf("Check network connectivity: ping %s", hostPart)
+	case host.ProbeFailAuth:
+		return "Check SSH key configuration: ssh-add -l\nOr add key: ssh-add ~/.ssh/id_ed25519"
+	case host.ProbeFailHostKey:
+		return fmt.Sprintf("Update known_hosts: ssh-keyscan -t rsa,ecdsa,ed25519 %s >> ~/.ssh/known_hosts", hostPart)
+	default:
+		return fmt.Sprintf("Try connecting directly: ssh %s", alias)
+	}
 }
 
 // Update the doctorCmd to use doctorCommand

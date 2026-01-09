@@ -18,9 +18,55 @@ import (
 // InitOptions holds options for the init command.
 type InitOptions struct {
 	Host           string // Pre-specified SSH host/alias
+	Name           string // Friendly name for the host
 	Dir            string // Pre-specified remote directory
 	Overwrite      bool   // Overwrite existing config without asking
 	NonInteractive bool   // Skip prompts, use defaults
+	SkipProbe      bool   // Skip connection testing
+}
+
+// getInitDefaults returns InitOptions populated from environment variables.
+func getInitDefaults() InitOptions {
+	nonInteractive := os.Getenv("RR_NON_INTERACTIVE") == "true" || os.Getenv("CI") != ""
+	return InitOptions{
+		Host:           os.Getenv("RR_HOST"),
+		Name:           os.Getenv("RR_HOST_NAME"),
+		Dir:            os.Getenv("RR_REMOTE_DIR"),
+		NonInteractive: nonInteractive,
+	}
+}
+
+// mergeInitOptions merges command-line options with environment defaults.
+// Command-line flags take precedence over environment variables.
+func mergeInitOptions(opts InitOptions) InitOptions {
+	defaults := getInitDefaults()
+
+	// Command-line flags override env vars
+	if opts.Host == "" {
+		opts.Host = defaults.Host
+	}
+	if opts.Name == "" {
+		opts.Name = defaults.Name
+	}
+	if opts.Dir == "" {
+		opts.Dir = defaults.Dir
+	}
+	// NonInteractive is true if either flag or env var is set
+	if defaults.NonInteractive {
+		opts.NonInteractive = true
+	}
+
+	return opts
+}
+
+// extractHostname extracts the hostname from an SSH connection string.
+// user@hostname -> hostname
+// hostname -> hostname
+func extractHostname(sshHost string) string {
+	if idx := strings.LastIndex(sshHost, "@"); idx != -1 {
+		return sshHost[idx+1:]
+	}
+	return sshHost
 }
 
 // Init creates a new .rr.yaml configuration file.
@@ -67,13 +113,16 @@ func Init(opts InitOptions) error {
 		if sshHost == "" {
 			return errors.New(errors.ErrConfig,
 				"SSH host is required in non-interactive mode",
-				"Provide --host flag or run interactively")
+				"Provide --host flag, set RR_HOST env var, or run interactively")
 		}
 		remoteDir = opts.Dir
 		if remoteDir == "" {
 			remoteDir = "~/projects/${PROJECT}"
 		}
-		hostName = "default"
+		hostName = opts.Name
+		if hostName == "" {
+			hostName = extractHostname(sshHost)
+		}
 	} else {
 		// Interactive prompts using huh
 		form := huh.NewForm(
@@ -135,47 +184,49 @@ func Init(opts InitOptions) error {
 		}
 	}
 
-	// Test connection before saving
-	fmt.Println()
-	spinner := ui.NewSpinner("Testing connection to " + sshHost)
-	spinner.Start()
+	// Test connection before saving (unless --skip-probe)
+	if !opts.SkipProbe {
+		fmt.Println()
+		spinner := ui.NewSpinner("Testing connection to " + sshHost)
+		spinner.Start()
 
-	_, err := host.Probe(sshHost, 10*time.Second)
-	if err != nil {
-		spinner.Fail()
+		_, err := host.Probe(sshHost, 10*time.Second)
+		if err != nil {
+			spinner.Fail()
 
-		// Connection failed, but still offer to save config
-		var saveAnyway bool
-		if !opts.NonInteractive {
-			fmt.Printf("\n%s Connection to '%s' failed: %v\n\n", ui.SymbolFail, sshHost, err)
+			// Connection failed, but still offer to save config
+			var saveAnyway bool
+			if !opts.NonInteractive {
+				fmt.Printf("\n%s Connection to '%s' failed: %v\n\n", ui.SymbolFail, sshHost, err)
 
-			form := huh.NewForm(
-				huh.NewGroup(
-					huh.NewConfirm().
-						Title("Save config anyway? (You can fix the connection later)").
-						Value(&saveAnyway),
-				),
-			)
+				form := huh.NewForm(
+					huh.NewGroup(
+						huh.NewConfirm().
+							Title("Save config anyway? (You can fix the connection later)").
+							Value(&saveAnyway),
+					),
+				)
 
-			if formErr := form.Run(); formErr != nil {
+				if formErr := form.Run(); formErr != nil {
+					return errors.WrapWithCode(err, errors.ErrSSH,
+						fmt.Sprintf("Connection to '%s' failed", sshHost),
+						"Check that the host is reachable: ssh "+sshHost)
+				}
+
+				if !saveAnyway {
+					return errors.WrapWithCode(err, errors.ErrSSH,
+						fmt.Sprintf("Connection to '%s' failed", sshHost),
+						"Check that the host is reachable: ssh "+sshHost)
+				}
+			} else {
 				return errors.WrapWithCode(err, errors.ErrSSH,
 					fmt.Sprintf("Connection to '%s' failed", sshHost),
-					"Check that the host is reachable: ssh "+sshHost)
-			}
-
-			if !saveAnyway {
-				return errors.WrapWithCode(err, errors.ErrSSH,
-					fmt.Sprintf("Connection to '%s' failed", sshHost),
-					"Check that the host is reachable: ssh "+sshHost)
+					"Check that the host is reachable, or use --skip-probe: ssh "+sshHost)
 			}
 		} else {
-			return errors.WrapWithCode(err, errors.ErrSSH,
-				fmt.Sprintf("Connection to '%s' failed", sshHost),
-				"Check that the host is reachable: ssh "+sshHost)
+			spinner.Success()
+			fmt.Println()
 		}
-	} else {
-		spinner.Success()
-		fmt.Println()
 	}
 
 	// Build config
@@ -225,9 +276,8 @@ func Init(opts InitOptions) error {
 }
 
 // initCommand is the implementation called by the cobra command.
-func initCommand(hostFlag string, force bool) error {
-	return Init(InitOptions{
-		Host:      hostFlag,
-		Overwrite: force,
-	})
+func initCommand(opts InitOptions) error {
+	// Merge with environment variable defaults
+	opts = mergeInitOptions(opts)
+	return Init(opts)
 }

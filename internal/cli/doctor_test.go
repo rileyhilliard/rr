@@ -2,9 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/doctor"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -256,6 +258,183 @@ func TestSummaryOutput_AllClear(t *testing.T) {
 			data, err := json.Marshal(tt.summary)
 			require.NoError(t, err)
 			assert.Contains(t, string(data), tt.wantJSON)
+		})
+	}
+}
+
+func TestFormatProbeError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: "Connection failed",
+		},
+		{
+			name: "generic error",
+			err:  assert.AnError,
+			want: "Assert.AnError general error for testing",
+		},
+		{
+			name: "unknown probe error with cause",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailUnknown,
+				Cause:    fmt.Errorf("specific underlying error"),
+			},
+			want: "Specific underlying error",
+		},
+		{
+			name: "unknown probe error without cause",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailUnknown,
+				Cause:    nil,
+			},
+			want: "Connection failed",
+		},
+		{
+			name: "timeout probe error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailTimeout,
+				Cause:    fmt.Errorf("timeout"),
+			},
+			want: "Connection timed out",
+		},
+		{
+			name: "connection refused probe error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailRefused,
+				Cause:    fmt.Errorf("connection refused"),
+			},
+			want: "Connection refused",
+		},
+		{
+			name: "auth failed probe error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailAuth,
+				Cause:    fmt.Errorf("permission denied"),
+			},
+			want: "Authentication failed",
+		},
+		{
+			name: "host key probe error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailHostKey,
+				Cause:    fmt.Errorf("host key verification failed"),
+			},
+			want: "Host key verification failed",
+		},
+		{
+			name: "unreachable probe error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailUnreachable,
+				Cause:    fmt.Errorf("no route to host"),
+			},
+			want: "Host unreachable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatProbeError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestGetSSHErrorSuggestion(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		alias    string
+		contains []string
+	}{
+		{
+			name:     "generic error",
+			err:      assert.AnError,
+			alias:    "user@example.com",
+			contains: []string{"ssh user@example.com"},
+		},
+		{
+			name: "connection refused",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailRefused,
+			},
+			alias:    "user@example.com",
+			contains: []string{"SSH server may not be running", "ssh user@example.com"},
+		},
+		{
+			name: "timeout",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailTimeout,
+			},
+			alias:    "user@example.com",
+			contains: []string{"offline", "firewall", "ping example.com"},
+		},
+		{
+			name: "unreachable",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailUnreachable,
+			},
+			alias:    "user@example.com",
+			contains: []string{"network connectivity", "ping example.com"},
+		},
+		{
+			name: "auth failed",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailAuth,
+			},
+			alias:    "user@example.com",
+			contains: []string{"ssh-add"},
+		},
+		{
+			name: "host key mismatch",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailHostKey,
+			},
+			alias:    "user@example.com",
+			contains: []string{"ssh-keyscan", "example.com", "known_hosts"},
+		},
+		{
+			name: "unknown error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailUnknown,
+			},
+			alias:    "myhost",
+			contains: []string{"ssh myhost"},
+		},
+		{
+			name: "extracts host from user@host",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailTimeout,
+			},
+			alias:    "root@192.168.1.1",
+			contains: []string{"ping 192.168.1.1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getSSHErrorSuggestion(tt.err, tt.alias)
+			for _, s := range tt.contains {
+				assert.Contains(t, got, s)
+			}
 		})
 	}
 }
