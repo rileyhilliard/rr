@@ -361,6 +361,7 @@ func TestFindAsset(t *testing.T) {
 			{Name: "rr_darwin_arm64.tar.gz", DownloadURL: "https://example.com/darwin_arm64"},
 			{Name: "rr_darwin_amd64.tar.gz", DownloadURL: "https://example.com/darwin_amd64"},
 			{Name: "rr_linux_amd64.tar.gz", DownloadURL: "https://example.com/linux_amd64"},
+			{Name: "rr_linux_arm64.tar.gz", DownloadURL: "https://example.com/linux_arm64"},
 			{Name: "rr_windows_amd64.zip", DownloadURL: "https://example.com/windows_amd64"},
 		},
 	}
