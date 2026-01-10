@@ -12,19 +12,28 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 )
 
+// cpuJiffies stores CPU jiffies for delta calculation.
+type cpuJiffies struct {
+	total int64
+	idle  int64
+}
+
 // Collector gathers system metrics from multiple remote hosts.
 type Collector struct {
-	hosts   map[string]config.Host
-	pool    *Pool
-	timeout time.Duration
+	hosts       map[string]config.Host
+	pool        *Pool
+	timeout     time.Duration
+	prevJiffies map[string]cpuJiffies // Previous CPU jiffies per host for delta calculation
+	mu          sync.Mutex            // Protects prevJiffies
 }
 
 // NewCollector creates a new metrics collector for the specified hosts.
 func NewCollector(hosts map[string]config.Host) *Collector {
 	return &Collector{
-		hosts:   hosts,
-		pool:    NewPool(hosts, 10*time.Second),
-		timeout: 30 * time.Second,
+		hosts:       hosts,
+		pool:        NewPool(hosts, 10*time.Second),
+		timeout:     30 * time.Second,
+		prevJiffies: make(map[string]cpuJiffies),
 	}
 }
 
@@ -120,12 +129,12 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 		if r.err != nil {
 			return nil, r.err
 		}
-		return c.parseOutput(platform, string(r.output))
+		return c.parseOutput(alias, platform, string(r.output))
 	}
 }
 
 // parseOutput parses the batched command output into HostMetrics.
-func (c *Collector) parseOutput(platform Platform, output string) (*HostMetrics, error) {
+func (c *Collector) parseOutput(alias string, platform Platform, output string) (*HostMetrics, error) {
 	metrics := &HostMetrics{
 		Timestamp: time.Now(),
 	}
@@ -135,23 +144,23 @@ func (c *Collector) parseOutput(platform Platform, output string) (*HostMetrics,
 
 	switch platform {
 	case PlatformLinux:
-		return c.parseLinuxOutput(metrics, sections)
+		return c.parseLinuxOutput(alias, metrics, sections)
 	case PlatformDarwin:
 		return c.parseDarwinOutput(metrics, sections)
 	default:
 		// Try Linux parsing as fallback
-		return c.parseLinuxOutput(metrics, sections)
+		return c.parseLinuxOutput(alias, metrics, sections)
 	}
 }
 
 // parseLinuxOutput parses Linux metrics from the batched command output.
 // Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi, 5=ps aux
-func (c *Collector) parseLinuxOutput(metrics *HostMetrics, sections []string) (*HostMetrics, error) {
+func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, sections []string) (*HostMetrics, error) {
 	if len(sections) >= 2 {
 		procStat := strings.TrimSpace(sections[0])
 		procLoadavg := strings.TrimSpace(sections[1])
 
-		cpu, err := parseLinuxCPU(procStat, procLoadavg)
+		cpu, err := c.parseLinuxCPUWithDelta(alias, procStat, procLoadavg)
 		if err == nil && cpu != nil {
 			metrics.CPU = *cpu
 		}
@@ -294,6 +303,82 @@ func parseLinuxCPU(procStat, procLoadavg string) (*CPUMetrics, error) {
 	}
 	metrics.Cores = coreCount
 
+	if procLoadavg != "" {
+		fields := strings.Fields(strings.TrimSpace(procLoadavg))
+		if len(fields) >= 3 {
+			for i := 0; i < 3; i++ {
+				val, err := strconv.ParseFloat(fields[i], 64)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse loadavg field %d: %w", i, err)
+				}
+				metrics.LoadAvg[i] = val
+			}
+		}
+	}
+
+	return metrics, nil
+}
+
+// parseLinuxCPUWithDelta calculates CPU usage from delta between two readings.
+// This gives instantaneous CPU usage rather than average-since-boot.
+func (c *Collector) parseLinuxCPUWithDelta(alias, procStat, procLoadavg string) (*CPUMetrics, error) {
+	metrics := &CPUMetrics{}
+
+	scanner := bufio.NewScanner(strings.NewReader(procStat))
+	coreCount := 0
+	var totalJiffies, idleJiffies int64
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if strings.HasPrefix(line, "cpu") && len(line) > 3 && line[3] >= '0' && line[3] <= '9' {
+			coreCount++
+			continue
+		}
+
+		if strings.HasPrefix(line, "cpu ") {
+			fields := strings.Fields(line)
+			if len(fields) < 5 {
+				return nil, fmt.Errorf("invalid /proc/stat cpu line: %s", line)
+			}
+
+			for i := 1; i < len(fields); i++ {
+				val, err := strconv.ParseInt(fields[i], 10, 64)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse cpu field %d: %w", i, err)
+				}
+				totalJiffies += val
+
+				// idle is field 4 (index 4), iowait is field 5 (index 5)
+				if i == 4 || i == 5 {
+					idleJiffies += val
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error scanning /proc/stat: %w", err)
+	}
+
+	metrics.Cores = coreCount
+
+	// Calculate CPU percentage from delta between this reading and previous
+	c.mu.Lock()
+	prev, hasPrev := c.prevJiffies[alias]
+	c.prevJiffies[alias] = cpuJiffies{total: totalJiffies, idle: idleJiffies}
+	c.mu.Unlock()
+
+	if hasPrev && totalJiffies > prev.total {
+		totalDelta := totalJiffies - prev.total
+		idleDelta := idleJiffies - prev.idle
+		if totalDelta > 0 {
+			metrics.Percent = float64(totalDelta-idleDelta) / float64(totalDelta) * 100
+		}
+	}
+	// If no previous reading, Percent stays 0 (will show correct on next poll)
+
+	// Parse load averages
 	if procLoadavg != "" {
 		fields := strings.Fields(strings.TrimSpace(procLoadavg))
 		if len(fields) >= 3 {

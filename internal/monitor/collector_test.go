@@ -50,7 +50,7 @@ func TestCollectorClose(t *testing.T) {
 }
 
 func TestParseLinuxOutput(t *testing.T) {
-	collector := &Collector{}
+	collector := NewCollector(map[string]config.Host{})
 	metrics := &HostMetrics{}
 
 	// Sample Linux output sections
@@ -75,7 +75,7 @@ Cached:          4567890 kB`
 
 	sections := []string{procStat, procLoadavg, procMeminfo, procNetDev, nvidiaSmi}
 
-	result, err := collector.parseLinuxOutput(metrics, sections)
+	result, err := collector.parseLinuxOutput("test-host", metrics, sections)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -97,7 +97,7 @@ Cached:          4567890 kB`
 }
 
 func TestParseLinuxOutput_PartialSections(t *testing.T) {
-	collector := &Collector{}
+	collector := NewCollector(map[string]config.Host{})
 	metrics := &HostMetrics{}
 
 	// Only provide CPU section
@@ -107,7 +107,7 @@ cpu0 500000 5000 100000 4000000 5000 0 2500 0 0 0`
 
 	sections := []string{procStat, procLoadavg}
 
-	result, err := collector.parseLinuxOutput(metrics, sections)
+	result, err := collector.parseLinuxOutput("test-host", metrics, sections)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -121,12 +121,12 @@ cpu0 500000 5000 100000 4000000 5000 0 2500 0 0 0`
 }
 
 func TestParseLinuxOutput_EmptySections(t *testing.T) {
-	collector := &Collector{}
+	collector := NewCollector(map[string]config.Host{})
 	metrics := &HostMetrics{}
 
 	sections := []string{}
 
-	result, err := collector.parseLinuxOutput(metrics, sections)
+	result, err := collector.parseLinuxOutput("test-host", metrics, sections)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 }
@@ -550,22 +550,22 @@ func TestCollector_SetTimeout(t *testing.T) {
 }
 
 func TestCollector_parseOutput(t *testing.T) {
-	c := &Collector{}
+	c := NewCollector(map[string]config.Host{})
 
 	// Test Linux parsing
 	linuxOutput := "cpu data\n---\nloadavg data\n---\nmeminfo data\n---\nnet data\n---\ngpu data\n---\nps data"
-	result, err := c.parseOutput(PlatformLinux, linuxOutput)
+	result, err := c.parseOutput("test-host", PlatformLinux, linuxOutput)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	// Test Darwin parsing
 	darwinOutput := "top data\n---\nvm_stat data\n---\nnetstat data\n---\nps data"
-	result, err = c.parseOutput(PlatformDarwin, darwinOutput)
+	result, err = c.parseOutput("test-host", PlatformDarwin, darwinOutput)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
 	// Test unknown platform (defaults to Linux)
-	result, err = c.parseOutput(PlatformUnknown, linuxOutput)
+	result, err = c.parseOutput("test-host", PlatformUnknown, linuxOutput)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 }
