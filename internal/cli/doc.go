@@ -49,4 +49,36 @@
 // during startup. This allows "rr mytask" to work like "rr run" with the
 // task's configured command. Tasks are registered before Cobra parses
 // flags, using a pre-scan of os.Args for --config.
+//
+// # Input Validation
+//
+// User input comes from three sources, each with its own validation:
+//
+// 1. Command-line flags (validated by Cobra and ParseProbeTimeout):
+//   - --host: String, used as map key in config.Hosts (validated at selection)
+//   - --tag: String, matched against host tags (validated at selection)
+//   - --probe-timeout: Duration string parsed by time.ParseDuration
+//   - --config: File path, validated by config.Find/Load
+//
+// 2. Command arguments (validated in command handlers):
+//   - Commands to execute (run, exec): Joined and passed to remote shell
+//     The remote shell handles parsing; no local sanitization needed
+//     since the user controls both ends. Shell metacharacters work as expected.
+//
+// 3. Config file (.rr.yaml) (validated by config.Validate):
+//   - Host SSH strings: Must not be empty
+//   - Host directories: Validated for unexpanded variables; ~ allowed for remote
+//   - Shell format: Must end with a flag like -c
+//   - Task names: Must not conflict with built-in commands
+//   - Task steps: Must have run commands, valid on_fail values
+//   - Output/lock/monitor: Validated against allowed values
+//
+// Security notes:
+//   - Commands are executed via SSH as the authenticated user - they're not
+//     sanitized because the user has shell access anyway
+//   - Config paths use os.Getwd() and filepath operations - path traversal
+//     attempts would require modifying the config file, which already implies
+//     write access to the project
+//   - SSH connections use the system SSH agent or configured keys - no
+//     credential storage in the tool itself
 package cli
