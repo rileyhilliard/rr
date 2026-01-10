@@ -254,8 +254,17 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	return nil
 }
 
-// SetupWorkflow performs the common workflow phases: load config, connect, sync, and lock.
+// SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
 // Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
+//
+// When multiple hosts are configured, this function implements load balancing:
+// 1. Try each host with non-blocking lock acquisition
+// 2. If a host is locked, immediately try the next host
+// 3. If all hosts are locked and local_fallback is true, run locally
+// 4. If all hosts are locked and local_fallback is false, round-robin wait
+// 5. Once a lock is acquired, sync files to that host
+//
+// The lock-before-sync order ensures we don't waste time syncing to a host we can't use.
 func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	ctx := &WorkflowContext{
 		StartTime:    time.Now(),
@@ -275,20 +284,33 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	// Create host selector
 	setupHostSelector(ctx, opts)
 
-	// Phase 1: Connect
-	if err := connectPhase(ctx, opts); err != nil {
-		ctx.Close()
-		return nil, err
+	// Check if we have multiple hosts (load balancing scenario)
+	hostCount := ctx.selector.HostCount()
+	useLoadBalancing := hostCount > 1 && opts.Host == "" && opts.Tag == ""
+
+	if useLoadBalancing {
+		// Multi-host: use load-balanced workflow (Connect + Lock combined, then Sync)
+		if err := setupWorkflowLoadBalanced(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
+	} else {
+		// Single host or explicit host/tag: use original workflow order
+		// Phase 1: Connect
+		if err := connectPhase(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
+
+		// Phase 2: Acquire lock (moved before sync for consistency)
+		if err := lockPhase(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 	}
 
-	// Phase 2: Sync
+	// Phase 3: Sync (same for both paths)
 	if err := syncPhase(ctx, opts); err != nil {
-		ctx.Close()
-		return nil, err
-	}
-
-	// Phase 3: Acquire lock
-	if err := lockPhase(ctx, opts); err != nil {
 		ctx.Close()
 		return nil, err
 	}

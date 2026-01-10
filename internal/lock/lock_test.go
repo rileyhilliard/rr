@@ -735,3 +735,283 @@ func TestAcquire_LockLifecycle(t *testing.T) {
 	// Cleanup
 	lock3.Release()
 }
+
+// ============================================================================
+// TryAcquire tests
+// ============================================================================
+
+func TestTryAcquire_Success(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	lock, err := TryAcquire(conn, cfg, "tryacquire-test")
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	// Verify lock dir was created
+	assert.True(t, mock.GetFS().IsDir("/tmp/rr-tryacquire-test.lock"))
+
+	// Verify info file was created
+	assert.True(t, mock.GetFS().IsFile("/tmp/rr-tryacquire-test.lock/info.json"))
+
+	// Cleanup
+	lock.Release()
+}
+
+func TestTryAcquire_ReturnsErrLocked(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Pre-create the lock directory to simulate existing lock
+	mock.GetFS().Mkdir("/tmp/rr-tryacquire-test.lock")
+
+	// Create a recent lock info (not stale)
+	info := &LockInfo{
+		User:     "other",
+		Hostname: "otherhost",
+		Started:  time.Now(),
+		PID:      9999,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-tryacquire-test.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	_, err := TryAcquire(conn, cfg, "tryacquire-test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLocked)
+}
+
+func TestTryAcquire_RemovesStaleLock(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Pre-create a stale lock
+	mock.GetFS().Mkdir("/tmp/rr-tryacquire-stale.lock")
+
+	// Create an old lock info (stale)
+	info := &LockInfo{
+		User:     "old",
+		Hostname: "oldhost",
+		Started:  time.Now().Add(-1 * time.Hour), // 1 hour ago
+		PID:      1234,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-tryacquire-stale.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute, // 10 minutes = stale
+		Dir:     "/tmp",
+	}
+
+	// Should acquire by removing stale lock
+	lock, err := TryAcquire(conn, cfg, "tryacquire-stale")
+	require.NoError(t, err)
+	require.NotNil(t, lock)
+
+	// Verify we got the lock
+	assert.Equal(t, "/tmp/rr-tryacquire-stale.lock", lock.Dir)
+
+	// Cleanup
+	lock.Release()
+}
+
+func TestTryAcquire_NoConnection(t *testing.T) {
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: time.Second,
+		Stale:   time.Minute,
+		Dir:     "/tmp",
+	}
+
+	_, err := TryAcquire(nil, cfg, "test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Can't grab the lock")
+}
+
+func TestTryAcquire_DoesNotBlock(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Pre-create lock
+	mock.GetFS().Mkdir("/tmp/rr-noblock.lock")
+	info := &LockInfo{
+		User:     "other",
+		Hostname: "otherhost",
+		Started:  time.Now(),
+		PID:      9999,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-noblock.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Minute, // Long timeout - but TryAcquire should ignore this
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	// Measure how long TryAcquire takes
+	start := time.Now()
+	_, err := TryAcquire(conn, cfg, "noblock")
+	elapsed := time.Since(start)
+
+	// Should return ErrLocked almost immediately (not wait for timeout)
+	require.ErrorIs(t, err, ErrLocked)
+	assert.Less(t, elapsed, 1*time.Second, "TryAcquire should return immediately, not wait")
+}
+
+// ============================================================================
+// IsLocked tests
+// ============================================================================
+
+func TestIsLocked_True(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Create a lock
+	mock.GetFS().Mkdir("/tmp/rr-islocked.lock")
+	info := &LockInfo{
+		User:     "holder",
+		Hostname: "holderhost",
+		Started:  time.Now(),
+		PID:      1234,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-islocked.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	locked := IsLocked(conn, cfg, "islocked")
+	assert.True(t, locked)
+}
+
+func TestIsLocked_False_NoLock(t *testing.T) {
+	conn, _ := newMockConnection("testhost")
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	locked := IsLocked(conn, cfg, "nonexistent")
+	assert.False(t, locked)
+}
+
+func TestIsLocked_False_StaleLock(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Create a stale lock
+	mock.GetFS().Mkdir("/tmp/rr-stale.lock")
+	info := &LockInfo{
+		User:     "old",
+		Hostname: "oldhost",
+		Started:  time.Now().Add(-1 * time.Hour), // 1 hour ago
+		PID:      1234,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-stale.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute, // Lock is older than 10 minutes = stale
+		Dir:     "/tmp",
+	}
+
+	// Stale locks should not count as locked
+	locked := IsLocked(conn, cfg, "stale")
+	assert.False(t, locked)
+}
+
+func TestIsLocked_NoConnection(t *testing.T) {
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	// With nil connection, should return false
+	locked := IsLocked(nil, cfg, "test")
+	assert.False(t, locked)
+}
+
+// ============================================================================
+// GetLockHolder tests
+// ============================================================================
+
+func TestGetLockHolder_ReturnsHolder(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Create a lock
+	mock.GetFS().Mkdir("/tmp/rr-getholder.lock")
+	info := &LockInfo{
+		User:     "alice",
+		Hostname: "wonderland",
+		Started:  time.Now(),
+		PID:      42,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-getholder.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	holder := GetLockHolder(conn, cfg, "getholder")
+	assert.Contains(t, holder, "alice")
+	assert.Contains(t, holder, "wonderland")
+}
+
+func TestGetLockHolder_EmptyWhenNoLock(t *testing.T) {
+	conn, _ := newMockConnection("testhost")
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	holder := GetLockHolder(conn, cfg, "nonexistent")
+	assert.Empty(t, holder)
+}
+
+func TestGetLockHolder_EmptyWhenStale(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	// Create a stale lock
+	mock.GetFS().Mkdir("/tmp/rr-staleholder.lock")
+	info := &LockInfo{
+		User:     "old",
+		Hostname: "oldhost",
+		Started:  time.Now().Add(-1 * time.Hour),
+		PID:      1234,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr-staleholder.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	// Stale lock should return empty holder
+	holder := GetLockHolder(conn, cfg, "staleholder")
+	assert.Empty(t, holder)
+}

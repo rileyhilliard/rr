@@ -67,6 +67,11 @@ type LockConfig struct {
 	// Timeout is how long to wait for a lock before giving up.
 	Timeout time.Duration `yaml:"timeout" mapstructure:"timeout"`
 
+	// WaitTimeout is how long to round-robin through hosts when all are locked.
+	// Only applies when multiple hosts are configured and local_fallback is false.
+	// If local_fallback is true, we immediately fall back to local when all hosts are locked.
+	WaitTimeout time.Duration `yaml:"wait_timeout" mapstructure:"wait_timeout"`
+
 	// Stale is when to consider a lock stale (holder probably crashed).
 	Stale time.Duration `yaml:"stale" mapstructure:"stale"`
 
@@ -177,10 +182,11 @@ func DefaultConfig() *Config {
 			Flags: []string{},
 		},
 		Lock: LockConfig{
-			Enabled: true,
-			Timeout: 5 * time.Minute,
-			Stale:   10 * time.Minute,
-			Dir:     "/tmp/rr-locks",
+			Enabled:     true,
+			Timeout:     5 * time.Minute,
+			WaitTimeout: 1 * time.Minute,
+			Stale:       10 * time.Minute,
+			Dir:         "/tmp/rr-locks",
 		},
 		Tasks: make(map[string]TaskConfig),
 		Output: OutputConfig{
