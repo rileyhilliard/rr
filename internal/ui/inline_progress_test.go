@@ -181,11 +181,11 @@ func TestEaseOutQuad(t *testing.T) {
 func TestFakeProgressCapsAt99(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewInlineProgress("Test", &buf)
-	p.startTime = time.Now().Add(-15 * time.Second) // 15 seconds ago
+	p.startTime = time.Now().Add(-35 * time.Second) // 35 seconds ago
 
 	fake := p.calculateFakeProgress()
 
-	// After 10+ seconds, should cap at 99%
+	// After 30+ seconds, should cap at 99%
 	assert.Equal(t, 0.99, fake)
 }
 
