@@ -1,85 +1,15 @@
 package cli
 
 import (
+	"os"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-func TestHashProject(t *testing.T) {
-	tests := []struct {
-		name    string
-		path    string
-		wantLen int
-	}{
-		{
-			name:    "simple path",
-			path:    "/home/user/project",
-			wantLen: 16,
-		},
-		{
-			name:    "empty path",
-			path:    "",
-			wantLen: 16,
-		},
-		{
-			name:    "path with special chars",
-			path:    "/home/user/my-project_v2.0",
-			wantLen: 16,
-		},
-		{
-			name:    "windows-style path",
-			path:    "C:\\Users\\project",
-			wantLen: 16,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := hashProject(tt.path)
-			assert.Len(t, got, tt.wantLen, "hash should be 16 hex characters")
-		})
-	}
-}
-
-func TestHashProject_Deterministic(t *testing.T) {
-	path := "/home/user/myproject"
-
-	hash1 := hashProject(path)
-	hash2 := hashProject(path)
-
-	assert.Equal(t, hash1, hash2, "same path should produce same hash")
-}
-
-func TestHashProject_UniqueForDifferentPaths(t *testing.T) {
-	paths := []string{
-		"/home/user/project1",
-		"/home/user/project2",
-		"/home/other/project1",
-		"/tmp/test",
-	}
-
-	hashes := make(map[string]string)
-	for _, path := range paths {
-		hash := hashProject(path)
-		if existing, ok := hashes[hash]; ok {
-			t.Errorf("hash collision: %q and %q both produce %s", path, existing, hash)
-		}
-		hashes[hash] = path
-	}
-}
-
-func TestHashProject_HexFormat(t *testing.T) {
-	hash := hashProject("/some/path")
-
-	// Should only contain valid hex characters
-	for _, c := range hash {
-		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
-		assert.True(t, isHex, "hash should only contain hex characters, got: %c", c)
-	}
-}
 
 func TestMapProbeErrorToStatus(t *testing.T) {
 	tests := []struct {
@@ -171,22 +101,418 @@ func TestRunOptions_Defaults(t *testing.T) {
 
 func TestRunOptions_WithValues(t *testing.T) {
 	opts := RunOptions{
-		Command:    "make test",
-		Host:       "remote-dev",
-		Tag:        "fast",
-		SkipSync:   true,
-		SkipLock:   true,
-		DryRun:     true,
-		WorkingDir: "/custom/dir",
-		Quiet:      true,
+		Command:      "make test",
+		Host:         "remote-dev",
+		Tag:          "fast",
+		ProbeTimeout: 5 * time.Second,
+		SkipSync:     true,
+		SkipLock:     true,
+		DryRun:       true,
+		WorkingDir:   "/custom/dir",
+		Quiet:        true,
 	}
 
 	assert.Equal(t, "make test", opts.Command)
 	assert.Equal(t, "remote-dev", opts.Host)
 	assert.Equal(t, "fast", opts.Tag)
+	assert.Equal(t, 5*time.Second, opts.ProbeTimeout)
 	assert.True(t, opts.SkipSync)
 	assert.True(t, opts.SkipLock)
 	assert.True(t, opts.DryRun)
 	assert.Equal(t, "/custom/dir", opts.WorkingDir)
 	assert.True(t, opts.Quiet)
+}
+
+func TestRunCommand_NoArgs(t *testing.T) {
+	err := runCommand([]string{}, "", "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "What should I run?")
+}
+
+func TestRunCommand_InvalidProbeTimeout(t *testing.T) {
+	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
+}
+
+func TestRunCommand_JoinsArgs(t *testing.T) {
+	// Create temp dir without config - will fail on config load
+	// but we're testing arg parsing
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Multiple args should be joined into single command
+	err = runCommand([]string{"make", "test"}, "", "", "")
+	require.Error(t, err)
+	// Should fail because no config, not because of args
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestRunCommand_ValidProbeTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Valid probe timeout should not fail on parsing
+	err = runCommand([]string{"echo"}, "", "", "5s")
+	require.Error(t, err)
+	// Should fail on config, not on probe timeout
+	assert.NotContains(t, err.Error(), "timeout")
+}
+
+func TestExecCommand_NoArgs(t *testing.T) {
+	err := execCommand([]string{}, "", "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "What should I run?")
+}
+
+func TestExecCommand_InvalidProbeTimeout(t *testing.T) {
+	err := execCommand([]string{"ls"}, "", "", "bad-duration")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
+}
+
+func TestExecCommand_JoinsArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Multiple args should be joined
+	err = execCommand([]string{"ls", "-la"}, "", "", "")
+	require.Error(t, err)
+	// Should fail because no config, not because of args
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestExecCommand_ValidProbeTimeoutFormats(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		timeout string
+	}{
+		{"seconds", "5s"},
+		{"minutes", "2m"},
+		{"milliseconds", "500ms"},
+		{"combined", "1m30s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := execCommand([]string{"ls"}, "", "", tt.timeout)
+			// Should fail with config error, not parse error
+			if err != nil {
+				assert.NotContains(t, err.Error(), "doesn't look like a valid timeout",
+					"should parse duration %s correctly", tt.timeout)
+			}
+		})
+	}
+}
+
+func TestRun_NoConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command: "echo hello",
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestRun_WithHostFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Run with host flag but no config
+	exitCode, err := Run(RunOptions{
+		Command: "echo hello",
+		Host:    "myhost",
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	// Should fail on config, but host flag was accepted
+}
+
+func TestRun_WithTagFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command: "echo hello",
+		Tag:     "gpu",
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+}
+
+func TestMapProbeErrorToStatus_AllReasons(t *testing.T) {
+	// Comprehensive test for all probe failure reasons
+	tests := []struct {
+		reason host.ProbeFailReason
+		want   ui.ConnectionStatus
+	}{
+		{host.ProbeFailTimeout, ui.StatusTimeout},
+		{host.ProbeFailRefused, ui.StatusRefused},
+		{host.ProbeFailUnreachable, ui.StatusUnreachable},
+		{host.ProbeFailAuth, ui.StatusAuthFailed},
+		{host.ProbeFailHostKey, ui.StatusFailed},
+		{host.ProbeFailUnknown, ui.StatusFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.reason.String(), func(t *testing.T) {
+			err := &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   tt.reason,
+			}
+			got := mapProbeErrorToStatus(err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRun_DryRunMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// DryRun mode still needs config
+	exitCode, err := Run(RunOptions{
+		Command: "echo test",
+		DryRun:  true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestRun_SkipSyncFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command:  "echo test",
+		SkipSync: true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	// Should fail on config, not on skip-sync flag
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestRun_SkipLockFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command:  "echo test",
+		SkipLock: true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+}
+
+func TestRun_QuietMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command: "echo test",
+		Quiet:   true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+}
+
+func TestRun_WorkingDirFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command:    "echo test",
+		WorkingDir: "/custom/path",
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+}
+
+func TestRun_AllOptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	exitCode, err := Run(RunOptions{
+		Command:      "make test",
+		Host:         "dev-server",
+		Tag:          "gpu",
+		ProbeTimeout: 5 * time.Second,
+		SkipSync:     true,
+		SkipLock:     true,
+		DryRun:       false,
+		WorkingDir:   "/project",
+		Quiet:        true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	// All options accepted, fails on config
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestRunOptions_ZeroValues(t *testing.T) {
+	opts := RunOptions{}
+
+	assert.Empty(t, opts.Command)
+	assert.Empty(t, opts.Host)
+	assert.Empty(t, opts.Tag)
+	assert.Zero(t, opts.ProbeTimeout)
+	assert.False(t, opts.SkipSync)
+	assert.False(t, opts.SkipLock)
+	assert.False(t, opts.DryRun)
+	assert.Empty(t, opts.WorkingDir)
+	assert.False(t, opts.Quiet)
+}
+
+func TestRunCommand_EmptyArgs(t *testing.T) {
+	err := runCommand([]string{}, "", "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "What should I run?")
+}
+
+func TestRunCommand_MultipleArgsJoined(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Multiple args should be joined with spaces
+	err = runCommand([]string{"make", "test", "-v"}, "", "", "")
+	require.Error(t, err)
+	// Fails on config, but args were processed
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestRunCommand_WithHostAndTag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = runCommand([]string{"echo"}, "myhost", "mytag", "")
+	require.Error(t, err)
+	// Should fail on config, flags were accepted
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestExecCommand_MultipleArgsJoined(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = execCommand([]string{"ls", "-la", "/tmp"}, "", "", "")
+	require.Error(t, err)
+	// Fails on config, but args were processed
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestMapProbeErrorToStatus_NilProbeError(t *testing.T) {
+	// Test with non-ProbeError type
+	status := mapProbeErrorToStatus(nil)
+	assert.Equal(t, ui.StatusSuccess, status)
+}
+
+func TestMapProbeErrorToStatus_WrappedError(t *testing.T) {
+	// Test with a regular error (not ProbeError)
+	regularErr := assert.AnError
+	status := mapProbeErrorToStatus(regularErr)
+	assert.Equal(t, ui.StatusFailed, status)
+}
+
+func TestRun_ProbeTimeoutValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{"zero timeout", 0},
+		{"1 second", time.Second},
+		{"30 seconds", 30 * time.Second},
+		{"2 minutes", 2 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			origDir, _ := os.Getwd()
+			defer os.Chdir(origDir)
+
+			err := os.Chdir(tmpDir)
+			require.NoError(t, err)
+
+			exitCode, err := Run(RunOptions{
+				Command:      "echo test",
+				ProbeTimeout: tt.timeout,
+			})
+			assert.Equal(t, 1, exitCode)
+			require.Error(t, err)
+			// Should fail on config, not probe timeout
+			assert.Contains(t, err.Error(), "config")
+		})
+	}
 }
