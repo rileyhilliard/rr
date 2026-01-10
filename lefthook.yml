@@ -35,11 +35,11 @@ pre-commit:
       run: go mod tidy
       stage_fixed: true
 
-    # Auto-fix: golangci-lint with fixes
+    # Auto-fix: golangci-lint with fixes (uses pinned version from .golangci-version)
     # Note: runs on ./... because linter needs full package context
     golangci-lint:
       glob: "*.go"
-      run: golangci-lint run --fix ./...
+      run: make lint-fix
       stage_fixed: true
 
     # Check: validate YAML syntax (requires python3 with PyYAML)
@@ -106,9 +106,9 @@ pre-push:
     test:
       run: go test ./...
 
-    # Run full lint check before push
+    # Run full lint check before push (uses pinned version from .golangci-version)
     lint:
-      run: golangci-lint run
+      run: make lint
 
     # Check coverage threshold (50% minimum)
     coverage:

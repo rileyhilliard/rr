@@ -29,10 +29,14 @@ jobs:
             exit 1
           fi
 
+      - name: Get golangci-lint version
+        id: golangci-version
+        run: echo "version=$(cat .golangci-version)" >> $GITHUB_OUTPUT
+
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.8
+          version: v${{ steps.golangci-version.outputs.version }}
 
       - name: Test with coverage
         run: |
