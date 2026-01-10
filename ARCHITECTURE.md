@@ -781,79 +781,62 @@ flowchart TB
 
 ### Package Dependencies
 
-This diagram shows how the internal packages depend on each other:
+This diagram shows the simplified package dependency graph with key relationships:
 
 ```mermaid
 flowchart TB
-    subgraph cmd["cmd/rr"]
-        main[main.go]
+    subgraph entry["Entry Point"]
+        cmd[cmd/rr]
     end
 
-    subgraph cli["internal/cli"]
-        run[run.go]
-        exec_cmd[exec_cmd.go]
-        sync_cmd[sync.go]
-        task[task.go]
-        workflow[workflow.go]
+    subgraph cli_layer["CLI Layer"]
+        cli[internal/cli]
     end
 
     subgraph core["Core Packages"]
+        host[host]
+        sync[sync]
+        lock[lock]
+        exec[exec]
         config[config]
-        hostpkg[host]
-        syncpkg[sync]
-        execpkg[exec]
-        lockpkg[lock]
-    end
-
-    subgraph ui_layer["UI Packages"]
-        output[output]
-        ui[ui]
-        monitor[monitor]
     end
 
     subgraph infra["Infrastructure"]
-        errors[errors]
         sshutil[pkg/sshutil]
     end
 
-    main --> run
-    main --> exec_cmd
-    main --> sync_cmd
-    main --> task
+    cmd --> cli
 
-    run --> workflow
-    exec_cmd --> workflow
-    sync_cmd --> workflow
-    task --> workflow
+    cli --> host
+    cli --> sync
+    cli --> lock
+    cli --> exec
+    cli --> config
 
-    workflow --> config
-    workflow --> hostpkg
-    workflow --> syncpkg
-    workflow --> lockpkg
-    workflow --> ui
+    host --> sshutil
+    sync --> host
+    lock --> host
 
-    hostpkg --> sshutil
-    syncpkg --> sshutil
-    lockpkg --> sshutil
-    execpkg --> sshutil
+    style entry fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
+    style cli_layer fill:#14532d,stroke:#34d399,stroke-width:2px,color:#dcfce7
+    style core fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style infra fill:#831843,stroke:#f472b6,stroke-width:2px,color:#fce7f3
 
-    run --> output
-    run --> execpkg
-
-    hostpkg --> errors
-    syncpkg --> errors
-    lockpkg --> errors
-    config --> errors
-
-    monitor --> hostpkg
-    monitor --> sshutil
-
-    style cmd fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
-    style cli fill:#dcfce7,stroke:#10b981,stroke-width:2px
-    style core fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-    style ui_layer fill:#f3e8ff,stroke:#a855f7,stroke-width:2px
-    style infra fill:#fce7f3,stroke:#ec4899,stroke-width:2px
+    style cmd fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
+    style cli fill:#14532d,stroke:#34d399,stroke-width:2px,color:#dcfce7
+    style host fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style sync fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style lock fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style exec fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style config fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style sshutil fill:#831843,stroke:#f472b6,stroke-width:2px,color:#fce7f3
 ```
+
+**Key dependencies:**
+- `cmd/rr` is the entry point, calls `internal/cli`
+- `cli` orchestrates `host`, `sync`, `lock`, `exec`, and `config`
+- `host` uses `pkg/sshutil` for SSH operations
+- `sync` and `lock` both depend on `host` for connection management
 
 ### The `rr run` Command Flow
 
@@ -863,103 +846,114 @@ This sequence diagram shows what happens when you run `rr run "make test"`:
 sequenceDiagram
     participant User
     participant CLI as cli/run.go
-    participant Workflow as workflow.go
     participant Config as config
-    participant Selector as host/selector
-    participant SSH as sshutil
+    participant Host as host/selector
     participant Sync as sync
     participant Lock as lock
     participant Exec as exec
 
     User->>CLI: rr run "make test"
-    CLI->>Workflow: SetupWorkflow(opts)
 
-    rect rgb(219, 234, 254)
-        Note over Workflow,Config: Phase 1: Load Config
-        Workflow->>Config: Find() + Load()
-        Config-->>Workflow: config
+    rect rgb(30, 58, 138)
+        Note over CLI,Config: Phase 1: Load Config
+        CLI->>Config: Find() + Load()
+        Config-->>CLI: config
     end
 
-    rect rgb(220, 252, 231)
-        Note over Workflow,SSH: Phase 2: Connect
-        Workflow->>Selector: Select(preferredHost)
+    rect rgb(20, 83, 45)
+        Note over CLI,Host: Phase 2: Select Host + Connect
+        CLI->>Host: Select(preferredHost)
         loop Try each SSH alias
-            Selector->>SSH: ProbeAndConnect(alias)
+            Host->>Host: ProbeAndConnect(alias)
             alt Success
-                SSH-->>Selector: client, latency
+                Note over Host: Return connection
             else Failure
-                SSH-->>Selector: error
-                Note over Selector: Try next alias
+                Note over Host: Try next alias
             end
         end
-        Selector-->>Workflow: Connection
+        Host-->>CLI: Connection
     end
 
-    rect rgb(254, 243, 199)
-        Note over Workflow,Sync: Phase 3: Sync Files
-        Workflow->>Sync: Sync(conn, workDir, config)
-        Sync->>SSH: rsync via SSH
-        SSH-->>Sync: progress
-        Sync-->>Workflow: done
+    rect rgb(120, 53, 15)
+        Note over CLI,Sync: Phase 3: Sync Files
+        CLI->>Sync: Sync(conn, workDir, excludes)
+        Sync-->>CLI: files synced
     end
 
-    rect rgb(243, 232, 255)
-        Note over Workflow,Lock: Phase 4: Acquire Lock
-        Workflow->>Lock: Acquire(conn, config, hash)
-        Lock->>SSH: mkdir lockDir
+    rect rgb(88, 28, 135)
+        Note over CLI,Lock: Phase 4: Acquire Lock
+        CLI->>Lock: Acquire(conn, projectHash)
         alt Lock acquired
-            SSH-->>Lock: success
-            Lock-->>Workflow: Lock
-        else Lock held
-            SSH-->>Lock: exists
+            Lock-->>CLI: Lock handle
+        else Lock held by other
             Lock->>Lock: Wait and retry
         end
     end
 
-    Workflow-->>CLI: WorkflowContext
-
-    rect rgb(252, 231, 243)
+    rect rgb(131, 24, 67)
         Note over CLI,Exec: Phase 5: Execute Command
         CLI->>Exec: ExecStream(command)
-        Exec->>SSH: run command
-        SSH-->>User: streaming output
-        SSH-->>Exec: exit code
+        Exec-->>User: streaming output
+        Exec-->>CLI: exit code
     end
 
     CLI->>Lock: Release()
     CLI->>User: exit code + summary
 ```
 
+**Phase summary:**
+1. **Load Config** - Find and parse `.rr.yaml`
+2. **Select Host** - Probe SSH aliases in order, connect to first available
+3. **Sync Files** - rsync local files to remote working directory
+4. **Acquire Lock** - Prevent concurrent execution on shared hosts
+5. **Execute** - Run command, stream output, capture exit code
+6. **Cleanup** - Release lock, return result
+
 ### Host Selection Flow
 
+The host selector implements a probe-and-select pattern with ordered fallback:
+
 ```mermaid
-sequenceDiagram
-    participant CLI
-    participant HostSelector
-    participant SSHClient
-    participant LocalExec
+flowchart TB
+    start([Select Host]) --> load[Load host config]
+    load --> first_alias[Try first SSH alias]
 
-    CLI->>HostSelector: SelectHost(config.hosts)
+    first_alias --> probe{Probe SSH<br/>timeout 2s}
 
-    loop For each host entry
-        HostSelector->>SSHClient: Probe(host.ssh[0], timeout=2s)
-        alt Connection succeeds
-            SSHClient-->>HostSelector: Connected
-            HostSelector-->>CLI: Host{name, connection}
-        else Connection fails
-            SSHClient-->>HostSelector: Error
-            Note over HostSelector: Try next SSH alias
-        end
-    end
+    probe -->|Success| connected[Connected]
+    probe -->|Timeout/Error| next{More aliases?}
 
-    alt All remote hosts failed
-        HostSelector->>LocalExec: CheckLocalFallback()
-        LocalExec-->>HostSelector: Available
-        HostSelector-->>CLI: Host{local=true}
-    else No fallback configured
-        HostSelector-->>CLI: Error: No hosts available
-    end
+    next -->|Yes| try_next[Try next alias]
+    try_next --> probe
+
+    next -->|No| fallback{Local fallback<br/>enabled?}
+
+    fallback -->|Yes| local[Use local execution]
+    fallback -->|No| fail[Error: No hosts available]
+
+    connected --> cache[Cache connection]
+    local --> cache
+    cache --> done([Return connection])
+
+    fail --> error([Return error])
+
+    style start fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
+    style done fill:#065f46,stroke:#10b981,stroke-width:2px,color:#d1fae5
+    style error fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fee2e2
+    style connected fill:#065f46,stroke:#10b981,stroke-width:2px,color:#d1fae5
+    style local fill:#78350f,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
+    style fail fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fee2e2
+    style probe fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
+    style next fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
+    style fallback fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
 ```
+
+**Selection logic:**
+1. Load configured SSH aliases for the host (e.g., `[mini-local, mini-tailscale]`)
+2. Probe each alias in order with a 2-second timeout
+3. Return first successful connection and cache it
+4. If all fail and `local_fallback: true`, execute locally
+5. Otherwise, return error with diagnostic info
 
 ### Lock Management
 
