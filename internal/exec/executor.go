@@ -53,13 +53,22 @@ func (e *MissingToolError) GetPATHToAdd() string {
 
 // commandNotFoundPatterns are regex patterns to detect "command not found" errors
 // from various shells. These require exit code 127.
+// Order matters: more specific patterns should come before generic ones.
 var commandNotFoundPatterns = []*regexp.Regexp{
+	// bash: foo: command not found
 	regexp.MustCompile(`(?i)bash: (\S+): command not found`),
-	regexp.MustCompile(`(?i)zsh: command not found: (\S+)`),
+	// zsh:1: command not found: foo (zsh includes line number)
+	// zsh: command not found: foo (some versions omit line number)
+	regexp.MustCompile(`(?i)zsh:(?:\d+:)? command not found: (\S+)`),
+	// sh: 1: foo: not found
 	regexp.MustCompile(`(?i)sh: \d+: (\S+): not found`),
+	// -bash: foo: No such file or directory
 	regexp.MustCompile(`(?i)-bash: (\S+): No such file or directory`),
-	regexp.MustCompile(`(?i)(\S+): not found`),
-	regexp.MustCompile(`(?i)(\S+): command not found`),
+	// Generic fallbacks (must be last - they're less specific)
+	// foo: not found
+	regexp.MustCompile(`(?i)^(\S+): not found`),
+	// foo: command not found
+	regexp.MustCompile(`(?i)^(\S+): command not found`),
 }
 
 // dependencyNotFoundPatterns detect when a tool (like make) fails because
