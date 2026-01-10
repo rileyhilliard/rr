@@ -38,8 +38,8 @@ func hostAdd(opts HostAddOptions) error {
 		existingSSHHosts = append(existingSSHHosts, h.SSH...)
 	}
 
-	// Collect machine config interactively
-	machine, cancelled, err := collectMachineConfig(existingSSHHosts)
+	// Collect machine config interactively (don't skip probe)
+	machine, cancelled, err := collectMachineConfig(existingSSHHosts, false)
 	if err != nil {
 		return err
 	}

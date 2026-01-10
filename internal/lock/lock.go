@@ -202,6 +202,172 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string, o
 	}
 }
 
+// TryAcquire attempts to acquire a lock without blocking.
+// Unlike Acquire, it returns immediately if the lock is held by another process.
+//
+// Returns:
+//   - (*Lock, nil) if the lock was successfully acquired
+//   - (nil, ErrLocked) if the lock is held by another process
+//   - (nil, other error) for SSH/permission issues
+//
+// This is useful for load-balancing across multiple hosts - if one host is locked,
+// the caller can immediately try the next host instead of waiting.
+func TryAcquire(conn *host.Connection, cfg config.LockConfig, projectHash string, opts ...AcquireOption) (*Lock, error) {
+	// Apply options
+	options := &acquireOptions{
+		logger: defaultLogger,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+	log := options.logger
+
+	if err := host.ValidateConnectionForLock(conn); err != nil {
+		return nil, err
+	}
+
+	// Build lock directory path: <dir>/rr-<projectHash>.lock/
+	baseDir := cfg.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	infoFile := filepath.Join(lockDir, "info.json")
+
+	log.Debug("TryAcquire: attempting lock: dir=%s", lockDir)
+
+	// Create our lock info
+	info, err := NewLockInfo()
+	if err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrLock,
+			"Couldn't create lock info",
+			"Check your hostname and user environment variables.")
+	}
+
+	// Ensure the parent directory exists (e.g., /tmp/rr-locks)
+	if baseDir != "/tmp" {
+		mkdirParentCmd := fmt.Sprintf("mkdir -p %q", baseDir)
+		log.Debug("TryAcquire: ensuring parent directory exists: %s", mkdirParentCmd)
+		_, stderr, exitCode, err := conn.Client.Exec(mkdirParentCmd)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrLock,
+				"Couldn't create the lock directory",
+				"Check your SSH connection.")
+		}
+		if exitCode != 0 {
+			return nil, errors.New(errors.ErrLock,
+				fmt.Sprintf("Couldn't create lock directory at %s", baseDir),
+				fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(stderr))))
+		}
+	}
+
+	// Check for stale lock and remove it first
+	if isLockStale(conn.Client, infoFile, cfg.Stale) {
+		log.Debug("TryAcquire: detected stale lock, attempting removal")
+		if err := forceRemove(conn.Client, lockDir); err != nil {
+			log.Debug("TryAcquire: failed to remove stale lock: %v", err)
+			// Continue anyway - maybe we can still acquire
+		} else {
+			log.Debug("TryAcquire: stale lock removed successfully")
+		}
+	}
+
+	// Try to acquire lock using mkdir (atomic operation)
+	// mkdir will fail if the directory already exists
+	mkdirCmd := fmt.Sprintf("mkdir %q", lockDir)
+	log.Debug("TryAcquire: executing mkdir command: %s", mkdirCmd)
+	_, _, exitCode, err := conn.Client.Exec(mkdirCmd)
+
+	if err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrLock,
+			"Lock command failed",
+			"Check your SSH connection.")
+	}
+
+	if exitCode != 0 {
+		// Lock is held by another process
+		log.Debug("TryAcquire: lock is held by another process (mkdir failed)")
+		return nil, ErrLocked
+	}
+
+	log.Debug("TryAcquire: lock directory created successfully, writing info file")
+
+	// Lock acquired, write our info
+	infoJSON, err := info.Marshal()
+	if err != nil {
+		// Clean up the lock dir if we can't write info
+		forceRemove(conn.Client, lockDir)
+		return nil, errors.WrapWithCode(err, errors.ErrLock,
+			"Couldn't serialize lock info",
+			"This is unexpected - please report this bug!")
+	}
+
+	// Write the info file
+	writeCmd := fmt.Sprintf("cat > %q << 'LOCKINFO'\n%s\nLOCKINFO", infoFile, string(infoJSON))
+	_, writeStderr, writeExitCode, writeErr := conn.Client.Exec(writeCmd)
+	if writeErr != nil || writeExitCode != 0 {
+		// Clean up and report error
+		forceRemove(conn.Client, lockDir)
+		return nil, errors.New(errors.ErrLock,
+			"Couldn't write the lock info file",
+			fmt.Sprintf("Check disk space and permissions on the remote. Error: %s", strings.TrimSpace(string(writeStderr))))
+	}
+
+	log.Debug("TryAcquire: lock acquired successfully: %s", lockDir)
+	return &Lock{
+		Dir:  lockDir,
+		Info: info,
+		conn: conn,
+	}, nil
+}
+
+// IsLocked checks if a lock is currently held without trying to acquire it.
+// Returns true if the lock exists (and is not stale), false otherwise.
+func IsLocked(conn *host.Connection, cfg config.LockConfig, projectHash string) bool {
+	if err := host.ValidateConnectionForLock(conn); err != nil {
+		return false
+	}
+
+	// Build lock directory path
+	baseDir := cfg.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	infoFile := filepath.Join(lockDir, "info.json")
+
+	// Check if lock directory exists
+	testCmd := fmt.Sprintf("test -d %q", lockDir)
+	_, _, exitCode, err := conn.Client.Exec(testCmd)
+	if err != nil || exitCode != 0 {
+		return false // Directory doesn't exist or error checking
+	}
+
+	// Check if it's stale
+	if isLockStale(conn.Client, infoFile, cfg.Stale) {
+		return false // Stale locks don't count
+	}
+
+	return true
+}
+
+// GetLockHolder returns information about the current lock holder, if any.
+// Returns empty string if no lock is held.
+func GetLockHolder(conn *host.Connection, cfg config.LockConfig, projectHash string) string {
+	if !IsLocked(conn, cfg, projectHash) {
+		return ""
+	}
+
+	baseDir := cfg.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	infoFile := filepath.Join(lockDir, "info.json")
+
+	return readLockHolder(conn.Client, infoFile)
+}
+
 // Release removes the lock, allowing others to acquire it.
 func (l *Lock) Release() error {
 	if l == nil || l.conn == nil || l.conn.Client == nil {

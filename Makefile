@@ -1,5 +1,8 @@
 .PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh completions
-.PHONY: setup setup-hooks verify check ci coverage-check fmt-check
+.PHONY: setup setup-hooks verify check ci coverage-check fmt-check install-linter
+
+# Read golangci-lint version from file (shared with CI)
+GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.0")
 
 # Build
 build:
@@ -32,11 +35,19 @@ coverage-check:
 	fi
 
 # Linting and formatting
-lint:
+lint: install-linter
 	golangci-lint run
 
-lint-fix:
+lint-fix: install-linter
 	golangci-lint run --fix
+
+# Install golangci-lint at the pinned version (from .golangci-version)
+install-linter:
+	@CURRENT=$$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+	if [ "$$CURRENT" != "$(GOLANGCI_LINT_VERSION)" ]; then \
+		echo "Installing golangci-lint v$(GOLANGCI_LINT_VERSION) (current: $${CURRENT:-none})..."; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION); \
+	fi
 
 fmt:
 	go fmt ./...
@@ -80,8 +91,7 @@ verify: lint test
 check: verify
 
 # Development setup (run once after cloning)
-setup: setup-hooks
-	@command -v golangci-lint >/dev/null 2>&1 || { echo "Installing golangci-lint..."; go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; }
+setup: setup-hooks install-linter
 	@command -v goimports >/dev/null 2>&1 || { echo "Installing goimports..."; go install golang.org/x/tools/cmd/goimports@latest; }
 	go mod download
 	@echo "Development environment ready"

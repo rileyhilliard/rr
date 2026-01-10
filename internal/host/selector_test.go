@@ -1067,3 +1067,219 @@ func TestSelector_isConnectionAlive_WithMockClient(t *testing.T) {
 		t.Error("isConnectionAlive should return false after connection is closed")
 	}
 }
+
+// ============================================================================
+// GetHostNames tests
+// ============================================================================
+
+func TestSelector_GetHostNames_Empty(t *testing.T) {
+	selector := NewSelector(nil)
+	names := selector.GetHostNames()
+	if len(names) != 0 {
+		t.Errorf("GetHostNames() returned %d names, want 0", len(names))
+	}
+}
+
+func TestSelector_GetHostNames_Sorted(t *testing.T) {
+	hosts := map[string]config.Host{
+		"zebra": {SSH: []string{"localhost"}},
+		"apple": {SSH: []string{"localhost"}},
+		"mango": {SSH: []string{"localhost"}},
+	}
+
+	selector := NewSelector(hosts)
+	names := selector.GetHostNames()
+
+	expected := []string{"apple", "mango", "zebra"}
+	if len(names) != len(expected) {
+		t.Fatalf("GetHostNames() returned %d names, want %d", len(names), len(expected))
+	}
+
+	for i, name := range names {
+		if name != expected[i] {
+			t.Errorf("GetHostNames()[%d] = %q, want %q", i, name, expected[i])
+		}
+	}
+}
+
+// ============================================================================
+// SelectHost tests
+// ============================================================================
+
+func TestSelector_SelectHost_NotFound(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host1": {SSH: []string{"localhost"}},
+	}
+
+	selector := NewSelector(hosts)
+
+	_, err := selector.SelectHost("nonexistent")
+	if err == nil {
+		t.Fatal("SelectHost should fail for non-existent host")
+	}
+
+	if !containsString(err.Error(), "nonexistent") {
+		t.Errorf("error should mention the missing host: %v", err)
+	}
+}
+
+func TestSelector_SelectHost_NoSSH(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host1": {SSH: []string{}, Dir: "/tmp"},
+	}
+
+	selector := NewSelector(hosts)
+
+	_, err := selector.SelectHost("host1")
+	if err == nil {
+		t.Fatal("SelectHost should fail when host has no SSH aliases")
+	}
+}
+
+func TestSelector_SelectHost_Success(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"myhost": {
+			SSH: []string{host},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(10 * time.Second)
+
+	conn, err := selector.SelectHost("myhost")
+	if err != nil {
+		t.Fatalf("SelectHost failed: %v", err)
+	}
+
+	if conn.Name != "myhost" {
+		t.Errorf("conn.Name = %q, want 'myhost'", conn.Name)
+	}
+
+	if conn.Client == nil {
+		t.Error("conn.Client should not be nil")
+	}
+
+	conn.Close()
+}
+
+func TestSelector_SelectHost_DoesNotCache(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"myhost": {
+			SSH: []string{host},
+			Dir: "/tmp/test",
+		},
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(10 * time.Second)
+	defer selector.Close()
+
+	// First call
+	conn1, err := selector.SelectHost("myhost")
+	if err != nil {
+		t.Fatalf("First SelectHost failed: %v", err)
+	}
+
+	// Second call should create a new connection (not use cache)
+	conn2, err := selector.SelectHost("myhost")
+	if err != nil {
+		t.Fatalf("Second SelectHost failed: %v", err)
+	}
+
+	// The connections should be different objects (not cached)
+	if conn1 == conn2 {
+		t.Error("SelectHost should not cache connections")
+	}
+
+	conn1.Close()
+	conn2.Close()
+}
+
+// ============================================================================
+// SelectNextHost tests
+// ============================================================================
+
+func TestSelector_SelectNextHost_NoHosts(t *testing.T) {
+	selector := NewSelector(nil)
+
+	_, err := selector.SelectNextHost(nil)
+	if err == nil {
+		t.Fatal("SelectNextHost should fail when no hosts configured")
+	}
+}
+
+func TestSelector_SelectNextHost_AllSkipped(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host1": {SSH: []string{"localhost"}},
+		"host2": {SSH: []string{"localhost"}},
+	}
+
+	selector := NewSelector(hosts)
+
+	_, err := selector.SelectNextHost([]string{"host1", "host2"})
+	if err == nil {
+		t.Fatal("SelectNextHost should fail when all hosts are skipped")
+	}
+
+	if !containsString(err.Error(), "All hosts have been tried") {
+		t.Errorf("error message should indicate all hosts tried: %v", err)
+	}
+}
+
+func TestSelector_SelectNextHost_SkipsHosts(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"alpha": {SSH: []string{host}, Dir: "/tmp"}, // Reachable
+		"beta":  {SSH: []string{host}, Dir: "/tmp"}, // Reachable
+		"gamma": {SSH: []string{host}, Dir: "/tmp"}, // Reachable
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(10 * time.Second)
+
+	// Skip "alpha", should get "beta" (next in alphabetical order)
+	conn, err := selector.SelectNextHost([]string{"alpha"})
+	if err != nil {
+		t.Fatalf("SelectNextHost failed: %v", err)
+	}
+
+	if conn.Name != "beta" {
+		t.Errorf("conn.Name = %q, want 'beta' (next after skipping alpha)", conn.Name)
+	}
+
+	conn.Close()
+}
+
+func TestSelector_SelectNextHost_SkipsUnreachable(t *testing.T) {
+	skipIfNoSSH(t)
+
+	host := getTestSSHHost()
+	hosts := map[string]config.Host{
+		"alpha": {SSH: []string{"192.0.2.1"}, Dir: "/tmp"}, // Unreachable
+		"beta":  {SSH: []string{host}, Dir: "/tmp"},        // Reachable
+	}
+
+	selector := NewSelector(hosts)
+	selector.SetTimeout(2 * time.Second)
+
+	// Don't skip any, but alpha is unreachable, so should get beta
+	conn, err := selector.SelectNextHost(nil)
+	if err != nil {
+		t.Fatalf("SelectNextHost failed: %v", err)
+	}
+
+	if conn.Name != "beta" {
+		t.Errorf("conn.Name = %q, want 'beta' (alpha was unreachable)", conn.Name)
+	}
+
+	conn.Close()
+}

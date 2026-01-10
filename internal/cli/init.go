@@ -75,8 +75,9 @@ func extractHostname(sshHost string) string {
 
 // machineConfig holds configuration for a single machine.
 type machineConfig struct {
-	name     string   // Friendly name (config key)
-	sshHosts []string // Connection fallbacks for this machine
+	name          string   // Friendly name (config key)
+	sshHosts      []string // Connection fallbacks for this machine
+	setupCommands []string // Setup commands (e.g., PATH exports)
 }
 
 // initConfigValues holds the collected configuration values.
@@ -216,7 +217,7 @@ func getAllSelectedSSHHosts(machines []machineConfig) []string {
 }
 
 // collectInteractiveValues collects config values interactively.
-func collectInteractiveValues() (*initConfigValues, error) {
+func collectInteractiveValues(skipProbe bool) (*initConfigValues, error) {
 	vals := &initConfigValues{
 		remoteDir: "${HOME}/rr/${PROJECT}", // Default, will prompt at end
 	}
@@ -225,7 +226,7 @@ func collectInteractiveValues() (*initConfigValues, error) {
 	for {
 		allSelected := getAllSelectedSSHHosts(vals.machines)
 
-		machine, cancelled, err := collectMachineConfig(allSelected)
+		machine, cancelled, err := collectMachineConfig(allSelected, skipProbe)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +255,7 @@ func collectInteractiveValues() (*initConfigValues, error) {
 
 // collectMachineConfig collects configuration for a single machine.
 // Returns the machine config, cancelled flag, and any error.
-func collectMachineConfig(excludeSSHHosts []string) (*machineConfig, bool, error) {
+func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineConfig, bool, error) {
 	machine := &machineConfig{}
 
 	// Get primary SSH connection for this machine
@@ -287,6 +288,15 @@ func collectMachineConfig(excludeSSHHosts []string) (*machineConfig, bool, error
 	allExcluded = append(allExcluded, machine.sshHosts...)
 	if err := promptAdditionalConnections(machine, allExcluded); err != nil {
 		return nil, false, err
+	}
+
+	// Test connection and detect PATH setup commands (unless --skip-probe)
+	if !skipProbe && len(machine.sshHosts) > 0 {
+		setupCommands, err := testConnectionInteractive(machine.sshHosts[0])
+		if err != nil {
+			return nil, false, err
+		}
+		machine.setupCommands = setupCommands
 	}
 
 	return machine, false, nil
@@ -455,8 +465,9 @@ func isIPAddress(s string) bool {
 	return strings.Contains(s, ".") || strings.Contains(s, ":")
 }
 
-// testConnection tests the SSH connection and handles failure.
-func testConnection(sshHost string, opts InitOptions) error {
+// testConnectionInteractive tests SSH connection during interactive setup.
+// Prompts user to continue on failure. Returns setup commands if PATH differences detected.
+func testConnectionInteractive(sshHost string) ([]string, error) {
 	fmt.Println()
 	spinner := ui.NewSpinner("Testing connection to " + sshHost)
 	spinner.Start()
@@ -465,83 +476,64 @@ func testConnection(sshHost string, opts InitOptions) error {
 	if err == nil {
 		spinner.Success()
 
-		// Check for PATH differences (non-blocking warning)
-		checkPATHDifference(sshHost)
+		// Check for PATH differences and get setup commands
+		setupCommands := detectPATHSetupCommands(sshHost)
 
 		fmt.Println()
-		return nil
+		return setupCommands, nil
 	}
 
 	spinner.Fail()
 
-	if opts.NonInteractive {
-		return errors.WrapWithCode(err, errors.ErrSSH,
+	// Offer to continue anyway
+	fmt.Printf("\n%s Connection to '%s' failed: %v\n\n", ui.SymbolFail, sshHost, err)
+	var continueAnyway bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Continue anyway? (You can fix the connection later)").
+				Value(&continueAnyway),
+		),
+	)
+
+	if formErr := form.Run(); formErr != nil || !continueAnyway {
+		return nil, errors.WrapWithCode(err, errors.ErrSSH,
+			fmt.Sprintf("Can't reach %s", sshHost),
+			"Make sure the host is up and SSH is working: ssh "+sshHost)
+	}
+	return nil, nil
+}
+
+// testConnectionNonInteractive tests SSH connection in non-interactive mode.
+// Returns setup commands if PATH differences detected, or error on failure.
+func testConnectionNonInteractive(sshHost string) ([]string, error) {
+	_, err := host.Probe(sshHost, 10*time.Second)
+	if err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrSSH,
 			fmt.Sprintf("Can't reach %s", sshHost),
 			"Make sure the host is up, or use --skip-probe to skip the connection test: ssh "+sshHost)
 	}
 
-	// Offer to save anyway
-	fmt.Printf("\n%s Connection to '%s' failed: %v\n\n", ui.SymbolFail, sshHost, err)
-	var saveAnyway bool
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Save config anyway? (You can fix the connection later)").
-				Value(&saveAnyway),
-		),
-	)
-
-	if formErr := form.Run(); formErr != nil || !saveAnyway {
-		return errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Can't reach %s", sshHost),
-			"Make sure the host is up and SSH is working: ssh "+sshHost)
-	}
-	return nil
+	// Check for PATH differences and get setup commands
+	return detectPATHSetupCommands(sshHost), nil
 }
 
-// checkPATHDifference checks if login and interactive shell PATH differ.
-// This is a non-blocking warning to help users understand potential issues.
-func checkPATHDifference(sshHost string) {
+// detectPATHSetupCommands checks if login and interactive shell PATH differ.
+// Returns setup commands to add to config, or nil if no differences detected.
+func detectPATHSetupCommands(sshHost string) []string {
 	// Connect for PATH check
 	client, err := sshutil.Dial(sshHost, 10*time.Second)
 	if err != nil {
-		return // Silent fail - connection already verified
+		return nil // Silent fail - connection already verified
 	}
 	defer client.Close()
 
 	diff, err := exec.GetPATHDifference(client)
 	if err != nil || len(diff.InterOnly) == 0 {
-		return // No differences or error - nothing to report
+		return nil // No differences or error - nothing to add
 	}
 
-	// Warn about PATH differences
-	warnStyle := lipgloss.NewStyle().Foreground(ui.ColorWarning)
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
-
-	fmt.Println()
-	fmt.Printf("%s PATH Difference Detected\n", warnStyle.Render(ui.SymbolWarning))
-	fmt.Println()
-	fmt.Println(mutedStyle.Render("  Your interactive shell has additional PATH directories that won't"))
-	fmt.Println(mutedStyle.Render("  be available when rr runs commands (login shell mode):"))
-	fmt.Println()
-
-	// Show up to 5 directories
-	displayCount := len(diff.InterOnly)
-	if displayCount > 5 {
-		displayCount = 5
-	}
-	for _, dir := range diff.InterOnly[:displayCount] {
-		fmt.Printf("    %s\n", mutedStyle.Render(dir))
-	}
-	if len(diff.InterOnly) > 5 {
-		fmt.Printf("    %s\n", mutedStyle.Render(fmt.Sprintf("... and %d more", len(diff.InterOnly)-5)))
-	}
-
-	fmt.Println()
-	fmt.Println(mutedStyle.Render("  You may want to add setup_commands to your config later:"))
-	fmt.Println(mutedStyle.Render("    setup_commands:"))
-
-	// Generate suggestion with up to 3 paths
+	// Generate setup command with PATH exports (up to 3 paths for readability)
 	exportCount := len(diff.InterOnly)
 	if exportCount > 3 {
 		exportCount = 3
@@ -550,7 +542,9 @@ func checkPATHDifference(sshHost string) {
 	for i := 0; i < exportCount; i++ {
 		pathParts[i] = toHomeRelativePath(diff.InterOnly[i])
 	}
-	fmt.Printf("      %s\n", mutedStyle.Render(fmt.Sprintf("- export PATH=%s:$PATH", strings.Join(pathParts, ":"))))
+
+	setupCmd := fmt.Sprintf("export PATH=%s:$PATH", strings.Join(pathParts, ":"))
+	return []string{setupCmd}
 }
 
 // toHomeRelativePath converts absolute paths to $HOME-relative for portability.
@@ -571,36 +565,219 @@ func toHomeRelativePath(path string) string {
 	return path
 }
 
-// writeConfig writes the configuration file.
-func writeConfig(configPath string, vals *initConfigValues) error {
-	cfg := config.DefaultConfig()
+// yamlValue safely formats a string for YAML output.
+// Quotes the value if it contains special characters.
+func yamlValue(s string) string {
+	// Characters that require quoting in YAML
+	needsQuoting := strings.ContainsAny(s, ":{}[]!#&*?|>'\"%@`") ||
+		strings.HasPrefix(s, "-") ||
+		strings.HasPrefix(s, " ") ||
+		strings.HasSuffix(s, " ")
 
-	// Add all machines to config
-	for _, machine := range vals.machines {
-		cfg.Hosts[machine.name] = config.Host{
-			SSH: machine.sshHosts,
-			Dir: vals.remoteDir,
+	if needsQuoting {
+		// Use yaml.Marshal to get proper escaping
+		b, err := yaml.Marshal(s)
+		if err != nil {
+			// Fallback to double-quoting
+			return fmt.Sprintf("%q", s)
 		}
+		return strings.TrimSpace(string(b))
 	}
+	return s
+}
 
-	// First machine added is the default
-	if len(vals.machines) > 0 {
-		cfg.Default = vals.machines[0].name
-	}
+// generateConfigContent creates a fully-documented .rr.yaml config file.
+// Active settings are uncommented; unused settings are commented out with explanations.
+func generateConfigContent(vals *initConfigValues) string {
+	var sb strings.Builder
 
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't generate the config file",
-			"This is unexpected - please report this bug!")
-	}
-
-	header := `# Road Runner configuration
+	// Header
+	sb.WriteString(`# Road Runner configuration
 # Run 'rr run <command>' to sync and execute remotely
 # See: https://github.com/rileyhilliard/rr for documentation
 
-`
-	content := header + string(data)
+`)
+
+	// Version
+	sb.WriteString("version: 1\n\n")
+
+	// Hosts section
+	sb.WriteString("hosts:\n")
+	for _, machine := range vals.machines {
+		sb.WriteString(fmt.Sprintf("  %s:\n", yamlValue(machine.name)))
+
+		// SSH connections
+		sb.WriteString("    # SSH connection(s) - tried in order until one succeeds\n")
+		sb.WriteString("    # Can be: hostname, user@host, or SSH config alias\n")
+		sb.WriteString("    ssh:\n")
+		for _, sshHost := range machine.sshHosts {
+			sb.WriteString(fmt.Sprintf("      - %s\n", yamlValue(sshHost)))
+		}
+		sb.WriteString("\n")
+
+		// Directory
+		sb.WriteString("    # Where files sync to on the remote machine\n")
+		sb.WriteString("    # Supports: ${PROJECT} (current dir name), ${USER}, ${HOME}, ~\n")
+		sb.WriteString(fmt.Sprintf("    dir: %s\n", yamlValue(vals.remoteDir)))
+		sb.WriteString("\n")
+
+		// Setup commands (only if present)
+		if len(machine.setupCommands) > 0 {
+			sb.WriteString("    # Commands run before each task (e.g., to set up PATH)\n")
+			sb.WriteString("    setup_commands:\n")
+			for _, cmd := range machine.setupCommands {
+				sb.WriteString(fmt.Sprintf("      - %s\n", yamlValue(cmd)))
+			}
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("    # Commands run before each task (e.g., to set up PATH)\n")
+			sb.WriteString("    # setup_commands:\n")
+			sb.WriteString("    #   - export PATH=$HOME/.local/bin:$PATH\n")
+			sb.WriteString("\n")
+		}
+
+		// Tags (commented out)
+		sb.WriteString("    # Tags for filtering hosts with --tag flag\n")
+		sb.WriteString("    # tags:\n")
+		sb.WriteString("    #   - gpu\n")
+		sb.WriteString("    #   - fast\n")
+		sb.WriteString("\n")
+
+		// Env (commented out)
+		sb.WriteString("    # Environment variables for this host\n")
+		sb.WriteString("    # env:\n")
+		sb.WriteString("    #   CUDA_VISIBLE_DEVICES: \"0\"\n")
+		sb.WriteString("\n")
+
+		// Shell (commented out)
+		sb.WriteString("    # Custom shell invocation (default: $SHELL -l -c)\n")
+		sb.WriteString("    # shell: /bin/bash -l -c\n")
+		sb.WriteString("\n")
+	}
+
+	// Default host
+	defaultHost := ""
+	if len(vals.machines) > 0 {
+		defaultHost = vals.machines[0].name
+	}
+	sb.WriteString("# Host to try first when running commands\n")
+	sb.WriteString(fmt.Sprintf("default: %s\n\n", yamlValue(defaultHost)))
+
+	// Local fallback
+	sb.WriteString("# Run locally if all remote hosts are unavailable or busy\n")
+	sb.WriteString("local_fallback: false\n\n")
+
+	// Probe timeout (commented out)
+	sb.WriteString("# How long to wait when testing if a host is reachable (default: 2s)\n")
+	sb.WriteString("# probe_timeout: 2s\n\n")
+
+	// Sync section
+	sb.WriteString("# File sync settings (uses rsync under the hood)\n")
+	sb.WriteString("sync:\n")
+	sb.WriteString("  # Files/directories to exclude from sync (rsync patterns)\n")
+	sb.WriteString("  exclude:\n")
+	sb.WriteString("    - .git/\n")
+	sb.WriteString("    - .venv/\n")
+	sb.WriteString("    - __pycache__/\n")
+	sb.WriteString("    - \"*.pyc\"\n")
+	sb.WriteString("    - node_modules/\n")
+	sb.WriteString("    - .mypy_cache/\n")
+	sb.WriteString("    - .pytest_cache/\n")
+	sb.WriteString("    - .ruff_cache/\n")
+	sb.WriteString("    - .DS_Store\n")
+	sb.WriteString("    - \"*.log\"\n")
+	sb.WriteString("\n")
+	sb.WriteString("  # Files to keep on remote even if deleted locally\n")
+	sb.WriteString("  preserve:\n")
+	sb.WriteString("    - .venv/\n")
+	sb.WriteString("    - node_modules/\n")
+	sb.WriteString("    - data/\n")
+	sb.WriteString("    - .cache/\n")
+	sb.WriteString("\n")
+	sb.WriteString("  # Extra rsync flags\n")
+	sb.WriteString("  # flags:\n")
+	sb.WriteString("  #   - --compress\n")
+	sb.WriteString("  #   - --bwlimit=1000\n\n")
+
+	// Lock section
+	sb.WriteString("# Distributed locking prevents concurrent runs on the same host\n")
+	sb.WriteString("lock:\n")
+	sb.WriteString("  enabled: true\n")
+	sb.WriteString("\n")
+	sb.WriteString("  # How long to wait for a lock before giving up\n")
+	sb.WriteString("  timeout: 5m\n")
+	sb.WriteString("\n")
+	sb.WriteString("  # How long to retry across hosts when all are locked\n")
+	sb.WriteString("  wait_timeout: 1m\n")
+	sb.WriteString("\n")
+	sb.WriteString("  # When to consider a lock stale (holder probably crashed)\n")
+	sb.WriteString("  stale: 10m\n")
+	sb.WriteString("\n")
+	sb.WriteString("  # Where lock files are stored on remote\n")
+	sb.WriteString("  # dir: /tmp/rr-locks\n\n")
+
+	// Tasks section (commented out example)
+	sb.WriteString("# Named tasks for common commands\n")
+	sb.WriteString("# tasks:\n")
+	sb.WriteString("#   test:\n")
+	sb.WriteString("#     description: Run the test suite\n")
+	sb.WriteString("#     run: pytest\n")
+	sb.WriteString("#\n")
+	sb.WriteString("#   build:\n")
+	sb.WriteString("#     description: Build the project\n")
+	sb.WriteString("#     steps:\n")
+	sb.WriteString("#       - name: Install dependencies\n")
+	sb.WriteString("#         run: pip install -e .\n")
+	sb.WriteString("#       - name: Run build\n")
+	sb.WriteString("#         run: python setup.py build\n\n")
+
+	// Output section (commented out)
+	sb.WriteString("# Output formatting\n")
+	sb.WriteString("# output:\n")
+	sb.WriteString("#   color: auto      # auto, always, or never\n")
+	sb.WriteString("#   format: auto     # auto, generic, pytest, jest, go, cargo\n")
+	sb.WriteString("#   timing: true     # show timing for each phase\n")
+	sb.WriteString("#   verbosity: normal  # quiet, normal, or verbose\n\n")
+
+	// Monitor section (commented out)
+	sb.WriteString("# Resource monitoring dashboard settings (rr monitor)\n")
+	sb.WriteString("# monitor:\n")
+	sb.WriteString("#   interval: 2s     # how often to refresh metrics\n")
+	sb.WriteString("#   exclude: []      # hosts to hide from dashboard\n")
+	sb.WriteString("#   thresholds:\n")
+	sb.WriteString("#     cpu:\n")
+	sb.WriteString("#       warning: 70\n")
+	sb.WriteString("#       critical: 90\n")
+	sb.WriteString("#     ram:\n")
+	sb.WriteString("#       warning: 70\n")
+	sb.WriteString("#       critical: 90\n")
+	sb.WriteString("#     gpu:\n")
+	sb.WriteString("#       warning: 70\n")
+	sb.WriteString("#       critical: 90\n")
+
+	return sb.String()
+}
+
+// writeConfig writes the configuration file with documented settings.
+func writeConfig(configPath string, vals *initConfigValues) error {
+	// Track if we added any setup commands (for user feedback)
+	var addedSetupCommands bool
+	for _, machine := range vals.machines {
+		if len(machine.setupCommands) > 0 {
+			addedSetupCommands = true
+			break
+		}
+	}
+
+	content := generateConfigContent(vals)
+
+	// Validate the generated YAML is parseable
+	var testConfig config.Config
+	if err := yaml.Unmarshal([]byte(content), &testConfig); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Generated config file has invalid YAML",
+			"This is unexpected - please report this bug!")
+	}
 
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		return errors.WrapWithCode(err, errors.ErrConfig,
@@ -609,6 +786,17 @@ func writeConfig(configPath string, vals *initConfigValues) error {
 	}
 
 	fmt.Printf("%s Created %s\n\n", ui.SymbolSuccess, configPath)
+
+	// Inform user about auto-added setup commands
+	if addedSetupCommands {
+		mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+		fmt.Printf("%s Added setup_commands to extend PATH\n", ui.SymbolSuccess)
+		fmt.Println(mutedStyle.Render("  Some tools (like those in ~/.local/bin or /opt/homebrew/bin) are only"))
+		fmt.Println(mutedStyle.Render("  available in interactive shells. rr runs commands in login shells, so"))
+		fmt.Println(mutedStyle.Render("  setup_commands ensures these paths are available when rr executes."))
+		fmt.Println()
+	}
+
 	fmt.Println("Next steps:")
 	fmt.Println("  rr sync       - Sync files to remote")
 	fmt.Println("  rr run <cmd>  - Sync and run a command")
@@ -634,21 +822,27 @@ func Init(opts InitOptions) error {
 	var vals *initConfigValues
 	if opts.NonInteractive {
 		vals, err = collectNonInteractiveValues(opts)
+		if err != nil {
+			return err
+		}
+
+		// Test connection in non-interactive mode (unless --skip-probe)
+		if !opts.SkipProbe && len(vals.machines) > 0 && len(vals.machines[0].sshHosts) > 0 {
+			setupCommands, connErr := testConnectionNonInteractive(vals.machines[0].sshHosts[0])
+			if connErr != nil {
+				return connErr
+			}
+			vals.machines[0].setupCommands = setupCommands
+		}
 	} else {
-		vals, err = collectInteractiveValues()
+		// Interactive mode: connection testing happens per-machine in collectMachineConfig
+		vals, err = collectInteractiveValues(opts.SkipProbe)
 	}
 	if err != nil {
 		return err
 	}
 	if vals == nil {
 		return nil // User cancelled
-	}
-
-	// Test connection to first machine before saving (unless --skip-probe)
-	if !opts.SkipProbe && len(vals.machines) > 0 && len(vals.machines[0].sshHosts) > 0 {
-		if err := testConnection(vals.machines[0].sshHosts[0], opts); err != nil {
-			return err
-		}
 	}
 
 	return writeConfig(configPath, vals)

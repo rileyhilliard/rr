@@ -497,3 +497,122 @@ func (s *Selector) HostCount() int {
 	defer s.mu.Unlock()
 	return len(s.hosts)
 }
+
+// GetHostNames returns all configured host names in alphabetical order.
+// This is useful for iterating through hosts for load balancing.
+func (s *Selector) GetHostNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	names := make([]string, 0, len(s.hosts))
+	for name := range s.hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// SelectHost connects to a specific host by name.
+// Unlike Select, this does not use caching - each call creates a new connection.
+// This is useful for load balancing where we need connections to multiple hosts.
+//
+// Returns the connection if successful, or an error if the host doesn't exist
+// or all SSH aliases fail to connect.
+func (s *Selector) SelectHost(hostName string) (*Connection, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	host, ok := s.hosts[hostName]
+	if !ok {
+		return nil, errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host '%s' doesn't exist", hostName),
+			fmt.Sprintf("Available hosts: %s", s.hostNames()))
+	}
+
+	if len(host.SSH) == 0 {
+		return nil, errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host '%s' needs at least one SSH connection", hostName),
+			"Add something like 'user@hostname' under the 'ssh:' section for this host.")
+	}
+
+	// Try each SSH alias in order (fallback chain)
+	var lastErr error
+	var failedAliases []string
+	for i, sshAlias := range host.SSH {
+		s.emit(ConnectionEvent{
+			Type:    EventTrying,
+			Alias:   sshAlias,
+			Message: fmt.Sprintf("trying alias %s", sshAlias),
+		})
+
+		conn, err := s.connect(hostName, sshAlias, host)
+		if err == nil {
+			msg := fmt.Sprintf("connected via %s", sshAlias)
+			if i > 0 {
+				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
+			}
+			s.emit(ConnectionEvent{
+				Type:    EventConnected,
+				Alias:   sshAlias,
+				Message: msg,
+				Latency: conn.Latency,
+			})
+			return conn, nil
+		}
+
+		errMsg := "connection failed"
+		if probeErr, ok := err.(*ProbeError); ok {
+			errMsg = probeErr.Reason.String()
+		}
+		s.emit(ConnectionEvent{
+			Type:    EventFailed,
+			Alias:   sshAlias,
+			Message: errMsg,
+			Error:   err,
+		})
+		failedAliases = append(failedAliases, sshAlias)
+		lastErr = err
+	}
+
+	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
+		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(failedAliases)),
+		"The remote might be offline, or there could be a network/firewall issue.")
+}
+
+// SelectNextHost returns the next available host after skipping the specified hosts.
+// Hosts are tried in alphabetical order for deterministic behavior.
+// Returns an error if all hosts have been skipped.
+func (s *Selector) SelectNextHost(skipHosts []string) (*Connection, error) {
+	hostNames := s.GetHostNames()
+
+	// Build skip set for O(1) lookup
+	skipSet := make(map[string]bool, len(skipHosts))
+	for _, name := range skipHosts {
+		skipSet[name] = true
+	}
+
+	// Find the first host not in the skip list
+	for _, hostName := range hostNames {
+		if skipSet[hostName] {
+			continue
+		}
+
+		conn, err := s.SelectHost(hostName)
+		if err != nil {
+			// Connection failed, this host should be skipped on retry
+			continue
+		}
+		return conn, nil
+	}
+
+	// All hosts either skipped or failed to connect
+	if len(skipHosts) >= len(hostNames) {
+		return nil, errors.New(errors.ErrSSH,
+			"All hosts have been tried",
+			"No available hosts remaining. Check your host configuration and network connectivity.")
+	}
+
+	return nil, errors.New(errors.ErrSSH,
+		"Couldn't connect to any remaining hosts",
+		"All untried hosts failed to connect. Check your SSH configuration and network connectivity.")
+}
