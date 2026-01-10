@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 // SSHHostInfo contains information about an SSH host from ~/.ssh/config.
@@ -217,7 +217,7 @@ func PickSSHHostWithOutput(hosts []SSHHostInfo, output io.Writer, input io.Reade
 
 	finalModel, err := p.Run()
 	if err != nil {
-		return nil, false, fmt.Errorf("SSH host picker error: %w", err)
+		return nil, false, errors.WrapWithCode(err, errors.ErrSSH, "SSH host picker failed", "Try running again or use --host to specify the host directly.")
 	}
 
 	if m, ok := finalModel.(SSHHostPickerModel); ok {

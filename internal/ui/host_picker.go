@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 // HostInfo contains information about a host for display in the picker.
@@ -182,7 +183,7 @@ func PickHost(hosts []HostInfo) (*HostInfo, error) {
 // PickHostWithOutput displays the host picker using custom I/O.
 func PickHostWithOutput(hosts []HostInfo, output io.Writer, input io.Reader) (*HostInfo, error) {
 	if len(hosts) == 0 {
-		return nil, fmt.Errorf("no hosts to pick from")
+		return nil, errors.New(errors.ErrConfig, "No hosts to pick from", "Add hosts to your .rr.yaml or run 'rr init' to set one up.")
 	}
 
 	if len(hosts) == 1 {
@@ -200,7 +201,7 @@ func PickHostWithOutput(hosts []HostInfo, output io.Writer, input io.Reader) (*H
 
 	finalModel, err := p.Run()
 	if err != nil {
-		return nil, fmt.Errorf("host picker error: %w", err)
+		return nil, errors.WrapWithCode(err, errors.ErrConfig, "Host picker failed", "Try running again or use --host to specify the host directly.")
 	}
 
 	if m, ok := finalModel.(HostPickerModel); ok {
