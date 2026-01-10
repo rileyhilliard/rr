@@ -105,7 +105,7 @@ hosts:
     ssh:
       - mac-mini.local      # Try LAN first
       - mac-mini-tailscale  # Fall back to VPN
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
 
 default: mini
 
@@ -144,7 +144,7 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 
 2. **File sync**: Wraps rsync with sane defaults. Excludes `.git`, `node_modules`, etc. Preserves remote-only directories so you don't nuke your venv every sync.
 
-3. **Locking**: Creates a lock file on the remote before running commands. If someone else has the lock, `rr` either waits or falls back to another host (see above).
+3. **Locking with load balancing**: Creates a lock file on the remote before running commands. If a host is locked, `rr` immediately tries the next configured host. If all hosts are locked, it either falls back to local (if enabled) or round-robins until one becomes free.
 
 4. **Output formatting**: Auto-detects pytest, jest, go test, cargo and formats failures nicely. You can turn this off if you hate it.
 

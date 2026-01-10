@@ -191,7 +191,7 @@ fi
      myserver:
        ssh:
          - user@server
-       dir: ~/projects/${PROJECT}
+       dir: ${HOME}/projects/${PROJECT}
        shell: "zsh -l -c"  # Use login shell for full PATH
    ```
 
@@ -244,7 +244,7 @@ Install rsync on the remote host using the same commands above.
 rr exec "df -h"
 
 # Check directory permissions
-rr exec "ls -la ~/projects/"
+rr exec "ls -la \${HOME}/projects/"
 ```
 
 ### Sync is slow
@@ -329,7 +329,7 @@ hosts:
   myhost:
     ssh:
       - myserver.example.com
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
 ```
 
 ### "Host 'X' has no SSH aliases"
@@ -341,7 +341,7 @@ hosts:
   myhost:
     ssh:
       - user@server.example.com  # Add this
-    dir: ~/projects
+    dir: ${HOME}/projects
 ```
 
 ### "Host 'X' has no dir"
@@ -353,7 +353,7 @@ hosts:
   myhost:
     ssh:
       - myserver.example.com
-    dir: ~/projects/${PROJECT}  # Add this
+    dir: ${HOME}/projects/${PROJECT}  # Add this
 ```
 
 ### "Reserved task name"

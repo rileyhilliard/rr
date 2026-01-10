@@ -37,7 +37,7 @@ hosts:
       - mac-mini.local
       - mac-mini-tailscale
       - user@192.168.1.50
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
     tags:
       - fast
       - local
@@ -141,7 +141,7 @@ hosts:
     ssh:
       - mac-mini.local
       - mac-mini-tailscale
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
     tags:
       - fast
     env:
@@ -269,7 +269,8 @@ lock:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `true` | Whether to use distributed locking. |
-| `timeout` | duration | `5m` | How long to wait for a lock. |
+| `timeout` | duration | `5m` | How long to wait for a lock on a single host. |
+| `wait_timeout` | duration | `1m` | How long to round-robin when all hosts are locked. |
 | `stale` | duration | `10m` | When to consider a lock abandoned. |
 | `dir` | string | `/tmp/rr-locks` | Directory for lock files on remote. |
 
@@ -279,6 +280,23 @@ lock:
 2. If another instance holds the lock, `rr` waits up to `timeout`
 3. If the lock is older than `stale`, it's considered abandoned and can be taken
 4. The lock is released when the command finishes
+
+### Load balancing with multiple hosts
+
+When multiple hosts are configured, `rr` distributes work automatically:
+
+1. Tries each host with a non-blocking lock check
+2. If a host is locked, immediately tries the next host
+3. If all hosts are locked and `local_fallback: true`, runs locally immediately
+4. If all hosts are locked and `local_fallback: false`, round-robins through hosts until one becomes available (up to `wait_timeout`)
+
+```yaml
+lock:
+  enabled: true
+  timeout: 5m        # Per-host lock wait time
+  wait_timeout: 2m   # Total time to round-robin when all hosts locked
+  stale: 10m
+```
 
 Disable locking if you're the only user of a remote host:
 
@@ -511,7 +529,7 @@ hosts:
   myhost:
     ssh:
       - myserver.example.com
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
 ```
 
 Everything else uses sensible defaults.
