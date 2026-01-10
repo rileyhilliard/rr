@@ -130,6 +130,14 @@ func (s *Selector) emit(event ConnectionEvent) {
 //
 // Returns a cached connection if one exists for the same host.
 // Emits ConnectionEvents to report progress through the event handler.
+//
+// The ordered fallback approach handles common scenarios:
+//   - LAN IP first (fastest when on home network)
+//   - VPN/Tailscale second (works from anywhere)
+//   - Different machine last (backup when primary is busy/down)
+//
+// This design means users can run the same command from anywhere without
+// manually switching hosts - rr figures out what's reachable.
 func (s *Selector) Select(preferred string) (*Connection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,8 +219,14 @@ func (s *Selector) connect(hostName, sshAlias string, host config.Host) (*Connec
 }
 
 // isConnectionAlive checks if the cached connection is still usable.
-// Uses a lightweight keep-alive request instead of creating a full session,
-// which avoids the ~100-200ms overhead of session creation.
+//
+// We use SSH's "keepalive@openssh.com" request instead of creating a new session
+// because NewSession() adds 100-200ms of overhead per check. The keepalive request
+// is just a single packet exchange on the existing connection, making it fast
+// enough to call on every Select() without noticeable delay.
+//
+// This matters because connections can silently die (network changes, remote
+// restarts) and we don't want stale connections causing confusing errors.
 func (s *Selector) isConnectionAlive(conn *Connection) bool {
 	if conn == nil {
 		return false
@@ -302,6 +316,14 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 }
 
 // selectUnlocked performs selection without locking (called when lock is already held).
+//
+// The caching strategy is intentional:
+//   - Reuse connections within a session to avoid repeated SSH handshakes
+//   - But verify the connection is still alive (networks change, machines restart)
+//   - Clear cache when switching hosts so we don't accidentally reuse wrong connection
+//
+// The local fallback (when enabled) lets users work offline or when all remotes are down.
+// It's opt-in because most users want to know if their remote is unreachable.
 func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 	// If we have a cached connection for the preferred host, return it
 	if s.cached != nil {
