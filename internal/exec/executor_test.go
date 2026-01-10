@@ -22,7 +22,14 @@ func TestIsCommandNotFound(t *testing.T) {
 			wantFound: true,
 		},
 		{
-			name:      "zsh command not found",
+			name:      "zsh command not found with line number",
+			stderr:    "zsh:1: command not found: python",
+			exitCode:  127,
+			wantCmd:   "python",
+			wantFound: true,
+		},
+		{
+			name:      "zsh command not found without line number",
 			stderr:    "zsh: command not found: python",
 			exitCode:  127,
 			wantCmd:   "python",
