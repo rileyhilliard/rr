@@ -167,6 +167,75 @@ refactor: extract host probing into separate module
 
 Focus on the "why" over the "what" in the body when helpful.
 
+## Adding new CLI commands
+
+To add a new command:
+
+1. Create a new file in `internal/cli/` (e.g., `mycommand.go`)
+2. Define the command using Cobra:
+
+```go
+var myCmd = &cobra.Command{
+    Use:   "mycommand",
+    Short: "One-line description",
+    Long:  `Longer description if needed.`,
+    RunE: func(cmd *cobra.Command, args []string) error {
+        // Implementation here
+        return nil
+    },
+}
+
+func init() {
+    rootCmd.AddCommand(myCmd)
+    // Add flags here
+    myCmd.Flags().StringP("flag", "f", "", "Flag description")
+}
+```
+
+3. Register the command in `init()` - Cobra handles this automatically
+4. Add tests in a `*_test.go` file alongside your command
+5. Update shell completions if needed
+
+Check existing commands like `run.go` or `status.go` for patterns.
+
+## Adding output formatters
+
+Output formatters parse test runner output (pytest, jest, go test) to extract failures and show summaries.
+
+1. Create a new file in `internal/output/formatters/` (e.g., `myrunner.go`)
+2. Implement the `Formatter` interface:
+
+```go
+type MyFormatter struct {
+    // State tracking fields
+}
+
+func (f *MyFormatter) Name() string { return "myrunner" }
+
+func (f *MyFormatter) Detect(command string, output []byte) int {
+    // Return 0-100 confidence this formatter handles the output
+    if strings.Contains(command, "myrunner") {
+        return 100
+    }
+    return 0
+}
+
+func (f *MyFormatter) ProcessLine(line string) string {
+    // Transform/colorize the line, collect state
+    return line
+}
+
+func (f *MyFormatter) Summary(exitCode int) string {
+    // Return summary after command completes
+    return ""
+}
+```
+
+3. Register in `internal/output/formatters/registry.go`
+4. Add tests with sample output from the test runner
+
+See `gotest.go` or `pytest.go` for real examples.
+
 ## Questions?
 
 Open an issue if you're not sure about something. We're happy to help.

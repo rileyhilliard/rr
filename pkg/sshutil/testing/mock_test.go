@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -298,4 +299,241 @@ func TestMockClient_SendRequest_AfterClose(t *testing.T) {
 	_, _, err = client.SendRequest("keepalive@openssh.com", true, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "closed")
+}
+
+func TestMockClient_Exec_TestDirExists(t *testing.T) {
+	client := NewMockClient("testhost")
+	client.GetFS().MkdirAll("/tmp/mydir")
+
+	_, _, code, err := client.Exec(`test -d "/tmp/mydir"`)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code, "directory should exist")
+}
+
+func TestMockClient_Exec_TestDirNotExists(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	_, _, code, err := client.Exec(`test -d "/tmp/nonexistent"`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, code, "directory should not exist")
+}
+
+func TestMockClient_Exec_TestFileExists(t *testing.T) {
+	client := NewMockClient("testhost")
+	client.GetFS().WriteFile("/tmp/myfile.txt", []byte("content"))
+
+	_, _, code, err := client.Exec(`test -f "/tmp/myfile.txt"`)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code, "file should exist")
+}
+
+func TestMockClient_Exec_TestFileNotExists(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	_, _, code, err := client.Exec(`test -f "/tmp/nonexistent.txt"`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, code, "file should not exist")
+}
+
+func TestMockClient_Exec_MkdirWithParent(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	_, _, code, err := client.Exec(`mkdir -p "/tmp/a/b/c"`)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+
+	assert.True(t, client.GetFS().IsDir("/tmp/a/b/c"))
+	assert.True(t, client.GetFS().IsDir("/tmp/a/b"))
+	assert.True(t, client.GetFS().IsDir("/tmp/a"))
+}
+
+func TestMockClient_Exec_MkdirNoParent(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Create parent first
+	client.GetFS().MkdirAll("/tmp")
+
+	_, _, code, err := client.Exec(`mkdir "/tmp/newdir"`)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.True(t, client.GetFS().IsDir("/tmp/newdir"))
+}
+
+func TestMockClient_Exec_MkdirNoParentFails(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Try to create dir without parent
+	_, stderr, code, err := client.Exec(`mkdir "/nonexistent/dir"`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, string(stderr), "No such file")
+}
+
+func TestMockClient_ExecStream(t *testing.T) {
+	client := NewMockClient("testhost")
+	client.GetFS().WriteFile("/tmp/data.txt", []byte("stream content"))
+
+	var stdout, stderr bytes.Buffer
+	code, err := client.ExecStream(`cat "/tmp/data.txt"`, &stdout, &stderr)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "stream content", stdout.String())
+	assert.Empty(t, stderr.String())
+}
+
+func TestMockClient_ExecStream_WithError(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	var stdout, stderr bytes.Buffer
+	code, err := client.ExecStream(`cat "/nonexistent"`, &stdout, &stderr)
+	require.NoError(t, err)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "No such file")
+}
+
+func TestMockClient_RegexPattern(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Set a regex pattern response
+	client.SetCommandResponse("echo .*", CommandResponse{
+		Stdout:   []byte("matched"),
+		ExitCode: 0,
+	})
+
+	stdout, _, code, err := client.Exec("echo hello world")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "matched", string(stdout))
+}
+
+func TestMockClient_CustomError(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Set a custom error response
+	client.SetCommandResponse("fail-cmd", CommandResponse{
+		Error: assert.AnError,
+	})
+
+	_, _, _, err := client.Exec("fail-cmd")
+	assert.Error(t, err)
+}
+
+func TestMockFS_Exists(t *testing.T) {
+	fs := NewMockFS()
+
+	assert.False(t, fs.Exists("/nonexistent"))
+
+	fs.WriteFile("/tmp/file.txt", []byte("content"))
+	assert.True(t, fs.Exists("/tmp/file.txt"))
+
+	fs.MkdirAll("/tmp/dir")
+	assert.True(t, fs.Exists("/tmp/dir"))
+}
+
+func TestMockFS_IsFile(t *testing.T) {
+	fs := NewMockFS()
+
+	fs.WriteFile("/tmp/file.txt", []byte("content"))
+	fs.MkdirAll("/tmp/dir")
+
+	assert.True(t, fs.IsFile("/tmp/file.txt"))
+	assert.False(t, fs.IsFile("/tmp/dir"))
+	assert.False(t, fs.IsFile("/nonexistent"))
+}
+
+func TestMockFS_IsDir(t *testing.T) {
+	fs := NewMockFS()
+
+	fs.WriteFile("/tmp/file.txt", []byte("content"))
+	fs.MkdirAll("/tmp/dir")
+
+	assert.False(t, fs.IsDir("/tmp/file.txt"))
+	assert.True(t, fs.IsDir("/tmp/dir"))
+	assert.False(t, fs.IsDir("/nonexistent"))
+}
+
+func TestExtractPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expect string
+	}{
+		{
+			name:   "double quoted",
+			input:  `"/path/to/file"`,
+			expect: "/path/to/file",
+		},
+		{
+			name:   "single quoted",
+			input:  `'/path/to/file'`,
+			expect: "/path/to/file",
+		},
+		{
+			name:   "unquoted",
+			input:  "/path/to/file",
+			expect: "/path/to/file",
+		},
+		{
+			name:   "with trailing text",
+			input:  "/path/to/file extra stuff",
+			expect: "/path/to/file",
+		},
+		{
+			name:   "empty",
+			input:  "",
+			expect: "",
+		},
+		{
+			name:   "whitespace only",
+			input:  "   ",
+			expect: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractPath(tt.input)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestMockClient_Exec_BracketTestSyntax(t *testing.T) {
+	client := NewMockClient("testhost")
+	client.GetFS().MkdirAll("/tmp/mydir")
+
+	// Test with bracket syntax: [ -d "/path" ]
+	_, _, code, err := client.Exec(`[ -d "/tmp/mydir" ]`)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+}
+
+func TestMockClient_Exec_UnknownCommand(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	// Unknown commands should return success by default
+	_, _, code, err := client.Exec("unknown-command arg1 arg2")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+}
+
+func TestMockClient_Exec_UnameVariants(t *testing.T) {
+	client := NewMockClient("testhost")
+
+	tests := []struct {
+		cmd      string
+		contains string
+	}{
+		{"uname", "Linux"},
+		{"uname -s", "Linux"},
+		{"uname -r", "5.15"},
+		{"uname -a", "mockhost"},
+	}
+
+	for _, tt := range tests {
+		stdout, _, code, err := client.Exec(tt.cmd)
+		require.NoError(t, err, "command: %s", tt.cmd)
+		assert.Equal(t, 0, code)
+		assert.Contains(t, string(stdout), tt.contains, "command: %s", tt.cmd)
+	}
 }

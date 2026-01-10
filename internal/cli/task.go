@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -12,6 +11,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -56,7 +56,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	if !config.IsTaskHostAllowed(task, wf.Conn.Name) {
 		return 1, errors.New(errors.ErrConfig,
 			fmt.Sprintf("Task '%s' can't run on host '%s'", opts.TaskName, wf.Conn.Name),
-			fmt.Sprintf("This task is restricted to: %s", formatHosts(task.Hosts)))
+			fmt.Sprintf("This task is restricted to: %s", util.JoinOrNone(task.Hosts)))
 	}
 
 	// Phase 4: Execute task
@@ -158,14 +158,6 @@ func renderTaskSummary(_ *ui.PhaseDisplay, result *exec.TaskResult, taskName str
 	}
 }
 
-// formatHosts returns a comma-separated list of hosts.
-func formatHosts(hosts []string) string {
-	if len(hosts) == 0 {
-		return "(none)"
-	}
-	return strings.Join(hosts, ", ")
-}
-
 // RegisterTaskCommands dynamically registers task commands from config.
 // This should be called after config is loaded.
 func RegisterTaskCommands(cfg *config.Config) {
@@ -235,7 +227,7 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 	}
 
 	if len(task.Hosts) > 0 {
-		desc += fmt.Sprintf("\nRestricted to hosts: %s\n", formatHosts(task.Hosts))
+		desc += fmt.Sprintf("\nRestricted to hosts: %s\n", util.JoinOrNone(task.Hosts))
 	}
 
 	return desc
@@ -243,16 +235,9 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 
 // runTaskCommand is the implementation for task commands.
 func runTaskCommand(taskName, hostFlag, tagFlag, probeTimeoutFlag string) error {
-	// Parse probe timeout if provided
-	var probeTimeout time.Duration
-	if probeTimeoutFlag != "" {
-		var err error
-		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
-		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
-				"Try something like 5s, 2m, or 500ms.")
-		}
+	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
+	if err != nil {
+		return err
 	}
 
 	exitCode, err := RunTask(TaskOptions{

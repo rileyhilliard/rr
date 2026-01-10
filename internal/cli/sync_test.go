@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSyncOptions_Defaults(t *testing.T) {
@@ -63,4 +66,420 @@ func TestSyncCommand_ValidProbeTimeoutFormats(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSync_NoConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestSync_WithHostFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		Host: "myhost",
+	})
+	require.Error(t, err)
+	// Should fail on config, host flag was accepted
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestSync_WithTagFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		Tag: "gpu",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestSync_DryRunFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		DryRun: true,
+	})
+	require.Error(t, err)
+	// Should fail on config, dry-run flag was accepted
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestSync_WorkingDirFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		WorkingDir: "/custom/dir",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestSync_ProbeTimeoutFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		ProbeTimeout: 10 * time.Second,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "No config file found")
+}
+
+func TestSyncCommand_PassesDryRunFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Test that dry-run flag is passed through syncCommand
+	err = syncCommand("myhost", "gpu", "5s", true)
+	require.Error(t, err)
+	// Should fail on config, but all flags were parsed
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSync_InvalidConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Write invalid YAML
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte("invalid: yaml: content:"), 0644)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{})
+	require.Error(t, err)
+	// Should fail on config parsing
+}
+
+func TestSync_EmptyConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Write config with no hosts
+	configContent := `
+version: 1
+hosts: {}
+`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{})
+	require.Error(t, err)
+	// Should fail because no hosts configured
+	assert.Contains(t, err.Error(), "No hosts")
+}
+
+func TestSyncCommand_AllFlagsEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Test with all flags empty - should use defaults
+	err = syncCommand("", "", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSyncOptions_AllFlagCombinations(t *testing.T) {
+	tests := []struct {
+		name string
+		opts SyncOptions
+	}{
+		{
+			name: "host only",
+			opts: SyncOptions{Host: "myhost"},
+		},
+		{
+			name: "tag only",
+			opts: SyncOptions{Tag: "gpu"},
+		},
+		{
+			name: "host and tag",
+			opts: SyncOptions{Host: "myhost", Tag: "gpu"},
+		},
+		{
+			name: "with dry run",
+			opts: SyncOptions{DryRun: true},
+		},
+		{
+			name: "with probe timeout",
+			opts: SyncOptions{ProbeTimeout: 5 * time.Second},
+		},
+		{
+			name: "with working dir",
+			opts: SyncOptions{WorkingDir: "/custom"},
+		},
+		{
+			name: "all flags",
+			opts: SyncOptions{
+				Host:         "myhost",
+				Tag:          "gpu",
+				ProbeTimeout: 5 * time.Second,
+				DryRun:       true,
+				WorkingDir:   "/custom",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			origDir, _ := os.Getwd()
+			defer os.Chdir(origDir)
+
+			err := os.Chdir(tmpDir)
+			require.NoError(t, err)
+
+			err = Sync(tt.opts)
+			require.Error(t, err)
+			// All should fail on config, proving flags are accepted
+			assert.Contains(t, err.Error(), "config")
+		})
+	}
+}
+
+func TestSync_ConfigWithNoDefaultHost(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Config with hosts but no default
+	configContent := `
+version: 1
+hosts:
+  dev:
+    ssh:
+      - dev.example.com
+    dir: /home/user/project
+`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	// Sync without host flag should still work (selector will pick first)
+	err = Sync(SyncOptions{})
+	// Will fail on SSH connection, not on config
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "No config file found")
+}
+
+func TestSyncOptions_ZeroValues(t *testing.T) {
+	opts := SyncOptions{}
+
+	assert.Empty(t, opts.Host)
+	assert.Empty(t, opts.Tag)
+	assert.Zero(t, opts.ProbeTimeout)
+	assert.False(t, opts.DryRun)
+	assert.Empty(t, opts.WorkingDir)
+}
+
+func TestSyncCommand_EmptyFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// All empty flags should use defaults
+	err = syncCommand("", "", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSyncCommand_WithAllFlags(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = syncCommand("myhost", "gpu", "10s", true)
+	require.Error(t, err)
+	// Should fail on config, all flags were accepted
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSync_MultipleProbeTimeouts(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{"zero", 0},
+		{"short", 100 * time.Millisecond},
+		{"medium", 5 * time.Second},
+		{"long", 2 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			origDir, _ := os.Getwd()
+			defer os.Chdir(origDir)
+
+			err := os.Chdir(tmpDir)
+			require.NoError(t, err)
+
+			err = Sync(SyncOptions{
+				ProbeTimeout: tt.timeout,
+			})
+			require.Error(t, err)
+			// Should fail on config, not probe timeout
+			assert.Contains(t, err.Error(), "config")
+		})
+	}
+}
+
+func TestSyncCommand_InvalidProbeTimeoutFormats(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string
+		wantErr string
+	}{
+		{"no unit", "5", "doesn't look like a valid timeout"},
+		{"invalid text", "fast", "doesn't look like a valid timeout"},
+		{"invalid unit", "5x", "doesn't look like a valid timeout"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := syncCommand("", "", tt.timeout, false)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestSync_DryRunWithHost(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		Host:   "dev-server",
+		DryRun: true,
+	})
+	require.Error(t, err)
+	// Should fail on config
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSync_DryRunWithTag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		Tag:    "gpu",
+		DryRun: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSync_CustomWorkingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	customDir := filepath.Join(tmpDir, "custom")
+	err = os.MkdirAll(customDir, 0755)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		WorkingDir: customDir,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSync_NonExistentWorkingDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		WorkingDir: "/nonexistent/path/to/project",
+	})
+	require.Error(t, err)
+	// Should fail on config first
+	assert.Contains(t, err.Error(), "config")
+}
+
+func TestSync_HostAndTagCombined(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Sync(SyncOptions{
+		Host: "dev-server",
+		Tag:  "gpu",
+	})
+	require.Error(t, err)
+	// Should fail on config
+	assert.Contains(t, err.Error(), "config")
 }

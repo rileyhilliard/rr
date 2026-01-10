@@ -131,16 +131,9 @@ func Sync(opts SyncOptions) error {
 
 // syncCommand is the implementation called by the cobra command.
 func syncCommand(hostFlag, tagFlag, probeTimeoutFlag string, dryRun bool) error {
-	// Parse probe timeout if provided
-	var probeTimeout time.Duration
-	if probeTimeoutFlag != "" {
-		var err error
-		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
-		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
-				"Try something like 5s, 2m, or 500ms.")
-		}
+	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
+	if err != nil {
+		return err
 	}
 
 	return Sync(SyncOptions{

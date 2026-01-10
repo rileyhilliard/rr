@@ -323,3 +323,249 @@ func TestInit_NonInteractive_DefaultRemoteDir(t *testing.T) {
 	// Default remote dir should be used
 	assert.Contains(t, string(content), "${HOME}/rr/${PROJECT}")
 }
+
+func TestInitOptions_Defaults(t *testing.T) {
+	opts := InitOptions{}
+
+	assert.Empty(t, opts.Host)
+	assert.Empty(t, opts.Name)
+	assert.Empty(t, opts.Dir)
+	assert.False(t, opts.Overwrite)
+	assert.False(t, opts.NonInteractive)
+	assert.False(t, opts.SkipProbe)
+}
+
+func TestInitOptions_WithValues(t *testing.T) {
+	opts := InitOptions{
+		Host:           "user@example.com",
+		Name:           "myhost",
+		Dir:            "/remote/dir",
+		Overwrite:      true,
+		NonInteractive: true,
+		SkipProbe:      true,
+	}
+
+	assert.Equal(t, "user@example.com", opts.Host)
+	assert.Equal(t, "myhost", opts.Name)
+	assert.Equal(t, "/remote/dir", opts.Dir)
+	assert.True(t, opts.Overwrite)
+	assert.True(t, opts.NonInteractive)
+	assert.True(t, opts.SkipProbe)
+}
+
+func TestIsIPAddress(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{
+			name:  "IPv4 address",
+			input: "192.168.1.1",
+			want:  true,
+		},
+		{
+			name:  "IPv6 address",
+			input: "::1",
+			want:  true,
+		},
+		{
+			name:  "full IPv6",
+			input: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			want:  true,
+		},
+		{
+			name:  "hostname",
+			input: "example.com",
+			want:  false,
+		},
+		{
+			name:  "localhost",
+			input: "localhost",
+			want:  false,
+		},
+		{
+			name:  "just dots",
+			input: "...",
+			want:  true, // Edge case - technically matches pattern
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isIPAddress(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestToHomeRelativePath(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "Linux home path",
+			input: "/home/user/bin",
+			want:  "$HOME/bin",
+		},
+		{
+			name:  "macOS home path",
+			input: "/Users/john/Projects",
+			want:  "$HOME/Projects",
+		},
+		{
+			name:  "root home path",
+			input: "/root/scripts",
+			want:  "$HOME/scripts",
+		},
+		{
+			name:  "non-home path",
+			input: "/usr/local/bin",
+			want:  "/usr/local/bin",
+		},
+		{
+			name:  "empty path",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toHomeRelativePath(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCheckExistingConfig_NoConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, ".rr.yaml")
+
+	proceed, err := checkExistingConfig(configPath, InitOptions{})
+	require.NoError(t, err)
+	assert.True(t, proceed)
+}
+
+func TestCheckExistingConfig_WithOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, ".rr.yaml")
+
+	// Create existing config
+	err := os.WriteFile(configPath, []byte("existing: config"), 0644)
+	require.NoError(t, err)
+
+	proceed, err := checkExistingConfig(configPath, InitOptions{Overwrite: true})
+	require.NoError(t, err)
+	assert.True(t, proceed)
+}
+
+func TestCheckExistingConfig_NonInteractive_NoOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, ".rr.yaml")
+
+	// Create existing config
+	err := os.WriteFile(configPath, []byte("existing: config"), 0644)
+	require.NoError(t, err)
+
+	proceed, err := checkExistingConfig(configPath, InitOptions{NonInteractive: true, Overwrite: false})
+	require.Error(t, err)
+	assert.False(t, proceed)
+	assert.Contains(t, err.Error(), "already a config file")
+}
+
+func TestCollectNonInteractiveValues_RequiresHost(t *testing.T) {
+	vals, err := collectNonInteractiveValues(InitOptions{})
+	require.Error(t, err)
+	assert.Nil(t, vals)
+	assert.Contains(t, err.Error(), "Need an SSH host")
+}
+
+func TestCollectNonInteractiveValues_WithHost(t *testing.T) {
+	vals, err := collectNonInteractiveValues(InitOptions{
+		Host: "user@example.com",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, vals)
+	assert.Len(t, vals.machines, 1)
+	assert.Equal(t, "example.com", vals.machines[0].name)
+	assert.Equal(t, []string{"user@example.com"}, vals.machines[0].sshHosts)
+}
+
+func TestCollectNonInteractiveValues_WithName(t *testing.T) {
+	vals, err := collectNonInteractiveValues(InitOptions{
+		Host: "user@example.com",
+		Name: "myhost",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, vals)
+	assert.Equal(t, "myhost", vals.machines[0].name)
+}
+
+func TestCollectNonInteractiveValues_WithDir(t *testing.T) {
+	vals, err := collectNonInteractiveValues(InitOptions{
+		Host: "user@example.com",
+		Dir:  "/custom/dir",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, vals)
+	assert.Equal(t, "/custom/dir", vals.remoteDir)
+}
+
+func TestCollectNonInteractiveValues_DefaultDir(t *testing.T) {
+	vals, err := collectNonInteractiveValues(InitOptions{
+		Host: "user@example.com",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, vals)
+	assert.Equal(t, "${HOME}/rr/${PROJECT}", vals.remoteDir)
+}
+
+func TestInitCommand_MergesOptions(t *testing.T) {
+	// Save original env and restore after test
+	origHost := os.Getenv("RR_HOST")
+	defer os.Setenv("RR_HOST", origHost)
+
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Set env var
+	os.Setenv("RR_HOST", "env@example.com")
+
+	// Run with NonInteractive (will fail without host, but mergeInitOptions should merge env)
+	err = initCommand(InitOptions{
+		NonInteractive: true,
+		SkipProbe:      true,
+	})
+	require.NoError(t, err)
+
+	// Verify config was created with env var host
+	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "env@example.com")
+}
+
+func TestGetAllSelectedSSHHosts(t *testing.T) {
+	machines := []machineConfig{
+		{name: "dev", sshHosts: []string{"dev1", "dev2"}},
+		{name: "prod", sshHosts: []string{"prod1"}},
+	}
+
+	all := getAllSelectedSSHHosts(machines)
+	assert.Len(t, all, 3)
+	assert.Contains(t, all, "dev1")
+	assert.Contains(t, all, "dev2")
+	assert.Contains(t, all, "prod1")
+}
+
+func TestGetAllSelectedSSHHosts_Empty(t *testing.T) {
+	machines := []machineConfig{}
+	all := getAllSelectedSSHHosts(machines)
+	assert.Empty(t, all)
+}

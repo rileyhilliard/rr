@@ -214,27 +214,16 @@ func (p *InlineProgress) render() {
 }
 
 func (p *InlineProgress) renderBarWithPercent(percent float64) string {
-	filled := int(percent * float64(p.width))
-	if filled > p.width {
-		filled = p.width
-	}
+	filled, empty := CalculateBarCountsNormalized(percent, p.width)
 
-	// Choose color based on progress
-	var barColor lipgloss.Color
-	switch {
-	case percent >= 0.8:
-		barColor = ColorSuccess
-	case percent >= 0.5:
-		barColor = ColorWarning
-	default:
-		barColor = ColorSecondary
-	}
+	// Choose color based on progress (higher = better)
+	barColor := ProgressColorProgress(percent * 100) // Convert 0-1 to 0-100
 
 	filledStyle := lipgloss.NewStyle().Foreground(barColor)
 	emptyStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
-	filledBar := filledStyle.Render(strings.Repeat("█", filled))
-	emptyBar := emptyStyle.Render(strings.Repeat("░", p.width-filled))
+	filledBar := filledStyle.Render(strings.Repeat(string(BarFilled), filled))
+	emptyBar := emptyStyle.Render(strings.Repeat(string(BarEmpty), empty))
 
 	return "[" + filledBar + emptyBar + "]"
 }

@@ -50,10 +50,8 @@ func Version() (string, error) {
 
 // CheckRemote verifies that rsync is available on the remote host.
 func CheckRemote(conn *host.Connection) error {
-	if conn == nil || conn.Client == nil {
-		return errors.New(errors.ErrSync,
-			"No active SSH connection",
-			"Connect to the remote host first.")
+	if err := host.ValidateConnectionForSync(conn); err != nil {
+		return err
 	}
 
 	// Check if rsync exists on remote using Exec

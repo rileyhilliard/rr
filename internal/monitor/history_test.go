@@ -378,3 +378,235 @@ func TestMultipleHosts(t *testing.T) {
 	assert.Equal(t, []float64{0, 10, 20, 30, 40}, cpu1)
 	assert.Equal(t, []float64{0, 20, 40, 60, 80}, cpu2)
 }
+
+func TestNetworkRateToPercent(t *testing.T) {
+	tests := []struct {
+		name        string
+		bytesPerSec float64
+		wantMin     float64
+		wantMax     float64
+	}{
+		{
+			name:        "zero rate",
+			bytesPerSec: 0,
+			wantMin:     0,
+			wantMax:     0,
+		},
+		{
+			name:        "negative rate",
+			bytesPerSec: -100,
+			wantMin:     0,
+			wantMax:     0,
+		},
+		{
+			name:        "very high rate over 100MB/s",
+			bytesPerSec: 150 * 1024 * 1024,
+			wantMin:     100,
+			wantMax:     100,
+		},
+		{
+			name:        "high rate 10-100MB/s",
+			bytesPerSec: 50 * 1024 * 1024,
+			wantMin:     80,
+			wantMax:     100,
+		},
+		{
+			name:        "medium rate 1-10MB/s",
+			bytesPerSec: 5 * 1024 * 1024,
+			wantMin:     60,
+			wantMax:     80,
+		},
+		{
+			name:        "low rate 100KB-1MB/s",
+			bytesPerSec: 500 * 1024,
+			wantMin:     40,
+			wantMax:     60,
+		},
+		{
+			name:        "very low rate 10-100KB/s",
+			bytesPerSec: 50 * 1024,
+			wantMin:     20,
+			wantMax:     40,
+		},
+		{
+			name:        "tiny rate 1-10KB/s",
+			bytesPerSec: 5 * 1024,
+			wantMin:     5,
+			wantMax:     20,
+		},
+		{
+			name:        "minimal rate under 1KB/s",
+			bytesPerSec: 500,
+			wantMin:     0,
+			wantMax:     5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := networkRateToPercent(tt.bytesPerSec)
+			assert.GreaterOrEqual(t, result, tt.wantMin)
+			assert.LessOrEqual(t, result, tt.wantMax)
+		})
+	}
+}
+
+func TestGetNetworkRates(t *testing.T) {
+	h := NewHistory(10)
+
+	// No history for host
+	rates := h.GetNetworkRates("nonexistent", 1.0)
+	assert.Nil(t, rates)
+
+	// Zero interval
+	rates = h.GetNetworkRates("host1", 0)
+	assert.Nil(t, rates)
+
+	// Push network data (need at least 2 samples to calculate rate)
+	for i := 1; i <= 3; i++ {
+		h.Push("host1", &HostMetrics{
+			RAM: RAMMetrics{TotalBytes: 1},
+			Network: []NetworkInterface{
+				{
+					Name:     "eth0",
+					BytesIn:  int64(i * 1000),
+					BytesOut: int64(i * 500),
+				},
+			},
+		})
+	}
+
+	rates = h.GetNetworkRates("host1", 1.0)
+	assert.NotEmpty(t, rates)
+	assert.Equal(t, "eth0", rates[0].Interface)
+	assert.InDelta(t, 1000, rates[0].BytesInPerSec, 0.1)
+	assert.InDelta(t, 500, rates[0].BytesOutPerSec, 0.1)
+}
+
+func TestGetNetworkRates_CounterWrap(t *testing.T) {
+	h := NewHistory(10)
+
+	// Simulate counter wraparound (value decreases)
+	h.Push("host1", &HostMetrics{
+		RAM: RAMMetrics{TotalBytes: 1},
+		Network: []NetworkInterface{
+			{Name: "eth0", BytesIn: 10000, BytesOut: 5000},
+		},
+	})
+	h.Push("host1", &HostMetrics{
+		RAM: RAMMetrics{TotalBytes: 1},
+		Network: []NetworkInterface{
+			{Name: "eth0", BytesIn: 1000, BytesOut: 500}, // Counter reset
+		},
+	})
+
+	rates := h.GetNetworkRates("host1", 1.0)
+	assert.NotEmpty(t, rates)
+	// Should handle negative delta gracefully (clamp to 0)
+	assert.Equal(t, 0.0, rates[0].BytesInPerSec)
+	assert.Equal(t, 0.0, rates[0].BytesOutPerSec)
+}
+
+func TestGetTotalNetworkRate(t *testing.T) {
+	h := NewHistory(10)
+
+	// No history
+	inRate, outRate := h.GetTotalNetworkRate("nonexistent", 1.0)
+	assert.Equal(t, 0.0, inRate)
+	assert.Equal(t, 0.0, outRate)
+
+	// Push data for multiple interfaces including loopback
+	for i := 1; i <= 3; i++ {
+		h.Push("host1", &HostMetrics{
+			RAM: RAMMetrics{TotalBytes: 1},
+			Network: []NetworkInterface{
+				{Name: "lo", BytesIn: int64(i * 100), BytesOut: int64(i * 100)},
+				{Name: "eth0", BytesIn: int64(i * 1000), BytesOut: int64(i * 500)},
+				{Name: "wlan0", BytesIn: int64(i * 2000), BytesOut: int64(i * 1000)},
+			},
+		})
+	}
+
+	inRate, outRate = h.GetTotalNetworkRate("host1", 1.0)
+	// Should skip loopback (lo) and sum eth0 + wlan0
+	assert.InDelta(t, 3000, inRate, 0.1)  // 1000 + 2000
+	assert.InDelta(t, 1500, outRate, 0.1) // 500 + 1000
+}
+
+func TestGetNetworkRateHistory(t *testing.T) {
+	h := NewHistory(20)
+
+	// No history
+	result := h.GetNetworkRateHistory("nonexistent", 10, 1.0)
+	assert.Nil(t, result)
+
+	// Zero interval
+	result = h.GetNetworkRateHistory("host1", 10, 0)
+	assert.Nil(t, result)
+
+	// Push sufficient network data
+	for i := 1; i <= 10; i++ {
+		h.Push("host1", &HostMetrics{
+			RAM: RAMMetrics{TotalBytes: 1},
+			Network: []NetworkInterface{
+				{Name: "eth0", BytesIn: int64(i * 1000), BytesOut: int64(i * 500)},
+			},
+		})
+	}
+
+	result = h.GetNetworkRateHistory("host1", 5, 1.0)
+	assert.NotNil(t, result)
+	// Should return rate values as percentages (0-100)
+	for _, v := range result {
+		assert.GreaterOrEqual(t, v, 0.0)
+		assert.LessOrEqual(t, v, 100.0)
+	}
+}
+
+func TestGetNetworkRateHistory_SkipsLoopback(t *testing.T) {
+	h := NewHistory(20)
+
+	// Push data only for loopback
+	for i := 1; i <= 5; i++ {
+		h.Push("host1", &HostMetrics{
+			RAM: RAMMetrics{TotalBytes: 1},
+			Network: []NetworkInterface{
+				{Name: "lo0", BytesIn: int64(i * 1000), BytesOut: int64(i * 1000)},
+			},
+		})
+	}
+
+	// Should return nil since only loopback exists
+	result := h.GetNetworkRateHistory("host1", 3, 1.0)
+	assert.Nil(t, result)
+}
+
+func TestDefaultHistorySize(t *testing.T) {
+	assert.Equal(t, 600, DefaultHistorySize)
+}
+
+func TestRingBuffer_getAll(t *testing.T) {
+	rb := newRingBuffer(5)
+
+	// Empty buffer
+	all := rb.getAll()
+	assert.Nil(t, all)
+
+	// Partial fill
+	rb.push(1.0)
+	rb.push(2.0)
+	rb.push(3.0)
+	all = rb.getAll()
+	assert.Equal(t, []float64{1.0, 2.0, 3.0}, all)
+
+	// Full buffer
+	rb.push(4.0)
+	rb.push(5.0)
+	all = rb.getAll()
+	assert.Equal(t, []float64{1.0, 2.0, 3.0, 4.0, 5.0}, all)
+
+	// Overflow
+	rb.push(6.0)
+	all = rb.getAll()
+	assert.Equal(t, []float64{2.0, 3.0, 4.0, 5.0, 6.0}, all)
+}

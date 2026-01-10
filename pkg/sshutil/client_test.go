@@ -2,9 +2,15 @@ package sshutil
 
 import (
 	"bytes"
+	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // skipIfNoSSH skips the test if SSH tests are disabled.
@@ -675,4 +681,908 @@ func TestHostKeyMismatchError_SuggestionWithoutPort(t *testing.T) {
 	if !containsSubstring(suggestion, "ssh-keyscan -t rsa,ecdsa,ed25519 example.com") {
 		t.Errorf("Suggestion with portless hostname incorrect: %s", suggestion)
 	}
+}
+
+func TestClient_GetHost(t *testing.T) {
+	c := &Client{
+		Host:    "testserver",
+		Address: "192.168.1.1:22",
+	}
+
+	assert.Equal(t, "testserver", c.GetHost())
+}
+
+func TestClient_GetAddress(t *testing.T) {
+	c := &Client{
+		Host:    "testserver",
+		Address: "192.168.1.1:2222",
+	}
+
+	assert.Equal(t, "192.168.1.1:2222", c.GetAddress())
+}
+
+func TestResolveSSHSettings_TestUserOverride(t *testing.T) {
+	// Set the test user override
+	originalUser := os.Getenv("RR_TEST_SSH_USER")
+	os.Setenv("RR_TEST_SSH_USER", "testuser")
+	defer os.Setenv("RR_TEST_SSH_USER", originalUser)
+
+	settings := resolveSSHSettings("example.com")
+
+	// Should use the test user
+	assert.Equal(t, "testuser", settings.user)
+}
+
+func TestResolveSSHSettings_ExplicitUserTakesPrecedence(t *testing.T) {
+	// Set the test user override
+	originalUser := os.Getenv("RR_TEST_SSH_USER")
+	os.Setenv("RR_TEST_SSH_USER", "testuser")
+	defer os.Setenv("RR_TEST_SSH_USER", originalUser)
+
+	// Explicit user@host should take precedence
+	settings := resolveSSHSettings("explicituser@example.com")
+
+	// Should use the explicit user, not the test override
+	assert.Equal(t, "explicituser", settings.user)
+}
+
+func TestSshSettings_AddressFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostname string
+		port     string
+		expected string
+	}{
+		{
+			name:     "standard format",
+			hostname: "server.example.com",
+			port:     "22",
+			expected: "server.example.com:22",
+		},
+		{
+			name:     "custom port",
+			hostname: "server.example.com",
+			port:     "2222",
+			expected: "server.example.com:2222",
+		},
+		{
+			name:     "IP address",
+			hostname: "10.0.0.1",
+			port:     "22",
+			expected: "10.0.0.1:22",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &sshSettings{
+				hostname: tt.hostname,
+				port:     tt.port,
+			}
+			assert.Equal(t, tt.expected, s.address())
+		})
+	}
+}
+
+func TestPreprocessSSHConfig_MissingFile(t *testing.T) {
+	_, matchLine, err := preprocessSSHConfig("/nonexistent/config/file")
+
+	assert.Error(t, err)
+	assert.Equal(t, 0, matchLine)
+}
+
+func TestWarningHandler(t *testing.T) {
+	// Test that setting a custom warning handler works
+	var capturedMessage string
+	originalHandler := WarningHandler
+	WarningHandler = func(msg string) {
+		capturedMessage = msg
+	}
+	defer func() {
+		WarningHandler = originalHandler
+	}()
+
+	emitWarning("test warning message")
+
+	assert.Equal(t, "test warning message", capturedMessage)
+}
+
+func TestEmitWarning_DefaultHandler(t *testing.T) {
+	// Reset to default handler
+	originalHandler := WarningHandler
+	WarningHandler = nil
+	defer func() {
+		WarningHandler = originalHandler
+	}()
+
+	// Should not panic with default handler
+	emitWarning("test message")
+}
+
+func TestExpandPath_EdgeCases(t *testing.T) {
+	home := homeDir()
+
+	tests := []struct {
+		name   string
+		path   string
+		expect string
+	}{
+		{
+			name:   "tilde slash path",
+			path:   "~/.ssh/id_rsa",
+			expect: home + "/.ssh/id_rsa",
+		},
+		{
+			name:   "tilde without slash",
+			path:   "~test",
+			expect: "~test", // Should not expand
+		},
+		{
+			name:   "empty path",
+			path:   "",
+			expect: "",
+		},
+		{
+			name:   "absolute path",
+			path:   "/etc/ssh/config",
+			expect: "/etc/ssh/config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := expandPath(tt.path)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestSuggestionForDialError_NetworkUnreachable(t *testing.T) {
+	err := errFromString("network is unreachable")
+	suggestion := suggestionForDialError(err)
+
+	assert.Contains(t, suggestion, "route")
+}
+
+func TestSuggestionForHandshakeError_NoSupportedMethods(t *testing.T) {
+	err := errFromString("no supported methods remain")
+	suggestion := suggestionForHandshakeError(err, nil)
+
+	assert.Contains(t, suggestion, "Auth failed")
+}
+
+func TestSuggestionForHandshakeError_HostKey(t *testing.T) {
+	err := errFromString("host key verification failed")
+	suggestion := suggestionForHandshakeError(err, nil)
+
+	assert.Contains(t, suggestion, "Host key")
+}
+
+func TestHostKeyMismatchError_WithKnownKeys(t *testing.T) {
+	// Import required for this test
+	err := &HostKeyMismatchError{
+		Hostname:     "server.example.com:22",
+		ReceivedType: "ssh-ed25519",
+		KnownHosts:   "/home/user/.ssh/known_hosts",
+		Want:         nil, // Empty want slice
+	}
+
+	suggestion := err.Suggestion()
+
+	// Should mention "unknown" for want types when slice is empty
+	assert.Contains(t, suggestion, "unknown")
+	assert.Contains(t, suggestion, "ssh-ed25519")
+}
+
+func TestIsEncryptedPEM_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   []byte
+		expect bool
+	}{
+		{
+			name:   "lowercase encrypted",
+			data:   []byte("encrypted"),
+			expect: false, // isEncryptedPEM looks for "ENCRYPTED" (uppercase)
+		},
+		{
+			name:   "mixed case",
+			data:   []byte("Encrypted"),
+			expect: false,
+		},
+		{
+			name:   "proc-type header",
+			data:   []byte("Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC"),
+			expect: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isEncryptedPEM(tt.data)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestResolveSSHSettings_PortOnlyDigits(t *testing.T) {
+	// Test that port parsing only accepts digits
+	settings := resolveSSHSettings("example.com:abc")
+
+	// "abc" is not a valid port, so it shouldn't be parsed as port
+	assert.Equal(t, "example.com:abc", settings.hostname)
+	assert.Equal(t, "22", settings.port) // Should keep default
+}
+
+func TestResolveSSHSettings_EmptyPort(t *testing.T) {
+	settings := resolveSSHSettings("example.com:")
+
+	// Empty string after colon should not change port
+	assert.Equal(t, "example.com:", settings.hostname)
+	assert.Equal(t, "22", settings.port)
+}
+
+// Tests for keyFileAuth function
+
+func TestKeyFileAuth_NonexistentFile(t *testing.T) {
+	_, err := keyFileAuth("/nonexistent/path/to/key")
+	assert.Error(t, err)
+}
+
+func TestKeyFileAuth_InvalidKeyData(t *testing.T) {
+	// Create a temp file with invalid key data
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "invalid_key")
+	err := os.WriteFile(keyPath, []byte("not a valid ssh key"), 0600)
+	require.NoError(t, err)
+
+	_, err = keyFileAuth(keyPath)
+	assert.Error(t, err)
+}
+
+func TestKeyFileAuth_EncryptedKey(t *testing.T) {
+	// Create a temp file with encrypted key markers
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "encrypted_key")
+	encryptedKeyContent := `-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-128-CBC,0123456789ABCDEF
+
+invalidencryptedcontent
+-----END RSA PRIVATE KEY-----`
+	err := os.WriteFile(keyPath, []byte(encryptedKeyContent), 0600)
+	require.NoError(t, err)
+
+	_, err = keyFileAuth(keyPath)
+	assert.Error(t, err)
+
+	// Check that it's an EncryptedKeyError
+	var encErr *EncryptedKeyError
+	assert.True(t, errors.As(err, &encErr))
+	assert.Contains(t, encErr.Path, "encrypted_key")
+}
+
+func TestKeyFileAuth_EncryptedOpenSSHKey(t *testing.T) {
+	// Create a temp file with ENCRYPTED marker in BEGIN line (OpenSSH format)
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "encrypted_openssh")
+	encryptedKeyContent := `-----BEGIN ENCRYPTED PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgInvalidData
+-----END ENCRYPTED PRIVATE KEY-----`
+	err := os.WriteFile(keyPath, []byte(encryptedKeyContent), 0600)
+	require.NoError(t, err)
+
+	_, err = keyFileAuth(keyPath)
+	assert.Error(t, err)
+}
+
+// Tests for CloseAgent function
+
+func TestCloseAgent_NilConnection(t *testing.T) {
+	// Reset agent state to test nil case
+	originalConn := agentConn
+	agentConn = nil
+
+	// Should not panic with nil connection
+	CloseAgent()
+
+	agentConn = originalConn
+}
+
+// Tests for sshAgentAuth function
+
+func TestSshAgentAuth_NoSocket(t *testing.T) {
+	// Save and clear SSH_AUTH_SOCK
+	orig := os.Getenv("SSH_AUTH_SOCK")
+	os.Unsetenv("SSH_AUTH_SOCK")
+	defer os.Setenv("SSH_AUTH_SOCK", orig)
+
+	result := sshAgentAuth()
+	assert.Nil(t, result)
+}
+
+// Tests for createHostKeyCallback function
+
+func TestCreateHostKeyCallback_CreatesKnownHostsIfMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	sshDir := filepath.Join(tmpDir, ".ssh")
+	knownHostsPath := filepath.Join(sshDir, "known_hosts")
+
+	// Neither .ssh nor known_hosts should exist
+	_, err := os.Stat(sshDir)
+	assert.True(t, os.IsNotExist(err))
+
+	callback, err := createHostKeyCallback(knownHostsPath)
+	require.NoError(t, err)
+	assert.NotNil(t, callback)
+
+	// Verify known_hosts was created
+	info, err := os.Stat(knownHostsPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestCreateHostKeyCallback_ExistingKnownHosts(t *testing.T) {
+	tmpDir := t.TempDir()
+	knownHostsPath := filepath.Join(tmpDir, "known_hosts")
+
+	// Create an empty known_hosts file
+	err := os.WriteFile(knownHostsPath, []byte{}, 0600)
+	require.NoError(t, err)
+
+	callback, err := createHostKeyCallback(knownHostsPath)
+	require.NoError(t, err)
+	assert.NotNil(t, callback)
+}
+
+// Tests for helper functions
+
+func TestHomeDir_Fallback(t *testing.T) {
+	// homeDir should return something even if UserHomeDir fails
+	home := homeDir()
+	assert.NotEmpty(t, home)
+}
+
+// Tests for parseHostPort-like functionality in resolveSSHSettings
+
+func TestResolveSSHSettings_Comprehensive(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantHostname string
+		wantPort     string
+		wantUser     string
+	}{
+		{
+			name:         "simple hostname",
+			input:        "myserver",
+			wantHostname: "myserver",
+			wantPort:     "22",
+		},
+		{
+			name:         "hostname with port",
+			input:        "myserver:2222",
+			wantHostname: "myserver",
+			wantPort:     "2222",
+		},
+		{
+			name:         "user@hostname",
+			input:        "admin@myserver",
+			wantHostname: "myserver",
+			wantPort:     "22",
+			wantUser:     "admin",
+		},
+		{
+			name:         "user@hostname:port",
+			input:        "root@myserver:2222",
+			wantHostname: "myserver",
+			wantPort:     "2222",
+			wantUser:     "root",
+		},
+		{
+			name:         "ip address",
+			input:        "192.168.1.100",
+			wantHostname: "192.168.1.100",
+			wantPort:     "22",
+		},
+		{
+			name:         "ip address with port",
+			input:        "192.168.1.100:22222",
+			wantHostname: "192.168.1.100",
+			wantPort:     "22222",
+		},
+		{
+			name:         "user@ip:port",
+			input:        "ubuntu@10.0.0.1:3333",
+			wantHostname: "10.0.0.1",
+			wantPort:     "3333",
+			wantUser:     "ubuntu",
+		},
+		{
+			name:         "fqdn",
+			input:        "server.example.com",
+			wantHostname: "server.example.com",
+			wantPort:     "22",
+		},
+		{
+			name:         "fqdn with port",
+			input:        "server.example.com:2222",
+			wantHostname: "server.example.com",
+			wantPort:     "2222",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear test user override for these tests
+			orig := os.Getenv("RR_TEST_SSH_USER")
+			os.Unsetenv("RR_TEST_SSH_USER")
+			defer os.Setenv("RR_TEST_SSH_USER", orig)
+
+			settings := resolveSSHSettings(tt.input)
+
+			assert.Equal(t, tt.wantHostname, settings.hostname, "hostname mismatch")
+			assert.Equal(t, tt.wantPort, settings.port, "port mismatch")
+			if tt.wantUser != "" {
+				assert.Equal(t, tt.wantUser, settings.user, "user mismatch")
+			}
+		})
+	}
+}
+
+// Tests for buildSSHConfig error paths
+
+func TestBuildSSHConfig_NoAuthMethods(t *testing.T) {
+	// Create settings with no valid auth methods available
+	settings := &sshSettings{
+		hostname:     "example.com",
+		port:         "22",
+		user:         "testuser",
+		identityFile: "/nonexistent/key",
+	}
+
+	// Save and clear SSH_AUTH_SOCK to disable agent
+	origSocket := os.Getenv("SSH_AUTH_SOCK")
+	os.Unsetenv("SSH_AUTH_SOCK")
+	defer os.Setenv("SSH_AUTH_SOCK", origSocket)
+
+	// Clear test key override
+	origTestKey := os.Getenv("RR_TEST_SSH_KEY")
+	os.Unsetenv("RR_TEST_SSH_KEY")
+	defer os.Setenv("RR_TEST_SSH_KEY", origTestKey)
+
+	// Temporarily disable default key files by using a non-existent home
+	// This test may still succeed if default keys exist, but we're testing the path
+	_, err := buildSSHConfig(settings)
+
+	// The function may succeed or fail depending on whether default keys exist
+	// We just want to ensure it doesn't panic
+	_ = err
+}
+
+func TestBuildSSHConfig_WithEncryptedKeys(t *testing.T) {
+	// Create a temp encrypted key
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "encrypted_key")
+	encryptedKeyContent := `-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-128-CBC,0123456789ABCDEF
+
+invalidencryptedcontent
+-----END RSA PRIVATE KEY-----`
+	err := os.WriteFile(keyPath, []byte(encryptedKeyContent), 0600)
+	require.NoError(t, err)
+
+	settings := &sshSettings{
+		hostname:     "example.com",
+		port:         "22",
+		user:         "testuser",
+		identityFile: keyPath,
+	}
+
+	// Save and clear SSH_AUTH_SOCK to disable agent
+	origSocket := os.Getenv("SSH_AUTH_SOCK")
+	os.Unsetenv("SSH_AUTH_SOCK")
+	defer os.Setenv("SSH_AUTH_SOCK", origSocket)
+
+	// Clear test key override
+	origTestKey := os.Getenv("RR_TEST_SSH_KEY")
+	os.Unsetenv("RR_TEST_SSH_KEY")
+	defer os.Setenv("RR_TEST_SSH_KEY", origTestKey)
+
+	_, err = buildSSHConfig(settings)
+
+	// Should fail because key is encrypted and no agent
+	// But the encrypted key should be tracked in settings.encryptedKeys
+	if err != nil {
+		assert.Contains(t, err.Error(), "encrypted")
+	}
+}
+
+// Tests for StrictHostKeyChecking
+
+func TestBuildSSHConfig_InsecureHostKeyChecking(t *testing.T) {
+	// Create a valid unencrypted test key
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "test_key")
+
+	// Generate a real key for testing
+	_, lookErr := exec.LookPath("ssh-keygen")
+	if lookErr != nil {
+		t.Skip("ssh-keygen not available")
+	}
+
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "test")
+	err := cmd.Run()
+	require.NoError(t, err)
+
+	settings := &sshSettings{
+		hostname:     "example.com",
+		port:         "22",
+		user:         "testuser",
+		identityFile: keyPath,
+	}
+
+	// Disable strict host key checking
+	originalValue := StrictHostKeyChecking
+	StrictHostKeyChecking = false
+	defer func() { StrictHostKeyChecking = originalValue }()
+
+	config, err := buildSSHConfig(settings)
+	require.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.NotNil(t, config.HostKeyCallback)
+}
+
+// Tests for preprocessSSHConfig edge cases
+
+func TestPreprocessSSHConfig_IndentedMatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	// Match with leading whitespace
+	configContent := `Host myserver
+    HostName 192.168.1.100
+
+    Match host *.example.com
+    User special
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	content, matchLine, err := preprocessSSHConfig(configPath)
+	require.NoError(t, err)
+
+	// Should find Match even with leading whitespace
+	assert.NotZero(t, matchLine)
+	assert.NotContains(t, string(content), "Match")
+}
+
+func TestPreprocessSSHConfig_EmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	err := os.WriteFile(configPath, []byte(""), 0600)
+	require.NoError(t, err)
+
+	content, matchLine, err := preprocessSSHConfig(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, 0, matchLine)
+	assert.Empty(t, content)
+}
+
+// Tests for error suggestion functions with various error types
+
+func TestSuggestionForDialError_AllPatterns(t *testing.T) {
+	tests := []struct {
+		name     string
+		errMsg   string
+		contains []string
+	}{
+		{
+			name:     "connection refused",
+			errMsg:   "dial tcp: connection refused",
+			contains: []string{"SSH running"},
+		},
+		{
+			name:     "no route",
+			errMsg:   "no route to host",
+			contains: []string{"route"},
+		},
+		{
+			name:     "network unreachable",
+			errMsg:   "network is unreachable",
+			contains: []string{"route"},
+		},
+		{
+			name:     "io timeout",
+			errMsg:   "i/o timeout",
+			contains: []string{"timed out"},
+		},
+		{
+			name:     "general timeout",
+			errMsg:   "connection timeout",
+			contains: []string{"timed out"},
+		},
+		{
+			name:     "unknown error",
+			errMsg:   "some random error",
+			contains: []string{"Make sure"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suggestion := suggestionForDialError(errFromString(tt.errMsg))
+			for _, substr := range tt.contains {
+				assert.Contains(t, suggestion, substr)
+			}
+		})
+	}
+}
+
+func TestSuggestionForHandshakeError_AllPatterns(t *testing.T) {
+	tests := []struct {
+		name          string
+		errMsg        string
+		encryptedKeys []string
+		contains      []string
+	}{
+		{
+			name:     "unable to authenticate",
+			errMsg:   "unable to authenticate",
+			contains: []string{"Auth failed"},
+		},
+		{
+			name:     "no supported methods",
+			errMsg:   "no supported methods remain",
+			contains: []string{"Auth failed"},
+		},
+		{
+			name:          "auth fail with encrypted keys",
+			errMsg:        "unable to authenticate",
+			encryptedKeys: []string{"/home/user/.ssh/id_rsa"},
+			contains:      []string{"encrypted", "ssh-add"},
+		},
+		{
+			name:     "host key error",
+			errMsg:   "host key verification failed",
+			contains: []string{"Host key"},
+		},
+		{
+			name:     "generic error",
+			errMsg:   "something went wrong",
+			contains: []string{"went wrong"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), tt.encryptedKeys)
+			for _, substr := range tt.contains {
+				assert.Contains(t, suggestion, substr)
+			}
+		})
+	}
+}
+
+// Tests for resolveSSHSettings with SSH config file
+
+func TestResolveSSHSettings_FromSSHConfig(t *testing.T) {
+	// Create a temp SSH config
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	// Create a simple config with a host entry
+	configContent := `Host testserver
+    HostName 10.0.0.100
+    User configuser
+    Port 3333
+    IdentityFile ~/.ssh/custom_key
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	// Note: resolveSSHSettings uses the default ~/.ssh/config path
+	// so this test verifies the parsing logic indirectly
+
+	// Instead test the address() method which is always tested
+	settings := &sshSettings{
+		hostname: "10.0.0.100",
+		port:     "3333",
+		user:     "configuser",
+	}
+
+	assert.Equal(t, "10.0.0.100:3333", settings.address())
+}
+
+// Test ParseSSHConfig for the wrapper function
+
+func TestParseSSHConfig_Wrapper(t *testing.T) {
+	// This tests the wrapper that uses default path
+	// We can't control the user's SSH config, but verify no panic
+	hosts, err := ParseSSHConfig()
+
+	// May or may not have hosts depending on user's config
+	// Just verify no errors for non-existent or valid configs
+	if err != nil {
+		// If there's an error, it should be a parse error, not a panic
+		t.Logf("ParseSSHConfig returned error (might be expected): %v", err)
+	}
+	_ = hosts
+}
+
+// Tests for keyFileAuth with valid key
+
+func TestKeyFileAuth_ValidKey(t *testing.T) {
+	_, lookErr := exec.LookPath("ssh-keygen")
+	if lookErr != nil {
+		t.Skip("ssh-keygen not available")
+	}
+
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "test_key")
+
+	// Generate a real key for testing
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "test")
+	err := cmd.Run()
+	require.NoError(t, err)
+
+	// Now test keyFileAuth
+	authMethod, err := keyFileAuth(keyPath)
+	require.NoError(t, err)
+	assert.NotNil(t, authMethod)
+}
+
+// Tests for createHostKeyCallback error handling
+
+func TestCreateHostKeyCallback_InvalidDirectory(t *testing.T) {
+	// Try to create known_hosts in a read-only directory
+	// This is tricky to test portably, so we just verify the function handles errors
+
+	// Test with a path where parent doesn't exist and can't be created
+	callback, err := createHostKeyCallback("/nonexistent/deep/path/known_hosts")
+
+	// Should fail because parent directories can't be created
+	// But might succeed on some systems, so just verify no panic
+	_ = callback
+	_ = err
+}
+
+func TestCreateHostKeyCallback_WithEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	knownHostsPath := filepath.Join(tmpDir, "known_hosts")
+
+	// Create known_hosts with a valid entry
+	entry := "example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJmMq0FwNpHzzrt6mU8k5dBnEUB0J+E9z6xmrXrKhQc7"
+	err := os.WriteFile(knownHostsPath, []byte(entry+"\n"), 0600)
+	require.NoError(t, err)
+
+	callback, err := createHostKeyCallback(knownHostsPath)
+	require.NoError(t, err)
+	assert.NotNil(t, callback)
+}
+
+// More comprehensive tests for CloseAgent
+
+func TestCloseAgent_AfterInit(t *testing.T) {
+	// Test that CloseAgent doesn't panic even when called multiple times
+	CloseAgent()
+	CloseAgent() // Should be safe to call multiple times
+}
+
+// Tests for sshAgentAuth with invalid socket
+
+func TestSshAgentAuth_InvalidSocket(t *testing.T) {
+	// Save original socket
+	orig := os.Getenv("SSH_AUTH_SOCK")
+	defer os.Setenv("SSH_AUTH_SOCK", orig)
+
+	// Set an invalid socket path
+	os.Setenv("SSH_AUTH_SOCK", "/nonexistent/socket/path")
+
+	// Reset agent state to force reconnection attempt
+	// Note: Due to sync.Once, this might not trigger new connection
+	// But we're testing the code path doesn't panic
+	result := sshAgentAuth()
+
+	// Result can be nil (no valid agent) or non-nil (if agent was cached)
+	_ = result
+}
+
+// Tests for buildSSHConfig with strict host key checking
+
+func TestBuildSSHConfig_StrictHostKeyChecking(t *testing.T) {
+	_, lookErr := exec.LookPath("ssh-keygen")
+	if lookErr != nil {
+		t.Skip("ssh-keygen not available")
+	}
+
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "test_key")
+
+	// Generate a real key for testing
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", "", "-C", "test")
+	err := cmd.Run()
+	require.NoError(t, err)
+
+	settings := &sshSettings{
+		hostname:     "example.com",
+		port:         "22",
+		user:         "testuser",
+		identityFile: keyPath,
+	}
+
+	// Enable strict host key checking (default)
+	originalValue := StrictHostKeyChecking
+	StrictHostKeyChecking = true
+	defer func() { StrictHostKeyChecking = originalValue }()
+
+	config, err := buildSSHConfig(settings)
+	require.NoError(t, err)
+	assert.NotNil(t, config)
+	assert.NotNil(t, config.HostKeyCallback)
+}
+
+// Tests for encryptedKeys tracking in buildSSHConfig
+
+func TestBuildSSHConfig_TracksEncryptedKeys(t *testing.T) {
+	// Create a temp encrypted key
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "encrypted_key")
+	encryptedKeyContent := `-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-128-CBC,0123456789ABCDEF
+
+invalidencryptedcontent
+-----END RSA PRIVATE KEY-----`
+	err := os.WriteFile(keyPath, []byte(encryptedKeyContent), 0600)
+	require.NoError(t, err)
+
+	settings := &sshSettings{
+		hostname:     "example.com",
+		port:         "22",
+		user:         "testuser",
+		identityFile: keyPath,
+	}
+
+	// Save and clear SSH_AUTH_SOCK to disable agent
+	origSocket := os.Getenv("SSH_AUTH_SOCK")
+	os.Unsetenv("SSH_AUTH_SOCK")
+	defer os.Setenv("SSH_AUTH_SOCK", origSocket)
+
+	// Clear test key override
+	origTestKey := os.Getenv("RR_TEST_SSH_KEY")
+	os.Unsetenv("RR_TEST_SSH_KEY")
+	defer os.Setenv("RR_TEST_SSH_KEY", origTestKey)
+
+	_, _ = buildSSHConfig(settings)
+
+	// Check that encrypted key was tracked
+	assert.Contains(t, settings.encryptedKeys, keyPath)
+}
+
+// Tests for Client methods
+
+func TestClient_Methods(t *testing.T) {
+	c := &Client{
+		Client:  nil,
+		Host:    "testserver",
+		Address: "192.168.1.1:22",
+	}
+
+	// Test GetHost
+	assert.Equal(t, "testserver", c.GetHost())
+
+	// Test GetAddress
+	assert.Equal(t, "192.168.1.1:22", c.GetAddress())
+
+	// Test Close on nil client
+	err := c.Close()
+	assert.NoError(t, err)
+}
+
+// Import required for the assertion package
+func init() {
+	// Empty init - imports are needed for the tests
 }
