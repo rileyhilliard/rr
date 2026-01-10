@@ -62,11 +62,6 @@ func (l *noopLogger) Info(format string, args ...interface{})  {}
 func (l *noopLogger) Warn(format string, args ...interface{})  {}
 func (l *noopLogger) Error(format string, args ...interface{}) {}
 
-// bufferLogger captures log messages for testing.
-type bufferLogger struct {
-	Messages []LogMessage
-}
-
 // LogMessage represents a captured log message.
 type LogMessage struct {
 	Level   string
@@ -75,34 +70,36 @@ type LogMessage struct {
 
 // BufferLogger captures log messages for testing.
 // Exported for use in test assertions.
-type BufferLogger = bufferLogger
+type BufferLogger struct {
+	Messages []LogMessage
+}
 
 // NewBufferLogger creates a logger that captures messages for inspection.
 // Useful for testing that code logs expected messages.
 func NewBufferLogger() *BufferLogger {
-	return &bufferLogger{
+	return &BufferLogger{
 		Messages: make([]LogMessage, 0),
 	}
 }
 
-func (l *bufferLogger) Debug(format string, args ...interface{}) {
+func (l *BufferLogger) Debug(format string, args ...interface{}) {
 	l.Messages = append(l.Messages, LogMessage{Level: "debug", Message: fmt.Sprintf(format, args...)})
 }
 
-func (l *bufferLogger) Info(format string, args ...interface{}) {
+func (l *BufferLogger) Info(format string, args ...interface{}) {
 	l.Messages = append(l.Messages, LogMessage{Level: "info", Message: fmt.Sprintf(format, args...)})
 }
 
-func (l *bufferLogger) Warn(format string, args ...interface{}) {
+func (l *BufferLogger) Warn(format string, args ...interface{}) {
 	l.Messages = append(l.Messages, LogMessage{Level: "warn", Message: fmt.Sprintf(format, args...)})
 }
 
-func (l *bufferLogger) Error(format string, args ...interface{}) {
+func (l *BufferLogger) Error(format string, args ...interface{}) {
 	l.Messages = append(l.Messages, LogMessage{Level: "error", Message: fmt.Sprintf(format, args...)})
 }
 
 // HasLevel returns true if any message was logged at the given level.
-func (l *bufferLogger) HasLevel(level string) bool {
+func (l *BufferLogger) HasLevel(level string) bool {
 	for _, m := range l.Messages {
 		if m.Level == level {
 			return true
@@ -112,7 +109,7 @@ func (l *bufferLogger) HasLevel(level string) bool {
 }
 
 // Clear removes all captured messages.
-func (l *bufferLogger) Clear() {
+func (l *BufferLogger) Clear() {
 	l.Messages = l.Messages[:0]
 }
 
