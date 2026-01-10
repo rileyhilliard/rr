@@ -779,6 +779,157 @@ flowchart TB
 - **SSH Key Manager**: Check for keys, generate if needed, run ssh-copy-id
 - **Doctor Checks**: Validate config, test connectivity, check dependencies
 
+### Package Dependencies
+
+This diagram shows how the internal packages depend on each other:
+
+```mermaid
+flowchart TB
+    subgraph cmd["cmd/rr"]
+        main[main.go]
+    end
+
+    subgraph cli["internal/cli"]
+        run[run.go]
+        exec_cmd[exec_cmd.go]
+        sync_cmd[sync.go]
+        task[task.go]
+        workflow[workflow.go]
+    end
+
+    subgraph core["Core Packages"]
+        config[config]
+        hostpkg[host]
+        syncpkg[sync]
+        execpkg[exec]
+        lockpkg[lock]
+    end
+
+    subgraph ui_layer["UI Packages"]
+        output[output]
+        ui[ui]
+        monitor[monitor]
+    end
+
+    subgraph infra["Infrastructure"]
+        errors[errors]
+        sshutil[pkg/sshutil]
+    end
+
+    main --> run
+    main --> exec_cmd
+    main --> sync_cmd
+    main --> task
+
+    run --> workflow
+    exec_cmd --> workflow
+    sync_cmd --> workflow
+    task --> workflow
+
+    workflow --> config
+    workflow --> hostpkg
+    workflow --> syncpkg
+    workflow --> lockpkg
+    workflow --> ui
+
+    hostpkg --> sshutil
+    syncpkg --> sshutil
+    lockpkg --> sshutil
+    execpkg --> sshutil
+
+    run --> output
+    run --> execpkg
+
+    hostpkg --> errors
+    syncpkg --> errors
+    lockpkg --> errors
+    config --> errors
+
+    monitor --> hostpkg
+    monitor --> sshutil
+
+    style cmd fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
+    style cli fill:#dcfce7,stroke:#10b981,stroke-width:2px
+    style core fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
+    style ui_layer fill:#f3e8ff,stroke:#a855f7,stroke-width:2px
+    style infra fill:#fce7f3,stroke:#ec4899,stroke-width:2px
+```
+
+### The `rr run` Command Flow
+
+This sequence diagram shows what happens when you run `rr run "make test"`:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CLI as cli/run.go
+    participant Workflow as workflow.go
+    participant Config as config
+    participant Selector as host/selector
+    participant SSH as sshutil
+    participant Sync as sync
+    participant Lock as lock
+    participant Exec as exec
+
+    User->>CLI: rr run "make test"
+    CLI->>Workflow: SetupWorkflow(opts)
+
+    rect rgb(219, 234, 254)
+        Note over Workflow,Config: Phase 1: Load Config
+        Workflow->>Config: Find() + Load()
+        Config-->>Workflow: config
+    end
+
+    rect rgb(220, 252, 231)
+        Note over Workflow,SSH: Phase 2: Connect
+        Workflow->>Selector: Select(preferredHost)
+        loop Try each SSH alias
+            Selector->>SSH: ProbeAndConnect(alias)
+            alt Success
+                SSH-->>Selector: client, latency
+            else Failure
+                SSH-->>Selector: error
+                Note over Selector: Try next alias
+            end
+        end
+        Selector-->>Workflow: Connection
+    end
+
+    rect rgb(254, 243, 199)
+        Note over Workflow,Sync: Phase 3: Sync Files
+        Workflow->>Sync: Sync(conn, workDir, config)
+        Sync->>SSH: rsync via SSH
+        SSH-->>Sync: progress
+        Sync-->>Workflow: done
+    end
+
+    rect rgb(243, 232, 255)
+        Note over Workflow,Lock: Phase 4: Acquire Lock
+        Workflow->>Lock: Acquire(conn, config, hash)
+        Lock->>SSH: mkdir lockDir
+        alt Lock acquired
+            SSH-->>Lock: success
+            Lock-->>Workflow: Lock
+        else Lock held
+            SSH-->>Lock: exists
+            Lock->>Lock: Wait and retry
+        end
+    end
+
+    Workflow-->>CLI: WorkflowContext
+
+    rect rgb(252, 231, 243)
+        Note over CLI,Exec: Phase 5: Execute Command
+        CLI->>Exec: ExecStream(command)
+        Exec->>SSH: run command
+        SSH-->>User: streaming output
+        SSH-->>Exec: exit code
+    end
+
+    CLI->>Lock: Release()
+    CLI->>User: exit code + summary
+```
+
 ### Host Selection Flow
 
 ```mermaid
