@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-01-10
+
+### Added
+
+- Load-balanced host selection: when multiple hosts are configured, work is distributed across available hosts instead of using subsequent hosts only as failover
+- Non-blocking lock acquisition with `TryAcquire` for immediate lock status checks
+- Round-robin waiting when all hosts are locked (configurable via `lock.wait_timeout`, default 1 minute)
+- `local_fallback` now takes precedence: if true and all hosts locked, immediately runs locally without waiting
+- Auto-detection of PATH differences between local and remote, with automatic `setup_commands` suggestions during `rr init`
+
+### Changed
+
+- Workflow phase order changed to Connect -> Lock -> Sync (avoids syncing to hosts that can't be locked)
+- Shared golangci-lint version between CI and local via `.golangci-version` file
+
+### Developer Experience
+
+- Test coverage improved to 70.2%
+- New integration tests for load balancing functionality
+
+## [0.3.3] - 2026-01-09
+
+### Security
+
+- Bumped Go to 1.24.11 for security fixes
+
+### Fixed
+
+- CI release workflow now reads Go version from go.mod
+
+## [0.3.2] - 2026-01-09
+
+### Added
+
+- PATH diagnostics for "command not found" errors with actionable suggestions
+
+### Security
+
+- Bumped Go to 1.24.4 for security fixes
+
+### Fixed
+
+- Use `${HOME}` instead of `~` for default remote directory (shell compatibility)
+- Improved SSH server startup reliability in CI
+
+### Changed
+
+- CI dependencies updated (actions/setup-go v6, golangci-lint-action v9, upload-artifact v6)
+
+## [0.3.1] - 2026-01-09
+
+### Fixed
+
+- Use `${HOME}` instead of `~` for default remote directory path expansion
+
+## [0.3.0] - 2026-01-09
+
+### Added
+
+- `rr hosts` command for managing configured hosts
+- `rr update` command for self-updating the CLI
+- CI integration tests with SSH server in Docker
+- Expanded test coverage across packages
+
+### Changed
+
+- Improved UX for host selection and error messages
+
+## [0.2.2] - 2026-01-09
+
+### Changed
+
+- Use login shell by default for proper PATH setup on remote hosts
+- Set coverage threshold to 50% with CI enforcement
+
+## [0.2.1] - 2026-01-09
+
+### Added
+
+- `rr update` command for self-updating to the latest release
+
 ## [0.2.0] - 2025-01-09
 
 ### Added

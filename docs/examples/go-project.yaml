@@ -10,7 +10,7 @@ hosts:
     ssh:
       - linux.local
       - linux-vpn
-    dir: ~/code/${PROJECT}
+    dir: ${HOME}/code/${PROJECT}
     env:
       GOOS: linux
       GOARCH: amd64

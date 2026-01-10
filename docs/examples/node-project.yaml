@@ -9,7 +9,7 @@ hosts:
     ssh:
       - dev.local
       - dev-tailscale
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
     env:
       NODE_ENV: development
 

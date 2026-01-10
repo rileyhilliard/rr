@@ -1,7 +1,12 @@
-# Example: Multi-host setup with tags
+# Example: Multi-host setup with load balancing
 #
-# This config shows how to set up multiple hosts with tags for targeting
-# specific machines. Useful for small teams sharing build servers.
+# This config shows how to set up multiple hosts for load balancing and
+# targeting specific machines. Useful for small teams sharing build servers.
+#
+# With multiple hosts configured, rr automatically distributes work:
+# - Tries hosts in alphabetical order with non-blocking lock checks
+# - If a host is locked, immediately tries the next available host
+# - If all hosts are locked, waits and round-robins until one is free
 
 version: 1
 
@@ -10,7 +15,7 @@ hosts:
     ssh:
       - mac-mini.local
       - mac-mini-tailscale
-    dir: ~/builds/${PROJECT}
+    dir: ${HOME}/builds/${PROJECT}
     tags:
       - fast
       - macos
@@ -28,7 +33,7 @@ hosts:
   raspberry-pi:
     ssh:
       - pi.local
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
     tags:
       - arm
       - linux
@@ -56,8 +61,9 @@ sync:
 
 lock:
   enabled: true
-  timeout: 10m  # Longer timeout for shared machines
-  stale: 30m
+  timeout: 10m       # How long to wait when acquiring lock on a single host
+  wait_timeout: 2m   # How long to round-robin when all hosts are locked
+  stale: 30m         # Consider locks older than this as stale
 
 tasks:
   test:
@@ -89,7 +95,12 @@ tasks:
     run: python train.py
 
 # Usage:
-#   rr test                    # Runs on mac-mini (default)
-#   rr test --host linux-server # Runs on specific host
-#   rr test --tag linux        # Runs on any host tagged 'linux'
-#   rr build-linux             # Only runs on linux-server
+#   rr test                     # Runs on first available host (load balanced)
+#   rr test --host linux-server # Runs on specific host (no load balancing)
+#   rr test --tag linux         # Runs on any host tagged 'linux'
+#   rr build-linux              # Only runs on linux-server (task-specific host)
+#
+# Load balancing behavior:
+#   - With multiple hosts and no --host flag, rr tries each host until one is free
+#   - If local_fallback is true and all hosts are locked, runs locally immediately
+#   - Otherwise waits up to wait_timeout, checking hosts in round-robin fashion
