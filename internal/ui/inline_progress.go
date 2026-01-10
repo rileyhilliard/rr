@@ -48,7 +48,7 @@ func (p *InlineProgress) SetUseFakeProgress(use bool) {
 }
 
 // fakeProgressDuration is how long the fake progress takes to reach 99%.
-const fakeProgressDuration = 10 * time.Second
+const fakeProgressDuration = 30 * time.Second
 
 // easeOutQuad applies an ease-out quadratic curve: decelerates toward the end.
 // t should be in range [0, 1], returns value in [0, 1].
