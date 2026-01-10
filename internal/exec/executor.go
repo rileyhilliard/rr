@@ -8,6 +8,49 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 )
 
+// MissingToolError represents a command-not-found error with context for fixing it.
+type MissingToolError struct {
+	ToolName    string           // The missing tool/command name
+	HostName    string           // The remote host where it's missing
+	ProbeResult *PathProbeResult // Results from probing for the tool (may be nil)
+	CanInstall  bool             // Whether we have an installer for this tool
+	Suggestion  string           // Human-readable suggestion text
+}
+
+// Error implements the error interface.
+func (e *MissingToolError) Error() string {
+	return fmt.Sprintf("'%s' not found in PATH on remote", e.ToolName)
+}
+
+// FoundButNotInPATH returns true if the tool exists but isn't in PATH.
+func (e *MissingToolError) FoundButNotInPATH() bool {
+	if e.ProbeResult == nil {
+		return false
+	}
+	return e.ProbeResult.FoundInInter || len(e.ProbeResult.CommonPaths) > 0
+}
+
+// GetPATHToAdd returns the PATH directory to add if the tool was found.
+func (e *MissingToolError) GetPATHToAdd() string {
+	if e.ProbeResult == nil {
+		return ""
+	}
+	if e.ProbeResult.FoundInInter && e.ProbeResult.InterPath != "" {
+		// Extract directory from full path
+		lastSlash := strings.LastIndex(e.ProbeResult.InterPath, "/")
+		if lastSlash > 0 {
+			return e.ProbeResult.InterPath[:lastSlash]
+		}
+	}
+	if len(e.ProbeResult.CommonPaths) > 0 {
+		lastSlash := strings.LastIndex(e.ProbeResult.CommonPaths[0], "/")
+		if lastSlash > 0 {
+			return e.ProbeResult.CommonPaths[0][:lastSlash]
+		}
+	}
+	return ""
+}
+
 // commandNotFoundPatterns are regex patterns to detect "command not found" errors
 // from various shells. These require exit code 127.
 var commandNotFoundPatterns = []*regexp.Regexp{
@@ -63,10 +106,9 @@ func IsDependencyNotFound(stderr string) (string, bool) {
 	return "", false
 }
 
-// HandleExecError wraps execution errors with helpful suggestions.
-// It detects command-not-found errors and provides actionable fixes.
-// If client and hostName are provided, it probes the remote for better suggestions.
-func HandleExecError(cmd string, stderr string, exitCode int, client SSHExecer, hostName string) error {
+// DetectMissingTool checks if a command failed due to a missing tool and returns
+// structured information about it. Returns nil if not a missing tool error.
+func DetectMissingTool(cmd string, stderr string, exitCode int, client SSHExecer, hostName string) *MissingToolError {
 	// Check for direct command-not-found (exit 127)
 	cmdName, notFound := IsCommandNotFound(stderr, exitCode)
 
@@ -90,21 +132,24 @@ func HandleExecError(cmd string, stderr string, exitCode int, client SSHExecer, 
 		}
 	}
 
+	result := &MissingToolError{
+		ToolName:   displayCmd,
+		HostName:   hostName,
+		CanInstall: CanInstallTool(displayCmd),
+	}
+
 	// If we have an SSH client, probe for better suggestions
 	if client != nil {
 		probeResult, err := ProbeCommandPath(client, displayCmd)
 		if err == nil && probeResult != nil {
-			suggestion := GenerateSetupSuggestion(probeResult, hostName)
-			if suggestion != "" {
-				return errors.New(errors.ErrExec,
-					fmt.Sprintf("'%s' not found in PATH on remote", displayCmd),
-					suggestion)
-			}
+			result.ProbeResult = probeResult
+			result.Suggestion = GenerateSetupSuggestion(probeResult, hostName)
 		}
 	}
 
-	// Fallback to generic suggestion
-	suggestion := fmt.Sprintf(`'%s' wasn't found in the remote SSH session's PATH.
+	// Generate fallback suggestion if none from probe
+	if result.Suggestion == "" {
+		result.Suggestion = fmt.Sprintf(`'%s' wasn't found in the remote SSH session's PATH.
 
 This can happen if:
 - The tool isn't installed on the remote
@@ -123,8 +168,22 @@ Fixes:
      your-host:
        setup_commands:
          - export PATH=/opt/homebrew/bin:$PATH`, displayCmd, displayCmd, displayCmd)
+	}
+
+	return result
+}
+
+// HandleExecError wraps execution errors with helpful suggestions.
+// It detects command-not-found errors and provides actionable fixes.
+// If client and hostName are provided, it probes the remote for better suggestions.
+// This is the legacy function that returns a displayable error.
+func HandleExecError(cmd string, stderr string, exitCode int, client SSHExecer, hostName string) error {
+	missingTool := DetectMissingTool(cmd, stderr, exitCode, client, hostName)
+	if missingTool == nil {
+		return nil
+	}
 
 	return errors.New(errors.ErrExec,
-		fmt.Sprintf("'%s' not found in PATH on remote", displayCmd),
-		suggestion)
+		fmt.Sprintf("'%s' not found in PATH on remote", missingTool.ToolName),
+		missingTool.Suggestion)
 }
