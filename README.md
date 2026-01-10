@@ -60,9 +60,10 @@ Grab the binary for your platform from [releases](https://github.com/rileyhillia
 
 ## Setup
 
+**Prerequisite:** You need passwordless SSH access to your remote machine. If you can run `ssh user@yourhost` without entering a password, you're good. If not, see the [SSH setup guide](docs/ssh-setup.md).
+
 ```bash
 rr init          # Creates .rr.yaml - interactive prompts walk you through it
-rr setup myhost  # Configures SSH keys if needed
 rr doctor        # Verifies everything works
 ```
 
@@ -196,6 +197,7 @@ For more, see the [troubleshooting guide](docs/troubleshooting.md).
 
 ## Docs
 
+- [SSH setup guide](docs/ssh-setup.md) - Get passwordless SSH working
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Migration guide](docs/MIGRATION.md)
