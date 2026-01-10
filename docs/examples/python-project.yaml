@@ -10,7 +10,7 @@ hosts:
     ssh:
       - build.local          # Try local network first
       - build-tailscale      # Fall back to Tailscale
-    dir: ~/projects/${PROJECT}
+    dir: ${HOME}/projects/${PROJECT}
     env:
       PYTHONDONTWRITEBYTECODE: "1"
 
