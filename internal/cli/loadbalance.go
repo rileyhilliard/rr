@@ -45,6 +45,11 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	projectHash := hashProject(ctx.WorkDir)
 	hostNames := ctx.selector.GetHostNames()
 
+	// Put default host first if configured
+	if ctx.Config.Default != "" {
+		hostNames = reorderWithDefault(hostNames, ctx.Config.Default)
+	}
+
 	if len(hostNames) == 0 {
 		return nil, rrerrors.New(rrerrors.ErrConfig,
 			"No hosts configured",
@@ -304,4 +309,38 @@ func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error
 	}
 
 	return nil
+}
+
+// reorderWithDefault moves the default host to the front of the list.
+// If defaultHost is not in the list, returns the original slice unchanged.
+func reorderWithDefault(hostNames []string, defaultHost string) []string {
+	if defaultHost == "" {
+		return hostNames
+	}
+
+	// Find the default host in the list
+	defaultIdx := -1
+	for i, name := range hostNames {
+		if name == defaultHost {
+			defaultIdx = i
+			break
+		}
+	}
+
+	// Not found, return unchanged
+	if defaultIdx == -1 {
+		return hostNames
+	}
+
+	// Already first, nothing to do
+	if defaultIdx == 0 {
+		return hostNames
+	}
+
+	// Move default to front
+	result := make([]string, len(hostNames))
+	result[0] = defaultHost
+	copy(result[1:], hostNames[:defaultIdx])
+	copy(result[1+defaultIdx:], hostNames[defaultIdx+1:])
+	return result
 }
