@@ -1,53 +1,21 @@
 package cli
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFormatHosts(t *testing.T) {
-	tests := []struct {
-		name  string
-		hosts []string
-		want  string
-	}{
-		{
-			name:  "empty slice returns none",
-			hosts: []string{},
-			want:  "(none)",
-		},
-		{
-			name:  "nil slice returns none",
-			hosts: nil,
-			want:  "(none)",
-		},
-		{
-			name:  "single host",
-			hosts: []string{"dev-server"},
-			want:  "dev-server",
-		},
-		{
-			name:  "multiple hosts comma separated",
-			hosts: []string{"dev", "staging", "prod"},
-			want:  "dev, staging, prod",
-		},
-		{
-			name:  "two hosts",
-			hosts: []string{"local", "remote"},
-			want:  "local, remote",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatHosts(tt.hosts)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
+// Note: formatHosts functionality moved to internal/util.JoinOrNone
+// Tests for that are in internal/util/strings_test.go
 
 func TestBuildTaskLongDescription_WithRun(t *testing.T) {
 	task := config.TaskConfig{
@@ -199,4 +167,222 @@ func TestTaskOptions_WithValues(t *testing.T) {
 	assert.True(t, opts.DryRun)
 	assert.Equal(t, "/app", opts.WorkingDir)
 	assert.True(t, opts.Quiet)
+}
+
+// captureStdout captures stdout during function execution and returns the output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = w
+
+	fn()
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+
+	return buf.String()
+}
+
+func TestRenderTaskHeader(t *testing.T) {
+	tests := []struct {
+		name        string
+		taskName    string
+		task        *config.TaskConfig
+		wantStrings []string
+	}{
+		{
+			name:     "simple run command with description",
+			taskName: "test",
+			task: &config.TaskConfig{
+				Run:         "make test",
+				Description: "Run unit tests",
+			},
+			wantStrings: []string{"Task:", "test", "Run unit tests", "$", "make test"},
+		},
+		{
+			name:     "run command without description",
+			taskName: "build",
+			task: &config.TaskConfig{
+				Run: "make build",
+			},
+			wantStrings: []string{"Task:", "build", "$", "make build"},
+		},
+		{
+			name:     "multi-step task",
+			taskName: "deploy",
+			task: &config.TaskConfig{
+				Description: "Deploy to production",
+				Steps: []config.TaskStep{
+					{Name: "build", Run: "make build"},
+					{Name: "push", Run: "docker push"},
+					{Name: "apply", Run: "kubectl apply"},
+				},
+			},
+			wantStrings: []string{"Task:", "deploy", "Deploy to production", "(3 steps)"},
+		},
+		{
+			name:     "multi-step task without description",
+			taskName: "pipeline",
+			task: &config.TaskConfig{
+				Steps: []config.TaskStep{
+					{Name: "step1", Run: "echo 1"},
+					{Name: "step2", Run: "echo 2"},
+				},
+			},
+			wantStrings: []string{"Task:", "pipeline", "(2 steps)"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			pd := ui.NewPhaseDisplay(&buf)
+
+			output := captureStdout(t, func() {
+				renderTaskHeader(pd, tt.taskName, tt.task)
+			})
+
+			// Combine both outputs (stdout and buffer from PhaseDisplay)
+			combined := output + buf.String()
+
+			for _, want := range tt.wantStrings {
+				assert.Contains(t, combined, want, "output should contain %q", want)
+			}
+		})
+	}
+}
+
+func TestRenderTaskHeader_EmptyTask(t *testing.T) {
+	var buf bytes.Buffer
+	pd := ui.NewPhaseDisplay(&buf)
+
+	// Task with neither Run nor Steps should produce no output
+	task := &config.TaskConfig{}
+
+	output := captureStdout(t, func() {
+		renderTaskHeader(pd, "empty", task)
+	})
+
+	combined := output + buf.String()
+
+	// Should not contain "Task:" since there's nothing to render
+	assert.NotContains(t, combined, "Task:")
+}
+
+func TestRenderTaskSummary(t *testing.T) {
+	tests := []struct {
+		name        string
+		result      *exec.TaskResult
+		taskName    string
+		totalTime   time.Duration
+		execTime    time.Duration
+		host        string
+		wantStrings []string
+		wantSymbol  string
+	}{
+		{
+			name: "successful task",
+			result: &exec.TaskResult{
+				ExitCode:   0,
+				FailedStep: -1,
+			},
+			taskName:    "test",
+			totalTime:   5 * time.Second,
+			execTime:    3 * time.Second,
+			host:        "my-server",
+			wantStrings: []string{"test", "completed", "my-server", "5.0s total", "3.0s exec"},
+			wantSymbol:  ui.SymbolSuccess,
+		},
+		{
+			name: "failed simple task",
+			result: &exec.TaskResult{
+				ExitCode:   1,
+				FailedStep: -1,
+			},
+			taskName:    "build",
+			totalTime:   2 * time.Second,
+			execTime:    1 * time.Second,
+			host:        "build-server",
+			wantStrings: []string{"build", "failed", "build-server", "exit code 1", "2.0s"},
+			wantSymbol:  ui.SymbolFail,
+		},
+		{
+			name: "failed multi-step task",
+			result: &exec.TaskResult{
+				ExitCode:   2,
+				FailedStep: 1,
+				StepResults: []exec.StepResult{
+					{Name: "init", ExitCode: 0},
+					{Name: "compile", ExitCode: 2},
+				},
+			},
+			taskName:    "deploy",
+			totalTime:   10 * time.Second,
+			execTime:    8 * time.Second,
+			host:        "prod-server",
+			wantStrings: []string{"deploy", "failed", "step 'compile'", "prod-server", "exit code 2"},
+			wantSymbol:  ui.SymbolFail,
+		},
+		{
+			name: "success with fractional seconds",
+			result: &exec.TaskResult{
+				ExitCode:   0,
+				FailedStep: -1,
+			},
+			taskName:    "quick",
+			totalTime:   1500 * time.Millisecond,
+			execTime:    750 * time.Millisecond,
+			host:        "fast-host",
+			wantStrings: []string{"quick", "completed", "fast-host", "1.5s total", "0.8s exec"},
+			wantSymbol:  ui.SymbolSuccess,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			pd := ui.NewPhaseDisplay(&buf)
+
+			output := captureStdout(t, func() {
+				renderTaskSummary(pd, tt.result, tt.taskName, tt.totalTime, tt.execTime, tt.host)
+			})
+
+			for _, want := range tt.wantStrings {
+				assert.Contains(t, output, want, "output should contain %q", want)
+			}
+
+			assert.Contains(t, output, tt.wantSymbol, "output should contain symbol %q", tt.wantSymbol)
+		})
+	}
+}
+
+func TestRenderTaskSummary_MultiStepFirstStepFails(t *testing.T) {
+	var buf bytes.Buffer
+	pd := ui.NewPhaseDisplay(&buf)
+
+	result := &exec.TaskResult{
+		ExitCode:   1,
+		FailedStep: 0,
+		StepResults: []exec.StepResult{
+			{Name: "setup", ExitCode: 1},
+			{Name: "build", ExitCode: 0},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		renderTaskSummary(pd, result, "pipeline", 5*time.Second, 2*time.Second, "test-host")
+	})
+
+	assert.Contains(t, output, "pipeline")
+	assert.Contains(t, output, "failed")
+	assert.Contains(t, output, "step 'setup'")
+	assert.Contains(t, output, ui.SymbolFail)
 }
