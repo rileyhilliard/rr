@@ -1,7 +1,7 @@
 # rr (Road Runner)
 
 <p align="center">
-  <img src="assets/rr.gif" alt="Meep meep!" width="400">
+  <video src="https://github.com/rileyhilliard/rr/raw/main/assets/rr.mp4" controls width="600"></video>
 </p>
 
 [![CI](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml/badge.svg)](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml)
@@ -20,6 +20,10 @@ rr run "make test"
 ```
 
 This rsyncs your project to the remote host, runs `make test`, and streams the output back. If you switch from your home LAN to a VPN, it figures out which hostname works. If someone else is using the machine, it waits for them to finish.
+
+<p align="center">
+  <video src="https://github.com/rileyhilliard/rr/raw/main/assets/rr.mp4" controls width="600"></video>
+</p>
 
 ## Quick start
 
