@@ -105,7 +105,7 @@ func Run(opts RunOptions) (int, error) {
 					if fixResult != nil && fixResult.ShouldRetry {
 						// User wants to retry - show final status then indicate retry
 						wf.PhaseDisplay.ThinDivider()
-						renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+						renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 
 						// Close current workflow and retry
 						wf.Close()
@@ -143,7 +143,7 @@ func Run(opts RunOptions) (int, error) {
 
 	// Show final status
 	wf.PhaseDisplay.ThinDivider()
-	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 
 	return exitCode, nil
 }
