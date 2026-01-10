@@ -40,16 +40,19 @@ That's the whole flow. rr syncs your code to the remote, runs the command, and s
 ## Install
 
 **Homebrew (macOS/Linux)**
+
 ```bash
 brew install rileyhilliard/tap/rr
 ```
 
 **Install script**
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
 ```
 
 **Go install**
+
 ```bash
 go install github.com/rileyhilliard/rr/cmd/rr@latest
 ```
@@ -81,10 +84,10 @@ You can also define named tasks in your config:
 
 ```yaml
 tasks:
-  test:
-    run: pytest -n auto
-  build:
-    run: make build
+    test:
+        run: pytest -n auto
+    build:
+        run: make build
 ```
 
 Then run them by name:
@@ -102,19 +105,19 @@ The `.rr.yaml` file lives in your project root:
 version: 1
 
 hosts:
-  mini:
-    ssh:
-      - mac-mini.local      # Try LAN first
-      - mac-mini-tailscale  # Fall back to VPN
-    dir: ${HOME}/projects/${PROJECT}
+    mini:
+        ssh:
+            - mac-mini.local # Try LAN first
+            - mac-mini-tailscale # Fall back to VPN
+        dir: ${HOME}/projects/${PROJECT}
 
 default: mini
 
 sync:
-  exclude:
-    - .git/
-    - node_modules/
-    - .venv/
+    exclude:
+        - .git/
+        - node_modules/
+        - .venv/
 ```
 
 `rr` tries each SSH alias in order until one connects. The `${PROJECT}` variable expands to your local directory name.
@@ -125,23 +128,23 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 
 1. **Smart connection failover**: `rr` tries SSH connections in order and picks the first one that's reachable AND not busy. This handles three scenarios automatically:
 
-   ```yaml
-   hosts:
-     gpu-box:
-       ssh:
-         - 192.168.1.50       # LAN - fastest, try first
-         - gpu-tailscale      # Tailscale - works from anywhere
-         - user@backup-gpu    # Different machine - last resort
-   ```
+    ```yaml
+    hosts:
+        gpu-box:
+            ssh:
+                - 192.168.1.50 # LAN - fastest, try first
+                - gpu-tailscale # Tailscale - works from anywhere
+                - user@backup-gpu # Different machine - last resort
+    ```
 
-   | Where you are | What happens |
-   |---------------|--------------|
-   | Home office (LAN) | Uses `192.168.1.50` (fastest) |
-   | Coffee shop | LAN fails, uses Tailscale automatically |
-   | gpu-box is busy | Skips to `backup-gpu` |
-   | gpu-box is offline | Same - falls back down the list |
+    | Where you are      | What happens                            |
+    | ------------------ | --------------------------------------- |
+    | Home office (LAN)  | Uses `192.168.1.50` (fastest)           |
+    | Coffee shop        | LAN fails, uses Tailscale automatically |
+    | gpu-box is busy    | Skips to `backup-gpu`                   |
+    | gpu-box is offline | Same - falls back down the list         |
 
-   No manual switching. Run `rr run "make test"` from anywhere and it figures out how to reach your code.
+    No manual switching. Run `rr run "make test"` from anywhere and it figures out how to reach your code.
 
 2. **File sync**: Wraps rsync with sane defaults. Excludes `.git`, `node_modules`, etc. Preserves remote-only directories so you don't nuke your venv every sync.
 
@@ -165,6 +168,7 @@ rr completion bash      # Shell completions (also zsh, fish, powershell)
 ## Troubleshooting
 
 **Connection issues?**
+
 ```bash
 rr doctor    # Diagnoses SSH, config, and dependency problems
 ```
@@ -179,10 +183,10 @@ Check your exclude patterns - syncing node_modules or .git will tank performance
 
 ```yaml
 sync:
-  exclude:
-    - .git/
-    - node_modules/
-    - .venv/
+    exclude:
+        - .git/
+        - node_modules/
+        - .venv/
 ```
 
 **Lock stuck?**
@@ -197,13 +201,13 @@ For more, see the [troubleshooting guide](docs/troubleshooting.md).
 
 ## Docs
 
-- [SSH setup guide](docs/ssh-setup.md) - Get passwordless SSH working
-- [Configuration reference](docs/configuration.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Migration guide](docs/MIGRATION.md)
-- [Example configs](docs/examples/)
-- [Architecture](ARCHITECTURE.md)
-- [Contributing](CONTRIBUTING.md)
+-   [SSH setup guide](docs/ssh-setup.md) - Get passwordless SSH working
+-   [Configuration reference](docs/configuration.md)
+-   [Troubleshooting](docs/troubleshooting.md)
+-   [Migration guide](docs/MIGRATION.md)
+-   [Example configs](docs/examples/)
+-   [Architecture](docs/ARCHITECTURE.md)
+-   [Contributing](CONTRIBUTING.md)
 
 ## License
 
