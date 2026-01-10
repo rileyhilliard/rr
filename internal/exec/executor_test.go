@@ -185,3 +185,167 @@ func TestHandleExecError_ExtractsCommandFromInput(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "'rustup' not found in PATH on remote")
 }
+
+func TestDetectMissingTool(t *testing.T) {
+	tests := []struct {
+		name        string
+		cmd         string
+		stderr      string
+		exitCode    int
+		hostName    string
+		wantNil     bool
+		wantTool    string
+		wantInstall bool
+	}{
+		{
+			name:        "detects go missing",
+			cmd:         "go test",
+			stderr:      "bash: go: command not found",
+			exitCode:    127,
+			hostName:    "myhost",
+			wantNil:     false,
+			wantTool:    "go",
+			wantInstall: true,
+		},
+		{
+			name:        "detects make dependency missing",
+			cmd:         "make test",
+			stderr:      "make: python3: No such file or directory",
+			exitCode:    2,
+			hostName:    "myhost",
+			wantNil:     false,
+			wantTool:    "python3",
+			wantInstall: true,
+		},
+		{
+			name:        "unknown tool not installable",
+			cmd:         "customtool --version",
+			stderr:      "bash: customtool: command not found",
+			exitCode:    127,
+			hostName:    "myhost",
+			wantNil:     false,
+			wantTool:    "customtool",
+			wantInstall: false,
+		},
+		{
+			name:     "not a missing tool error",
+			cmd:      "go test",
+			stderr:   "FAIL: TestSomething",
+			exitCode: 1,
+			hostName: "myhost",
+			wantNil:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := DetectMissingTool(tt.cmd, tt.stderr, tt.exitCode, nil, tt.hostName)
+
+			if tt.wantNil {
+				assert.Nil(t, result)
+				return
+			}
+
+			assert.NotNil(t, result)
+			assert.Equal(t, tt.wantTool, result.ToolName)
+			assert.Equal(t, tt.hostName, result.HostName)
+			assert.Equal(t, tt.wantInstall, result.CanInstall)
+			assert.NotEmpty(t, result.Suggestion)
+		})
+	}
+}
+
+func TestMissingToolError_Error(t *testing.T) {
+	err := &MissingToolError{ToolName: "go"}
+	assert.Equal(t, "'go' not found in PATH on remote", err.Error())
+}
+
+func TestMissingToolError_FoundButNotInPATH(t *testing.T) {
+	tests := []struct {
+		name   string
+		probe  *PathProbeResult
+		expect bool
+	}{
+		{
+			name:   "nil probe",
+			probe:  nil,
+			expect: false,
+		},
+		{
+			name: "found in interactive shell",
+			probe: &PathProbeResult{
+				FoundInInter: true,
+				InterPath:    "/home/user/.local/bin/go",
+			},
+			expect: true,
+		},
+		{
+			name: "found in common paths",
+			probe: &PathProbeResult{
+				CommonPaths: []string{"/opt/homebrew/bin/go"},
+			},
+			expect: true,
+		},
+		{
+			name: "not found anywhere",
+			probe: &PathProbeResult{
+				FoundInInter: false,
+				FoundInLogin: false,
+				CommonPaths:  nil,
+			},
+			expect: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &MissingToolError{ProbeResult: tt.probe}
+			assert.Equal(t, tt.expect, err.FoundButNotInPATH())
+		})
+	}
+}
+
+func TestMissingToolError_GetPATHToAdd(t *testing.T) {
+	tests := []struct {
+		name   string
+		probe  *PathProbeResult
+		expect string
+	}{
+		{
+			name:   "nil probe",
+			probe:  nil,
+			expect: "",
+		},
+		{
+			name: "from interactive path",
+			probe: &PathProbeResult{
+				FoundInInter: true,
+				InterPath:    "/home/user/.local/bin/go",
+			},
+			expect: "/home/user/.local/bin",
+		},
+		{
+			name: "from common paths",
+			probe: &PathProbeResult{
+				CommonPaths: []string{"/opt/homebrew/bin/go"},
+			},
+			expect: "/opt/homebrew/bin",
+		},
+		{
+			name: "interactive path takes priority",
+			probe: &PathProbeResult{
+				FoundInInter: true,
+				InterPath:    "/home/user/.cargo/bin/cargo",
+				CommonPaths:  []string{"/opt/other/cargo"},
+			},
+			expect: "/home/user/.cargo/bin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &MissingToolError{ProbeResult: tt.probe}
+			assert.Equal(t, tt.expect, err.GetPATHToAdd())
+		})
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
@@ -86,9 +87,32 @@ func Run(opts RunOptions) (int, error) {
 		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
 			sshClient = wf.Conn.Client
 		}
-		if execErr := exec.HandleExecError(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name); execErr != nil {
+
+		// Try to detect a missing tool error
+		missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
+		if missingTool != nil {
+			// Show the error message
 			fmt.Println()
-			fmt.Println(execErr.Error())
+			fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
+			fmt.Println(missingTool.Suggestion)
+
+			// Offer interactive fix if we're on a remote host with SSH client
+			if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+				// Get config path for potential updates
+				configPath, _ := config.Find(Config())
+				if configPath != "" {
+					fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
+					if fixResult != nil && fixResult.ShouldRetry {
+						// User wants to retry - show final status then indicate retry
+						wf.PhaseDisplay.ThinDivider()
+						renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+
+						// Close current workflow and retry
+						wf.Close()
+						return Run(opts)
+					}
+				}
+			}
 		} else if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
 			// Check for test failures and render summary if available
 			failures := provider.GetTestFailures()
