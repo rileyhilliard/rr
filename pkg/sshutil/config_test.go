@@ -174,3 +174,201 @@ Host after-match
 	assert.Len(t, hosts, 1)
 	assert.Equal(t, "before-match", hosts[0].Alias)
 }
+
+func TestSSHHostEntry_HasIdentityFile_CustomPath(t *testing.T) {
+	// Create a temp identity file
+	tmpDir := t.TempDir()
+	keyPath := filepath.Join(tmpDir, "custom_key")
+	err := os.WriteFile(keyPath, []byte("fake key content"), 0600)
+	require.NoError(t, err)
+
+	entry := SSHHostEntry{
+		Alias:        "test-host",
+		IdentityFile: keyPath,
+	}
+
+	assert.True(t, entry.HasIdentityFile())
+}
+
+func TestSSHHostEntry_HasIdentityFile_NonexistentPath(t *testing.T) {
+	entry := SSHHostEntry{
+		Alias:        "test-host",
+		IdentityFile: "/nonexistent/key/file",
+	}
+
+	// Will return true only if default keys exist in ~/.ssh/
+	// We can't control this in the test, but we can verify it doesn't panic
+	_ = entry.HasIdentityFile()
+}
+
+func TestSSHHostEntry_HasIdentityFile_EmptyPath(t *testing.T) {
+	entry := SSHHostEntry{
+		Alias:        "test-host",
+		IdentityFile: "",
+	}
+
+	// Will check for default keys
+	// Just verify it doesn't panic
+	_ = entry.HasIdentityFile()
+}
+
+func TestParseSSHConfigFile_EmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	// Create an empty config file
+	err := os.WriteFile(configPath, []byte(""), 0600)
+	require.NoError(t, err)
+
+	hosts, err := ParseSSHConfigFile(configPath)
+	require.NoError(t, err)
+	assert.Empty(t, hosts)
+}
+
+func TestParseSSHConfigFile_CommentsOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	configContent := `
+# This is a comment
+# Another comment
+
+# Yet another comment
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	hosts, err := ParseSSHConfigFile(configPath)
+	require.NoError(t, err)
+	assert.Empty(t, hosts)
+}
+
+func TestParseSSHConfigFile_DuplicateHosts(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	configContent := `
+Host duplicate
+    HostName first.example.com
+
+Host duplicate
+    HostName second.example.com
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	hosts, err := ParseSSHConfigFile(configPath)
+	require.NoError(t, err)
+
+	// Should only have one entry (seen filter)
+	assert.Len(t, hosts, 1)
+	assert.Equal(t, "duplicate", hosts[0].Alias)
+}
+
+func TestParseSSHConfigFile_MultiplePatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	configContent := `
+Host server1 server2 server3
+    User shareduser
+    Port 2222
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	hosts, err := ParseSSHConfigFile(configPath)
+	require.NoError(t, err)
+
+	// Should have all three hosts
+	assert.Len(t, hosts, 3)
+
+	// All should have the same user and port
+	for _, h := range hosts {
+		assert.Equal(t, "shareduser", h.User)
+		assert.Equal(t, "2222", h.Port)
+	}
+}
+
+func TestSSHHostEntry_Description_OnlyUser(t *testing.T) {
+	entry := SSHHostEntry{
+		Alias: "myserver",
+		User:  "admin",
+	}
+
+	desc := entry.Description()
+	assert.Equal(t, "user: admin", desc)
+}
+
+func TestSSHHostEntry_Description_OnlyPort(t *testing.T) {
+	entry := SSHHostEntry{
+		Alias: "myserver",
+		Port:  "2222",
+	}
+
+	desc := entry.Description()
+	assert.Equal(t, "port: 2222", desc)
+}
+
+func TestSSHHostEntry_Description_OnlyHostname(t *testing.T) {
+	entry := SSHHostEntry{
+		Alias:    "myserver",
+		Hostname: "192.168.1.100",
+	}
+
+	desc := entry.Description()
+	assert.Equal(t, "192.168.1.100", desc)
+}
+
+func TestFilterHostsWithKeys_EmptyInput(t *testing.T) {
+	filtered := FilterHostsWithKeys([]SSHHostEntry{})
+	assert.Empty(t, filtered)
+}
+
+func TestFilterHostsWithKeys_NilInput(t *testing.T) {
+	filtered := FilterHostsWithKeys(nil)
+	assert.Empty(t, filtered)
+}
+
+func TestParseSSHConfigFile_SpecialCharactersInAlias(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	configContent := `
+Host my-server_01
+    HostName server01.example.com
+    User admin
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	hosts, err := ParseSSHConfigFile(configPath)
+	require.NoError(t, err)
+
+	assert.Len(t, hosts, 1)
+	assert.Equal(t, "my-server_01", hosts[0].Alias)
+}
+
+func TestParseSSHConfigFile_WithIdentityFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config")
+
+	configContent := `
+Host secure-server
+    HostName secure.example.com
+    IdentityFile ~/.ssh/special_key
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	hosts, err := ParseSSHConfigFile(configPath)
+	require.NoError(t, err)
+
+	assert.Len(t, hosts, 1)
+	assert.Contains(t, hosts[0].IdentityFile, "special_key")
+}
