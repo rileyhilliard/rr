@@ -40,10 +40,10 @@ func ExpandTilde(path string) string {
 // Supported variables:
 //   - ${PROJECT} - git repo name or directory name
 //   - ${USER}    - current username
-//   - ${HOME}    - user's home directory
+//   - ${HOME}    - user's home directory (LOCAL - use ExpandRemote for remote paths)
 //
 // Note: Does NOT expand ~ - use ExpandTilde for local paths if needed.
-// Remote paths (like host.Dir) should keep ~ for remote shell expansion.
+// For remote paths (like host.Dir), use ExpandRemote instead.
 func Expand(s string) string {
 	if s == "" {
 		return s
@@ -67,9 +67,40 @@ func Expand(s string) string {
 	return result
 }
 
+// ExpandRemote replaces variables in a string intended for a remote host.
+// Unlike Expand, this keeps ${HOME} and ~ as ~ so the remote shell expands them.
+// Supported variables:
+//   - ${PROJECT} - git repo name or directory name (from local context)
+//   - ${USER}    - current username (from local context)
+//   - ${HOME}    - expands to ~ (for remote shell to expand)
+//   - ~          - kept as ~ (for remote shell to expand)
+func ExpandRemote(s string) string {
+	if s == "" {
+		return s
+	}
+
+	result := s
+
+	if strings.Contains(result, "${PROJECT}") {
+		result = strings.ReplaceAll(result, "${PROJECT}", getProject())
+	}
+
+	if strings.Contains(result, "${USER}") {
+		result = strings.ReplaceAll(result, "${USER}", getUser())
+	}
+
+	// For remote paths, ${HOME} becomes ~ so the remote shell expands it
+	if strings.Contains(result, "${HOME}") {
+		result = strings.ReplaceAll(result, "${HOME}", "~")
+	}
+
+	return result
+}
+
 // ExpandHost expands variables in a Host configuration.
+// Uses ExpandRemote for Dir since it's a remote path.
 func ExpandHost(h Host) Host {
-	h.Dir = Expand(h.Dir)
+	h.Dir = ExpandRemote(h.Dir)
 	return h
 }
 

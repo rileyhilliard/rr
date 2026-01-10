@@ -141,9 +141,9 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
-	// Expand variables in host directories
+	// Expand variables in host directories (use ExpandRemote to preserve ~ for remote shell)
 	for name, host := range cfg.Hosts {
-		host.Dir = Expand(host.Dir)
+		host.Dir = ExpandRemote(host.Dir)
 		cfg.Hosts[name] = host
 	}
 
