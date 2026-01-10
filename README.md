@@ -4,9 +4,10 @@
   <img src="assets/rr.gif" alt="Meep meep!" width="400">
 </p>
 
+[![CI](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml/badge.svg)](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/github/go-mod/go-version/rileyhilliard/rr)](https://go.dev/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/rileyhilliard/rr)](https://github.com/rileyhilliard/rr/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Sync code to a remote machine and run commands there. That's it.
 
@@ -20,33 +21,76 @@ rr run "make test"
 
 This rsyncs your project to the remote host, runs `make test`, and streams the output back. If you switch from your home LAN to a VPN, it figures out which hostname works. If someone else is using the machine, it waits for them to finish.
 
-## Install
+## Quick start
 
 ```bash
-# macOS/Linux
+# 1. Install
+brew install rileyhilliard/tap/rr    # or see Install section below
+
+# 2. Set up in your project
+cd your-project
+rr init                               # Creates .rr.yaml config
+
+# 3. Run something
+rr run "make test"                    # Syncs files + runs command
+```
+
+That's the whole flow. rr syncs your code to the remote, runs the command, and streams output back.
+
+## Install
+
+**Homebrew (macOS/Linux)**
+```bash
+brew install rileyhilliard/tap/rr
+```
+
+**Install script**
+```bash
 curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
+```
 
-# Homebrew (macOS)
-brew install --cask rileyhilliard/tap/rr
-
-# Go
+**Go install**
+```bash
 go install github.com/rileyhilliard/rr/cmd/rr@latest
 ```
+
+**Manual download**
+
+Grab the binary for your platform from [releases](https://github.com/rileyhilliard/rr/releases).
 
 ## Setup
 
 ```bash
-rr init          # Creates .rr.yaml in your project
-rr setup myhost  # Walks you through SSH key setup (if needed)
-rr doctor        # Checks that everything works
+rr init          # Creates .rr.yaml - interactive prompts walk you through it
+rr setup myhost  # Configures SSH keys if needed
+rr doctor        # Verifies everything works
 ```
+
+If `rr init` doesn't detect your SSH config, you can add hosts manually. See [configuration docs](docs/configuration.md).
 
 ## Usage
 
 ```bash
-rr run "make test"    # Sync + run
-rr exec "git status"  # Run without syncing
-rr sync               # Just sync
+rr run "make test"    # Sync files, then run command
+rr exec "git status"  # Run command without syncing (faster for quick checks)
+rr sync               # Just sync files, no command
+```
+
+You can also define named tasks in your config:
+
+```yaml
+tasks:
+  test:
+    run: pytest -n auto
+  build:
+    run: make build
+```
+
+Then run them by name:
+
+```bash
+rr test    # Same as: rr run "pytest -n auto"
+rr build
 ```
 
 ## Config
@@ -117,10 +161,44 @@ rr update --check       # Just check if update is available
 rr completion bash      # Shell completions (also zsh, fish, powershell)
 ```
 
+## Troubleshooting
+
+**Connection issues?**
+```bash
+rr doctor    # Diagnoses SSH, config, and dependency problems
+```
+
+**Command not found on remote?**
+
+rr will show you what's in the remote's PATH and suggest fixes. Make sure your command is available in a non-interactive shell.
+
+**Sync seems slow?**
+
+Check your exclude patterns - syncing node_modules or .git will tank performance:
+
+```yaml
+sync:
+  exclude:
+    - .git/
+    - node_modules/
+    - .venv/
+```
+
+**Lock stuck?**
+
+If a previous run crashed and left a lock:
+
+```bash
+rr run --force-unlock "your command"
+```
+
+For more, see the [troubleshooting guide](docs/troubleshooting.md).
+
 ## Docs
 
 - [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Migration guide](docs/MIGRATION.md)
 - [Example configs](docs/examples/)
 - [Architecture](ARCHITECTURE.md)
 - [Contributing](CONTRIBUTING.md)
