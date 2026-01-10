@@ -75,7 +75,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Get remote directory for task execution
 	remoteDir := ""
 	if !wf.Conn.IsLocal {
-		remoteDir = config.Expand(wf.Conn.Host.Dir)
+		remoteDir = config.ExpandRemote(wf.Conn.Host.Dir)
 	}
 
 	// Execute the task

@@ -30,7 +30,7 @@ func (c *RemoteDirCheck) Run() CheckResult {
 		}
 	}
 
-	dir := config.Expand(c.Dir)
+	dir := config.ExpandRemote(c.Dir)
 
 	// Check if directory exists
 	_, _, exitCode, err := c.Conn.Client.Exec(fmt.Sprintf("test -d %q", dir))
@@ -65,7 +65,7 @@ func (c *RemoteDirCheck) Fix() error {
 		return fmt.Errorf("no connection")
 	}
 
-	dir := config.Expand(c.Dir)
+	dir := config.ExpandRemote(c.Dir)
 	_, _, exitCode, err := c.Conn.Client.Exec(fmt.Sprintf("mkdir -p %q", dir))
 	if err != nil || exitCode != 0 {
 		return fmt.Errorf("failed to create directory: %s", dir)
@@ -93,7 +93,7 @@ func (c *RemoteWritePermCheck) Run() CheckResult {
 		}
 	}
 
-	dir := config.Expand(c.Dir)
+	dir := config.ExpandRemote(c.Dir)
 
 	// First check if dir exists
 	_, _, exitCode, _ := c.Conn.Client.Exec(fmt.Sprintf("test -d %q", dir))

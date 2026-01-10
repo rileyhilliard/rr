@@ -124,8 +124,8 @@ func buildCommand(cmd string, env map[string]string, workDir string, isLocal boo
 
 	// Remote execution: cd to workDir and set env
 	if workDir != "" {
-		workDir = config.Expand(workDir)
-		return fmt.Sprintf("cd %q && %s%s", workDir, buildEnvPrefix(env), cmd)
+		workDir = config.ExpandRemote(workDir)
+		return fmt.Sprintf("cd %s && %s%s", shellQuotePreserveTilde(workDir), buildEnvPrefix(env), cmd)
 	}
 
 	return buildEnvPrefix(env) + cmd
@@ -183,8 +183,8 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 
 	// Add cd to working directory
 	if host.Dir != "" {
-		dir := config.Expand(host.Dir)
-		parts = append(parts, fmt.Sprintf("cd %q", dir))
+		dir := config.ExpandRemote(host.Dir)
+		parts = append(parts, fmt.Sprintf("cd %s", shellQuotePreserveTilde(dir)))
 	}
 
 	// Add the actual command
@@ -200,4 +200,25 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	}
 	// Shell format is "bash -l -c" - we append the quoted command
 	return fmt.Sprintf("%s %q", shell, fullCmd)
+}
+
+// shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
+// For paths starting with ~/, the tilde is kept unquoted and the rest is single-quoted.
+// For other paths, the entire path is single-quoted.
+func shellQuotePreserveTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		// Keep ~ unquoted, quote the rest
+		return "~/" + shellQuote(path[2:])
+	}
+	if path == "~" {
+		return "~"
+	}
+	return shellQuote(path)
+}
+
+// shellQuote wraps a string in single quotes, escaping any existing single quotes.
+func shellQuote(s string) string {
+	// Replace ' with '\'' (end quote, escaped quote, start quote)
+	escaped := strings.ReplaceAll(s, "'", "'\\''")
+	return "'" + escaped + "'"
 }

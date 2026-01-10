@@ -43,6 +43,11 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 	// Non-fatal if it fails: rsync will still work, just without connection reuse
 	_ = os.MkdirAll(controlSocketDir, 0700)
 
+	// Ensure remote directory exists before rsync (rsync won't create parent dirs)
+	if err := ensureRemoteDir(conn); err != nil {
+		return err
+	}
+
 	args, err := BuildArgs(conn, localDir, cfg)
 	if err != nil {
 		return err
@@ -109,7 +114,7 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	}
 
 	// Build remote destination: ssh-alias:remote-dir
-	remoteDir := config.Expand(conn.Host.Dir)
+	remoteDir := config.ExpandRemote(conn.Host.Dir)
 	if !strings.HasSuffix(remoteDir, "/") {
 		remoteDir += "/"
 	}
@@ -218,4 +223,54 @@ func handleRsyncError(err error, hostName string) error {
 	}
 
 	return errors.WrapWithCode(err, errors.ErrSync, msg, suggestion)
+}
+
+// ensureRemoteDir creates the remote sync directory if it doesn't exist.
+// rsync requires the target directory (or at least its parent) to exist.
+func ensureRemoteDir(conn *host.Connection) error {
+	if conn == nil || conn.Client == nil {
+		return errors.New(errors.ErrSync,
+			"No SSH connection available",
+			"Connect to the remote host first.")
+	}
+
+	remoteDir := config.ExpandRemote(conn.Host.Dir)
+	// Use single quotes around all but leading ~ so tilde expands but spaces are safe
+	// e.g. ~/rr/rr -> mkdir -p ~/'rr/rr'
+	mkdirCmd := fmt.Sprintf("mkdir -p %s", shellQuotePreserveTilde(remoteDir))
+
+	_, stderr, exitCode, err := conn.Client.Exec(mkdirCmd)
+	if err != nil {
+		return errors.WrapWithCode(err, errors.ErrSync,
+			"Couldn't create remote directory",
+			"Check your SSH connection.")
+	}
+	if exitCode != 0 {
+		return errors.New(errors.ErrSync,
+			fmt.Sprintf("Couldn't create remote directory %s", remoteDir),
+			fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(stderr))))
+	}
+
+	return nil
+}
+
+// shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
+// For paths starting with ~/, the tilde is kept unquoted and the rest is single-quoted.
+// For other paths, the entire path is single-quoted.
+func shellQuotePreserveTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		// Keep ~ unquoted, quote the rest
+		return "~/" + shellQuote(path[2:])
+	}
+	if path == "~" {
+		return "~"
+	}
+	return shellQuote(path)
+}
+
+// shellQuote wraps a string in single quotes, escaping any existing single quotes.
+func shellQuote(s string) string {
+	// Replace ' with '\'' (end quote, escaped quote, start quote)
+	escaped := strings.ReplaceAll(s, "'", "'\\''")
+	return "'" + escaped + "'"
 }
