@@ -2,15 +2,14 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Progress bar block characters.
+// Keep these for backward compatibility with tests that reference them.
 const (
-	progressFilled = '█'
-	progressEmpty  = '░'
+	progressFilled = BarFilled
+	progressEmpty  = BarEmpty
 )
 
 // RenderProgressBar creates a progress bar visualization.
@@ -26,33 +25,11 @@ func RenderProgressBar(percent float64, width int) string {
 		return ""
 	}
 
-	// Clamp percent to 0-100 range
-	if percent < 0 {
-		percent = 0
-	} else if percent > 100 {
-		percent = 100
-	}
+	percent = ClampPercent(percent)
+	filled, empty := CalculateBarCounts(percent, width)
+	bar := BuildBarString(filled, empty, true) // with brackets
 
-	// Calculate filled and empty portions
-	filledCount := int((percent / 100.0) * float64(width))
-	emptyCount := width - filledCount
-
-	// Build the bar
-	var sb strings.Builder
-	sb.Grow(width + 10) // bar + brackets + percentage
-
-	sb.WriteRune('[')
-	for i := 0; i < filledCount; i++ {
-		sb.WriteRune(progressFilled)
-	}
-	for i := 0; i < emptyCount; i++ {
-		sb.WriteRune(progressEmpty)
-	}
-	sb.WriteRune(']')
-
-	bar := sb.String()
-
-	// Get the color based on percentage threshold
+	// Apply threshold-based coloring
 	color := getThresholdColor(percent)
 	style := lipgloss.NewStyle().Foreground(color)
 
@@ -69,31 +46,11 @@ func RenderProgressBarSimple(percent float64, width int) string {
 		return ""
 	}
 
-	// Clamp percent to 0-100 range
-	if percent < 0 {
-		percent = 0
-	} else if percent > 100 {
-		percent = 100
-	}
+	percent = ClampPercent(percent)
+	filled, empty := CalculateBarCounts(percent, width)
+	bar := BuildBarString(filled, empty, false) // no brackets
 
-	// Calculate filled and empty portions
-	filledCount := int((percent / 100.0) * float64(width))
-	emptyCount := width - filledCount
-
-	// Build the bar
-	var sb strings.Builder
-	sb.Grow(width + 6) // bar + percentage
-
-	for i := 0; i < filledCount; i++ {
-		sb.WriteRune(progressFilled)
-	}
-	for i := 0; i < emptyCount; i++ {
-		sb.WriteRune(progressEmpty)
-	}
-
-	bar := sb.String()
-
-	// Get the color based on percentage threshold
+	// Apply threshold-based coloring
 	color := getThresholdColor(percent)
 	style := lipgloss.NewStyle().Foreground(color)
 
