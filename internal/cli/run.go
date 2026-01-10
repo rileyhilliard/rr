@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"strings"
@@ -159,12 +158,6 @@ func renderFinalStatus(_ *ui.PhaseDisplay, exitCode int, totalTime, execTime tim
 	}
 }
 
-// hashProject creates a short hash of the project path for lock identification.
-func hashProject(path string) string {
-	h := sha256.Sum256([]byte(path))
-	return fmt.Sprintf("%x", h[:8]) // First 16 hex chars
-}
-
 // mapProbeErrorToStatus converts a probe error to a ConnectionStatus for display.
 func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 	if err == nil {
@@ -198,16 +191,9 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error
 			"Usage: rr run <command>  (e.g., rr run \"make test\")")
 	}
 
-	// Parse probe timeout if provided
-	var probeTimeout time.Duration
-	if probeTimeoutFlag != "" {
-		var err error
-		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
-		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
-				"Try something like 5s, 2m, or 500ms.")
-		}
+	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
+	if err != nil {
+		return err
 	}
 
 	// Join all args as the command (handles "rr run make test")

@@ -38,10 +38,8 @@ type Lock struct {
 // If the lock is held, it will wait and retry until timeout.
 // Stale locks (older than config.Stale) are automatically removed.
 func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string) (*Lock, error) {
-	if conn == nil || conn.Client == nil {
-		return nil, errors.New(errors.ErrLock,
-			"Can't grab the lock without a connection",
-			"Connect to the remote host first.")
+	if err := host.ValidateConnectionForLock(conn); err != nil {
+		return nil, err
 	}
 
 	// Build lock directory path: <dir>/rr-<projectHash>.lock/
@@ -171,10 +169,8 @@ func (l *Lock) Release() error {
 // ForceRelease forcibly removes a lock directory, regardless of who holds it.
 // Use with caution - this should only be used for stuck or abandoned locks.
 func ForceRelease(conn *host.Connection, lockDir string) error {
-	if conn == nil || conn.Client == nil {
-		return errors.New(errors.ErrLock,
-			"Can't force release without a connection",
-			"Connect to the remote host first.")
+	if err := host.ValidateConnectionForLock(conn); err != nil {
+		return err
 	}
 
 	return forceRemove(conn.Client, lockDir)
@@ -182,7 +178,7 @@ func ForceRelease(conn *host.Connection, lockDir string) error {
 
 // Holder returns information about who holds the lock (if readable).
 func Holder(conn *host.Connection, lockDir string) string {
-	if conn == nil || conn.Client == nil {
+	if !host.HasClient(conn) {
 		return "unknown (no connection)"
 	}
 	infoFile := filepath.Join(lockDir, "info.json")

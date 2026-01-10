@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 )
@@ -17,16 +15,9 @@ func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) erro
 			"Usage: rr exec <command>  (e.g., rr exec \"ls -la\")")
 	}
 
-	// Parse probe timeout if provided
-	var probeTimeout time.Duration
-	if probeTimeoutFlag != "" {
-		var err error
-		probeTimeout, err = time.ParseDuration(probeTimeoutFlag)
-		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrConfig,
-				fmt.Sprintf("'%s' doesn't look like a valid timeout", probeTimeoutFlag),
-				"Try something like 5s, 2m, or 500ms.")
-		}
+	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
+	if err != nil {
+		return err
 	}
 
 	// Join all args as the command

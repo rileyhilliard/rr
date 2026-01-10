@@ -619,11 +619,12 @@ func TestGenerateKey_AllValidTypes(t *testing.T) {
 			// Verify the public key contains the expected type
 			pubKey, err := ReadPublicKey(keyPath + ".pub")
 			require.NoError(t, err)
-			if keyType == "ed25519" {
+			switch keyType {
+			case "ed25519":
 				assert.Contains(t, pubKey, "ssh-ed25519")
-			} else if keyType == "rsa" {
+			case "rsa":
 				assert.Contains(t, pubKey, "ssh-rsa")
-			} else if keyType == "ecdsa" {
+			case "ecdsa":
 				assert.Contains(t, pubKey, "ecdsa-sha2")
 			}
 		})

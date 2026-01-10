@@ -3,12 +3,12 @@ package host
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
@@ -241,12 +241,12 @@ func (s *Selector) hostNames() string {
 	for name := range s.hosts {
 		names = append(names, name)
 	}
-	return joinOrNone(names)
+	return util.JoinOrNone(names)
 }
 
 // formatFailedAliases returns a comma-separated list of failed aliases.
 func formatFailedAliases(aliases []string) string {
-	return joinOrNone(aliases)
+	return util.JoinOrNone(aliases)
 }
 
 // QuickSelect is a convenience function that creates a selector, selects a host,
@@ -432,15 +432,7 @@ func (s *Selector) collectTags() []string {
 
 // formatTags returns a comma-separated list of tags.
 func formatTags(tags []string) string {
-	return joinOrNone(tags)
-}
-
-// joinOrNone joins strings with ", " or returns "(none)" for empty slices.
-func joinOrNone(items []string) string {
-	if len(items) == 0 {
-		return "(none)"
-	}
-	return strings.Join(items, ", ")
+	return util.JoinOrNone(tags)
 }
 
 // HostInfo returns information about all configured hosts.
