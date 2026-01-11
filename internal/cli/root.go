@@ -112,7 +112,7 @@ func registerTasksFromConfig(explicit string) {
 	}
 
 	// Validate (silently) - don't register tasks from invalid configs
-	if err := config.Validate(cfg, config.AllowNoHosts()); err != nil {
+	if err := config.Validate(cfg); err != nil {
 		return
 	}
 
