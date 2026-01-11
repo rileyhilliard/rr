@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-01-11
+
+### Added
+
+- Contextual help for command failures with exit code explanations
+- Troubleshooting suggestions for unexplained failures
+- Tool installers for 25+ common tools (bun, uv, deno, yarn, pnpm, docker, kubectl, terraform, aws, gcloud, jq, ripgrep, fd, fzf, and more)
+
+### Fixed
+
+- Detection of missing tools when invoked via make/shell (e.g., `/bin/sh: line 1: uv: command not found`)
+
 ## [0.4.6] - 2026-01-11
 
 ### Added
