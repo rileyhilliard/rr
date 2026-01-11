@@ -85,7 +85,8 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 		// Check for host key mismatch error (provides detailed suggestion)
 		var hostKeyErr *HostKeyMismatchError
 		if stderrors.As(err, &hostKeyErr) {
-			return nil, errors.New(errors.ErrSSH,
+			// Wrap (not replace) so the original error is preserved for errors.As
+			return nil, errors.WrapWithCode(hostKeyErr, errors.ErrSSH,
 				hostKeyErr.Error(),
 				hostKeyErr.Suggestion())
 		}
@@ -449,15 +450,15 @@ func expandPath(path string) string {
 func suggestionForDialError(err error) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "connection refused") {
-		return "Is SSH running on that box? Try: ssh <host>"
+		return "Check if SSH is running, or if the host is on a different network"
 	}
 	if strings.Contains(errStr, "no route to host") || strings.Contains(errStr, "network is unreachable") {
-		return "Can't route to the host. Check your network connection."
+		return "Host may be offline or on a different network"
 	}
 	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "i/o timeout") {
-		return "Connection timed out. Host might be offline or blocked by a firewall."
+		return "Check if host is powered on and reachable from this network"
 	}
-	return "Make sure the host is reachable: ping <host>"
+	return "Check network connectivity to this host"
 }
 
 func suggestionForHandshakeError(err error, encryptedKeys []string) string {
@@ -534,9 +535,10 @@ func (e *HostKeyMismatchError) Suggestion() string {
 		wantStr, e.ReceivedType, host, e.KnownHosts, host)
 }
 
-// preprocessSSHConfig reads the SSH config and returns content up to the first Match directive.
-// Returns the original content if no Match directive is found.
-// Also returns the line number where Match was found (0 if not found).
+// preprocessSSHConfig reads the SSH config and strips out Match blocks.
+// Match blocks are not supported by the ssh_config library, so we skip them
+// but continue parsing Host blocks that come after.
+// Returns the line number of the first Match directive found (0 if none).
 func preprocessSSHConfig(configPath string) ([]byte, int, error) {
 	content, err := os.ReadFile(configPath)
 	if err != nil {
@@ -546,14 +548,31 @@ func preprocessSSHConfig(configPath string) ([]byte, int, error) {
 	lines := strings.Split(string(content), "\n")
 	var result []string
 	matchLine := 0
+	inMatchBlock := false
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		// Match directive check (case insensitive)
-		if strings.HasPrefix(strings.ToLower(trimmed), "match ") {
-			matchLine = i + 1 // 1-indexed line number
-			break
+		lower := strings.ToLower(trimmed)
+
+		// Match directive starts a block we need to skip
+		if strings.HasPrefix(lower, "match ") {
+			if matchLine == 0 {
+				matchLine = i + 1 // Record first Match line (1-indexed)
+			}
+			inMatchBlock = true
+			continue
 		}
+
+		// Host directive ends a Match block
+		if strings.HasPrefix(lower, "host ") {
+			inMatchBlock = false
+		}
+
+		// Skip lines inside Match blocks
+		if inMatchBlock {
+			continue
+		}
+
 		result = append(result, line)
 	}
 

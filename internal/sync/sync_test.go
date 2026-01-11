@@ -568,3 +568,106 @@ func TestStreamOutput_EmptyInput(t *testing.T) {
 
 	assert.Empty(t, output.String())
 }
+
+func TestStreamOutput_CarriageReturns(t *testing.T) {
+	// rsync uses \r to update progress in-place
+	input := "progress 10%\rprogress 50%\rprogress 100%\n"
+	reader := strings.NewReader(input)
+	var output strings.Builder
+
+	streamOutput(reader, &output)
+
+	// Each \r-delimited segment should be written as a separate line
+	assert.Contains(t, output.String(), "progress 10%")
+	assert.Contains(t, output.String(), "progress 50%")
+	assert.Contains(t, output.String(), "progress 100%")
+}
+
+func TestStreamOutput_MixedDelimiters(t *testing.T) {
+	// Test with mixed \r and \n
+	input := "line1\rline2\nline3\r\nline4\n"
+	reader := strings.NewReader(input)
+	var output strings.Builder
+
+	streamOutput(reader, &output)
+
+	assert.Contains(t, output.String(), "line1")
+	assert.Contains(t, output.String(), "line2")
+	assert.Contains(t, output.String(), "line3")
+	assert.Contains(t, output.String(), "line4")
+}
+
+func TestScanLinesWithCR(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		atEOF    bool
+		wantAdv  int
+		wantTok  string
+		wantMore bool // true if we expect 0, nil, nil (need more data)
+	}{
+		{
+			name:     "empty at EOF",
+			data:     []byte{},
+			atEOF:    true,
+			wantAdv:  0,
+			wantTok:  "",
+			wantMore: false,
+		},
+		{
+			name:     "line with newline",
+			data:     []byte("hello\nworld"),
+			atEOF:    false,
+			wantAdv:  6,
+			wantTok:  "hello",
+			wantMore: false,
+		},
+		{
+			name:     "line with carriage return",
+			data:     []byte("hello\rworld"),
+			atEOF:    false,
+			wantAdv:  6,
+			wantTok:  "hello",
+			wantMore: false,
+		},
+		{
+			name:     "no delimiter, not EOF",
+			data:     []byte("hello"),
+			atEOF:    false,
+			wantAdv:  0,
+			wantTok:  "",
+			wantMore: true,
+		},
+		{
+			name:     "no delimiter, at EOF",
+			data:     []byte("hello"),
+			atEOF:    true,
+			wantAdv:  5,
+			wantTok:  "hello",
+			wantMore: false,
+		},
+		{
+			name:     "rsync progress format",
+			data:     []byte("      1,234,567  42%  500.00kB/s    0:01:23\r"),
+			atEOF:    false,
+			wantAdv:  44,
+			wantTok:  "      1,234,567  42%  500.00kB/s    0:01:23",
+			wantMore: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adv, tok, err := scanLinesWithCR(tt.data, tt.atEOF)
+			assert.NoError(t, err)
+
+			if tt.wantMore {
+				assert.Equal(t, 0, adv)
+				assert.Nil(t, tok)
+			} else {
+				assert.Equal(t, tt.wantAdv, adv)
+				assert.Equal(t, tt.wantTok, string(tok))
+			}
+		})
+	}
+}

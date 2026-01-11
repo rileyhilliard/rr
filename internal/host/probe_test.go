@@ -148,3 +148,43 @@ func TestProbeResult_Fields(t *testing.T) {
 		t.Error("Success should be true")
 	}
 }
+
+func TestCategorizeProbeError_DNS(t *testing.T) {
+	testCases := []string{
+		"no such host",
+		"lookup myhost.example.com: failed",
+		"nodename nor servname provided",
+		"name or service not known",
+	}
+
+	for _, errMsg := range testCases {
+		err := categorizeProbeError("test-host", errors.New(errMsg))
+		if err == nil {
+			t.Errorf("categorizeProbeError(%q) returned nil", errMsg)
+			continue
+		}
+
+		if err.Reason != ProbeFailDNS {
+			t.Errorf("categorizeProbeError(%q).Reason = %v, want ProbeFailDNS", errMsg, err.Reason)
+		}
+	}
+}
+
+func TestCategorizeProbeError_ConnReset(t *testing.T) {
+	testCases := []string{
+		"connection reset by peer",
+		"broken pipe",
+	}
+
+	for _, errMsg := range testCases {
+		err := categorizeProbeError("test-host", errors.New(errMsg))
+		if err == nil {
+			t.Errorf("categorizeProbeError(%q) returned nil", errMsg)
+			continue
+		}
+
+		if err.Reason != ProbeFailConnReset {
+			t.Errorf("categorizeProbeError(%q).Reason = %v, want ProbeFailConnReset", errMsg, err.Reason)
+		}
+	}
+}

@@ -252,6 +252,7 @@ func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 // syncWithProgress syncs files with progress bar display.
 func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	syncProgress := ui.NewInlineProgress("Syncing files", os.Stdout)
+	syncProgress.SetUseFakeProgress(false) // Use real rsync progress
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 

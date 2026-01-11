@@ -75,6 +75,76 @@ func TestTruncateErrorMsg(t *testing.T) {
 	}
 }
 
+func TestParseErrorParts(t *testing.T) {
+	tests := []struct {
+		name     string
+		errMsg   string
+		wantCore string
+		wantSugg string
+	}{
+		{
+			name:     "structured error with suggestion",
+			errMsg:   "✗ Can't reach 'host' at 192.168.1.1:22\n\n  connect: connection refused\n\n  Check if SSH is running",
+			wantCore: "connect: connection refused",
+			wantSugg: "Check if SSH is running",
+		},
+		{
+			name:     "simple error message",
+			errMsg:   "connection refused",
+			wantCore: "connection refused",
+			wantSugg: "",
+		},
+		{
+			name:     "error with Try suggestion",
+			errMsg:   "dial tcp: timeout\n\nTry: ssh host",
+			wantCore: "dial tcp: timeout",
+			wantSugg: "Try: ssh host",
+		},
+		{
+			name:     "error with Check suggestion",
+			errMsg:   "network unreachable\n\nCheck your connection",
+			wantCore: "network unreachable",
+			wantSugg: "Check your connection",
+		},
+		{
+			name:     "empty message",
+			errMsg:   "",
+			wantCore: "",
+			wantSugg: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			core, sugg := parseErrorParts(tt.errMsg)
+			assert.Equal(t, tt.wantCore, core)
+			assert.Equal(t, tt.wantSugg, sugg)
+		})
+	}
+}
+
+func TestTruncateWithEllipsis(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"short string", "Hello", 10, "Hello"},
+		{"exact length", "Hello", 5, "Hello"},
+		{"needs truncation", "Hello World", 8, "Hello..."},
+		{"max len too short", "Hello", 2, "Hello"},
+		{"empty string", "", 10, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := truncateWithEllipsis(tt.input, tt.maxLen)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
 func TestRenderCardLine(t *testing.T) {
 	tests := []struct {
 		name    string
