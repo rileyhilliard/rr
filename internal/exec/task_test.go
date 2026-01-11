@@ -333,8 +333,11 @@ func TestBuildRemoteCommand_DefaultShell(t *testing.T) {
 	}
 	result := BuildRemoteCommand("make test", host)
 
-	// Should use user's default shell with login mode
-	assert.Contains(t, result, "${SHELL:-/bin/sh} -l -c")
+	// Should use user's default shell
+	assert.Contains(t, result, "${SHELL:-/bin/bash} -c")
+	// Should source rc files for PATH setup
+	assert.Contains(t, result, "[ -f ~/.bashrc ]")
+	assert.Contains(t, result, "[ -f ~/.zshrc ]")
 	assert.Contains(t, result, "make test")
 }
 
@@ -357,7 +360,7 @@ func TestBuildRemoteCommand_SetupCommands(t *testing.T) {
 	}
 	result := BuildRemoteCommand("go test", host)
 
-	// Should include setup command before main command
-	assert.Contains(t, result, "export PATH=/opt/go/bin:$PATH")
+	// Should include setup command before main command ($ is escaped to prevent outer shell expansion)
+	assert.Contains(t, result, "export PATH=/opt/go/bin:\\$PATH")
 	assert.Contains(t, result, "go test")
 }

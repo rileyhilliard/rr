@@ -166,10 +166,14 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 }
 
 // DefaultShell is used when no shell is configured.
-// Uses $SHELL (user's default shell) with login mode (-l) to ensure PATH is set up.
-// The -c flag keeps it non-interactive, avoiding oh-my-zsh update prompts etc.
-// Falls back to /bin/sh if $SHELL is unset.
-const DefaultShell = "${SHELL:-/bin/sh} -l -c"
+// Falls back to /bin/bash if $SHELL is unset.
+const DefaultShell = "${SHELL:-/bin/bash}"
+
+// rcSourceCommand sources the appropriate shell rc file if it exists.
+// SSH non-interactive sessions don't source .bashrc/.zshrc, so we explicitly source them.
+// This ensures PATH modifications from tools like nvm, bun, pyenv, etc. are available.
+// The trailing semicolon ensures this is always a successful command that can be followed by &&.
+const rcSourceCommand = `[ -f ~/.bashrc ] && . ~/.bashrc || true; [ -f ~/.zshrc ] && . ~/.zshrc || true;`
 
 // BuildRemoteCommand constructs a remote command with shell config, setup commands, and working directory.
 // This is the recommended way to build commands for remote execution with full configuration support.
@@ -191,15 +195,31 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	parts = append(parts, cmd)
 
 	// Join all parts with &&
-	fullCmd := strings.Join(parts, " && ")
+	cmdChain := strings.Join(parts, " && ")
+
+	// Prepend rc sourcing to get PATH setup from tools like nvm, bun, pyenv, etc.
+	// SSH non-interactive sessions skip .bashrc/.zshrc, so we do it explicitly.
+	// The rc source command ends with semicolons and || true, so it's safe to concatenate.
+	fullCmd := rcSourceCommand + " " + cmdChain
 
 	// Wrap in shell (use default login shell if not configured)
 	shell := host.Shell
 	if shell == "" {
 		shell = DefaultShell
 	}
-	// Shell format is "bash -l -c" - we append the quoted command
-	return fmt.Sprintf("%s %q", shell, fullCmd)
+
+	// Escape special characters so they're evaluated inside the shell -c, not by the outer shell.
+	// Without this, $PATH in setup_commands would be expanded before rc files are sourced,
+	// resulting in the minimal PATH instead of the user's configured PATH.
+	escapedCmd := fullCmd
+	escapedCmd = strings.ReplaceAll(escapedCmd, "\\", "\\\\") // Escape backslashes first
+	escapedCmd = strings.ReplaceAll(escapedCmd, "\"", "\\\"") // Escape double quotes
+	escapedCmd = strings.ReplaceAll(escapedCmd, "$", "\\$")   // Escape $ to prevent variable expansion
+	escapedCmd = strings.ReplaceAll(escapedCmd, "`", "\\`")   // Escape backticks to prevent command substitution
+
+	// Shell format is "bash -c" or custom - we append the quoted command.
+	// Using manual "%s" instead of %q because we've already escaped the string properly.
+	return fmt.Sprintf("%s -c \"%s\"", shell, escapedCmd) //nolint:gocritic // Manual escaping required
 }
 
 // shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
