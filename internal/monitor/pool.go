@@ -37,24 +37,19 @@ func NewPool(hosts map[string]config.Host, timeout time.Duration) *Pool {
 }
 
 // Get retrieves an existing connection for the given alias, or creates a new one.
-// If the connection is stale or broken, it will be replaced with a fresh connection.
+// Connections are reused without preemptive health checks - if a connection has died,
+// the caller will get an error when they try to use it and should call CloseOne() to
+// remove it from the pool, then retry.
 // The alias is looked up in the hosts config to get the actual SSH addresses to try.
 func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 	p.mu.Lock()
 	entry, exists := p.connections[alias]
-	p.mu.Unlock()
-
 	if exists && entry.client != nil {
-		// Test if connection is still alive by running a quick command
-		if p.isAlive(entry.client) {
-			p.mu.Lock()
-			entry.lastUsed = time.Now()
-			p.mu.Unlock()
-			return entry.client, nil
-		}
-		// Connection is dead, close and remove it
-		p.remove(alias)
+		entry.lastUsed = time.Now()
+		p.mu.Unlock()
+		return entry.client, nil
 	}
+	p.mu.Unlock()
 
 	// Look up the host config to get SSH addresses
 	host, ok := p.hosts[alias]
@@ -172,22 +167,6 @@ func (p *Pool) remove(alias string) {
 		}
 		delete(p.connections, alias)
 	}
-}
-
-// isAlive checks if a connection is still usable.
-func (p *Pool) isAlive(client *sshutil.Client) bool {
-	if client == nil || client.Client == nil {
-		return false
-	}
-
-	// Try to open a session as a connectivity test
-	// Use embedded ssh.Client's NewSession directly for full session capabilities
-	session, err := client.Client.NewSession()
-	if err != nil {
-		return false
-	}
-	_ = session.Close()
-	return true
 }
 
 // detectPlatform runs uname to determine the OS type.
