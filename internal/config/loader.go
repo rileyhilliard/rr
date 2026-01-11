@@ -139,13 +139,13 @@ func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
 	return cfg, nil
 }
 
-// Find locates the config file using the search order:
+// Find locates the project config file using the search order:
 // 1. Explicit path (from --config flag)
 // 2. .rr.yaml in current directory
 // 3. .rr.yaml in parent directories (stops at git root or home)
-// 4. ~/.config/rr/config.yaml (global defaults)
 //
 // Returns the path to the config file, or empty string if not found.
+// Note: Global config (~/.rr/config.yaml) is loaded separately via LoadGlobal().
 func Find(explicit string) (string, error) {
 	// 1. Explicit path takes precedence
 	if explicit != "" {
@@ -203,14 +203,6 @@ func Find(explicit string) (string, error) {
 		}
 	}
 
-	// 4. Global config
-	if home != "" {
-		globalConfig := filepath.Join(home, GlobalConfigDir, GlobalConfigFile)
-		if _, err := os.Stat(globalConfig); err == nil {
-			return globalConfig, nil
-		}
-	}
-
 	return "", nil
 }
 
@@ -227,6 +219,151 @@ func LoadOrDefault() (*Config, error) {
 	}
 
 	return Load(path)
+}
+
+// ConfigSource indicates where configuration was loaded from.
+type ConfigSource int
+
+const (
+	// GlobalOnly means only global config was found.
+	GlobalOnly ConfigSource = iota
+	// ProjectOnly means only project config was found (global defaults used).
+	ProjectOnly
+	// Both means both global and project configs were found.
+	Both
+)
+
+// ResolvedConfig contains both global and project configuration.
+type ResolvedConfig struct {
+	Global  *GlobalConfig
+	Project *Config
+	Source  ConfigSource
+}
+
+// LoadResolved loads both global and project configuration.
+// Global config is always loaded (or defaults used).
+// Project config is loaded if found (explicit path or search).
+func LoadResolved(explicitPath string) (*ResolvedConfig, error) {
+	resolved := &ResolvedConfig{}
+
+	// Always load global config
+	global, err := LoadGlobal()
+	if err != nil {
+		return nil, err
+	}
+	resolved.Global = global
+
+	// Find project config
+	projectPath, err := Find(explicitPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine source and load project config
+	if projectPath == "" {
+		// No project config found
+		resolved.Project = DefaultConfig()
+		resolved.Source = GlobalOnly
+	} else {
+		// Load project config
+		project, err := Load(projectPath)
+		if err != nil {
+			return nil, err
+		}
+		resolved.Project = project
+
+		// Check if global config has hosts (file existed and was non-empty)
+		if len(global.Hosts) > 0 {
+			resolved.Source = Both
+		} else {
+			resolved.Source = ProjectOnly
+		}
+	}
+
+	return resolved, nil
+}
+
+// ResolveHost determines which host to use based on resolution order:
+// 1. preferred (from --host flag)
+// 2. project.Host (from .rr.yaml host field)
+// 3. global.Defaults.Host (from ~/.rr/config.yaml defaults.host)
+// 4. First host alphabetically from global.Hosts
+//
+// Returns host name, host config, and error.
+func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, error) {
+	// Resolution order: flag -> project -> global defaults -> first alphabetically
+	hostName := ""
+
+	// 1. Preferred from flag
+	if preferred != "" {
+		hostName = preferred
+	}
+
+	// 2. Project config host reference
+	if hostName == "" && resolved.Project != nil && resolved.Project.Host != "" {
+		hostName = resolved.Project.Host
+	}
+
+	// 3. Global defaults host
+	if hostName == "" && resolved.Global != nil && resolved.Global.Defaults.Host != "" {
+		hostName = resolved.Global.Defaults.Host
+	}
+
+	// 4. First host alphabetically
+	if hostName == "" && resolved.Global != nil && len(resolved.Global.Hosts) > 0 {
+		var names []string
+		for name := range resolved.Global.Hosts {
+			names = append(names, name)
+		}
+		// Sort for deterministic behavior
+		for i := 0; i < len(names); i++ {
+			for j := i + 1; j < len(names); j++ {
+				if names[j] < names[i] {
+					names[i], names[j] = names[j], names[i]
+				}
+			}
+		}
+		hostName = names[0]
+	}
+
+	// No hosts available
+	if hostName == "" {
+		return "", nil, errors.New(errors.ErrConfig,
+			"No hosts configured",
+			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
+	}
+
+	// Look up host config
+	if resolved.Global == nil {
+		return "", nil, errors.New(errors.ErrConfig,
+			"Global config not loaded",
+			"This is unexpected - try running the command again.")
+	}
+
+	host, ok := resolved.Global.Hosts[hostName]
+	if !ok {
+		var available []string
+		for name := range resolved.Global.Hosts {
+			available = append(available, name)
+		}
+		return "", nil, errors.New(errors.ErrConfig,
+			"Host '"+hostName+"' not found in global config",
+			"Available hosts: "+formatHostList(available)+". Check ~/.rr/config.yaml.")
+	}
+
+	return hostName, &host, nil
+}
+
+// formatHostList formats a list of host names for display.
+func formatHostList(names []string) string {
+	if len(names) == 0 {
+		return "(none)"
+	}
+	result := names[0]
+	for i := 1; i < len(names); i++ {
+		result += ", " + names[i]
+	}
+	return result
 }
 
 // parseConfig converts viper config to our Config struct with defaults merged in.

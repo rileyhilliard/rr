@@ -130,6 +130,187 @@ defaults:
 	assert.True(t, cfg.Defaults.LocalFallback)
 }
 
+func TestResolveHost(t *testing.T) {
+	tests := []struct {
+		name        string
+		resolved    *ResolvedConfig
+		preferred   string
+		wantName    string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "preferred from flag takes precedence",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
+						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
+					},
+					Defaults: GlobalDefaults{Host: "dev"},
+				},
+				Project: &Config{Host: "prod"},
+			},
+			preferred: "dev",
+			wantName:  "dev",
+		},
+		{
+			name: "project host used when no flag",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
+						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
+					},
+					Defaults: GlobalDefaults{Host: "dev"},
+				},
+				Project: &Config{Host: "prod"},
+			},
+			preferred: "",
+			wantName:  "prod",
+		},
+		{
+			name: "global default used when no flag or project host",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
+						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
+					},
+					Defaults: GlobalDefaults{Host: "prod"},
+				},
+				Project: &Config{Host: ""},
+			},
+			preferred: "",
+			wantName:  "prod",
+		},
+		{
+			name: "first alphabetically when no other preference",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"zeta": {SSH: []string{"zeta"}, Dir: "/home/zeta"},
+						"alpha": {SSH: []string{"alpha"}, Dir: "/home/alpha"},
+						"beta": {SSH: []string{"beta"}, Dir: "/home/beta"},
+					},
+				},
+				Project: &Config{},
+			},
+			preferred: "",
+			wantName:  "alpha",
+		},
+		{
+			name: "error when no hosts configured",
+			resolved: &ResolvedConfig{
+				Global:  &GlobalConfig{Hosts: map[string]Host{}},
+				Project: &Config{},
+			},
+			preferred:   "",
+			wantErr:     true,
+			errContains: "No hosts configured",
+		},
+		{
+			name: "error when host not found",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{Host: "nonexistent"},
+			},
+			preferred:   "",
+			wantErr:     true,
+			errContains: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, host, err := ResolveHost(tt.resolved, tt.preferred)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantName, name)
+				assert.NotNil(t, host)
+			}
+		})
+	}
+}
+
+func TestLoadResolved(t *testing.T) {
+	// Save original home and cwd
+	originalHome := os.Getenv("HOME")
+	originalWd, _ := os.Getwd()
+	defer func() {
+		os.Setenv("HOME", originalHome)
+		os.Chdir(originalWd)
+	}()
+
+	t.Run("global only - no project config", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		tmpProject := t.TempDir()
+		os.Setenv("HOME", tmpHome)
+		os.Chdir(tmpProject)
+
+		// Create global config
+		configDir := filepath.Join(tmpHome, ".rr")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
+		globalContent := `
+version: 1
+hosts:
+  dev:
+    ssh: [dev]
+    dir: ~/dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(globalContent), 0644))
+
+		resolved, err := LoadResolved("")
+		require.NoError(t, err)
+
+		assert.Equal(t, GlobalOnly, resolved.Source)
+		assert.Len(t, resolved.Global.Hosts, 1)
+		assert.NotNil(t, resolved.Project)
+	})
+
+	t.Run("both - project and global config", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		tmpProject := t.TempDir()
+		os.Setenv("HOME", tmpHome)
+		os.Chdir(tmpProject)
+
+		// Create global config
+		configDir := filepath.Join(tmpHome, ".rr")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
+		globalContent := `
+version: 1
+hosts:
+  dev:
+    ssh: [dev]
+    dir: ~/dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(globalContent), 0644))
+
+		// Create project config
+		projectContent := `
+version: 1
+host: dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(tmpProject, ".rr.yaml"), []byte(projectContent), 0644))
+
+		resolved, err := LoadResolved("")
+		require.NoError(t, err)
+
+		assert.Equal(t, Both, resolved.Source)
+		assert.Len(t, resolved.Global.Hosts, 1)
+		assert.Equal(t, "dev", resolved.Project.Host)
+	})
+}
+
 func TestLoad(t *testing.T) {
 	// Create a temp project config file (no hosts - those are in global config now)
 	dir := t.TempDir()
