@@ -1,7 +1,9 @@
 # rr (Road Runner)
 
 <p align="center">
- 
+
+![demo-extended](https://github.com/user-attachments/assets/418782f4-04ac-4f93-a04e-dddf4f9f6125)
+
 ![rr](https://github.com/user-attachments/assets/d0ba88a9-6220-49ad-87eb-a06b234fbfb5)
 
 </p>
@@ -23,7 +25,7 @@ rr run "make test"
 
 This rsyncs your project to the remote host, runs `make test`, and streams the output back. If you switch from your home LAN to a VPN, it figures out which hostname works. If someone else is using the machine, it waits for them to finish.
 
-![rr720](https://github.com/user-attachments/assets/4231ca56-01d1-4209-9b5d-f476845d6eda)
+![Pi7_GIF_CMP](https://github.com/user-attachments/assets/9ffe029e-af38-4a77-8c77-156fae378db7)
 
 ## Quick start
 
@@ -74,6 +76,8 @@ rr init          # Creates .rr.yaml - interactive prompts walk you through it
 rr doctor        # Verifies everything works
 ```
 
+![demo-doctor](https://github.com/user-attachments/assets/b7f6dc8c-649d-439d-ba1f-5ceb237f680c)
+
 If `rr init` doesn't detect your SSH config, you can add hosts manually. See [configuration docs](docs/configuration.md).
 
 ## Usage
@@ -100,6 +104,8 @@ Then run them by name:
 rr test    # Same as: rr run "pytest -n auto"
 rr build
 ```
+
+![demo-tasks](https://github.com/user-attachments/assets/8d902e99-9b7a-4fa9-a2fa-bbdef8365e3b)
 
 ## Config
 
