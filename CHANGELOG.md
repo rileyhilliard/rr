@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-01-11
+
+### Added
+
+- Multi-host project support: projects can now specify multiple hosts with `hosts:` (plural) for load balancing
+- `ResolveHosts()` function with priority: CLI flag > project.Hosts > project.Host > all global hosts
+- Init wizard multi-select for choosing which hosts a project can use
+- Validation for hosts list (no duplicates, valid references)
+
+### Changed
+
+- Project config now generates `hosts:` list format instead of singular `host:`
+- Empty hosts list means "use all global hosts" (backwards compatible)
+- Improved test isolation across CLI test files
+
 ## [0.6.0] - 2026-01-11
 
 ### Added
