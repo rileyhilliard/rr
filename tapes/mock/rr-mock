@@ -1,0 +1,558 @@
+#!/usr/bin/env bash
+#
+# rr-mock - Simulates rr CLI output for VHS demo recordings
+#
+# This script produces deterministic, realistic output without
+# requiring actual SSH connectivity.
+#
+# Usage:
+#   PATH="tapes/mock:$PATH" vhs tapes/demo.tape
+#
+# The tape files should call "rr" which resolves to this mock.
+
+set -e
+
+# ANSI color codes (24-bit true color)
+PINK='\033[38;2;255;46;151m'
+CYAN='\033[38;2;0;255;255m'
+PURPLE='\033[38;2;191;64;255m'
+GREEN='\033[38;2;57;255;20m'
+AMBER='\033[38;2;255;170;0m'
+RED='\033[38;2;255;0;85m'
+WHITE='\033[38;2;255;255;255m'
+MUTED='\033[38;2;107;107;141m'
+RESET='\033[0m'
+
+# Symbols
+SYM_SUCCESS="●"
+SYM_FAIL="✕"
+SYM_PENDING="◇"
+SYM_PROGRESS="◆"
+SYM_COMPLETE="◉"
+SYM_WARNING="⚠"
+
+# Spinner frames (braille pattern)
+SPINNER_FRAMES=("⣾" "⣽" "⣻" "⢿" "⡿" "⣟" "⣯" "⣷")
+
+# Progress bar characters
+BAR_FILLED="▰"
+BAR_EMPTY="▱"
+
+# Divider
+DIVIDER="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Helper: print colored text
+print_color() {
+    local color="$1"
+    local text="$2"
+    echo -e "${color}${text}${RESET}"
+}
+
+# Helper: print success line with timing
+print_success() {
+    local msg="$1"
+    local time="$2"
+    printf "${GREEN}${SYM_SUCCESS}${RESET} ${WHITE}%s${RESET} %s\n" "$msg" "${MUTED}${time}${RESET}"
+}
+
+# Helper: print failure line with timing
+print_fail() {
+    local msg="$1"
+    local time="$2"
+    printf "${RED}${SYM_FAIL}${RESET} ${WHITE}%s${RESET} %s\n" "$msg" "${MUTED}${time}${RESET}"
+}
+
+# Helper: spinner animation (brief)
+animate_spinner() {
+    local msg="$1"
+    local duration="${2:-0.5}"
+    local frames=8
+    local delay=$(echo "$duration / $frames" | bc -l)
+
+    for i in $(seq 0 $((frames - 1))); do
+        local frame="${SPINNER_FRAMES[$((i % 8))]}"
+        # Cycle colors
+        case $((i % 4)) in
+            0) color="$PINK" ;;
+            1) color="$PURPLE" ;;
+            2) color="$CYAN" ;;
+            3) color="$GREEN" ;;
+        esac
+        printf "\r${color}${frame}${RESET} ${WHITE}%s${RESET}" "$msg"
+        sleep "$delay"
+    done
+    printf "\r"
+}
+
+# Helper: progress bar
+progress_bar() {
+    local percent="$1"
+    local width=10
+    local filled=$((percent * width / 100))
+    local empty=$((width - filled))
+
+    local bar=""
+    for ((i=0; i<filled; i++)); do bar+="$BAR_FILLED"; done
+    for ((i=0; i<empty; i++)); do bar+="$BAR_EMPTY"; done
+
+    echo "[$bar] ${percent}%"
+}
+
+# =============================================================================
+# COMMAND: run
+# =============================================================================
+mock_run() {
+    local cmd="${*:-make test}"
+
+    # Phase 1: Connecting
+    animate_spinner "Connecting..." 0.4
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} %-48s ${MUTED}%s${RESET}\n" "mini (tailscale)" "0.3s"
+    print_success "Connected to mini via mini (tailscale)" "0.3s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    # Phase 2: Syncing with progress
+    for pct in 15 35 60 85 100; do
+        local bar=$(progress_bar $pct)
+        local frame="${SPINNER_FRAMES[$((pct / 15 % 8))]}"
+        case $((pct / 25 % 4)) in
+            0) color="$PINK" ;;
+            1) color="$PURPLE" ;;
+            2) color="$CYAN" ;;
+            3) color="$GREEN" ;;
+        esac
+        printf "\r${color}${frame}${RESET} ${WHITE}Syncing${RESET} ${CYAN}%s${RESET}" "$bar"
+        sleep 0.15
+    done
+    echo ""
+    printf "  ${MUTED}2.1MB | 4.2MB/s | 45/89 files${RESET}\n"
+    print_success "Synced (2.1MB)" "0.8s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    # Phase 3: Locking
+    animate_spinner "Acquiring lock..." 0.2
+    print_success "Locked" "0.1s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    # Phase 4: Execute command
+    printf "${MUTED}\$ %s${RESET}\n\n" "$cmd"
+
+    # Simulate test output based on command
+    if [[ "$cmd" == *"pytest"* ]] || [[ "$cmd" == *"test"* ]]; then
+        echo -e "${WHITE}tests/test_main.py${RESET}::test_init ${GREEN}PASSED${RESET}                      [25%]"
+        sleep 0.1
+        echo -e "${WHITE}tests/test_main.py${RESET}::test_run ${GREEN}PASSED${RESET}                       [50%]"
+        sleep 0.1
+        echo -e "${WHITE}tests/test_sync.py${RESET}::test_rsync ${GREEN}PASSED${RESET}                     [75%]"
+        sleep 0.1
+        echo -e "${WHITE}tests/test_sync.py${RESET}::test_exclude ${GREEN}PASSED${RESET}                   [100%]"
+        echo ""
+        echo -e "${GREEN}${SYM_COMPLETE} 4 passed${RESET} ${MUTED}in 1.23s${RESET}"
+    else
+        # Generic command output
+        eval "$cmd" 2>/dev/null || echo "Command completed"
+    fi
+
+    echo ""
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+    print_success "Done" "2.4s"
+}
+
+# =============================================================================
+# COMMAND: exec
+# =============================================================================
+mock_exec() {
+    local cmd="${*:-uptime}"
+
+    # Quick connect (no sync)
+    animate_spinner "Connecting..." 0.3
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} %-48s ${MUTED}%s${RESET}\n" "mini (tailscale)" "0.2s"
+    print_success "Connected to mini" "0.2s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    printf "${MUTED}\$ %s${RESET}\n\n" "$cmd"
+
+    # Simulate common commands
+    case "$cmd" in
+        *uptime*)
+            echo " 14:32  up 12 days,  3:45, 2 users, load averages: 0.52 0.48 0.41"
+            ;;
+        *"df -h"*)
+            echo "Filesystem       Size   Used  Avail Capacity  Mounted on"
+            echo "/dev/disk1s1    932Gi  156Gi  724Gi    18%    /"
+            ;;
+        *"free -h"*)
+            echo "              total        used        free"
+            echo "Mem:           32Gi       12Gi       18Gi"
+            echo "Swap:         2.0Gi       0Bi       2.0Gi"
+            ;;
+        *)
+            eval "$cmd" 2>/dev/null || echo "Done"
+            ;;
+    esac
+
+    echo ""
+    print_success "Done" "0.5s"
+}
+
+# =============================================================================
+# COMMAND: doctor
+# =============================================================================
+mock_doctor() {
+    echo ""
+    print_color "$WHITE" "Road Runner Diagnostic Report"
+    echo ""
+
+    # CONFIG section
+    print_color "$CYAN" "CONFIG"
+    sleep 0.2
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} Config file found ${MUTED}(.rr.yaml)${RESET}\n"
+    sleep 0.15
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} Config syntax valid\n"
+    sleep 0.15
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} Default host configured ${MUTED}(mini)${RESET}\n"
+    echo ""
+
+    # SSH section
+    print_color "$CYAN" "SSH"
+    sleep 0.2
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} SSH client installed ${MUTED}(OpenSSH 9.0)${RESET}\n"
+    sleep 0.15
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} SSH agent running ${MUTED}(2 keys loaded)${RESET}\n"
+    sleep 0.15
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} SSH config found ${MUTED}(~/.ssh/config)${RESET}\n"
+    echo ""
+
+    # HOSTS section
+    print_color "$CYAN" "HOSTS"
+    sleep 0.2
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} ${WHITE}mini${RESET}\n"
+    sleep 0.1
+    printf "      ${GREEN}${SYM_SUCCESS}${RESET} %-44s ${GREEN}%s${RESET}\n" "mini (tailscale)" "0.3s"
+    sleep 0.1
+    printf "      ${MUTED}${SYM_PENDING}${RESET} %-44s ${MUTED}%s${RESET}\n" "mini-local" "timeout"
+    sleep 0.2
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} ${WHITE}gpu-box${RESET}\n"
+    sleep 0.1
+    printf "      ${GREEN}${SYM_SUCCESS}${RESET} %-44s ${GREEN}%s${RESET}\n" "192.168.1.50" "0.8s"
+    echo ""
+
+    # DEPENDENCIES section
+    print_color "$CYAN" "DEPENDENCIES"
+    sleep 0.2
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} rsync installed ${MUTED}(v3.2.7)${RESET}\n"
+    sleep 0.15
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} git installed ${MUTED}(v2.43.0)${RESET}\n"
+    echo ""
+
+    # LOCKS section
+    print_color "$CYAN" "LOCKS"
+    sleep 0.2
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} No stale locks found\n"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+    printf "${GREEN}${SYM_COMPLETE}${RESET} ${WHITE}All checks passed${RESET}\n"
+    echo ""
+}
+
+# =============================================================================
+# COMMAND: status
+# =============================================================================
+mock_status() {
+    echo ""
+    print_color "$WHITE" "Host Status"
+    echo ""
+
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} %-20s ${GREEN}%-12s${RESET} ${MUTED}%s${RESET}\n" "mini" "connected" "via tailscale (0.3s)"
+    printf "  ${MUTED}${SYM_PENDING}${RESET} %-20s ${MUTED}%-12s${RESET} ${MUTED}%s${RESET}\n" "gpu-box" "available" "not connected"
+    echo ""
+
+    print_color "$WHITE" "Project"
+    printf "  ${MUTED}Config:${RESET}    .rr.yaml\n"
+    printf "  ${MUTED}Remote dir:${RESET} ~/projects/myproject\n"
+    printf "  ${MUTED}Last sync:${RESET}  2 minutes ago\n"
+    echo ""
+}
+
+# =============================================================================
+# COMMAND: init (interactive simulation)
+# =============================================================================
+mock_init() {
+    echo ""
+    print_color "$WHITE" "Initialize rr configuration"
+    echo ""
+
+    # Simulate form prompts
+    printf "${CYAN}?${RESET} ${WHITE}Host name${RESET} ${MUTED}(identifier for this remote)${RESET}\n"
+    sleep 0.3
+    printf "  ${GREEN}>${RESET} mini\n"
+    sleep 0.5
+    echo ""
+
+    printf "${CYAN}?${RESET} ${WHITE}SSH alias(es)${RESET} ${MUTED}(from ~/.ssh/config or hostname)${RESET}\n"
+    sleep 0.3
+    printf "  ${GREEN}>${RESET} mini-local, mini (tailscale)\n"
+    sleep 0.5
+    echo ""
+
+    printf "${CYAN}?${RESET} ${WHITE}Remote directory${RESET} ${MUTED}(where to sync files)${RESET}\n"
+    sleep 0.3
+    printf "  ${GREEN}>${RESET} ~/projects/\${PROJECT}\n"
+    sleep 0.5
+    echo ""
+
+    printf "${CYAN}?${RESET} ${WHITE}Set as default host?${RESET}\n"
+    sleep 0.3
+    printf "  ${GREEN}>${RESET} Yes\n"
+    sleep 0.5
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+    print_success "Created .rr.yaml" ""
+    echo ""
+    printf "${MUTED}Run 'rr doctor' to verify your setup${RESET}\n"
+    echo ""
+}
+
+# =============================================================================
+# COMMAND: host list
+# =============================================================================
+mock_host_list() {
+    echo ""
+    print_color "$WHITE" "Configured Hosts"
+    echo ""
+
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} ${WHITE}mini${RESET} ${CYAN}(default)${RESET}\n"
+    printf "      ${MUTED}SSH aliases:${RESET} mini-local, mini (tailscale)\n"
+    printf "      ${MUTED}Directory:${RESET}   ~/projects/\${PROJECT}\n"
+    echo ""
+
+    printf "  ${SYM_PENDING} ${WHITE}gpu-box${RESET}\n"
+    printf "      ${MUTED}SSH aliases:${RESET} 192.168.1.50, gpu-tailscale\n"
+    printf "      ${MUTED}Directory:${RESET}   ~/dev/\${PROJECT}\n"
+    printf "      ${MUTED}Tags:${RESET}        gpu, fast\n"
+    echo ""
+}
+
+# =============================================================================
+# COMMAND: --help
+# =============================================================================
+mock_help() {
+    echo "Road Runner - Sync and run commands on remote machines"
+    echo ""
+    echo -e "${WHITE}Usage:${RESET}"
+    echo "  rr [command] [flags]"
+    echo "  rr [task]            Run a configured task"
+    echo ""
+    echo -e "${WHITE}Core Commands:${RESET}"
+    echo "  run <cmd>            Sync files and execute command"
+    echo "  exec <cmd>           Execute command without syncing"
+    echo "  sync                 Sync files only"
+    echo ""
+    echo -e "${WHITE}Setup Commands:${RESET}"
+    echo "  init                 Create .rr.yaml configuration"
+    echo "  setup <host>         Configure SSH access to host"
+    echo "  doctor               Run diagnostic checks"
+    echo ""
+    echo -e "${WHITE}Host Commands:${RESET}"
+    echo "  host list            List configured hosts"
+    echo "  host add             Add a new host interactively"
+    echo "  host remove <name>   Remove a host"
+    echo ""
+    echo -e "${WHITE}Other Commands:${RESET}"
+    echo "  monitor              Real-time dashboard"
+    echo "  status               Show connection status"
+    echo "  unlock               Release stuck locks"
+    echo "  completion           Generate shell completions"
+    echo ""
+    echo -e "${WHITE}Configured Tasks:${RESET}"
+    printf "  ${CYAN}test${RESET}                 Run pytest -n auto\n"
+    printf "  ${CYAN}build${RESET}                Run make build\n"
+    printf "  ${CYAN}lint${RESET}                 Run make lint\n"
+    echo ""
+    echo -e "${WHITE}Flags:${RESET}"
+    echo "  -h, --help           Show help"
+    echo "  -v, --version        Show version"
+    echo "      --host <name>    Use specific host"
+    echo "      --dry-run        Show what would be synced"
+    echo ""
+}
+
+# =============================================================================
+# COMMAND: version
+# =============================================================================
+mock_version() {
+    echo "rr version 0.7.1"
+    echo "  go: go1.22.0"
+    echo "  os/arch: darwin/arm64"
+}
+
+# =============================================================================
+# COMMAND: monitor (static frame for demo)
+# =============================================================================
+mock_monitor() {
+    # This would need TUI support - just show a static "screenshot"
+    clear
+    echo ""
+    print_color "$WHITE" "  Road Runner Monitor"
+    echo ""
+    echo -e "  ${MUTED}Press 'q' to quit, 's' to sort, '?' for help${RESET}"
+    echo ""
+    echo -e "  ${DIVIDER}"
+    echo ""
+    printf "  ${WHITE}%-16s${RESET} ${CYAN}%6s${RESET}  ${GREEN}%6s${RESET}  ${PURPLE}%6s${RESET}  ${MUTED}%s${RESET}\n" \
+        "HOST" "CPU" "RAM" "GPU" "STATUS"
+    echo ""
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} %-14s %5.1f%%  %5.1f%%  %5.1f%%  ${GREEN}%s${RESET}\n" \
+        "mini" "23.4" "45.2" "12.0" "connected"
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} %-14s %5.1f%%  %5.1f%%  %5.1f%%  ${GREEN}%s${RESET}\n" \
+        "gpu-box" "67.8" "82.1" "95.3" "connected"
+    printf "  ${MUTED}${SYM_PENDING}${RESET} ${MUTED}%-14s${RESET} ${MUTED}%6s  %6s  %6s${RESET}  ${MUTED}%s${RESET}\n" \
+        "backup" "-" "-" "-" "offline"
+    echo ""
+    echo -e "  ${MUTED}Last updated: just now${RESET}"
+    echo ""
+
+    # Wait for q key (for VHS tape to show the screen)
+    read -n1 -s key
+    clear
+}
+
+# =============================================================================
+# COMMAND: named task (test, build, lint)
+# =============================================================================
+mock_task() {
+    local task="$1"
+    case "$task" in
+        test)
+            mock_run "pytest -n auto"
+            ;;
+        build)
+            mock_run "make build"
+            ;;
+        lint)
+            mock_run "make lint"
+            ;;
+        *)
+            echo "Unknown task: $task"
+            exit 1
+            ;;
+    esac
+}
+
+# =============================================================================
+# COMMAND: failover demo (shows multiple connection attempts)
+# =============================================================================
+mock_run_failover() {
+    local cmd="${*:-echo hello}"
+
+    # Phase 1: Connecting with failover
+    animate_spinner "Connecting..." 0.3
+    printf "  ${AMBER}${SYM_PENDING}${RESET} %-48s ${AMBER}%s${RESET}\n" "192.168.1.50" "timeout (2s)"
+    sleep 0.3
+    printf "  ${GREEN}${SYM_SUCCESS}${RESET} %-48s ${GREEN}%s${RESET}\n" "gpu-tailscale" "0.4s"
+    print_success "Connected to gpu-box via gpu-tailscale" "2.4s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    # Quick sync (smaller)
+    for pct in 30 70 100; do
+        local bar=$(progress_bar $pct)
+        printf "\r${CYAN}${SPINNER_FRAMES[$((pct / 35 % 8))]}${RESET} ${WHITE}Syncing${RESET} ${CYAN}%s${RESET}" "$bar"
+        sleep 0.12
+    done
+    echo ""
+    print_success "Synced (0.5MB)" "0.4s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    animate_spinner "Acquiring lock..." 0.15
+    print_success "Locked" "0.1s"
+    echo ""
+
+    echo -e "${MUTED}${DIVIDER}${RESET}"
+    echo ""
+
+    printf "${MUTED}\$ %s${RESET}\n\n" "$cmd"
+    echo "hello"
+    echo ""
+
+    print_success "Done" "3.2s"
+}
+
+# =============================================================================
+# MAIN - Route to appropriate mock
+# =============================================================================
+main() {
+    local cmd="${1:-}"
+    shift 2>/dev/null || true
+
+    case "$cmd" in
+        run)
+            if [[ "$*" == *"--failover"* ]]; then
+                mock_run_failover "${@/--failover/}"
+            else
+                mock_run "$@"
+            fi
+            ;;
+        exec)
+            mock_exec "$@"
+            ;;
+        doctor)
+            mock_doctor
+            ;;
+        status)
+            mock_status
+            ;;
+        init)
+            mock_init
+            ;;
+        monitor)
+            mock_monitor
+            ;;
+        host)
+            case "$1" in
+                list) mock_host_list ;;
+                *) echo "Unknown host command: $1" ;;
+            esac
+            ;;
+        test|build|lint)
+            mock_task "$cmd"
+            ;;
+        --help|-h|help)
+            mock_help
+            ;;
+        --version|-v|version)
+            mock_version
+            ;;
+        "")
+            mock_help
+            ;;
+        *)
+            echo "Unknown command: $cmd"
+            echo "Run 'rr --help' for usage"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

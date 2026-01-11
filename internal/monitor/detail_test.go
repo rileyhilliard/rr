@@ -59,7 +59,7 @@ func TestModel_renderDetailHeader(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	tests := []struct {
 		name   string
@@ -85,7 +85,7 @@ func TestModel_renderDetailCPUSection(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 
 	cpu := CPUMetrics{
@@ -127,7 +127,7 @@ func TestModel_renderDetailRAMSection(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 
 	ram := RAMMetrics{
@@ -170,7 +170,7 @@ func TestModel_renderDetailGPUSection(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 
 	tests := []struct {
@@ -220,7 +220,7 @@ func TestModel_renderDetailNetworkSection(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 	m.interval = time.Second
 
@@ -259,7 +259,7 @@ func TestModel_renderDetailProcessSection(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 
 	tests := []struct {
@@ -301,7 +301,7 @@ func TestModel_renderDetailFooter(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	result := m.renderDetailFooter()
 	assert.NotEmpty(t, result)
@@ -314,7 +314,7 @@ func TestModel_renderDetailFooterWithScroll(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	// Without viewport ready
 	result := m.renderDetailFooterWithScroll()
@@ -327,7 +327,7 @@ func TestModel_renderDetailViewWithViewport(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 	m.height = 40
 

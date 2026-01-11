@@ -61,6 +61,7 @@ func (s HostStatus) String() string {
 // Model is the Bubble Tea model for the monitoring dashboard.
 type Model struct {
 	hosts      []string
+	hostOrder  []string // Original config order for default sorting (priority order)
 	metrics    map[string]*HostMetrics
 	status     map[string]HostStatus
 	errors     map[string]string // Last error message per host for diagnostics
@@ -92,9 +93,22 @@ type metricsMsg struct {
 }
 
 // NewModel creates a new dashboard model with the given collector.
-func NewModel(collector *Collector, interval time.Duration) Model {
+// hostOrder is the priority order from config (default host first, then fallbacks).
+// If nil, hosts are sorted alphabetically.
+func NewModel(collector *Collector, interval time.Duration, hostOrder []string) Model {
 	hosts := collector.Hosts()
-	sort.Strings(hosts)
+
+	// Store the original config order for default sorting
+	// If no order provided, fall back to alphabetical
+	var configOrder []string
+	if len(hostOrder) > 0 {
+		configOrder = make([]string, len(hostOrder))
+		copy(configOrder, hostOrder)
+	} else {
+		configOrder = make([]string, len(hosts))
+		copy(configOrder, hosts)
+		sort.Strings(configOrder)
+	}
 
 	// Initialize status map with all hosts unreachable
 	status := make(map[string]HostStatus)
@@ -102,15 +116,28 @@ func NewModel(collector *Collector, interval time.Duration) Model {
 		status[h] = StatusUnreachableState
 	}
 
-	return Model{
-		hosts:     hosts,
+	m := Model{
+		hosts:     hosts, // Will be sorted by sortHosts
+		hostOrder: configOrder,
 		metrics:   make(map[string]*HostMetrics),
 		status:    status,
 		errors:    make(map[string]string),
+		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
 		interval:  interval,
+		sortOrder: SortByDefault, // Start with default sort (online first, config order)
 	}
+
+	// Apply initial sort
+	m.sortHosts()
+
+	// Select first host after sorting
+	if len(m.hosts) > 0 {
+		m.selected = 0
+	}
+
+	return m
 }
 
 // Init starts the tick timer and triggers an initial metrics collection.
@@ -278,6 +305,9 @@ func (m *Model) sortHosts() {
 	}
 
 	switch m.sortOrder {
+	case SortByDefault:
+		m.sortByDefault()
+
 	case SortByName:
 		sort.Strings(m.hosts)
 
@@ -362,4 +392,43 @@ func (m *Model) sortHosts() {
 			}
 		}
 	}
+}
+
+// sortByDefault sorts hosts by online status first (online hosts first),
+// then by config priority order (default host, then fallbacks in order).
+func (m *Model) sortByDefault() {
+	// Build a map of host -> config order index for sorting
+	orderIndex := make(map[string]int)
+	for i, h := range m.hostOrder {
+		orderIndex[h] = i
+	}
+
+	sort.Slice(m.hosts, func(i, j int) bool {
+		hostI := m.hosts[i]
+		hostJ := m.hosts[j]
+
+		// Online hosts come first
+		onlineI := m.status[hostI] == StatusConnectedState
+		onlineJ := m.status[hostJ] == StatusConnectedState
+		if onlineI != onlineJ {
+			return onlineI
+		}
+
+		// Within same online/offline group, sort by config priority
+		idxI, okI := orderIndex[hostI]
+		idxJ, okJ := orderIndex[hostJ]
+
+		// Hosts in config come before hosts not in config
+		if okI != okJ {
+			return okI
+		}
+
+		// Both in config: use config order
+		if okI && okJ {
+			return idxI < idxJ
+		}
+
+		// Neither in config: alphabetical
+		return hostI < hostJ
+	})
 }

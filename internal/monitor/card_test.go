@@ -181,7 +181,7 @@ func TestModel_renderHostLine(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	tests := []struct {
 		name   string
@@ -207,7 +207,7 @@ func TestModel_renderCard(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 120
 	m.height = 40
 
@@ -248,7 +248,7 @@ func TestModel_renderCompactCard(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 100
 	m.height = 40
 
@@ -283,7 +283,7 @@ func TestModel_renderMinimalCard(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.width = 60
 	m.height = 40
 
@@ -316,7 +316,7 @@ func TestModel_renderMinimalHostLine(t *testing.T) {
 		"very-long-hostname-that-needs-truncation": {SSH: []string{"host"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	tests := []struct {
 		name     string
@@ -341,7 +341,7 @@ func TestModel_renderMinimalMetricsLine(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	metrics := &HostMetrics{
 		CPU: CPUMetrics{Percent: 45.0},
@@ -369,7 +369,7 @@ func TestModel_renderCardTopProcess(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 
 	tests := []struct {
 		name     string
@@ -405,7 +405,7 @@ func TestModel_renderCardNetworkLine(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second)
+	m := NewModel(collector, time.Second, nil)
 	m.interval = time.Second
 
 	// No network history yet
