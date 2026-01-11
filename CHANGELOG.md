@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-01-11
+
+### Added
+
+- `rr unlock` command for manually releasing stale locks
+- Signal handling improvements with proper cleanup on Ctrl+C
+
+### Fixed
+
+- SSH BatchMode for rsync hang issue
+- Remote artifact cleanup when removing hosts
+- macOS memory calculation accuracy
+- Braille sparkline coloring in monitor graphs
+
+## [0.4.5] - 2026-01-11
+
+### Fixed
+
+- Source `.bashrc`/`.zshrc` for proper PATH in remote commands
+
+### Changed
+
+- README updated with image instead of video
+
+## [0.4.4] - 2026-01-11
+
+### Added
+
+- SSH setup guide as prerequisite documentation
+
+### Fixed
+
+- CPU usage calculation now uses delta instead of cumulative jiffies
+- Progress bar timing slowed to 30 seconds for better UX
+- Display host name instead of IP in status output
+- Added linux_arm64 asset to TestFindAsset
+
+## [0.4.3] - 2026-01-10
+
+### Fixed
+
+- Expand `${HOME}` to `~` for remote paths instead of local home directory
+
+## [0.4.2] - 2026-01-10
+
+### Added
+
+- Interactive tool provisioning when commands fail on remote
+
+### Fixed
+
+- Improved command-not-found detection and guidance
+
+## [0.4.1] - 2026-01-10
+
+### Fixed
+
+- Respect default host in load balancing mode
+
 ## [0.4.0] - 2026-01-10
 
 ### Added
