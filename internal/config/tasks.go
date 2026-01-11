@@ -44,7 +44,7 @@ func GetTask(cfg *Config, name string) (*TaskConfig, error) {
 
 // GetTaskWithMergedEnv returns a task with environment variables merged.
 // Task env takes precedence over host env.
-func GetTaskWithMergedEnv(cfg *Config, taskName string, hostName string) (*TaskConfig, map[string]string, error) {
+func GetTaskWithMergedEnv(cfg *Config, taskName string, host *Host) (*TaskConfig, map[string]string, error) {
 	task, err := GetTask(cfg, taskName)
 	if err != nil {
 		return nil, nil, err
@@ -54,11 +54,9 @@ func GetTaskWithMergedEnv(cfg *Config, taskName string, hostName string) (*TaskC
 	mergedEnv := make(map[string]string)
 
 	// Add host env first (lowest precedence)
-	if hostName != "" {
-		if host, ok := cfg.Hosts[hostName]; ok {
-			for k, v := range host.Env {
-				mergedEnv[k] = v
-			}
+	if host != nil {
+		for k, v := range host.Env {
+			mergedEnv[k] = v
 		}
 	}
 

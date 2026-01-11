@@ -14,10 +14,7 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	assert.Equal(t, CurrentConfigVersion, cfg.Version)
-	assert.NotNil(t, cfg.Hosts)
-	assert.Empty(t, cfg.Hosts)
-	assert.False(t, cfg.LocalFallback)
-	assert.Equal(t, 2*time.Second, cfg.ProbeTimeout)
+	assert.Empty(t, cfg.Host) // Project config has optional host reference
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.Lock.Timeout)
 	assert.Equal(t, 10*time.Minute, cfg.Lock.Stale)
@@ -37,22 +34,25 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Empty(t, cfg.Monitor.Exclude)
 }
 
+func TestDefaultGlobalConfig(t *testing.T) {
+	cfg := DefaultGlobalConfig()
+
+	assert.Equal(t, CurrentGlobalConfigVersion, cfg.Version)
+	assert.NotNil(t, cfg.Hosts)
+	assert.Empty(t, cfg.Hosts)
+	assert.Empty(t, cfg.Defaults.Host)
+	assert.Equal(t, 2*time.Second, cfg.Defaults.ProbeTimeout)
+	assert.False(t, cfg.Defaults.LocalFallback)
+}
+
 func TestLoad(t *testing.T) {
-	// Create a temp config file
+	// Create a temp project config file (no hosts - those are in global config now)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, ".rr.yaml")
 
 	content := `
 version: 1
-hosts:
-  mini:
-    ssh:
-      - mini-local
-      - mini
-    dir: ~/projects/test
-    tags: [macos, arm64]
-default: mini
-probe_timeout: 5s
+host: mini
 sync:
   exclude:
     - .git/
@@ -78,11 +78,7 @@ output:
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, cfg.Version)
-	assert.Len(t, cfg.Hosts, 1)
-	assert.Contains(t, cfg.Hosts, "mini")
-	assert.Equal(t, []string{"mini-local", "mini"}, cfg.Hosts["mini"].SSH)
-	assert.Equal(t, "mini", cfg.Default)
-	assert.Equal(t, 5*time.Second, cfg.ProbeTimeout)
+	assert.Equal(t, "mini", cfg.Host)
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Len(t, cfg.Tasks, 2)
 	assert.Equal(t, "make build", cfg.Tasks["build"].Run)
@@ -253,64 +249,50 @@ func TestValidate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid config",
+			name: "valid config with host reference",
 			config: &Config{
 				Version: 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/projects/test"},
-				},
-				Default: "mini",
+				Host:    "mini",
 			},
 			wantErr: false,
 		},
 		{
-			name: "no hosts without option",
+			name: "valid config without host reference",
 			config: &Config{
 				Version: 1,
-				Hosts:   map[string]Host{},
 			},
-			wantErr: true,
-			errMsg:  "No hosts set up yet",
-		},
-		{
-			name: "no hosts with AllowNoHosts option",
-			config: &Config{
-				Version: 1,
-				Hosts:   map[string]Host{},
-			},
-			opts:    []ValidationOption{AllowNoHosts()},
 			wantErr: false,
 		},
 		{
 			name: "version too high",
 			config: &Config{
 				Version: CurrentConfigVersion + 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
-				},
 			},
 			wantErr: true,
 			errMsg:  "from the future",
 		},
 		{
-			name: "default host not found",
+			name: "host reference looks like SSH string",
 			config: &Config{
 				Version: 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
-				},
-				Default: "nonexistent",
+				Host:    "user@hostname",
 			},
 			wantErr: true,
-			errMsg:  "doesn't exist",
+			errMsg:  "looks like an SSH string",
+		},
+		{
+			name: "host reference contains path",
+			config: &Config{
+				Version: 1,
+				Host:    "hosts/mini",
+			},
+			wantErr: true,
+			errMsg:  "contains a path separator",
 		},
 		{
 			name: "reserved task name",
 			config: &Config{
 				Version: 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
-				},
 				Tasks: map[string]TaskConfig{
 					"init": {Run: "echo hello"},
 				},
@@ -780,5 +762,5 @@ func TestLoadOrDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
 	assert.Equal(t, CurrentConfigVersion, cfg.Version)
-	assert.Empty(t, cfg.Hosts)
+	assert.Empty(t, cfg.Host)
 }

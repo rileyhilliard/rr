@@ -141,16 +141,10 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
-	// Expand variables in host directories (use ExpandRemote to preserve ~ for remote shell)
-	for name, host := range cfg.Hosts {
-		host.Dir = ExpandRemote(host.Dir)
-		cfg.Hosts[name] = host
-	}
-
 	return cfg, nil
 }
 
-// setDurationDefaults configures viper to handle duration strings.
+// setDurationDefaults configures viper to handle duration strings for project config.
 func setDurationDefaults(v *viper.Viper) {
 	// Viper handles duration parsing automatically for time.Duration fields
 	// but we need to help with nested structs using DecodeHook
@@ -164,5 +158,4 @@ func setDurationDefaults(v *viper.Viper) {
 	v.SetDefault("output.format", "auto")
 	v.SetDefault("output.timing", true)
 	v.SetDefault("output.verbosity", "normal")
-	v.SetDefault("local_fallback", false)
 }

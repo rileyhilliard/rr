@@ -29,17 +29,10 @@ var ReservedTaskNames = map[string]bool{
 type ValidationOption func(*validationContext)
 
 type validationContext struct {
-	allowNoHosts bool
+	// No options currently needed for project config validation
 }
 
-// AllowNoHosts allows configs without hosts (for 'rr init').
-func AllowNoHosts() ValidationOption {
-	return func(ctx *validationContext) {
-		ctx.allowNoHosts = true
-	}
-}
-
-// Validate checks the config for errors and returns structured error messages.
+// Validate checks the project config for errors and returns structured error messages.
 func Validate(cfg *Config, opts ...ValidationOption) error {
 	ctx := &validationContext{}
 	for _, opt := range opts {
@@ -53,27 +46,10 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 			"Grab the latest rr: https://github.com/rileyhilliard/rr/releases")
 	}
 
-	// Check hosts exist (unless explicitly allowed)
-	if !ctx.allowNoHosts && len(cfg.Hosts) == 0 {
-		return errors.New(errors.ErrConfig,
-			"No hosts set up yet",
-			"You need at least one remote machine to sync to. Add one under 'hosts:' in .rr.yaml or run 'rr init'.")
-	}
-
-	// Validate each host
-	for name, host := range cfg.Hosts {
-		if err := validateHost(name, host); err != nil {
-			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in .rr.yaml and fix it up.")
-		}
-	}
-
-	// Check default host exists (if specified)
-	if cfg.Default != "" && cfg.Default != "auto" {
-		if _, ok := cfg.Hosts[cfg.Default]; !ok {
-			hostNames := getHostNames(cfg.Hosts)
-			return errors.New(errors.ErrConfig,
-				fmt.Sprintf("Default host '%s' doesn't exist", cfg.Default),
-				fmt.Sprintf("Did you rename or remove it? Available hosts: %s", strings.Join(hostNames, ", ")))
+	// Validate Host reference (if set) - should just be a name, no special chars
+	if cfg.Host != "" {
+		if err := validateHostReference(cfg.Host); err != nil {
+			return err
 		}
 	}
 
@@ -100,11 +76,27 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'lock' section in your .rr.yaml.")
 	}
 
-	// Validate monitor config
-	if err := validateMonitor(cfg.Monitor, cfg.Hosts); err != nil {
+	// Validate monitor config (no hosts to validate against in project config)
+	if err := validateMonitorConfig(cfg.Monitor); err != nil {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'monitor' section in your .rr.yaml.")
 	}
 
+	return nil
+}
+
+// validateHostReference checks that a host reference is just a name (no special chars).
+func validateHostReference(host string) error {
+	// Host reference should be a simple name - no @ (user@host), no / (paths)
+	if strings.Contains(host, "@") {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host reference '%s' looks like an SSH string, not a host name", host),
+			"Use just the host name here. Configure SSH connection details in ~/.rr/config.yaml.")
+	}
+	if strings.Contains(host, "/") {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host reference '%s' contains a path separator", host),
+			"Use just the host name here, not a path.")
+	}
 	return nil
 }
 
@@ -235,8 +227,9 @@ func validateLock(lock LockConfig) error {
 	return nil
 }
 
-// validateMonitor checks monitor configuration.
-func validateMonitor(monitor MonitorConfig, hosts map[string]Host) error {
+// validateMonitorConfig checks monitor configuration without host validation.
+// Used for project config where hosts are defined separately in global config.
+func validateMonitorConfig(monitor MonitorConfig) error {
 	// Validate interval format if specified
 	if monitor.Interval != "" {
 		if _, err := time.ParseDuration(monitor.Interval); err != nil {
@@ -255,16 +248,27 @@ func validateMonitor(monitor MonitorConfig, hosts map[string]Host) error {
 		return err
 	}
 
-	// Validate excluded hosts exist (warning only, don't fail validation)
-	// This allows excluding hosts that might be temporarily removed from config
+	// Validate exclude entries aren't empty (can't validate against hosts here)
 	for _, excluded := range monitor.Exclude {
-		if _, ok := hosts[excluded]; !ok && len(hosts) > 0 {
-			// Just validate that it's not empty, don't require it to exist
-			if strings.TrimSpace(excluded) == "" {
-				return fmt.Errorf("monitor.exclude has an empty entry - remove it or add a host name")
-			}
+		if strings.TrimSpace(excluded) == "" {
+			return fmt.Errorf("monitor.exclude has an empty entry - remove it or add a host name")
 		}
 	}
+
+	return nil
+}
+
+// validateMonitor checks monitor configuration with host validation.
+// Used when we have access to the hosts map (from global config).
+func validateMonitor(monitor MonitorConfig, hosts map[string]Host) error {
+	// First run the basic validation
+	if err := validateMonitorConfig(monitor); err != nil {
+		return err
+	}
+
+	// Then validate excluded hosts exist (warning only, don't fail validation)
+	// This allows excluding hosts that might be temporarily removed from config
+	// Note: the empty check is already done in validateMonitorConfig
 
 	return nil
 }

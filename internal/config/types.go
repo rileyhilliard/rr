@@ -6,18 +6,39 @@ import "time"
 // Increment when making breaking changes to the config structure.
 const CurrentConfigVersion = 1
 
-// Config represents the complete .rr.yaml configuration file.
+// CurrentGlobalConfigVersion is the schema version for the global config file.
+const CurrentGlobalConfigVersion = 1
+
+// GlobalConfig represents the global ~/.rr/config.yaml configuration file.
+// This contains personal host configurations that shouldn't be shared with a team.
+type GlobalConfig struct {
+	Version  int             `yaml:"version" mapstructure:"version"`
+	Hosts    map[string]Host `yaml:"hosts" mapstructure:"hosts"`
+	Defaults GlobalDefaults  `yaml:"defaults" mapstructure:"defaults"`
+}
+
+// GlobalDefaults contains default settings for host selection and connection.
+type GlobalDefaults struct {
+	// Host is the default host name to use when not specified.
+	Host string `yaml:"host" mapstructure:"host"`
+
+	// ProbeTimeout is how long to wait when probing SSH hosts.
+	ProbeTimeout time.Duration `yaml:"probe_timeout" mapstructure:"probe_timeout"`
+
+	// LocalFallback allows falling back to local execution when no hosts are available.
+	LocalFallback bool `yaml:"local_fallback" mapstructure:"local_fallback"`
+}
+
+// Config represents the project-level .rr.yaml configuration file.
+// This is shareable with the team and doesn't contain host connection details.
 type Config struct {
-	Version       int                   `yaml:"version" mapstructure:"version"`
-	Hosts         map[string]Host       `yaml:"hosts" mapstructure:"hosts"`
-	Default       string                `yaml:"default" mapstructure:"default"`
-	LocalFallback bool                  `yaml:"local_fallback" mapstructure:"local_fallback"`
-	ProbeTimeout  time.Duration         `yaml:"probe_timeout" mapstructure:"probe_timeout"`
-	Sync          SyncConfig            `yaml:"sync" mapstructure:"sync"`
-	Lock          LockConfig            `yaml:"lock" mapstructure:"lock"`
-	Tasks         map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
-	Output        OutputConfig          `yaml:"output" mapstructure:"output"`
-	Monitor       MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
+	Version int                   `yaml:"version" mapstructure:"version"`
+	Host    string                `yaml:"host,omitempty" mapstructure:"host"`
+	Sync    SyncConfig            `yaml:"sync" mapstructure:"sync"`
+	Lock    LockConfig            `yaml:"lock" mapstructure:"lock"`
+	Tasks   map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
+	Output  OutputConfig          `yaml:"output" mapstructure:"output"`
+	Monitor MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
 }
 
 // Host defines a remote machine and its connection settings.
@@ -153,13 +174,24 @@ type ThresholdValues struct {
 	Critical int `yaml:"critical" mapstructure:"critical"`
 }
 
+// DefaultGlobalConfig returns a GlobalConfig with sensible defaults.
+func DefaultGlobalConfig() *GlobalConfig {
+	return &GlobalConfig{
+		Version: CurrentGlobalConfigVersion,
+		Hosts:   make(map[string]Host),
+		Defaults: GlobalDefaults{
+			Host:          "",
+			ProbeTimeout:  2 * time.Second,
+			LocalFallback: false,
+		},
+	}
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		Version:       CurrentConfigVersion,
-		Hosts:         make(map[string]Host),
-		LocalFallback: false,
-		ProbeTimeout:  2 * time.Second,
+		Version: CurrentConfigVersion,
+		Host:    "",
 		Sync: SyncConfig{
 			Exclude: []string{
 				".git/",
