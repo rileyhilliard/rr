@@ -15,13 +15,15 @@ Sync code to a remote machine and run commands there. That's it.
 
 ## Why
 
-I got tired of my laptop fan spinning up and battery draining every time I ran tests. I have a beefy machine sitting in the corner doing nothing most of the time, so I wanted an easy way to sync code over and run heavy stuff there instead. `rr` is that.
+I got tired of my laptop fan spinning up and battery draining every time I ran tests. I have a few beefy machines sitting in the corner doing nothing most of the time, so I wanted an easy way to sync code over and run heavy stuff on those instead. `rr` is that.
 
 ```bash
 rr run "make test"
 ```
 
 This rsyncs your project to the remote host, runs `make test`, and streams the output back. If you switch from your home LAN to a VPN, it figures out which hostname works. If someone else is using the machine, it waits for them to finish.
+
+![rr720](https://github.com/user-attachments/assets/4231ca56-01d1-4209-9b5d-f476845d6eda)
 
 ## Quick start
 
