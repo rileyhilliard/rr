@@ -1,7 +1,9 @@
 # rr (Road Runner)
 
 <p align="center">
-  <video src="assets/rr.mp4" controls width="600"></video>
+ 
+![rr](https://github.com/user-attachments/assets/d0ba88a9-6220-49ad-87eb-a06b234fbfb5)
+
 </p>
 
 [![CI](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml/badge.svg)](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml)
