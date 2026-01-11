@@ -27,6 +27,8 @@ const (
 	ProbeFailUnreachable
 	ProbeFailAuth
 	ProbeFailHostKey
+	ProbeFailDNS       // hostname couldn't be resolved
+	ProbeFailConnReset // connection reset (often firewall)
 )
 
 // String returns a human-readable description of the failure reason.
@@ -42,6 +44,10 @@ func (r ProbeFailReason) String() string {
 		return "authentication failed"
 	case ProbeFailHostKey:
 		return "host key verification failed"
+	case ProbeFailDNS:
+		return "hostname not found"
+	case ProbeFailConnReset:
+		return "connection reset"
 	default:
 		return "unknown error"
 	}
@@ -170,6 +176,15 @@ func categorizeProbeError(sshAlias string, err error) *ProbeError {
 
 	errStr := strings.ToLower(err.Error())
 
+	// Check for DNS/hostname resolution failure
+	if strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "lookup") && strings.Contains(errStr, "failed") ||
+		strings.Contains(errStr, "nodename nor servname provided") ||
+		strings.Contains(errStr, "name or service not known") {
+		probeErr.Reason = ProbeFailDNS
+		return probeErr
+	}
+
 	// Check for timeout
 	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "i/o timeout") {
 		probeErr.Reason = ProbeFailTimeout
@@ -179,6 +194,13 @@ func categorizeProbeError(sshAlias string, err error) *ProbeError {
 	// Check for connection refused
 	if strings.Contains(errStr, "connection refused") {
 		probeErr.Reason = ProbeFailRefused
+		return probeErr
+	}
+
+	// Check for connection reset (often firewall dropping connection)
+	if strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") {
+		probeErr.Reason = ProbeFailConnReset
 		return probeErr
 	}
 

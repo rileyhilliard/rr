@@ -418,15 +418,14 @@ Host *
 The remote host's key changed or you're connecting for the first time:
 
 ```bash
-# View the fingerprint being offered
-ssh-keyscan myserver.example.com
+# Accept the new host key (works with SSH config aliases)
+ssh -o StrictHostKeyChecking=accept-new myserver exit
 
-# If it's correct, add to known_hosts
-ssh-keyscan myserver.example.com >> ~/.ssh/known_hosts
-
-# Or connect once manually to verify and accept
-ssh user@myserver.example.com
+# Or connect manually to verify and accept interactively
+ssh myserver
 ```
+
+Note: `ssh-keyscan` won't work with SSH config aliases since it doesn't read `~/.ssh/config`. Use the `ssh` command instead.
 
 **SELinux blocking SSH**
 

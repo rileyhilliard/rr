@@ -24,6 +24,59 @@ func renderCardDivider(width int) string {
 	return cardDividerStyle.Render(divider)
 }
 
+// parseErrorParts extracts the core error and suggestion from a structured error message.
+// Structured errors have format: "✗ Message\n\n  cause\n\n  suggestion"
+func parseErrorParts(errMsg string) (core string, suggestion string) {
+	lines := strings.Split(errMsg, "\n")
+
+	var coreLines []string
+	var suggestionLines []string
+	inSuggestion := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Skip the ✗ symbol line (main message)
+		if strings.HasPrefix(line, "✗") {
+			continue
+		}
+
+		// Heuristic: suggestions often contain actionable words
+		if strings.Contains(line, "Try:") ||
+			strings.Contains(line, "Check") ||
+			strings.Contains(line, "Make sure") ||
+			strings.Contains(line, "might be") ||
+			strings.Contains(line, "may be") ||
+			strings.Contains(line, "ssh-add") ||
+			strings.Contains(line, "ssh ") {
+			inSuggestion = true
+		}
+
+		if inSuggestion {
+			suggestionLines = append(suggestionLines, line)
+		} else {
+			coreLines = append(coreLines, line)
+		}
+	}
+
+	core = strings.Join(coreLines, " ")
+	suggestion = strings.Join(suggestionLines, " ")
+	return core, suggestion
+}
+
+// truncateWithEllipsis truncates a string to maxLen, adding ellipsis if needed.
+func truncateWithEllipsis(s string, maxLen int) string {
+	if maxLen <= 3 {
+		return s
+	}
+	if len(s) > maxLen {
+		return s[:maxLen-3] + "..."
+	}
+	return s
+}
+
 // truncateErrorMsg extracts the most useful part of an error message and truncates to fit.
 func truncateErrorMsg(errMsg string, maxLen int) string {
 	// Extract the most relevant part of the error
@@ -82,11 +135,55 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		if status == StatusUnreachableState {
 			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
-			// Show error details if available
+
+			// Show error details and suggestion on separate lines
 			if errMsg, ok := m.errors[host]; ok && errMsg != "" {
-				errDisplay := truncateErrorMsg(errMsg, innerWidth-4)
-				lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
+				core, suggestion := parseErrorParts(errMsg)
+
+				// Show core error (e.g., "connection refused")
+				if core != "" {
+					errDisplay := truncateWithEllipsis(core, innerWidth-4)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
+				}
+
+				// Add divider before suggestion
+				lines = append(lines, renderCardDivider(innerWidth))
+
+				// Show suggestion with word wrapping for readability
+				if suggestion != "" {
+					// Wrap long suggestions across multiple lines
+					suggestionWidth := innerWidth - 4
+					words := strings.Fields(suggestion)
+					var currentLine string
+					for _, word := range words {
+						if currentLine == "" {
+							currentLine = word
+						} else if len(currentLine)+1+len(word) <= suggestionWidth {
+							currentLine += " " + word
+						} else {
+							lines = append(lines, renderCardLine(LabelStyle.Render("  "+currentLine), innerWidth))
+							currentLine = word
+						}
+					}
+					if currentLine != "" {
+						lines = append(lines, renderCardLine(LabelStyle.Render("  "+currentLine), innerWidth))
+					}
+				} else {
+					// Default suggestion if none parsed
+					lines = append(lines, renderCardLine(LabelStyle.Render("  Host may be offline or unreachable"), innerWidth))
+				}
+			} else {
+				// No error message available
+				lines = append(lines, renderCardDivider(innerWidth))
+				lines = append(lines, renderCardLine(LabelStyle.Render("  No connection details available"), innerWidth))
 			}
+
+			// Add padding lines to roughly match online card height
+			// Online cards have: CPU header + 2 graph rows + RAM header + 2 graph rows + net + top = ~10 lines
+			// We have: Unreachable + error + divider + suggestion = ~4 lines
+			// Add a few blank lines for visual consistency
+			lines = append(lines, renderCardLine("", innerWidth))
+			lines = append(lines, renderCardLine("", innerWidth))
 		} else {
 			lines = append(lines, renderCardLine(LabelStyle.Render("  Connecting..."), innerWidth))
 		}
@@ -331,10 +428,30 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		if status == StatusUnreachableState {
 			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
-			// Show error details if available
+
+			// Show error details and suggestion
 			if errMsg, ok := m.errors[host]; ok && errMsg != "" {
-				errDisplay := truncateErrorMsg(errMsg, innerWidth-4)
-				lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
+				core, suggestion := parseErrorParts(errMsg)
+
+				// Show core error
+				if core != "" {
+					errDisplay := truncateWithEllipsis(core, innerWidth-4)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
+				}
+
+				// Add divider before suggestion
+				lines = append(lines, renderCardDivider(innerWidth))
+
+				// Show suggestion (compact: single line with truncation)
+				if suggestion != "" {
+					suggDisplay := truncateWithEllipsis(suggestion, innerWidth-4)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+suggDisplay), innerWidth))
+				} else {
+					lines = append(lines, renderCardLine(LabelStyle.Render("  Host may be offline or unreachable"), innerWidth))
+				}
+			} else {
+				lines = append(lines, renderCardDivider(innerWidth))
+				lines = append(lines, renderCardLine(LabelStyle.Render("  No connection details"), innerWidth))
 			}
 		} else {
 			lines = append(lines, renderCardLine(LabelStyle.Render("  Connecting..."), innerWidth))

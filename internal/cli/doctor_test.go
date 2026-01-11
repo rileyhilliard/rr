@@ -12,10 +12,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/doctor"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 func TestCapitalizeFirst(t *testing.T) {
@@ -340,6 +343,22 @@ func TestFormatProbeError(t *testing.T) {
 			want: "Host key verification failed",
 		},
 		{
+			name: "host key mismatch with detailed error",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailHostKey,
+				Cause: errors.WrapWithCode(
+					&sshutil.HostKeyMismatchError{
+						Hostname:     "192.168.1.100:22",
+						ReceivedType: "ecdsa-sha2-nistp256",
+						KnownHosts:   "/home/user/.ssh/known_hosts",
+						Want:         []knownhosts.KnownKey{},
+					},
+					errors.ErrSSH, "host key mismatch", "suggestion"),
+			},
+			want: "Host key mismatch (got ecdsa-sha2-nistp256, expected different type)",
+		},
+		{
 			name: "unreachable probe error",
 			err: &host.ProbeError{
 				SSHAlias: "test",
@@ -414,7 +433,25 @@ func TestGetSSHErrorSuggestion(t *testing.T) {
 				Reason:   host.ProbeFailHostKey,
 			},
 			alias:    "user@example.com",
-			contains: []string{"ssh-keyscan", "example.com", "known_hosts"},
+			contains: []string{"StrictHostKeyChecking=accept-new", "user@example.com"},
+		},
+		{
+			name: "host key mismatch with detailed error extracts real suggestion",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailHostKey,
+				Cause: errors.WrapWithCode(
+					&sshutil.HostKeyMismatchError{
+						Hostname:     "192.168.1.100:22",
+						ReceivedType: "ecdsa-sha2-nistp256",
+						KnownHosts:   "/home/user/.ssh/known_hosts",
+						Want:         []knownhosts.KnownKey{},
+					},
+					errors.ErrSSH, "host key mismatch", "suggestion"),
+			},
+			alias: "myserver",
+			// The detailed suggestion from HostKeyMismatchError includes the IP and key types
+			contains: []string{"ssh-keyscan", "192.168.1.100", "ecdsa-sha2-nistp256"},
 		},
 		{
 			name: "unknown error",
@@ -1012,6 +1049,8 @@ func TestFormatProbeError_AllReasons(t *testing.T) {
 		host.ProbeFailUnreachable,
 		host.ProbeFailAuth,
 		host.ProbeFailHostKey,
+		host.ProbeFailDNS,
+		host.ProbeFailConnReset,
 		host.ProbeFailUnknown,
 	}
 
@@ -1035,6 +1074,8 @@ func TestGetSSHErrorSuggestion_AllReasons(t *testing.T) {
 		host.ProbeFailUnreachable,
 		host.ProbeFailAuth,
 		host.ProbeFailHostKey,
+		host.ProbeFailDNS,
+		host.ProbeFailConnReset,
 		host.ProbeFailUnknown,
 	}
 

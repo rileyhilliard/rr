@@ -257,10 +257,10 @@ func TestSuggestionForDialError(t *testing.T) {
 		errMsg   string
 		contains string
 	}{
-		{"connection refused", "Is SSH running"},
-		{"no route to host", "Can't route"},
-		{"i/o timeout", "timed out"},
-		{"random error", "Make sure the host is reachable"},
+		{"connection refused", "Check if SSH"},
+		{"no route to host", "offline or on a different"},
+		{"i/o timeout", "powered on"},
+		{"random error", "Check network"},
 	}
 
 	for _, tt := range tests {
@@ -526,12 +526,16 @@ Host aftermatch
 		t.Errorf("matchLine = %d, want 5", matchLine)
 	}
 
-	// Content should not include Match directive or anything after it
+	// Content should not include Match directive or its block contents
 	if bytes.Contains(content, []byte("Match")) {
 		t.Errorf("Content still contains Match directive")
 	}
-	if bytes.Contains(content, []byte("aftermatch")) {
-		t.Errorf("Content still contains host after Match")
+	if bytes.Contains(content, []byte("special")) {
+		t.Errorf("Content still contains Match block content")
+	}
+	// But Host blocks after Match SHOULD be preserved
+	if !bytes.Contains(content, []byte("aftermatch")) {
+		t.Errorf("Content missing host after Match block")
 	}
 	if !bytes.Contains(content, []byte("myserver")) {
 		t.Errorf("Content missing host before Match")
@@ -841,7 +845,7 @@ func TestSuggestionForDialError_NetworkUnreachable(t *testing.T) {
 	err := errFromString("network is unreachable")
 	suggestion := suggestionForDialError(err)
 
-	assert.Contains(t, suggestion, "route")
+	assert.Contains(t, suggestion, "offline or on a different")
 }
 
 func TestSuggestionForHandshakeError_NoSupportedMethods(t *testing.T) {
@@ -1282,32 +1286,32 @@ func TestSuggestionForDialError_AllPatterns(t *testing.T) {
 		{
 			name:     "connection refused",
 			errMsg:   "dial tcp: connection refused",
-			contains: []string{"SSH running"},
+			contains: []string{"Check if SSH"},
 		},
 		{
 			name:     "no route",
 			errMsg:   "no route to host",
-			contains: []string{"route"},
+			contains: []string{"offline or on a different"},
 		},
 		{
 			name:     "network unreachable",
 			errMsg:   "network is unreachable",
-			contains: []string{"route"},
+			contains: []string{"offline or on a different"},
 		},
 		{
 			name:     "io timeout",
 			errMsg:   "i/o timeout",
-			contains: []string{"timed out"},
+			contains: []string{"powered on"},
 		},
 		{
 			name:     "general timeout",
 			errMsg:   "connection timeout",
-			contains: []string{"timed out"},
+			contains: []string{"powered on"},
 		},
 		{
 			name:     "unknown error",
 			errMsg:   "some random error",
-			contains: []string{"Make sure"},
+			contains: []string{"Check network"},
 		},
 	}
 

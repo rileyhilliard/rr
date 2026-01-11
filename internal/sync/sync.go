@@ -167,11 +167,37 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 }
 
 // streamOutput reads from r and writes each line to w.
+// It handles both \n and \r as line delimiters since rsync uses \r for progress updates.
 func streamOutput(r io.Reader, w io.Writer) {
 	scanner := bufio.NewScanner(r)
+	scanner.Split(scanLinesWithCR)
 	for scanner.Scan() {
-		fmt.Fprintln(w, scanner.Text())
+		line := scanner.Text()
+		if line != "" {
+			fmt.Fprintln(w, line)
+		}
 	}
+}
+
+// scanLinesWithCR is a split function that handles both \n and \r as line delimiters.
+// This is necessary because rsync's --info=progress2 uses \r to update progress in-place.
+func scanLinesWithCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	// Look for \r or \n
+	for i, b := range data {
+		if b == '\n' || b == '\r' {
+			// Skip empty tokens from consecutive delimiters (e.g., \r\n)
+			return i + 1, data[0:i], nil
+		}
+	}
+	// At EOF, return remaining data
+	if atEOF {
+		return len(data), data, nil
+	}
+	// Request more data
+	return 0, nil, nil
 }
 
 // handleRsyncError wraps rsync exit errors with helpful messages.

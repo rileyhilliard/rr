@@ -170,9 +170,11 @@ Host after-match
 	hosts, err := ParseSSHConfigFile(configPath)
 	require.NoError(t, err)
 
-	// Should only see the host before the Match directive
-	assert.Len(t, hosts, 1)
-	assert.Equal(t, "before-match", hosts[0].Alias)
+	// Should see hosts both before and after the Match directive
+	// Match block contents are stripped but Host blocks after it are preserved
+	assert.Len(t, hosts, 2)
+	assert.Equal(t, "after-match", hosts[0].Alias) // sorted alphabetically
+	assert.Equal(t, "before-match", hosts[1].Alias)
 }
 
 func TestSSHHostEntry_HasIdentityFile_CustomPath(t *testing.T) {

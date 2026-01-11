@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -426,6 +427,15 @@ func formatProbeError(err error) string {
 		return capitalizeFirst(err.Error())
 	}
 
+	// For host key errors, try to extract more detail
+	if probeErr.Reason == host.ProbeFailHostKey {
+		var hostKeyErr *sshutil.HostKeyMismatchError
+		if errors.As(probeErr.Cause, &hostKeyErr) {
+			// Show which key type was expected vs received
+			return fmt.Sprintf("Host key mismatch (got %s, expected different type)", hostKeyErr.ReceivedType)
+		}
+	}
+
 	// For unknown errors, show the actual cause instead of "unknown error"
 	if probeErr.Reason == host.ProbeFailUnknown {
 		if probeErr.Cause != nil {
@@ -452,16 +462,25 @@ func getSSHErrorSuggestion(err error, alias string) string {
 	}
 
 	switch probeErr.Reason {
+	case host.ProbeFailDNS:
+		return fmt.Sprintf("Hostname '%s' not found. Check spelling or SSH config:\n  grep -A3 'Host %s' ~/.ssh/config", hostPart, alias)
 	case host.ProbeFailRefused:
 		return fmt.Sprintf("SSH server may not be running. Try: ssh %s", alias)
 	case host.ProbeFailTimeout:
 		return fmt.Sprintf("Host may be offline or blocked by firewall. Try: ping %s", hostPart)
+	case host.ProbeFailConnReset:
+		return fmt.Sprintf("Connection was reset (often a firewall). Try: ssh -v %s", alias)
 	case host.ProbeFailUnreachable:
 		return fmt.Sprintf("Check network connectivity: ping %s", hostPart)
 	case host.ProbeFailAuth:
 		return "Check SSH key configuration: ssh-add -l\nOr add key: ssh-add ~/.ssh/id_ed25519"
 	case host.ProbeFailHostKey:
-		return fmt.Sprintf("Update known_hosts: ssh-keyscan -t rsa,ecdsa,ed25519 %s >> ~/.ssh/known_hosts", hostPart)
+		// Check if we have a detailed HostKeyMismatchError with specific suggestion
+		var hostKeyErr *sshutil.HostKeyMismatchError
+		if errors.As(probeErr.Cause, &hostKeyErr) {
+			return hostKeyErr.Suggestion()
+		}
+		return fmt.Sprintf("Update known_hosts: ssh -o StrictHostKeyChecking=accept-new %s exit", alias)
 	default:
 		return fmt.Sprintf("Try connecting directly: ssh %s", alias)
 	}
