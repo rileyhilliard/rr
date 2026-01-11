@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-01-11
+
+### Added
+
+- Global config separation: hosts now live in `~/.rr/config.yaml` (personal) while project config stays in `.rr.yaml` (shareable)
+- `LoadGlobal()`, `SaveGlobal()`, `LoadResolved()` config functions
+- `ResolveHost()` with priority: CLI flag > project.Host > global default > first alphabetically
+- Migration guide in `docs/MIGRATION.md` for upgrading from v0.4.x
+
+### Changed
+
+- `rr host add/remove/list` now read/write global config instead of project config
+- `rr init` creates project config without hosts, prompts to select from global hosts
+- Project `.rr.yaml` uses `host: <name>` reference instead of inline host definitions
+
+### Breaking Changes
+
+- Hosts must be moved from `.rr.yaml` to `~/.rr/config.yaml`
+- See `docs/MIGRATION.md` for upgrade instructions
+
 ## [0.5.0] - 2026-01-11
 
 ### Changed
