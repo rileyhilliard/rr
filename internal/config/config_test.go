@@ -583,6 +583,186 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestValidateGlobal(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *GlobalConfig
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid global config",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts: map[string]Host{
+					"dev": {SSH: []string{"dev"}, Dir: "/home/user/dev"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "nil config",
+			config:      nil,
+			wantErr:     true,
+			errContains: "nil",
+		},
+		{
+			name: "version too high",
+			config: &GlobalConfig{
+				Version: CurrentGlobalConfigVersion + 1,
+				Hosts:   map[string]Host{},
+			},
+			wantErr:     true,
+			errContains: "from the future",
+		},
+		{
+			name: "invalid host config",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts: map[string]Host{
+					"bad": {SSH: []string{}, Dir: "/home"},
+				},
+			},
+			wantErr:     true,
+			errContains: "needs at least one SSH",
+		},
+		{
+			name: "default host not found",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts: map[string]Host{
+					"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+				},
+				Defaults: GlobalDefaults{Host: "nonexistent"},
+			},
+			wantErr:     true,
+			errContains: "doesn't exist",
+		},
+		{
+			name: "empty hosts is allowed for global config",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts:   map[string]Host{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateGlobal(tt.config)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateResolved(t *testing.T) {
+	tests := []struct {
+		name        string
+		resolved    *ResolvedConfig
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid resolved config",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{
+					Version: 1,
+					Host:    "dev",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "nil resolved config",
+			resolved:    nil,
+			wantErr:     true,
+			errContains: "nil",
+		},
+		{
+			name: "nil global config",
+			resolved: &ResolvedConfig{
+				Global:  nil,
+				Project: &Config{},
+			},
+			wantErr:     true,
+			errContains: "Global config not loaded",
+		},
+		{
+			name: "no hosts configured",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts:   map[string]Host{},
+				},
+				Project: &Config{},
+			},
+			wantErr:     true,
+			errContains: "No hosts configured",
+		},
+		{
+			name: "project references nonexistent host",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{
+					Version: 1,
+					Host:    "prod",
+				},
+			},
+			wantErr:     true,
+			errContains: "doesn't exist in global config",
+		},
+		{
+			name: "project host empty is valid",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{
+					Version: 1,
+					Host:    "",
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateResolved(tt.resolved)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateHost(t *testing.T) {
 	tests := []struct {
 		name    string

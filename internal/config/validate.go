@@ -100,6 +100,86 @@ func validateHostReference(host string) error {
 	return nil
 }
 
+// ValidateGlobal checks the global config for errors.
+func ValidateGlobal(cfg *GlobalConfig) error {
+	if cfg == nil {
+		return errors.New(errors.ErrConfig,
+			"Global config is nil",
+			"This is unexpected - try reloading the configuration.")
+	}
+
+	// Check version
+	if cfg.Version > CurrentGlobalConfigVersion {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Global config is from the future (version %d, but rr only knows up to %d)", cfg.Version, CurrentGlobalConfigVersion),
+			"Grab the latest rr: https://github.com/rileyhilliard/rr/releases")
+	}
+
+	// Validate each host
+	for name, host := range cfg.Hosts {
+		if err := validateHost(name, host); err != nil {
+			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
+		}
+	}
+
+	// Check default host exists (if specified)
+	if cfg.Defaults.Host != "" {
+		if _, ok := cfg.Hosts[cfg.Defaults.Host]; !ok {
+			hostNames := getHostNames(cfg.Hosts)
+			return errors.New(errors.ErrConfig,
+				fmt.Sprintf("Default host '%s' doesn't exist", cfg.Defaults.Host),
+				fmt.Sprintf("Did you rename or remove it? Available hosts: %s", strings.Join(hostNames, ", ")))
+		}
+	}
+
+	return nil
+}
+
+// ValidateResolved checks the combined global and project configuration.
+func ValidateResolved(r *ResolvedConfig) error {
+	if r == nil {
+		return errors.New(errors.ErrConfig,
+			"Resolved config is nil",
+			"This is unexpected - try reloading the configuration.")
+	}
+
+	// Validate global config - must have at least one host
+	if r.Global == nil {
+		return errors.New(errors.ErrConfig,
+			"Global config not loaded",
+			"This is unexpected - try running the command again.")
+	}
+
+	if len(r.Global.Hosts) == 0 {
+		return errors.New(errors.ErrConfig,
+			"No hosts configured",
+			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
+	}
+
+	if err := ValidateGlobal(r.Global); err != nil {
+		return err
+	}
+
+	// Validate project config if present
+	if r.Project != nil {
+		if err := Validate(r.Project); err != nil {
+			return err
+		}
+
+		// Validate project's Host reference exists in global (if set)
+		if r.Project.Host != "" {
+			if _, ok := r.Global.Hosts[r.Project.Host]; !ok {
+				hostNames := getHostNames(r.Global.Hosts)
+				return errors.New(errors.ErrConfig,
+					fmt.Sprintf("Project references host '%s' which doesn't exist in global config", r.Project.Host),
+					fmt.Sprintf("Available hosts: %s. Add it to ~/.rr/config.yaml or change the host in .rr.yaml.", strings.Join(hostNames, ", ")))
+			}
+		}
+	}
+
+	return nil
+}
+
 // validateHost checks a single host configuration.
 func validateHost(name string, host Host) error {
 	if len(host.SSH) == 0 {
