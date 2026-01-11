@@ -5,6 +5,7 @@ This document covers breaking changes and upgrade instructions between versions.
 ## Contents
 
 - [Version compatibility](#version-compatibility)
+- [v0.4.x to v0.5.x](#v04x-to-v05x-global-config-separation) (current)
 - [v1.x to v2.x](#v1x-to-v2x-future)
 - [v0.x to v1.x](#v0x-to-v1x)
 - [Troubleshooting upgrades](#troubleshooting-upgrades)
@@ -18,6 +19,110 @@ version: 1  # Current schema version
 ```
 
 When the schema changes in incompatible ways, the version number bumps and rr will warn you if your config needs updating.
+
+## v0.4.x to v0.5.x (Global Config Separation)
+
+Host definitions have moved from `.rr.yaml` to `~/.rr/config.yaml`. This allows you to define hosts once and share project configs with your team.
+
+### What changed
+
+- **Hosts are now global**: Host definitions moved from project `.rr.yaml` to `~/.rr/config.yaml`
+- **Projects reference hosts by name**: Instead of defining hosts, projects now just reference them with `host: <name>`
+- **New global defaults**: Settings like `default`, `local_fallback`, and `probe_timeout` are now in the global config
+
+### Migration steps
+
+**1. Create your global config**
+
+Move your host definitions to `~/.rr/config.yaml`:
+
+```yaml
+# ~/.rr/config.yaml
+version: 1
+
+hosts:
+  gpu-box:
+    ssh:
+      - gpu-local
+      - gpu-vpn
+    dir: ~/projects/${PROJECT}
+
+  mini:
+    ssh:
+      - mini-local
+    dir: ~/dev/${PROJECT}
+
+defaults:
+  host: gpu-box
+  local_fallback: false
+  probe_timeout: 2s
+```
+
+Or use the CLI:
+```bash
+rr host add  # Interactive host setup
+```
+
+**2. Update your project configs**
+
+Replace host definitions with a reference:
+
+```yaml
+# Before (.rr.yaml)
+version: 1
+hosts:
+  gpu-box:
+    ssh: [gpu-local, gpu-vpn]
+    dir: ~/projects/${PROJECT}
+default: gpu-box
+local_fallback: false
+probe_timeout: 2s
+sync:
+  exclude:
+    - .git/
+    - node_modules/
+
+# After (.rr.yaml)
+version: 1
+host: gpu-box  # Just reference the global host
+sync:
+  exclude:
+    - .git/
+    - node_modules/
+```
+
+**3. Remove old host fields**
+
+Delete these from your `.rr.yaml` (they now live in global config):
+- `hosts:` section
+- `default:`
+- `local_fallback:`
+- `probe_timeout:`
+
+### Quick migration
+
+If you want to keep your current setup working:
+
+```bash
+# Copy hosts from project to global config
+mkdir -p ~/.rr
+cat > ~/.rr/config.yaml << 'EOF'
+version: 1
+hosts:
+  # Paste your hosts here from .rr.yaml
+defaults:
+  host: your-default-host
+EOF
+
+# Update .rr.yaml to reference the host
+# Replace the hosts section with: host: your-host-name
+```
+
+### Benefits
+
+- **One place for hosts**: Define each machine once, use it in any project
+- **Shareable project configs**: Team members can share `.rr.yaml` without overwriting each other's SSH settings
+- **Personal machine names**: Use your own names for hosts without affecting others
 
 ## v1.x to v2.x (future)
 

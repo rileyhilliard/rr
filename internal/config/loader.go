@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/spf13/viper"
@@ -315,14 +316,7 @@ func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, err
 		for name := range resolved.Global.Hosts {
 			names = append(names, name)
 		}
-		// Sort for deterministic behavior
-		for i := 0; i < len(names); i++ {
-			for j := i + 1; j < len(names); j++ {
-				if names[j] < names[i] {
-					names[i], names[j] = names[j], names[i]
-				}
-			}
-		}
+		sort.Strings(names)
 		hostName = names[0]
 	}
 
