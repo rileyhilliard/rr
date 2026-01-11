@@ -33,7 +33,8 @@ type GlobalDefaults struct {
 // This is shareable with the team and doesn't contain host connection details.
 type Config struct {
 	Version int                   `yaml:"version" mapstructure:"version"`
-	Host    string                `yaml:"host,omitempty" mapstructure:"host"`
+	Host    string                `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
+	Hosts   []string              `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
 	Sync    SyncConfig            `yaml:"sync" mapstructure:"sync"`
 	Lock    LockConfig            `yaml:"lock" mapstructure:"lock"`
 	Tasks   map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`

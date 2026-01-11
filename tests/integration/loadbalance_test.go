@@ -26,13 +26,11 @@ func TestLoadBalancing_ConfigWaitTimeout(t *testing.T) {
 
 	t.Run("wait_timeout can be customized", func(t *testing.T) {
 		dir := t.TempDir()
+		// Project config (hosts are now in global config)
 		configContent := `
 version: 1
 hosts:
-  test-host:
-    ssh:
-      - localhost
-    dir: /tmp/test
+  - test-host
 lock:
   enabled: true
   wait_timeout: 2m30s

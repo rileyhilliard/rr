@@ -20,13 +20,11 @@ func TestConfigFileCheck(t *testing.T) {
 	})
 
 	t.Run("config found", func(t *testing.T) {
-		// Create a config file
+		// Create a config file (project config - hosts are now in global config)
 		cfgPath := filepath.Join(tmpDir, ".rr.yaml")
 		content := `version: 1
 hosts:
-  test:
-    ssh: ["test-host"]
-    dir: "~/test"
+  - test-host
 `
 		if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
 			t.Fatal(err)
@@ -58,9 +56,7 @@ func TestConfigSchemaCheck(t *testing.T) {
 		cfgPath := filepath.Join(tmpDir, "valid.yaml")
 		content := `version: 1
 hosts:
-  test:
-    ssh: ["test-host"]
-    dir: "~/test"
+  - test-host
 `
 		if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
 			t.Fatal(err)
@@ -179,9 +175,7 @@ func TestConfigReservedNamesCheck(t *testing.T) {
 		cfgPath := filepath.Join(tmpDir, "noreserved.yaml")
 		content := `version: 1
 hosts:
-  test:
-    ssh: ["test-host"]
-    dir: "~/test"
+  - test-host
 tasks:
   build:
     run: "make build"
@@ -202,9 +196,7 @@ tasks:
 		cfgPath := filepath.Join(tmpDir, "reserved.yaml")
 		content := `version: 1
 hosts:
-  test:
-    ssh: ["test-host"]
-    dir: "~/test"
+  - test-host
 tasks:
   run:
     run: "make run"

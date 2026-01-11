@@ -232,7 +232,8 @@ func TestInit_NonInteractive_Success(t *testing.T) {
 	// Verify project config contains host reference (hostname extracted from user@example.com)
 	content, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "host: example.com")
+	assert.Contains(t, string(content), "hosts:")
+	assert.Contains(t, string(content), "- example.com")
 
 	// Verify global config was created with host details
 	globalConfigPath := filepath.Join(tmpDir, ".rr", "config.yaml")
@@ -270,7 +271,8 @@ func TestInit_NonInteractive_ExtractsHostname(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
 	require.NoError(t, err)
 	// The hostname "192.168.1.100" should be used as the host reference
-	assert.Contains(t, string(content), "host: 192.168.1.100")
+	assert.Contains(t, string(content), "hosts:")
+	assert.Contains(t, string(content), "- 192.168.1.100")
 }
 
 func TestInit_NonInteractive_ConfigExists(t *testing.T) {
@@ -330,7 +332,8 @@ func TestInit_NonInteractive_ForceOverwrite(t *testing.T) {
 	// Verify project config was overwritten with host reference
 	content, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "host: example.com")
+	assert.Contains(t, string(content), "hosts:")
+	assert.Contains(t, string(content), "- example.com")
 	assert.NotContains(t, string(content), "existing: config")
 
 	// Verify global config has SSH details
@@ -519,14 +522,14 @@ func TestCheckExistingConfig_NonInteractive_NoOverwrite(t *testing.T) {
 }
 
 func TestCollectNonInteractiveValues_NoHostNoGlobal(t *testing.T) {
-	// With no host specified and no global hosts, vals.hostRef should be empty
+	// With no host specified and no global hosts, vals.hostRefs should be empty
 	globalCfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{},
 	}
 	vals, err := collectNonInteractiveValues(InitOptions{}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Empty(t, vals.hostRef) // No host to reference
+	assert.Empty(t, vals.hostRefs) // No host to reference
 }
 
 func TestCollectNonInteractiveValues_WithExistingGlobalHost(t *testing.T) {
@@ -539,7 +542,8 @@ func TestCollectNonInteractiveValues_WithExistingGlobalHost(t *testing.T) {
 	vals, err := collectNonInteractiveValues(InitOptions{}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Equal(t, "dev", vals.hostRef) // References the default host
+	// When no host flag is provided, hostRefs is empty = use all global hosts
+	assert.Empty(t, vals.hostRefs)
 }
 
 func TestCollectNonInteractiveValues_WithHostAddsToGlobal(t *testing.T) {
@@ -558,7 +562,7 @@ func TestCollectNonInteractiveValues_WithHostAddsToGlobal(t *testing.T) {
 	}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Equal(t, "example.com", vals.hostRef) // Uses extracted hostname as hostRef
+	assert.Equal(t, []string{"example.com"}, vals.hostRefs) // Uses extracted hostname as hostRef
 }
 
 func TestCollectNonInteractiveValues_WithExplicitName(t *testing.T) {
@@ -578,7 +582,7 @@ func TestCollectNonInteractiveValues_WithExplicitName(t *testing.T) {
 	}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Equal(t, "myhost", vals.hostRef) // Uses explicit name
+	assert.Equal(t, []string{"myhost"}, vals.hostRefs) // Uses explicit name
 }
 
 func TestInitCommand_MergesOptions(t *testing.T) {
@@ -613,7 +617,8 @@ func TestInitCommand_MergesOptions(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
 	require.NoError(t, err)
 	// Project config should reference the host, not contain the SSH details
-	assert.Contains(t, string(content), "host:")
+	assert.Contains(t, string(content), "hosts:")
+	assert.Contains(t, string(content), "- example.com")
 
 	// Verify global config was created with the host
 	globalContent, err := os.ReadFile(filepath.Join(tmpHome, ".rr", "config.yaml"))

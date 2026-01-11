@@ -84,7 +84,7 @@ type machineConfig struct {
 
 // projectConfigValues holds the collected project configuration values.
 type projectConfigValues struct {
-	hostRef string // Reference to a host in global config (or empty)
+	hostRefs []string // References to hosts in global config (empty = use all)
 }
 
 // checkExistingConfig checks for existing config and prompts for overwrite.
@@ -517,14 +517,20 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	// Version
 	sb.WriteString("version: 1\n\n")
 
-	// Host reference (if user selected one)
-	if vals.hostRef != "" {
-		sb.WriteString("# Host to use for this project (from ~/.rr/config.yaml)\n")
-		sb.WriteString(fmt.Sprintf("host: %s\n\n", yamlValue(vals.hostRef)))
+	// Host references (if user selected any)
+	if len(vals.hostRefs) > 0 {
+		sb.WriteString("# Hosts this project can use for load balancing (from ~/.rr/config.yaml)\n")
+		sb.WriteString("hosts:\n")
+		for _, h := range vals.hostRefs {
+			sb.WriteString(fmt.Sprintf("  - %s\n", yamlValue(h)))
+		}
+		sb.WriteString("\n")
 	} else {
-		sb.WriteString("# Host to use for this project (from ~/.rr/config.yaml)\n")
-		sb.WriteString("# Uncomment and set to a host name from 'rr host list'\n")
-		sb.WriteString("# host: my-host\n\n")
+		sb.WriteString("# Hosts this project can use (from ~/.rr/config.yaml)\n")
+		sb.WriteString("# If omitted, all global hosts are used for load balancing\n")
+		sb.WriteString("# hosts:\n")
+		sb.WriteString("#   - my-host\n")
+		sb.WriteString("#   - other-host\n\n")
 	}
 
 	// Sync section
@@ -635,7 +641,7 @@ func writeProjectConfig(configPath string, vals *projectConfigValues) error {
 	fmt.Printf("%s Created %s\n\n", ui.SymbolSuccess, configPath)
 
 	fmt.Println("Next steps:")
-	if vals.hostRef == "" {
+	if len(vals.hostRefs) == 0 {
 		fmt.Println("  rr host add   - Add a host to your global config")
 	}
 	fmt.Println("  rr sync       - Sync files to remote")
@@ -681,9 +687,9 @@ func addHostToGlobal(globalCfg *config.GlobalConfig, machine *machineConfig) (st
 	return machine.name, nil
 }
 
-// promptHostSelection shows a picker to select which global host to use.
-// Returns the selected host name, or empty string for "none".
-func promptHostSelection(globalCfg *config.GlobalConfig) (string, error) {
+// promptHostsSelection shows a multi-select to choose which hosts this project can use.
+// Returns selected host names (empty = use all global hosts).
+func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
 	// Build sorted list of host names
 	var hostNames []string
 	for name := range globalCfg.Hosts {
@@ -692,10 +698,7 @@ func promptHostSelection(globalCfg *config.GlobalConfig) (string, error) {
 	sort.Strings(hostNames)
 
 	// Build options
-	options := make([]huh.Option[string], 0, len(hostNames)+1)
-
-	// Add "None" option first
-	options = append(options, huh.NewOption("None / I'll set it later", ""))
+	options := make([]huh.Option[string], 0, len(hostNames))
 
 	for _, name := range hostNames {
 		label := name
@@ -709,19 +712,22 @@ func promptHostSelection(globalCfg *config.GlobalConfig) (string, error) {
 		options = append(options, huh.NewOption(label, name))
 	}
 
-	var selected string
+	// Default to all hosts selected
+	selected := make([]string, len(hostNames))
+	copy(selected, hostNames)
+
 	form := huh.NewForm(
 		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Which host should this project use?").
-				Description("Hosts are defined in ~/.rr/config.yaml").
+			huh.NewMultiSelect[string]().
+				Title("Which hosts can this project use?").
+				Description("Select hosts for load balancing. Uncheck hosts this project shouldn't use.").
 				Options(options...).
 				Value(&selected),
 		),
 	)
 
 	if err := form.Run(); err != nil {
-		return "", errors.WrapWithCode(err, errors.ErrConfig,
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Couldn't get your selection",
 			"Try --host flag to specify a host.")
 	}
@@ -750,43 +756,93 @@ func promptAddHost() (bool, error) {
 	return addHost, nil
 }
 
+// promptAddMoreHosts asks if the user wants to add another host to global config.
+func promptAddMoreHosts() (bool, error) {
+	var addMore bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Add another host to global config?").
+				Description("You can always add more later with 'rr host add'").
+				Value(&addMore),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return false, errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't get your input",
+			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+	}
+
+	return addMore, nil
+}
+
 // collectInteractiveValues collects project config values interactively.
 func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*projectConfigValues, error) {
 	vals := &projectConfigValues{}
 
+	// If no hosts, prompt to add at least one
 	if len(globalCfg.Hosts) == 0 {
-		// No hosts configured - offer to add one
 		addHost, err := promptAddHost()
 		if err != nil {
 			return nil, err
 		}
 
 		if addHost {
-			// Collect machine config (including remote dir)
 			machine, cancelled, err := collectMachineConfig(nil, skipProbe)
 			if err != nil {
 				return nil, err
 			}
 			if cancelled {
-				// User cancelled, create project without host
 				return vals, nil
 			}
 
-			// Add to global config
 			hostName, err := addHostToGlobal(globalCfg, machine)
 			if err != nil {
 				return nil, err
 			}
-			vals.hostRef = hostName
+			vals.hostRefs = []string{hostName}
 		}
-		// If user chose not to add, hostRef stays empty
-	} else {
-		// Hosts exist - show picker
-		selected, err := promptHostSelection(globalCfg)
+	}
+
+	// Loop to add more hosts to global config
+	for {
+		addMore, err := promptAddMoreHosts()
 		if err != nil {
 			return nil, err
 		}
-		vals.hostRef = selected
+		if !addMore {
+			break
+		}
+
+		// Get existing host names to exclude from picker
+		var existingHosts []string
+		for name := range globalCfg.Hosts {
+			existingHosts = append(existingHosts, name)
+		}
+
+		machine, cancelled, err := collectMachineConfig(existingHosts, skipProbe)
+		if err != nil {
+			return nil, err
+		}
+		if cancelled {
+			break
+		}
+
+		hostName, err := addHostToGlobal(globalCfg, machine)
+		if err != nil {
+			return nil, err
+		}
+		vals.hostRefs = append(vals.hostRefs, hostName)
+	}
+
+	// If we have hosts now, show multi-select
+	if len(globalCfg.Hosts) > 0 {
+		selected, err := promptHostsSelection(globalCfg)
+		if err != nil {
+			return nil, err
+		}
+		vals.hostRefs = selected
 	}
 
 	return vals, nil
@@ -806,7 +862,7 @@ func collectNonInteractiveValues(opts InitOptions, globalCfg *config.GlobalConfi
 		// Check if host already exists
 		if _, exists := globalCfg.Hosts[machineName]; exists {
 			// Host exists, just reference it
-			vals.hostRef = machineName
+			vals.hostRefs = []string{machineName}
 		} else {
 			// Host doesn't exist, add it to global config
 			machine := &machineConfig{
@@ -832,23 +888,10 @@ func collectNonInteractiveValues(opts InitOptions, globalCfg *config.GlobalConfi
 			if err != nil {
 				return nil, err
 			}
-			vals.hostRef = hostName
-		}
-	} else if len(globalCfg.Hosts) > 0 {
-		// No host specified but global hosts exist - use default or first
-		if globalCfg.Defaults.Host != "" {
-			vals.hostRef = globalCfg.Defaults.Host
-		} else {
-			// Use first alphabetically
-			var names []string
-			for name := range globalCfg.Hosts {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			vals.hostRef = names[0]
+			vals.hostRefs = []string{hostName}
 		}
 	}
-	// If no hosts anywhere, hostRef stays empty
+	// If no hosts specified, hostRefs stays empty = use all global hosts
 
 	return vals, nil
 }

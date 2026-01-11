@@ -143,14 +143,17 @@ func TestRunCommand_JoinsArgs(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// Multiple args should be joined into single command
 	err = runCommand([]string{"make", "test"}, "", "", "")
 	require.Error(t, err)
-	// Should fail because no config, not because of args
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestRunCommand_ValidProbeTimeout(t *testing.T) {
@@ -158,13 +161,16 @@ func TestRunCommand_ValidProbeTimeout(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// Valid probe timeout should not fail on parsing
 	err = runCommand([]string{"echo"}, "", "", "5s")
 	require.Error(t, err)
-	// Should fail on config, not on probe timeout
+	// Should fail on no hosts configured, not on probe timeout
 	assert.NotContains(t, err.Error(), "timeout")
 }
 
@@ -185,20 +191,26 @@ func TestExecCommand_JoinsArgs(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// Multiple args should be joined
 	err = execCommand([]string{"ls", "-la"}, "", "", "")
 	require.Error(t, err)
-	// Should fail because no config, not because of args
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestExecCommand_ValidProbeTimeoutFormats(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -251,6 +263,9 @@ func TestRun_WithHostFlag(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
@@ -261,13 +276,16 @@ func TestRun_WithHostFlag(t *testing.T) {
 	})
 	assert.Equal(t, 1, exitCode)
 	require.Error(t, err)
-	// Should fail on config, but host flag was accepted
+	// Should fail on no hosts configured
 }
 
 func TestRun_WithTagFlag(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -357,6 +375,9 @@ func TestRun_SkipLockFlag(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
@@ -372,6 +393,9 @@ func TestRun_QuietMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -389,6 +413,9 @@ func TestRun_WorkingDirFlag(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
@@ -404,6 +431,9 @@ func TestRun_AllOptions(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -421,8 +451,8 @@ func TestRun_AllOptions(t *testing.T) {
 	})
 	assert.Equal(t, 1, exitCode)
 	require.Error(t, err)
-	// All options accepted, fails on config
-	assert.Contains(t, err.Error(), "config")
+	// All options accepted, fails on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestRunOptions_ZeroValues(t *testing.T) {
@@ -450,14 +480,17 @@ func TestRunCommand_MultipleArgsJoined(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// Multiple args should be joined with spaces
 	err = runCommand([]string{"make", "test", "-v"}, "", "", "")
 	require.Error(t, err)
-	// Fails on config, but args were processed
-	assert.Contains(t, err.Error(), "config")
+	// Fails on no hosts configured, but args were processed
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestRunCommand_WithHostAndTag(t *testing.T) {
@@ -465,13 +498,16 @@ func TestRunCommand_WithHostAndTag(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	err = runCommand([]string{"echo"}, "myhost", "mytag", "")
 	require.Error(t, err)
-	// Should fail on config, flags were accepted
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured, flags were accepted
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestExecCommand_MultipleArgsJoined(t *testing.T) {
@@ -479,13 +515,16 @@ func TestExecCommand_MultipleArgsJoined(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	err = execCommand([]string{"ls", "-la", "/tmp"}, "", "", "")
 	require.Error(t, err)
-	// Fails on config, but args were processed
-	assert.Contains(t, err.Error(), "config")
+	// Fails on no hosts configured, but args were processed
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestMapProbeErrorToStatus_NilProbeError(t *testing.T) {
@@ -518,6 +557,9 @@ func TestRun_ProbeTimeoutValues(t *testing.T) {
 			origDir, _ := os.Getwd()
 			defer os.Chdir(origDir)
 
+			// Isolate from real user config
+			t.Setenv("HOME", tmpDir)
+
 			err := os.Chdir(tmpDir)
 			require.NoError(t, err)
 
@@ -527,8 +569,8 @@ func TestRun_ProbeTimeoutValues(t *testing.T) {
 			})
 			assert.Equal(t, 1, exitCode)
 			require.Error(t, err)
-			// Should fail on config, not probe timeout
-			assert.Contains(t, err.Error(), "config")
+			// Should fail on no hosts configured, not probe timeout
+			assert.Contains(t, err.Error(), "No hosts configured")
 		})
 	}
 }

@@ -109,8 +109,17 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 }
 
 // setupHostSelector creates and configures the host selector.
+// It uses ResolveHosts to determine which hosts this project can use.
 func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
-	ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
+	// Get the hosts this project is allowed to use
+	// (respects project.Hosts list if specified, otherwise uses all global hosts)
+	_, projectHosts, err := config.ResolveHosts(ctx.Resolved, opts.Host)
+	if err != nil {
+		// Fall back to all global hosts if resolution fails
+		ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
+	} else {
+		ctx.selector = host.NewSelector(projectHosts)
+	}
 	ctx.selector.SetLocalFallback(ctx.Resolved.Global.Defaults.LocalFallback)
 
 	probeTimeout := ctx.Resolved.Global.Defaults.ProbeTimeout
@@ -129,8 +138,11 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 	}
 
 	// Get default host from resolution order
+	// Priority: project.Hosts[0], project.Host, global defaults
 	defaultHost := ""
-	if ctx.Resolved.Project != nil && ctx.Resolved.Project.Host != "" {
+	if ctx.Resolved.Project != nil && len(ctx.Resolved.Project.Hosts) > 0 {
+		defaultHost = ctx.Resolved.Project.Hosts[0]
+	} else if ctx.Resolved.Project != nil && ctx.Resolved.Project.Host != "" {
 		defaultHost = ctx.Resolved.Project.Host
 	} else if ctx.Resolved.Global.Defaults.Host != "" {
 		defaultHost = ctx.Resolved.Global.Defaults.Host

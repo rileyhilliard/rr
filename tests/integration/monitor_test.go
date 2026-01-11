@@ -31,10 +31,7 @@ func TestMonitorConfigParsing(t *testing.T) {
 		content := `
 version: 1
 hosts:
-  test-host:
-    ssh:
-      - test.local
-    dir: ~/projects/test
+  - test-host
 monitor:
   interval: 5s
   thresholds:
@@ -73,10 +70,7 @@ monitor:
 		content := `
 version: 1
 hosts:
-  test-host:
-    ssh:
-      - test.local
-    dir: ~/projects/test
+  - test-host
 monitor:
   interval: 3s
 `
