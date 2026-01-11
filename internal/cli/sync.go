@@ -26,23 +26,13 @@ func Sync(opts SyncOptions) error {
 	startTime := time.Now()
 	phaseDisplay := ui.NewPhaseDisplay(os.Stdout)
 
-	// Load config
-	cfgPath, err := config.Find(Config())
-	if err != nil {
-		return err
-	}
-	if cfgPath == "" {
-		return errors.New(errors.ErrConfig,
-			"No config file found",
-			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
-	}
-
-	cfg, err := config.Load(cfgPath)
+	// Load resolved config (global + project)
+	resolved, err := config.LoadResolved(Config())
 	if err != nil {
 		return err
 	}
 
-	if err := config.Validate(cfg); err != nil {
+	if err := config.ValidateResolved(resolved); err != nil {
 		return err
 	}
 
@@ -57,12 +47,12 @@ func Sync(opts SyncOptions) error {
 		}
 	}
 
-	// Create host selector
-	selector := host.NewSelector(cfg.Hosts)
+	// Create host selector from global hosts
+	selector := host.NewSelector(resolved.Global.Hosts)
 	defer selector.Close()
 
 	// Set probe timeout (CLI flag overrides config)
-	probeTimeout := cfg.ProbeTimeout
+	probeTimeout := resolved.Global.Defaults.ProbeTimeout
 	if opts.ProbeTimeout > 0 {
 		probeTimeout = opts.ProbeTimeout
 	}
@@ -75,9 +65,10 @@ func Sync(opts SyncOptions) error {
 	spinner := ui.NewSpinner("Connecting")
 	spinner.Start()
 
+	// Resolve preferred host using resolution order
 	preferredHost := opts.Host
 	if preferredHost == "" {
-		preferredHost = cfg.Default
+		preferredHost, _, _ = config.ResolveHost(resolved, "")
 	}
 
 	// Connect - either by tag or by host/default
@@ -99,8 +90,12 @@ func Sync(opts SyncOptions) error {
 	spinner = ui.NewSpinner("Syncing files")
 	spinner.Start()
 
+	// Use project sync config if available, otherwise use defaults
+	syncCfg := config.DefaultConfig().Sync
+	if resolved.Project != nil {
+		syncCfg = resolved.Project.Sync
+	}
 	// Add dry-run flag if requested
-	syncCfg := cfg.Sync
 	if opts.DryRun {
 		syncCfg.Flags = append(syncCfg.Flags, "--dry-run", "-v")
 	}

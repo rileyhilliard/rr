@@ -77,8 +77,8 @@ func (c *ConfigSchemaCheck) Run() CheckResult {
 		}
 	}
 
-	// Run validation
-	err = config.Validate(cfg, config.AllowNoHosts())
+	// Run validation on project config
+	err = config.Validate(cfg)
 	if err != nil {
 		return CheckResult{
 			Name:       c.Name(),
@@ -99,42 +99,42 @@ func (c *ConfigSchemaCheck) Fix() error {
 	return nil // Schema issues require manual intervention
 }
 
-// ConfigHostsCheck verifies hosts are configured.
+// ConfigHostsCheck verifies hosts are configured in global config.
 type ConfigHostsCheck struct {
-	ConfigPath string
+	ConfigPath string // Project config path (for task count)
 }
 
 func (c *ConfigHostsCheck) Name() string     { return "config_hosts" }
 func (c *ConfigHostsCheck) Category() string { return "CONFIG" }
 
 func (c *ConfigHostsCheck) Run() CheckResult {
-	path, err := config.Find(c.ConfigPath)
-	if err != nil || path == "" {
-		return CheckResult{
-			Name:    c.Name(),
-			Status:  StatusFail,
-			Message: "Cannot check hosts: no config file",
-		}
-	}
-
-	cfg, err := config.Load(path)
+	// Load global config to check hosts
+	globalCfg, err := config.LoadGlobal()
 	if err != nil {
 		return CheckResult{
 			Name:    c.Name(),
 			Status:  StatusFail,
-			Message: "Cannot check hosts: config load error",
+			Message: "Cannot check hosts: global config load error",
 		}
 	}
 
-	numHosts := len(cfg.Hosts)
-	numTasks := len(cfg.Tasks)
+	numHosts := len(globalCfg.Hosts)
+
+	// Try to load project config for task count
+	numTasks := 0
+	path, _ := config.Find(c.ConfigPath)
+	if path != "" {
+		if projectCfg, err := config.Load(path); err == nil {
+			numTasks = len(projectCfg.Tasks)
+		}
+	}
 
 	if numHosts == 0 {
 		return CheckResult{
 			Name:       c.Name(),
 			Status:     StatusFail,
 			Message:    "No hosts configured",
-			Suggestion: "Add at least one host under 'hosts:' in your .rr.yaml",
+			Suggestion: "Add at least one host with 'rr host add'",
 		}
 	}
 

@@ -104,17 +104,30 @@ func TestConfigHostsCheck(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	t.Run("hosts configured", func(t *testing.T) {
-		cfgPath := filepath.Join(tmpDir, "hosts.yaml")
-		content := `version: 1
+		// Set up isolated HOME with global config containing hosts
+		globalDir := filepath.Join(tmpDir, "withhosts", ".rr")
+		if err := os.MkdirAll(globalDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		globalContent := `version: 1
 hosts:
   test:
     ssh: ["test-host"]
     dir: "~/test"
+`
+		if err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", filepath.Join(tmpDir, "withhosts"))
+
+		// Write project config with tasks
+		cfgPath := filepath.Join(tmpDir, "withhosts", "hosts.yaml")
+		projectContent := `version: 1
 tasks:
   build:
     run: "make build"
 `
-		if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(cfgPath, []byte(projectContent), 0644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -130,7 +143,20 @@ tasks:
 	})
 
 	t.Run("no hosts", func(t *testing.T) {
-		cfgPath := filepath.Join(tmpDir, "nohosts.yaml")
+		// Set up isolated HOME with empty global config (no hosts)
+		globalDir := filepath.Join(tmpDir, "nohosts", ".rr")
+		if err := os.MkdirAll(globalDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		globalContent := `version: 1
+hosts: {}
+`
+		if err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("HOME", filepath.Join(tmpDir, "nohosts"))
+
+		cfgPath := filepath.Join(tmpDir, "nohosts", "nohosts.yaml")
 		content := `version: 1
 `
 		if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {

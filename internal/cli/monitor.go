@@ -13,30 +13,16 @@ import (
 
 // monitorCommand starts the TUI monitoring dashboard.
 func monitorCommand(hostsFilter string, interval time.Duration) error {
-	// Load config
-	cfgPath, err := config.Find(Config())
+	// Load global config (hosts are stored globally now)
+	globalCfg, err := config.LoadGlobal()
 	if err != nil {
-		return err
-	}
-	if cfgPath == "" {
-		return errors.New(errors.ErrConfig,
-			"No config file found",
-			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return err
-	}
-
-	if err := config.Validate(cfg); err != nil {
 		return err
 	}
 
 	// Filter hosts if --hosts flag provided
-	hosts := cfg.Hosts
+	hosts := globalCfg.Hosts
 	if hostsFilter != "" {
-		hosts = filterHosts(cfg.Hosts, hostsFilter)
+		hosts = filterHosts(globalCfg.Hosts, hostsFilter)
 		if len(hosts) == 0 {
 			return errors.New(errors.ErrConfig,
 				fmt.Sprintf("No hosts match '%s'", hostsFilter),
@@ -46,8 +32,8 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 
 	if len(hosts) == 0 {
 		return errors.New(errors.ErrConfig,
-			"No hosts set up yet",
-			"Add some hosts to your .rr.yaml config file first.")
+			"No hosts configured",
+			"Add a host with 'rr host add' first.")
 	}
 
 	// Create collector from filtered hosts

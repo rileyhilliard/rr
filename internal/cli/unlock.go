@@ -24,15 +24,29 @@ type UnlockOptions struct {
 
 // unlockCommand releases the lock on one or more remote hosts.
 func unlockCommand(opts UnlockOptions) error {
-	cfg, _, err := loadExistingConfig()
+	// Load global config for hosts
+	globalCfg, err := config.LoadGlobal()
 	if err != nil {
 		return err
 	}
 
-	if len(cfg.Hosts) == 0 {
+	if len(globalCfg.Hosts) == 0 {
 		return errors.New(errors.ErrConfig,
 			"No hosts configured",
 			"Add a host with 'rr host add' first.")
+	}
+
+	// Load project config for lock settings (if available)
+	var lockCfg config.LockConfig
+	cfgPath, _ := config.Find(Config())
+	if cfgPath != "" {
+		if projectCfg, err := config.Load(cfgPath); err == nil {
+			lockCfg = projectCfg.Lock
+		} else {
+			lockCfg = config.DefaultConfig().Lock
+		}
+	} else {
+		lockCfg = config.DefaultConfig().Lock
 	}
 
 	// Get current working directory for project hash
@@ -49,15 +63,15 @@ func unlockCommand(opts UnlockOptions) error {
 
 	if opts.All {
 		// Unlock all configured hosts
-		for name := range cfg.Hosts {
+		for name := range globalCfg.Hosts {
 			hostsToUnlock = append(hostsToUnlock, name)
 		}
 		sort.Strings(hostsToUnlock)
 	} else if opts.Host != "" {
 		// Specific host provided
-		if _, exists := cfg.Hosts[opts.Host]; !exists {
+		if _, exists := globalCfg.Hosts[opts.Host]; !exists {
 			var available []string
-			for k := range cfg.Hosts {
+			for k := range globalCfg.Hosts {
 				available = append(available, k)
 			}
 			sort.Strings(available)
@@ -68,16 +82,16 @@ func unlockCommand(opts UnlockOptions) error {
 		hostsToUnlock = []string{opts.Host}
 	} else {
 		// No host specified - use default or show picker
-		if cfg.Default != "" {
-			hostsToUnlock = []string{cfg.Default}
-		} else if len(cfg.Hosts) == 1 {
+		if globalCfg.Defaults.Host != "" {
+			hostsToUnlock = []string{globalCfg.Defaults.Host}
+		} else if len(globalCfg.Hosts) == 1 {
 			// Only one host, use it
-			for name := range cfg.Hosts {
+			for name := range globalCfg.Hosts {
 				hostsToUnlock = []string{name}
 			}
 		} else {
 			// Multiple hosts, no default - show picker
-			selectedHost, err := pickHostForUnlock(cfg)
+			selectedHost, err := pickHostForUnlock(globalCfg)
 			if err != nil {
 				return err
 			}
@@ -93,8 +107,8 @@ func unlockCommand(opts UnlockOptions) error {
 	var successCount, notLockedCount, failCount int
 
 	for _, hostName := range hostsToUnlock {
-		hostCfg := cfg.Hosts[hostName]
-		result := unlockHost(hostName, hostCfg, cfg.Lock, projectHash)
+		hostCfg := globalCfg.Hosts[hostName]
+		result := unlockHost(hostName, hostCfg, lockCfg, projectHash)
 
 		switch result {
 		case unlockResultSuccess:
@@ -205,9 +219,9 @@ func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig,
 }
 
 // pickHostForUnlock shows a host picker for the unlock command.
-func pickHostForUnlock(cfg *config.Config) (string, error) {
+func pickHostForUnlock(globalCfg *config.GlobalConfig) (string, error) {
 	var hostNames []string
-	for k := range cfg.Hosts {
+	for k := range globalCfg.Hosts {
 		hostNames = append(hostNames, k)
 	}
 	sort.Strings(hostNames)
@@ -215,10 +229,10 @@ func pickHostForUnlock(cfg *config.Config) (string, error) {
 	options := make([]huh.Option[string], len(hostNames))
 	for i, h := range hostNames {
 		label := h
-		if h == cfg.Default {
+		if h == globalCfg.Defaults.Host {
 			label += " (default)"
 		}
-		if hostCfg, ok := cfg.Hosts[h]; ok && len(hostCfg.SSH) > 0 {
+		if hostCfg, ok := globalCfg.Hosts[h]; ok && len(hostCfg.SSH) > 0 {
 			label += " - " + hostCfg.SSH[0]
 		}
 		options[i] = huh.NewOption(label, h)

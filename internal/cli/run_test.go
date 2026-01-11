@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,12 +233,17 @@ func TestRun_NoConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	exitCode, err := Run(RunOptions{
 		Command: "echo hello",
 	})
 	assert.Equal(t, 1, exitCode)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestRun_WithHostFlag(t *testing.T) {
@@ -308,6 +314,9 @@ func TestRun_DryRunMode(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	// DryRun mode still needs config
 	exitCode, err := Run(RunOptions{
 		Command: "echo test",
@@ -315,7 +324,9 @@ func TestRun_DryRunMode(t *testing.T) {
 	})
 	assert.Equal(t, 1, exitCode)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestRun_SkipSyncFlag(t *testing.T) {
@@ -326,14 +337,19 @@ func TestRun_SkipSyncFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	exitCode, err := Run(RunOptions{
 		Command:  "echo test",
 		SkipSync: true,
 	})
 	assert.Equal(t, 1, exitCode)
 	require.Error(t, err)
-	// Should fail on config, not on skip-sync flag
-	assert.Contains(t, err.Error(), "No config file found")
+	// Should fail on config or hosts, not on skip-sync flag
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestRun_SkipLockFlag(t *testing.T) {

@@ -51,21 +51,24 @@ type SummaryOutput struct {
 
 // doctorCommand implements the doctor command logic.
 func doctorCommand() error {
-	// Load config (if it exists)
+	// Load project config (if it exists)
 	cfgPath, err := config.Find(Config())
-	var cfg *config.Config
+	var projectCfg *config.Config
 
 	if err == nil && cfgPath != "" {
-		cfg, _ = config.Load(cfgPath) // Ignore load errors, config checks will catch them
+		projectCfg, _ = config.Load(cfgPath) // Ignore load errors, config checks will catch them
 	}
 
+	// Load global config for hosts
+	globalCfg, _ := config.LoadGlobal() // Ignore errors, config checks will catch them
+
 	// Collect all checks
-	checks := collectChecks(cfgPath, cfg)
+	checks := collectChecks(cfgPath, projectCfg, globalCfg)
 
 	// If --path flag, establish connections and add PATH checks
 	var pathClients map[string]sshutil.SSHClient
-	if doctorPath && cfg != nil && len(cfg.Hosts) > 0 {
-		pathClients = establishPathConnections(cfg)
+	if doctorPath && globalCfg != nil && len(globalCfg.Hosts) > 0 {
+		pathClients = establishPathConnections(globalCfg)
 		defer closePathConnections(pathClients)
 
 		if len(pathClients) > 0 {
@@ -89,10 +92,10 @@ func doctorCommand() error {
 }
 
 // establishPathConnections connects to hosts for PATH checking.
-func establishPathConnections(cfg *config.Config) map[string]sshutil.SSHClient {
+func establishPathConnections(globalCfg *config.GlobalConfig) map[string]sshutil.SSHClient {
 	clients := make(map[string]sshutil.SSHClient)
 
-	for name, hostCfg := range cfg.Hosts {
+	for name, hostCfg := range globalCfg.Hosts {
 		if len(hostCfg.SSH) == 0 {
 			continue
 		}
@@ -115,7 +118,7 @@ func closePathConnections(clients map[string]sshutil.SSHClient) {
 }
 
 // collectChecks gathers all diagnostic checks based on available config.
-func collectChecks(cfgPath string, cfg *config.Config) []doctor.Check {
+func collectChecks(cfgPath string, _ *config.Config, globalCfg *config.GlobalConfig) []doctor.Check {
 	var checks []doctor.Check
 
 	// Config checks (always run)
@@ -124,9 +127,9 @@ func collectChecks(cfgPath string, cfg *config.Config) []doctor.Check {
 	// SSH checks (always run)
 	checks = append(checks, doctor.NewSSHChecks()...)
 
-	// Host connectivity checks (if config with hosts exists)
-	if cfg != nil && len(cfg.Hosts) > 0 {
-		checks = append(checks, doctor.NewHostsChecks(cfg.Hosts)...)
+	// Host connectivity checks (if global config with hosts exists)
+	if globalCfg != nil && len(globalCfg.Hosts) > 0 {
+		checks = append(checks, doctor.NewHostsChecks(globalCfg.Hosts)...)
 	}
 
 	// Dependency checks (local always, remote if connected)

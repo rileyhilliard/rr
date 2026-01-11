@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,9 +77,14 @@ func TestSync_NoConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err = Sync(SyncOptions{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestSync_WithHostFlag(t *testing.T) {
@@ -89,12 +95,17 @@ func TestSync_WithHostFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err = Sync(SyncOptions{
 		Host: "myhost",
 	})
 	require.Error(t, err)
-	// Should fail on config, host flag was accepted
-	assert.Contains(t, err.Error(), "No config file found")
+	// Should fail on config or hosts, host flag was accepted
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestSync_WithTagFlag(t *testing.T) {
@@ -105,11 +116,16 @@ func TestSync_WithTagFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err = Sync(SyncOptions{
 		Tag: "gpu",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestSync_DryRunFlag(t *testing.T) {
@@ -120,12 +136,17 @@ func TestSync_DryRunFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err = Sync(SyncOptions{
 		DryRun: true,
 	})
 	require.Error(t, err)
-	// Should fail on config, dry-run flag was accepted
-	assert.Contains(t, err.Error(), "No config file found")
+	// Should fail on config or hosts, dry-run flag was accepted
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestSync_WorkingDirFlag(t *testing.T) {
@@ -136,11 +157,16 @@ func TestSync_WorkingDirFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err = Sync(SyncOptions{
 		WorkingDir: "/custom/dir",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestSync_ProbeTimeoutFlag(t *testing.T) {
@@ -151,11 +177,16 @@ func TestSync_ProbeTimeoutFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err = Sync(SyncOptions{
 		ProbeTimeout: 10 * time.Second,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestSyncCommand_PassesDryRunFlag(t *testing.T) {
@@ -198,12 +229,22 @@ func TestSync_EmptyConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	// Write config with no hosts
-	configContent := `
+	// Set up isolated HOME with empty global config (no hosts)
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts: {}
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", tmpDir)
+
+	// Write project config
+	projectContent := `
+version: 1
+`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	err = Sync(SyncOptions{})

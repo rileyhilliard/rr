@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -15,7 +13,6 @@ import (
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
-	"gopkg.in/yaml.v3"
 )
 
 // HostAddOptions holds options for the host add command.
@@ -26,9 +23,9 @@ type HostAddOptions struct {
 	SkipProbe bool   // Skip connection testing
 }
 
-// hostAdd adds a new host to the configuration.
+// hostAdd adds a new host to the global configuration.
 func hostAdd(opts HostAddOptions) error {
-	cfg, configPath, err := loadExistingConfig()
+	cfg, _, err := loadGlobalConfig()
 	if err != nil {
 		return err
 	}
@@ -90,12 +87,12 @@ func hostAdd(opts HostAddOptions) error {
 	}
 
 	// If this is the first host, make it the default
-	if cfg.Default == "" {
-		cfg.Default = machine.name
+	if cfg.Defaults.Host == "" {
+		cfg.Defaults.Host = machine.name
 	}
 
 	// Save config
-	if err := saveConfig(configPath, cfg); err != nil {
+	if err := saveGlobalConfig(cfg); err != nil {
 		return err
 	}
 
@@ -103,9 +100,9 @@ func hostAdd(opts HostAddOptions) error {
 	return nil
 }
 
-// hostRemove removes a host from the configuration.
+// hostRemove removes a host from the global configuration.
 func hostRemove(name string) error {
-	cfg, configPath, err := loadExistingConfig()
+	cfg, _, err := loadGlobalConfig()
 	if err != nil {
 		return err
 	}
@@ -129,7 +126,7 @@ func hostRemove(name string) error {
 		options := make([]huh.Option[string], len(hostNames))
 		for i, h := range hostNames {
 			label := h
-			if h == cfg.Default {
+			if h == cfg.Defaults.Host {
 				label += " (default)"
 			}
 			// Add first SSH connection as hint
@@ -181,7 +178,7 @@ func hostRemove(name string) error {
 	if err := form.Run(); err != nil {
 		return errors.WrapWithCode(err, errors.ErrConfig,
 			"Couldn't get your input",
-			"Try again or edit .rr.yaml manually.")
+			"Try again or edit ~/.rr/config.yaml manually.")
 	}
 	if !confirm {
 		fmt.Println("Cancelled.")
@@ -195,8 +192,8 @@ func hostRemove(name string) error {
 	delete(cfg.Hosts, name)
 
 	// Handle default host
-	if cfg.Default == name {
-		cfg.Default = ""
+	if cfg.Defaults.Host == name {
+		cfg.Defaults.Host = ""
 		// Pick a new default if there are other hosts
 		if len(cfg.Hosts) > 0 {
 			// Pick first alphabetically for consistency
@@ -205,13 +202,13 @@ func hostRemove(name string) error {
 				remaining = append(remaining, k)
 			}
 			sort.Strings(remaining)
-			cfg.Default = remaining[0]
-			fmt.Printf("  Default host changed to '%s'\n", cfg.Default)
+			cfg.Defaults.Host = remaining[0]
+			fmt.Printf("  Default host changed to '%s'\n", cfg.Defaults.Host)
 		}
 	}
 
 	// Save config
-	if err := saveConfig(configPath, cfg); err != nil {
+	if err := saveGlobalConfig(cfg); err != nil {
 		return err
 	}
 
@@ -219,9 +216,9 @@ func hostRemove(name string) error {
 	return nil
 }
 
-// hostList lists all configured hosts.
+// hostList lists all configured hosts from global config.
 func hostList() error {
-	cfg, _, err := loadExistingConfig()
+	cfg, globalPath, err := loadGlobalConfig()
 	if err != nil {
 		return err
 	}
@@ -244,12 +241,15 @@ func hostList() error {
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	defaultStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("green"))
 
+	// Show config location
+	fmt.Printf("%s\n\n", dimStyle.Render("Config: "+globalPath))
+
 	for _, name := range names {
 		h := cfg.Hosts[name]
 
 		// Name with default indicator
 		line := nameStyle.Render(name)
-		if name == cfg.Default {
+		if name == cfg.Defaults.Host {
 			line += defaultStyle.Render(" (default)")
 		}
 		fmt.Println(line)
@@ -273,49 +273,25 @@ func hostList() error {
 	return nil
 }
 
-// loadExistingConfig loads the existing config or returns an error if it doesn't exist.
-func loadExistingConfig() (*config.Config, string, error) {
-	configPath := filepath.Join(".", config.ConfigFileName)
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil, "", errors.New(errors.ErrConfig,
-			"No config file found",
-			"Run 'rr init' first to create one.")
-	}
-
-	cfg, err := config.Load(configPath)
+// loadGlobalConfig loads the global config from ~/.rr/config.yaml.
+// Returns the config, the path to the config file, and any error.
+func loadGlobalConfig() (*config.GlobalConfig, string, error) {
+	globalPath, err := config.GlobalConfigPath()
 	if err != nil {
-		return nil, "", errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't load config file",
-			"Check that .rr.yaml is valid YAML.")
+		return nil, "", err
 	}
 
-	return cfg, configPath, nil
+	cfg, err := config.LoadGlobal()
+	if err != nil {
+		return nil, "", err
+	}
+
+	return cfg, globalPath, nil
 }
 
-// saveConfig saves the config to the specified path.
-func saveConfig(configPath string, cfg *config.Config) error {
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't generate the config file",
-			"This is unexpected - please report this bug!")
-	}
-
-	header := `# Road Runner configuration
-# Run 'rr run <command>' to sync and execute remotely
-# See: https://github.com/rileyhilliard/rr for documentation
-
-`
-	content := header + string(data)
-
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			fmt.Sprintf("Couldn't write config file to %s", configPath),
-			"Check that you have write permissions.")
-	}
-
-	return nil
+// saveGlobalConfig saves the global config to ~/.rr/config.yaml.
+func saveGlobalConfig(cfg *config.GlobalConfig) error {
+	return config.SaveGlobal(cfg)
 }
 
 // testConnectionForAdd tests the SSH connection when adding a host.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,9 +22,9 @@ import (
 
 // InitOptions holds options for the init command.
 type InitOptions struct {
-	Host           string // Pre-specified SSH host/alias
-	Name           string // Friendly name for the host
-	Dir            string // Pre-specified remote directory
+	Host           string // Pre-specified SSH host/alias (for non-interactive)
+	Name           string // Friendly name for the host (for non-interactive)
+	Dir            string // Pre-specified remote directory (for non-interactive)
 	Overwrite      bool   // Overwrite existing config without asking
 	NonInteractive bool   // Skip prompts, use defaults
 	SkipProbe      bool   // Skip connection testing
@@ -78,12 +79,12 @@ type machineConfig struct {
 	name          string   // Friendly name (config key)
 	sshHosts      []string // Connection fallbacks for this machine
 	setupCommands []string // Setup commands (e.g., PATH exports)
+	remoteDir     string   // Remote directory for this host
 }
 
-// initConfigValues holds the collected configuration values.
-type initConfigValues struct {
-	machines  []machineConfig // All machines configured
-	remoteDir string          // Shared across all machines
+// projectConfigValues holds the collected project configuration values.
+type projectConfigValues struct {
+	hostRef string // Reference to a host in global config (or empty)
 }
 
 // checkExistingConfig checks for existing config and prompts for overwrite.
@@ -118,34 +119,6 @@ func checkExistingConfig(configPath string, opts InitOptions) (bool, error) {
 		fmt.Println("Cancelled.")
 	}
 	return overwrite, nil
-}
-
-// collectNonInteractiveValues collects config values in non-interactive mode.
-func collectNonInteractiveValues(opts InitOptions) (*initConfigValues, error) {
-	if opts.Host == "" {
-		return nil, errors.New(errors.ErrConfig,
-			"Need an SSH host in non-interactive mode",
-			"Pass --host, set RR_HOST env var, or drop the --non-interactive flag to use the prompts.")
-	}
-
-	machineName := opts.Name
-	if machineName == "" {
-		machineName = extractHostname(opts.Host)
-	}
-
-	vals := &initConfigValues{
-		machines: []machineConfig{
-			{
-				name:     machineName,
-				sshHosts: []string{opts.Host},
-			},
-		},
-	}
-	vals.remoteDir = opts.Dir
-	if vals.remoteDir == "" {
-		vals.remoteDir = "${HOME}/rr/${PROJECT}"
-	}
-	return vals, nil
 }
 
 // getSSHHostsForPicker returns SSH hosts formatted for the picker, optionally excluding some.
@@ -207,52 +180,6 @@ func trySSHHostPicker(exclude ...string) (sshHost string, cancelled bool) {
 	return "", false
 }
 
-// getAllSelectedSSHHosts returns all SSH hosts selected across all machines.
-func getAllSelectedSSHHosts(machines []machineConfig) []string {
-	var all []string
-	for _, m := range machines {
-		all = append(all, m.sshHosts...)
-	}
-	return all
-}
-
-// collectInteractiveValues collects config values interactively.
-func collectInteractiveValues(skipProbe bool) (*initConfigValues, error) {
-	vals := &initConfigValues{
-		remoteDir: "${HOME}/rr/${PROJECT}", // Default, will prompt at end
-	}
-
-	// Machine loop - collect one or more machines
-	for {
-		allSelected := getAllSelectedSSHHosts(vals.machines)
-
-		machine, cancelled, err := collectMachineConfig(allSelected, skipProbe)
-		if err != nil {
-			return nil, err
-		}
-		if cancelled {
-			if len(vals.machines) == 0 {
-				return nil, nil // User cancelled on first machine
-			}
-			break // User cancelled adding more, but we have at least one
-		}
-
-		vals.machines = append(vals.machines, *machine)
-
-		// Ask if they want to add another machine
-		if !promptAddAnotherMachine() {
-			break
-		}
-	}
-
-	// Prompt for remote directory (shared across all machines)
-	if err := promptRemoteDir(&vals.remoteDir); err != nil {
-		return nil, err
-	}
-
-	return vals, nil
-}
-
 // collectMachineConfig collects configuration for a single machine.
 // Returns the machine config, cancelled flag, and any error.
 func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineConfig, bool, error) {
@@ -287,6 +214,12 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 	allExcluded = append(allExcluded, excludeSSHHosts...)
 	allExcluded = append(allExcluded, machine.sshHosts...)
 	if err := promptAdditionalConnections(machine, allExcluded); err != nil {
+		return nil, false, err
+	}
+
+	// Prompt for remote directory
+	machine.remoteDir = "${HOME}/rr/${PROJECT}"
+	if err := promptRemoteDir(&machine.remoteDir); err != nil {
 		return nil, false, err
 	}
 
@@ -385,30 +318,13 @@ func promptAdditionalConnections(machine *machineConfig, excludeSSHHosts []strin
 	}
 }
 
-// promptAddAnotherMachine asks if the user wants to add another machine.
-func promptAddAnotherMachine() bool {
-	var addMore bool
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Add another machine?").
-				Description("A different computer that can run your jobs").
-				Value(&addMore),
-		),
-	)
-	if err := form.Run(); err != nil {
-		return false
-	}
-	return addMore
-}
-
 // promptRemoteDir prompts for the remote directory.
 func promptRemoteDir(remoteDir *string) error {
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Remote directory").
-				Description("Where files sync to on all machines (supports ${PROJECT}, ${USER}, ${HOME})").
+				Description("Where files sync to (supports ${PROJECT}, ${USER}, ${HOME}, ~)").
 				Placeholder("${HOME}/rr/${PROJECT}").
 				Value(remoteDir).
 				Validate(func(s string) error {
@@ -586,13 +502,13 @@ func yamlValue(s string) string {
 	return s
 }
 
-// generateConfigContent creates a fully-documented .rr.yaml config file.
-// Active settings are uncommented; unused settings are commented out with explanations.
-func generateConfigContent(vals *initConfigValues) string {
+// generateProjectConfigContent creates a project-focused .rr.yaml config file.
+// This config references hosts from global config rather than defining them.
+func generateProjectConfigContent(vals *projectConfigValues) string {
 	var sb strings.Builder
 
 	// Header
-	sb.WriteString(`# Road Runner configuration
+	sb.WriteString(`# Road Runner project configuration
 # Run 'rr run <command>' to sync and execute remotely
 # See: https://github.com/rileyhilliard/rr for documentation
 
@@ -601,75 +517,15 @@ func generateConfigContent(vals *initConfigValues) string {
 	// Version
 	sb.WriteString("version: 1\n\n")
 
-	// Hosts section
-	sb.WriteString("hosts:\n")
-	for _, machine := range vals.machines {
-		sb.WriteString(fmt.Sprintf("  %s:\n", yamlValue(machine.name)))
-
-		// SSH connections
-		sb.WriteString("    # SSH connection(s) - tried in order until one succeeds\n")
-		sb.WriteString("    # Can be: hostname, user@host, or SSH config alias\n")
-		sb.WriteString("    ssh:\n")
-		for _, sshHost := range machine.sshHosts {
-			sb.WriteString(fmt.Sprintf("      - %s\n", yamlValue(sshHost)))
-		}
-		sb.WriteString("\n")
-
-		// Directory
-		sb.WriteString("    # Where files sync to on the remote machine\n")
-		sb.WriteString("    # Supports: ${PROJECT} (current dir name), ${USER}, ${HOME}, ~\n")
-		sb.WriteString(fmt.Sprintf("    dir: %s\n", yamlValue(vals.remoteDir)))
-		sb.WriteString("\n")
-
-		// Setup commands (only if present)
-		if len(machine.setupCommands) > 0 {
-			sb.WriteString("    # Commands run before each task (e.g., to set up PATH)\n")
-			sb.WriteString("    setup_commands:\n")
-			for _, cmd := range machine.setupCommands {
-				sb.WriteString(fmt.Sprintf("      - %s\n", yamlValue(cmd)))
-			}
-			sb.WriteString("\n")
-		} else {
-			sb.WriteString("    # Commands run before each task (e.g., to set up PATH)\n")
-			sb.WriteString("    # setup_commands:\n")
-			sb.WriteString("    #   - export PATH=$HOME/.local/bin:$PATH\n")
-			sb.WriteString("\n")
-		}
-
-		// Tags (commented out)
-		sb.WriteString("    # Tags for filtering hosts with --tag flag\n")
-		sb.WriteString("    # tags:\n")
-		sb.WriteString("    #   - gpu\n")
-		sb.WriteString("    #   - fast\n")
-		sb.WriteString("\n")
-
-		// Env (commented out)
-		sb.WriteString("    # Environment variables for this host\n")
-		sb.WriteString("    # env:\n")
-		sb.WriteString("    #   CUDA_VISIBLE_DEVICES: \"0\"\n")
-		sb.WriteString("\n")
-
-		// Shell (commented out)
-		sb.WriteString("    # Custom shell invocation (default: $SHELL -l -c)\n")
-		sb.WriteString("    # shell: /bin/bash -l -c\n")
-		sb.WriteString("\n")
+	// Host reference (if user selected one)
+	if vals.hostRef != "" {
+		sb.WriteString("# Host to use for this project (from ~/.rr/config.yaml)\n")
+		sb.WriteString(fmt.Sprintf("host: %s\n\n", yamlValue(vals.hostRef)))
+	} else {
+		sb.WriteString("# Host to use for this project (from ~/.rr/config.yaml)\n")
+		sb.WriteString("# Uncomment and set to a host name from 'rr host list'\n")
+		sb.WriteString("# host: my-host\n\n")
 	}
-
-	// Default host
-	defaultHost := ""
-	if len(vals.machines) > 0 {
-		defaultHost = vals.machines[0].name
-	}
-	sb.WriteString("# Host to try first when running commands\n")
-	sb.WriteString(fmt.Sprintf("default: %s\n\n", yamlValue(defaultHost)))
-
-	// Local fallback
-	sb.WriteString("# Run locally if all remote hosts are unavailable or busy\n")
-	sb.WriteString("local_fallback: false\n\n")
-
-	// Probe timeout (commented out)
-	sb.WriteString("# How long to wait when testing if a host is reachable (default: 2s)\n")
-	sb.WriteString("# probe_timeout: 2s\n\n")
 
 	// Sync section
 	sb.WriteString("# File sync settings (uses rsync under the hood)\n")
@@ -758,18 +614,9 @@ func generateConfigContent(vals *initConfigValues) string {
 	return sb.String()
 }
 
-// writeConfig writes the configuration file with documented settings.
-func writeConfig(configPath string, vals *initConfigValues) error {
-	// Track if we added any setup commands (for user feedback)
-	var addedSetupCommands bool
-	for _, machine := range vals.machines {
-		if len(machine.setupCommands) > 0 {
-			addedSetupCommands = true
-			break
-		}
-	}
-
-	content := generateConfigContent(vals)
+// writeProjectConfig writes the project configuration file.
+func writeProjectConfig(configPath string, vals *projectConfigValues) error {
+	content := generateProjectConfigContent(vals)
 
 	// Validate the generated YAML is parseable
 	var testConfig config.Config
@@ -787,8 +634,42 @@ func writeConfig(configPath string, vals *initConfigValues) error {
 
 	fmt.Printf("%s Created %s\n\n", ui.SymbolSuccess, configPath)
 
+	fmt.Println("Next steps:")
+	if vals.hostRef == "" {
+		fmt.Println("  rr host add   - Add a host to your global config")
+	}
+	fmt.Println("  rr sync       - Sync files to remote")
+	fmt.Println("  rr run <cmd>  - Sync and run a command")
+	fmt.Println("  rr doctor     - Check configuration")
+
+	return nil
+}
+
+// addHostToGlobal adds a new host to the global config.
+// Returns the host name and any error.
+func addHostToGlobal(globalCfg *config.GlobalConfig, machine *machineConfig) (string, error) {
+	// Add host to global config
+	globalCfg.Hosts[machine.name] = config.Host{
+		SSH:           machine.sshHosts,
+		Dir:           machine.remoteDir,
+		SetupCommands: machine.setupCommands,
+	}
+
+	// Set as default if first host
+	if globalCfg.Defaults.Host == "" {
+		globalCfg.Defaults.Host = machine.name
+	}
+
+	// Save global config
+	if err := config.SaveGlobal(globalCfg); err != nil {
+		return "", err
+	}
+
+	globalPath, _ := config.GlobalConfigPath()
+	fmt.Printf("%s Added host '%s' to %s\n\n", ui.SymbolSuccess, machine.name, globalPath)
+
 	// Inform user about auto-added setup commands
-	if addedSetupCommands {
+	if len(machine.setupCommands) > 0 {
 		mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 		fmt.Printf("%s Added setup_commands to extend PATH\n", ui.SymbolSuccess)
 		fmt.Println(mutedStyle.Render("  Some tools (like those in ~/.local/bin or /opt/homebrew/bin) are only"))
@@ -797,15 +678,182 @@ func writeConfig(configPath string, vals *initConfigValues) error {
 		fmt.Println()
 	}
 
-	fmt.Println("Next steps:")
-	fmt.Println("  rr sync       - Sync files to remote")
-	fmt.Println("  rr run <cmd>  - Sync and run a command")
-	fmt.Println("  rr doctor     - Check configuration")
-
-	return nil
+	return machine.name, nil
 }
 
-// Init creates a new .rr.yaml configuration file.
+// promptHostSelection shows a picker to select which global host to use.
+// Returns the selected host name, or empty string for "none".
+func promptHostSelection(globalCfg *config.GlobalConfig) (string, error) {
+	// Build sorted list of host names
+	var hostNames []string
+	for name := range globalCfg.Hosts {
+		hostNames = append(hostNames, name)
+	}
+	sort.Strings(hostNames)
+
+	// Build options
+	options := make([]huh.Option[string], 0, len(hostNames)+1)
+
+	// Add "None" option first
+	options = append(options, huh.NewOption("None / I'll set it later", ""))
+
+	for _, name := range hostNames {
+		label := name
+		if name == globalCfg.Defaults.Host {
+			label += " (default)"
+		}
+		// Add first SSH connection as hint
+		if h, ok := globalCfg.Hosts[name]; ok && len(h.SSH) > 0 {
+			label += " - " + h.SSH[0]
+		}
+		options = append(options, huh.NewOption(label, name))
+	}
+
+	var selected string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Which host should this project use?").
+				Description("Hosts are defined in ~/.rr/config.yaml").
+				Options(options...).
+				Value(&selected),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return "", errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't get your selection",
+			"Try --host flag to specify a host.")
+	}
+
+	return selected, nil
+}
+
+// promptAddHost asks if the user wants to add a host now.
+func promptAddHost() (bool, error) {
+	var addHost bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("No hosts configured yet. Add one now?").
+				Description("Hosts are stored globally in ~/.rr/config.yaml").
+				Value(&addHost),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return false, errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't get your input",
+			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+	}
+
+	return addHost, nil
+}
+
+// collectInteractiveValues collects project config values interactively.
+func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*projectConfigValues, error) {
+	vals := &projectConfigValues{}
+
+	if len(globalCfg.Hosts) == 0 {
+		// No hosts configured - offer to add one
+		addHost, err := promptAddHost()
+		if err != nil {
+			return nil, err
+		}
+
+		if addHost {
+			// Collect machine config (including remote dir)
+			machine, cancelled, err := collectMachineConfig(nil, skipProbe)
+			if err != nil {
+				return nil, err
+			}
+			if cancelled {
+				// User cancelled, create project without host
+				return vals, nil
+			}
+
+			// Add to global config
+			hostName, err := addHostToGlobal(globalCfg, machine)
+			if err != nil {
+				return nil, err
+			}
+			vals.hostRef = hostName
+		}
+		// If user chose not to add, hostRef stays empty
+	} else {
+		// Hosts exist - show picker
+		selected, err := promptHostSelection(globalCfg)
+		if err != nil {
+			return nil, err
+		}
+		vals.hostRef = selected
+	}
+
+	return vals, nil
+}
+
+// collectNonInteractiveValues collects project config values in non-interactive mode.
+func collectNonInteractiveValues(opts InitOptions, globalCfg *config.GlobalConfig) (*projectConfigValues, error) {
+	vals := &projectConfigValues{}
+
+	// If RR_HOST is set, check if it exists in global config
+	if opts.Host != "" {
+		machineName := opts.Name
+		if machineName == "" {
+			machineName = extractHostname(opts.Host)
+		}
+
+		// Check if host already exists
+		if _, exists := globalCfg.Hosts[machineName]; exists {
+			// Host exists, just reference it
+			vals.hostRef = machineName
+		} else {
+			// Host doesn't exist, add it to global config
+			machine := &machineConfig{
+				name:      machineName,
+				sshHosts:  []string{opts.Host},
+				remoteDir: opts.Dir,
+			}
+			if machine.remoteDir == "" {
+				machine.remoteDir = "${HOME}/rr/${PROJECT}"
+			}
+
+			// Test connection if not skipping probe
+			if !opts.SkipProbe {
+				setupCommands, err := testConnectionNonInteractive(opts.Host)
+				if err != nil {
+					return nil, err
+				}
+				machine.setupCommands = setupCommands
+			}
+
+			// Add to global config
+			hostName, err := addHostToGlobal(globalCfg, machine)
+			if err != nil {
+				return nil, err
+			}
+			vals.hostRef = hostName
+		}
+	} else if len(globalCfg.Hosts) > 0 {
+		// No host specified but global hosts exist - use default or first
+		if globalCfg.Defaults.Host != "" {
+			vals.hostRef = globalCfg.Defaults.Host
+		} else {
+			// Use first alphabetically
+			var names []string
+			for name := range globalCfg.Hosts {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			vals.hostRef = names[0]
+		}
+	}
+	// If no hosts anywhere, hostRef stays empty
+
+	return vals, nil
+}
+
+// Init creates a new .rr.yaml project configuration file.
 func Init(opts InitOptions) error {
 	configPath := filepath.Join(".", config.ConfigFileName)
 
@@ -818,25 +866,18 @@ func Init(opts InitOptions) error {
 		return nil
 	}
 
-	// Collect configuration values
-	var vals *initConfigValues
-	if opts.NonInteractive {
-		vals, err = collectNonInteractiveValues(opts)
-		if err != nil {
-			return err
-		}
+	// Load global config to check for existing hosts
+	globalCfg, err := config.LoadGlobal()
+	if err != nil {
+		return err
+	}
 
-		// Test connection in non-interactive mode (unless --skip-probe)
-		if !opts.SkipProbe && len(vals.machines) > 0 && len(vals.machines[0].sshHosts) > 0 {
-			setupCommands, connErr := testConnectionNonInteractive(vals.machines[0].sshHosts[0])
-			if connErr != nil {
-				return connErr
-			}
-			vals.machines[0].setupCommands = setupCommands
-		}
+	// Collect configuration values
+	var vals *projectConfigValues
+	if opts.NonInteractive {
+		vals, err = collectNonInteractiveValues(opts, globalCfg)
 	} else {
-		// Interactive mode: connection testing happens per-machine in collectMachineConfig
-		vals, err = collectInteractiveValues(opts.SkipProbe)
+		vals, err = collectInteractiveValues(globalCfg, opts.SkipProbe)
 	}
 	if err != nil {
 		return err
@@ -845,7 +886,7 @@ func Init(opts InitOptions) error {
 		return nil // User cancelled
 	}
 
-	return writeConfig(configPath, vals)
+	return writeProjectConfig(configPath, vals)
 }
 
 // initCommand is the implementation called by the cobra command.

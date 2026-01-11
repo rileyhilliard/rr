@@ -124,7 +124,11 @@ func TestLoadBalancing_GetHostNames_Alphabetical(t *testing.T) {
 
 func TestLoadBalancing_MultipleHosts_Config(t *testing.T) {
 	dir := t.TempDir()
-	configContent := `
+
+	// Set up global config with hosts
+	globalDir := dir + "/.rr"
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   gpu-box:
@@ -136,26 +140,39 @@ hosts:
     ssh:
       - cpu.local
     dir: /home/user/projects
-default: gpu-box
-local_fallback: true
+defaults:
+  host: gpu-box
+  local_fallback: true
+`
+	err := os.WriteFile(globalDir+"/config.yaml", []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", dir)
+
+	globalCfg, err := config.LoadGlobal()
+	require.NoError(t, err)
+
+	// Verify multiple hosts
+	assert.Len(t, globalCfg.Hosts, 2)
+	assert.Contains(t, globalCfg.Hosts, "gpu-box")
+	assert.Contains(t, globalCfg.Hosts, "cpu-box")
+
+	// Verify local_fallback and default host
+	assert.True(t, globalCfg.Defaults.LocalFallback)
+	assert.Equal(t, "gpu-box", globalCfg.Defaults.Host)
+
+	// Write project config with lock settings
+	projectContent := `
+version: 1
+host: gpu-box
 lock:
   enabled: true
   wait_timeout: 30s
 `
-	configPath := dir + "/.rr.yaml"
-	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	err = os.WriteFile(dir+"/.rr.yaml", []byte(projectContent), 0644)
 	require.NoError(t, err)
 
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(dir + "/.rr.yaml")
 	require.NoError(t, err)
-
-	// Verify multiple hosts
-	assert.Len(t, cfg.Hosts, 2)
-	assert.Contains(t, cfg.Hosts, "gpu-box")
-	assert.Contains(t, cfg.Hosts, "cpu-box")
-
-	// Verify local_fallback
-	assert.True(t, cfg.LocalFallback)
 
 	// Verify wait_timeout
 	assert.Equal(t, 30*time.Second, cfg.Lock.WaitTimeout)

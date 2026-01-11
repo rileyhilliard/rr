@@ -447,7 +447,7 @@ func TestGetSSHErrorSuggestion(t *testing.T) {
 }
 
 func TestCollectChecks_NoConfig(t *testing.T) {
-	checks := collectChecks("", nil)
+	checks := collectChecks("", nil, nil)
 
 	// Should have config checks, SSH checks, and deps checks
 	assert.NotEmpty(t, checks)
@@ -463,40 +463,40 @@ func TestCollectChecks_NoConfig(t *testing.T) {
 	assert.True(t, categories["DEPENDENCIES"], "should have DEPENDENCIES checks")
 }
 
-func TestCollectChecks_WithConfig(t *testing.T) {
-	cfg := &config.Config{
+func TestCollectChecks_WithGlobalConfig(t *testing.T) {
+	globalCfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{
 			"dev": {SSH: []string{"dev.example.com"}},
 		},
 	}
 
-	checks := collectChecks(".rr.yaml", cfg)
+	checks := collectChecks(".rr.yaml", nil, globalCfg)
 	assert.NotEmpty(t, checks)
 
-	// Should have host checks when config has hosts
+	// Should have host checks when global config has hosts
 	categories := make(map[string]bool)
 	for _, check := range checks {
 		categories[check.Category()] = true
 	}
 
-	assert.True(t, categories["HOSTS"], "should have HOSTS checks when config has hosts")
+	assert.True(t, categories["HOSTS"], "should have HOSTS checks when global config has hosts")
 }
 
 func TestCollectChecks_EmptyHosts(t *testing.T) {
-	cfg := &config.Config{
+	globalCfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{},
 	}
 
-	checks := collectChecks(".rr.yaml", cfg)
+	checks := collectChecks(".rr.yaml", nil, globalCfg)
 	assert.NotEmpty(t, checks)
 
-	// Should NOT have host checks when config has no hosts
+	// Should NOT have host checks when global config has no hosts
 	categories := make(map[string]bool)
 	for _, check := range checks {
 		categories[check.Category()] = true
 	}
 
-	assert.False(t, categories["HOSTS"], "should not have HOSTS checks when config has no hosts")
+	assert.False(t, categories["HOSTS"], "should not have HOSTS checks when global config has no hosts")
 }
 
 func TestAttemptFixes_PassStatus(t *testing.T) {
@@ -745,7 +745,7 @@ func TestAttemptFixes_MultipleChecks(t *testing.T) {
 
 func TestCollectChecks_ConfigPath(t *testing.T) {
 	// With non-empty config path, should include config checks
-	checks := collectChecks("/path/to/.rr.yaml", nil)
+	checks := collectChecks("/path/to/.rr.yaml", nil, nil)
 
 	hasConfig := false
 	for _, check := range checks {
@@ -758,7 +758,7 @@ func TestCollectChecks_ConfigPath(t *testing.T) {
 }
 
 func TestCollectChecks_MultipleHostsConfig(t *testing.T) {
-	cfg := &config.Config{
+	globalCfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{
 			"dev":     {SSH: []string{"dev.example.com"}},
 			"staging": {SSH: []string{"staging.example.com"}},
@@ -766,7 +766,7 @@ func TestCollectChecks_MultipleHostsConfig(t *testing.T) {
 		},
 	}
 
-	checks := collectChecks(".rr.yaml", cfg)
+	checks := collectChecks(".rr.yaml", nil, globalCfg)
 
 	hostCheckCount := 0
 	for _, check := range checks {

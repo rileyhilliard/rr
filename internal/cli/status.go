@@ -51,37 +51,32 @@ type Selected struct {
 
 // statusCommand implements the status command logic.
 func statusCommand() error {
-	// Load config
-	cfgPath, err := config.Find(Config())
+	// Load global config (hosts are stored globally now)
+	globalCfg, err := config.LoadGlobal()
 	if err != nil {
 		return err
 	}
-	if cfgPath == "" {
+
+	if len(globalCfg.Hosts) == 0 {
 		return errors.New(errors.ErrConfig,
-			"No config file found",
-			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
+			"No hosts configured",
+			"Add a host with 'rr host add' first.")
 	}
 
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return err
-	}
-
-	if err := config.Validate(cfg); err != nil {
-		return err
-	}
+	// Get default host from global config
+	defaultHost := globalCfg.Defaults.Host
 
 	// Probe all hosts in parallel
-	results := probeAllHosts(cfg.Hosts)
+	results := probeAllHosts(globalCfg.Hosts)
 
 	// Determine which host would be selected
-	selected := findSelectedHost(cfg, results)
+	selected := findSelectedHost(defaultHost, results)
 
 	if statusJSON {
-		return outputStatusJSON(cfg, results, selected)
+		return outputStatusJSON(defaultHost, results, selected)
 	}
 
-	return outputStatusText(cfg, results, selected)
+	return outputStatusText(defaultHost, results, selected)
 }
 
 // probeResult holds the result of probing a single host.
@@ -119,9 +114,9 @@ func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
 }
 
 // findSelectedHost determines which host/alias would be used for the next command.
-func findSelectedHost(cfg *config.Config, results map[string]probeResult) *Selected {
+func findSelectedHost(defaultHost string, results map[string]probeResult) *Selected {
 	// Determine the preferred host
-	preferred := cfg.Default
+	preferred := defaultHost
 	if preferred == "" || preferred == "auto" {
 		// Use first healthy host
 		for name, result := range results {
@@ -150,10 +145,10 @@ func findSelectedHost(cfg *config.Config, results map[string]probeResult) *Selec
 }
 
 // outputStatusJSON outputs status in JSON format.
-func outputStatusJSON(cfg *config.Config, results map[string]probeResult, selected *Selected) error {
+func outputStatusJSON(defaultHost string, results map[string]probeResult, selected *Selected) error {
 	output := StatusOutput{
 		Hosts:    make([]HostStatus, 0, len(results)),
-		Default:  cfg.Default,
+		Default:  defaultHost,
 		Selected: selected,
 	}
 
@@ -190,7 +185,7 @@ func outputStatusJSON(cfg *config.Config, results map[string]probeResult, select
 }
 
 // outputStatusText outputs status in human-readable format using a table.
-func outputStatusText(cfg *config.Config, results map[string]probeResult, selected *Selected) error {
+func outputStatusText(defaultHost string, results map[string]probeResult, selected *Selected) error {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 
@@ -231,11 +226,11 @@ func outputStatusText(cfg *config.Config, results map[string]probeResult, select
 	}
 
 	// Render the table
-	fmt.Println(ui.RenderStatusTable(rows, cfg.Default, tableSelection))
+	fmt.Println(ui.RenderStatusTable(rows, defaultHost, tableSelection))
 
 	// Show default and selected summary
-	if cfg.Default != "" && cfg.Default != "auto" {
-		fmt.Printf("Default: %s\n", cfg.Default)
+	if defaultHost != "" && defaultHost != "auto" {
+		fmt.Printf("Default: %s\n", defaultHost)
 	} else {
 		fmt.Printf("Default: %s\n", mutedStyle.Render("auto"))
 	}

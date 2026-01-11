@@ -14,10 +14,7 @@ func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
 	assert.Equal(t, CurrentConfigVersion, cfg.Version)
-	assert.NotNil(t, cfg.Hosts)
-	assert.Empty(t, cfg.Hosts)
-	assert.False(t, cfg.LocalFallback)
-	assert.Equal(t, 2*time.Second, cfg.ProbeTimeout)
+	assert.Empty(t, cfg.Host) // Project config has optional host reference
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.Lock.Timeout)
 	assert.Equal(t, 10*time.Minute, cfg.Lock.Stale)
@@ -37,22 +34,291 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Empty(t, cfg.Monitor.Exclude)
 }
 
+func TestDefaultGlobalConfig(t *testing.T) {
+	cfg := DefaultGlobalConfig()
+
+	assert.Equal(t, CurrentGlobalConfigVersion, cfg.Version)
+	assert.NotNil(t, cfg.Hosts)
+	assert.Empty(t, cfg.Hosts)
+	assert.Empty(t, cfg.Defaults.Host)
+	assert.Equal(t, 2*time.Second, cfg.Defaults.ProbeTimeout)
+	assert.False(t, cfg.Defaults.LocalFallback)
+}
+
+func TestGlobalConfigPath(t *testing.T) {
+	path, err := GlobalConfigPath()
+	require.NoError(t, err)
+
+	home, _ := os.UserHomeDir()
+	expected := filepath.Join(home, ".rr", "config.yaml")
+	assert.Equal(t, expected, path)
+}
+
+func TestEnsureGlobalConfigDir(t *testing.T) {
+	// Save original home and restore after test
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	// Use temp dir as home
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	err := EnsureGlobalConfigDir()
+	require.NoError(t, err)
+
+	// Check directory was created
+	configDir := filepath.Join(tmpHome, ".rr")
+	info, err := os.Stat(configDir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
+func TestLoadGlobal_NoFile(t *testing.T) {
+	// Save original home and restore after test
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	// Use temp dir as home (no config exists)
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+
+	// Should return defaults
+	assert.Equal(t, CurrentGlobalConfigVersion, cfg.Version)
+	assert.Empty(t, cfg.Hosts)
+}
+
+func TestLoadGlobal_WithFile(t *testing.T) {
+	// Save original home and restore after test
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	// Set up temp home with config
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".rr")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+
+	content := `
+version: 1
+hosts:
+  dev:
+    ssh:
+      - dev-lan
+      - dev-vpn
+    dir: ~/projects
+defaults:
+  host: dev
+  probe_timeout: 5s
+  local_fallback: true
+`
+	configPath := filepath.Join(configDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0644))
+
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, cfg.Version)
+	assert.Len(t, cfg.Hosts, 1)
+	assert.Contains(t, cfg.Hosts, "dev")
+	assert.Equal(t, []string{"dev-lan", "dev-vpn"}, cfg.Hosts["dev"].SSH)
+	assert.Equal(t, "dev", cfg.Defaults.Host)
+	assert.Equal(t, 5*time.Second, cfg.Defaults.ProbeTimeout)
+	assert.True(t, cfg.Defaults.LocalFallback)
+}
+
+func TestResolveHost(t *testing.T) {
+	tests := []struct {
+		name        string
+		resolved    *ResolvedConfig
+		preferred   string
+		wantName    string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "preferred from flag takes precedence",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
+						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
+					},
+					Defaults: GlobalDefaults{Host: "dev"},
+				},
+				Project: &Config{Host: "prod"},
+			},
+			preferred: "dev",
+			wantName:  "dev",
+		},
+		{
+			name: "project host used when no flag",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
+						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
+					},
+					Defaults: GlobalDefaults{Host: "dev"},
+				},
+				Project: &Config{Host: "prod"},
+			},
+			preferred: "",
+			wantName:  "prod",
+		},
+		{
+			name: "global default used when no flag or project host",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
+						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
+					},
+					Defaults: GlobalDefaults{Host: "prod"},
+				},
+				Project: &Config{Host: ""},
+			},
+			preferred: "",
+			wantName:  "prod",
+		},
+		{
+			name: "first alphabetically when no other preference",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"zeta":  {SSH: []string{"zeta"}, Dir: "/home/zeta"},
+						"alpha": {SSH: []string{"alpha"}, Dir: "/home/alpha"},
+						"beta":  {SSH: []string{"beta"}, Dir: "/home/beta"},
+					},
+				},
+				Project: &Config{},
+			},
+			preferred: "",
+			wantName:  "alpha",
+		},
+		{
+			name: "error when no hosts configured",
+			resolved: &ResolvedConfig{
+				Global:  &GlobalConfig{Hosts: map[string]Host{}},
+				Project: &Config{},
+			},
+			preferred:   "",
+			wantErr:     true,
+			errContains: "No hosts configured",
+		},
+		{
+			name: "error when host not found",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{Host: "nonexistent"},
+			},
+			preferred:   "",
+			wantErr:     true,
+			errContains: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, host, err := ResolveHost(tt.resolved, tt.preferred)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantName, name)
+				assert.NotNil(t, host)
+			}
+		})
+	}
+}
+
+func TestLoadResolved(t *testing.T) {
+	// Save original home and cwd
+	originalHome := os.Getenv("HOME")
+	originalWd, _ := os.Getwd()
+	defer func() {
+		os.Setenv("HOME", originalHome)
+		os.Chdir(originalWd)
+	}()
+
+	t.Run("global only - no project config", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		tmpProject := t.TempDir()
+		os.Setenv("HOME", tmpHome)
+		os.Chdir(tmpProject)
+
+		// Create global config
+		configDir := filepath.Join(tmpHome, ".rr")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
+		globalContent := `
+version: 1
+hosts:
+  dev:
+    ssh: [dev]
+    dir: ~/dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(globalContent), 0644))
+
+		resolved, err := LoadResolved("")
+		require.NoError(t, err)
+
+		assert.Equal(t, GlobalOnly, resolved.Source)
+		assert.Len(t, resolved.Global.Hosts, 1)
+		assert.NotNil(t, resolved.Project)
+	})
+
+	t.Run("both - project and global config", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		tmpProject := t.TempDir()
+		os.Setenv("HOME", tmpHome)
+		os.Chdir(tmpProject)
+
+		// Create global config
+		configDir := filepath.Join(tmpHome, ".rr")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
+		globalContent := `
+version: 1
+hosts:
+  dev:
+    ssh: [dev]
+    dir: ~/dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(globalContent), 0644))
+
+		// Create project config
+		projectContent := `
+version: 1
+host: dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(tmpProject, ".rr.yaml"), []byte(projectContent), 0644))
+
+		resolved, err := LoadResolved("")
+		require.NoError(t, err)
+
+		assert.Equal(t, Both, resolved.Source)
+		assert.Len(t, resolved.Global.Hosts, 1)
+		assert.Equal(t, "dev", resolved.Project.Host)
+	})
+}
+
 func TestLoad(t *testing.T) {
-	// Create a temp config file
+	// Create a temp project config file (no hosts - those are in global config now)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, ".rr.yaml")
 
 	content := `
 version: 1
-hosts:
-  mini:
-    ssh:
-      - mini-local
-      - mini
-    dir: ~/projects/test
-    tags: [macos, arm64]
-default: mini
-probe_timeout: 5s
+host: mini
 sync:
   exclude:
     - .git/
@@ -78,11 +344,7 @@ output:
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, cfg.Version)
-	assert.Len(t, cfg.Hosts, 1)
-	assert.Contains(t, cfg.Hosts, "mini")
-	assert.Equal(t, []string{"mini-local", "mini"}, cfg.Hosts["mini"].SSH)
-	assert.Equal(t, "mini", cfg.Default)
-	assert.Equal(t, 5*time.Second, cfg.ProbeTimeout)
+	assert.Equal(t, "mini", cfg.Host)
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Len(t, cfg.Tasks, 2)
 	assert.Equal(t, "make build", cfg.Tasks["build"].Run)
@@ -253,64 +515,50 @@ func TestValidate(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid config",
+			name: "valid config with host reference",
 			config: &Config{
 				Version: 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/projects/test"},
-				},
-				Default: "mini",
+				Host:    "mini",
 			},
 			wantErr: false,
 		},
 		{
-			name: "no hosts without option",
+			name: "valid config without host reference",
 			config: &Config{
 				Version: 1,
-				Hosts:   map[string]Host{},
 			},
-			wantErr: true,
-			errMsg:  "No hosts set up yet",
-		},
-		{
-			name: "no hosts with AllowNoHosts option",
-			config: &Config{
-				Version: 1,
-				Hosts:   map[string]Host{},
-			},
-			opts:    []ValidationOption{AllowNoHosts()},
 			wantErr: false,
 		},
 		{
 			name: "version too high",
 			config: &Config{
 				Version: CurrentConfigVersion + 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
-				},
 			},
 			wantErr: true,
 			errMsg:  "from the future",
 		},
 		{
-			name: "default host not found",
+			name: "host reference looks like SSH string",
 			config: &Config{
 				Version: 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
-				},
-				Default: "nonexistent",
+				Host:    "user@hostname",
 			},
 			wantErr: true,
-			errMsg:  "doesn't exist",
+			errMsg:  "looks like an SSH string",
+		},
+		{
+			name: "host reference contains path",
+			config: &Config{
+				Version: 1,
+				Host:    "hosts/mini",
+			},
+			wantErr: true,
+			errMsg:  "contains a path separator",
 		},
 		{
 			name: "reserved task name",
 			config: &Config{
 				Version: 1,
-				Hosts: map[string]Host{
-					"mini": {SSH: []string{"mini"}, Dir: "/home/user/test"},
-				},
 				Tasks: map[string]TaskConfig{
 					"init": {Run: "echo hello"},
 				},
@@ -327,6 +575,186 @@ func TestValidate(t *testing.T) {
 				assert.Error(t, err)
 				if tt.errMsg != "" {
 					assert.Contains(t, err.Error(), tt.errMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateGlobal(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *GlobalConfig
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid global config",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts: map[string]Host{
+					"dev": {SSH: []string{"dev"}, Dir: "/home/user/dev"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "nil config",
+			config:      nil,
+			wantErr:     true,
+			errContains: "nil",
+		},
+		{
+			name: "version too high",
+			config: &GlobalConfig{
+				Version: CurrentGlobalConfigVersion + 1,
+				Hosts:   map[string]Host{},
+			},
+			wantErr:     true,
+			errContains: "from the future",
+		},
+		{
+			name: "invalid host config",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts: map[string]Host{
+					"bad": {SSH: []string{}, Dir: "/home"},
+				},
+			},
+			wantErr:     true,
+			errContains: "needs at least one SSH",
+		},
+		{
+			name: "default host not found",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts: map[string]Host{
+					"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+				},
+				Defaults: GlobalDefaults{Host: "nonexistent"},
+			},
+			wantErr:     true,
+			errContains: "doesn't exist",
+		},
+		{
+			name: "empty hosts is allowed for global config",
+			config: &GlobalConfig{
+				Version: 1,
+				Hosts:   map[string]Host{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateGlobal(tt.config)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateResolved(t *testing.T) {
+	tests := []struct {
+		name        string
+		resolved    *ResolvedConfig
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid resolved config",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{
+					Version: 1,
+					Host:    "dev",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:        "nil resolved config",
+			resolved:    nil,
+			wantErr:     true,
+			errContains: "nil",
+		},
+		{
+			name: "nil global config",
+			resolved: &ResolvedConfig{
+				Global:  nil,
+				Project: &Config{},
+			},
+			wantErr:     true,
+			errContains: "Global config not loaded",
+		},
+		{
+			name: "no hosts configured",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts:   map[string]Host{},
+				},
+				Project: &Config{},
+			},
+			wantErr:     true,
+			errContains: "No hosts configured",
+		},
+		{
+			name: "project references nonexistent host",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{
+					Version: 1,
+					Host:    "prod",
+				},
+			},
+			wantErr:     true,
+			errContains: "doesn't exist in global config",
+		},
+		{
+			name: "project host empty is valid",
+			resolved: &ResolvedConfig{
+				Global: &GlobalConfig{
+					Version: 1,
+					Hosts: map[string]Host{
+						"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
+					},
+				},
+				Project: &Config{
+					Version: 1,
+					Host:    "",
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateResolved(tt.resolved)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
 				}
 			} else {
 				assert.NoError(t, err)
@@ -780,5 +1208,5 @@ func TestLoadOrDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, cfg)
 	assert.Equal(t, CurrentConfigVersion, cfg.Version)
-	assert.Empty(t, cfg.Hosts)
+	assert.Empty(t, cfg.Host)
 }

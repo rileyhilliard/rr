@@ -95,14 +95,9 @@ monitor:
 }
 
 func TestMonitorConfigValidation(t *testing.T) {
-	baseHosts := map[string]config.Host{
-		"test": {SSH: []string{"test.local"}, Dir: "/home/user/test"},
-	}
-
 	t.Run("valid monitor config", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts:   baseHosts,
 			Monitor: config.MonitorConfig{
 				Interval: "2s",
 				Thresholds: config.ThresholdConfig{
@@ -119,7 +114,6 @@ func TestMonitorConfigValidation(t *testing.T) {
 	t.Run("invalid interval format", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts:   baseHosts,
 			Monitor: config.MonitorConfig{
 				Interval: "invalid",
 			},
@@ -132,7 +126,6 @@ func TestMonitorConfigValidation(t *testing.T) {
 	t.Run("warning greater than critical", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts:   baseHosts,
 			Monitor: config.MonitorConfig{
 				Interval: "2s",
 				Thresholds: config.ThresholdConfig{
@@ -149,7 +142,6 @@ func TestMonitorConfigValidation(t *testing.T) {
 	t.Run("threshold out of range", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts:   baseHosts,
 			Monitor: config.MonitorConfig{
 				Interval: "2s",
 				Thresholds: config.ThresholdConfig{
@@ -165,7 +157,6 @@ func TestMonitorConfigValidation(t *testing.T) {
 	t.Run("empty exclude entry", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts:   baseHosts,
 			Monitor: config.MonitorConfig{
 				Interval: "2s",
 				Exclude:  []string{"valid-host", ""},
@@ -181,7 +172,6 @@ func TestMonitorConfigValidation(t *testing.T) {
 		// (it might be temporarily removed from config)
 		cfg := &config.Config{
 			Version: 1,
-			Hosts:   baseHosts,
 			Monitor: config.MonitorConfig{
 				Interval: "2s",
 				Exclude:  []string{"non-existent-host"},

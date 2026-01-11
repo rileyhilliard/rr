@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/spf13/viper"
@@ -11,13 +12,13 @@ import (
 const (
 	// ConfigFileName is the default config file name.
 	ConfigFileName = ".rr.yaml"
-	// GlobalConfigDir is the directory for global config.
-	GlobalConfigDir = ".config/rr"
+	// GlobalConfigDir is the directory for global config (~/.rr/).
+	GlobalConfigDir = ".rr"
 	// GlobalConfigFile is the global config file name.
 	GlobalConfigFile = "config.yaml"
 )
 
-// Load reads config from the specified path.
+// Load reads project config from the specified path.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -36,13 +37,116 @@ func Load(path string) (*Config, error) {
 	return parseConfig(v, path)
 }
 
-// Find locates the config file using the search order:
+// GlobalConfigPath returns the path to the global config file.
+func GlobalConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't find your home directory",
+			"This is unusual - check your environment.")
+	}
+	return filepath.Join(home, GlobalConfigDir, GlobalConfigFile), nil
+}
+
+// EnsureGlobalConfigDir creates ~/.rr/ if it doesn't exist.
+func EnsureGlobalConfigDir() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't find your home directory",
+			"This is unusual - check your environment.")
+	}
+
+	dir := filepath.Join(home, GlobalConfigDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't create global config directory "+dir,
+			"Check your permissions.")
+	}
+	return nil
+}
+
+// LoadGlobal reads global config from ~/.rr/config.yaml.
+// Returns default global config if file doesn't exist.
+func LoadGlobal() (*GlobalConfig, error) {
+	path, err := GlobalConfigPath()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Return defaults if no global config exists yet
+		return DefaultGlobalConfig(), nil
+	}
+
+	v := viper.New()
+	v.SetConfigFile(path)
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't read global config",
+			"Check your ~/.rr/config.yaml for valid YAML syntax.")
+	}
+
+	return parseGlobalConfig(v, path)
+}
+
+// SaveGlobal writes global config to ~/.rr/config.yaml.
+func SaveGlobal(cfg *GlobalConfig) error {
+	if err := EnsureGlobalConfigDir(); err != nil {
+		return err
+	}
+
+	path, err := GlobalConfigPath()
+	if err != nil {
+		return err
+	}
+
+	v := viper.New()
+	v.Set("version", cfg.Version)
+	v.Set("hosts", cfg.Hosts)
+	v.Set("defaults", cfg.Defaults)
+
+	if err := v.WriteConfigAs(path); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't save global config to "+path,
+			"Check your permissions.")
+	}
+
+	return nil
+}
+
+// parseGlobalConfig converts viper config to GlobalConfig struct.
+func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
+	cfg := DefaultGlobalConfig()
+
+	// Set duration defaults for global config
+	v.SetDefault("defaults.probe_timeout", "2s")
+	v.SetDefault("defaults.local_fallback", false)
+
+	if err := v.Unmarshal(cfg); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			"Global config has some issues",
+			"Check the YAML syntax in "+path+" - something's not parsing right.")
+	}
+
+	// Expand variables in host directories
+	for name, host := range cfg.Hosts {
+		host.Dir = ExpandRemote(host.Dir)
+		cfg.Hosts[name] = host
+	}
+
+	return cfg, nil
+}
+
+// Find locates the project config file using the search order:
 // 1. Explicit path (from --config flag)
 // 2. .rr.yaml in current directory
 // 3. .rr.yaml in parent directories (stops at git root or home)
-// 4. ~/.config/rr/config.yaml (global defaults)
 //
 // Returns the path to the config file, or empty string if not found.
+// Note: Global config (~/.rr/config.yaml) is loaded separately via LoadGlobal().
 func Find(explicit string) (string, error) {
 	// 1. Explicit path takes precedence
 	if explicit != "" {
@@ -100,14 +204,6 @@ func Find(explicit string) (string, error) {
 		}
 	}
 
-	// 4. Global config
-	if home != "" {
-		globalConfig := filepath.Join(home, GlobalConfigDir, GlobalConfigFile)
-		if _, err := os.Stat(globalConfig); err == nil {
-			return globalConfig, nil
-		}
-	}
-
 	return "", nil
 }
 
@@ -126,6 +222,144 @@ func LoadOrDefault() (*Config, error) {
 	return Load(path)
 }
 
+// ConfigSource indicates where configuration was loaded from.
+type ConfigSource int
+
+const (
+	// GlobalOnly means only global config was found.
+	GlobalOnly ConfigSource = iota
+	// ProjectOnly means only project config was found (global defaults used).
+	ProjectOnly
+	// Both means both global and project configs were found.
+	Both
+)
+
+// ResolvedConfig contains both global and project configuration.
+type ResolvedConfig struct {
+	Global  *GlobalConfig
+	Project *Config
+	Source  ConfigSource
+}
+
+// LoadResolved loads both global and project configuration.
+// Global config is always loaded (or defaults used).
+// Project config is loaded if found (explicit path or search).
+func LoadResolved(explicitPath string) (*ResolvedConfig, error) {
+	resolved := &ResolvedConfig{}
+
+	// Always load global config
+	global, err := LoadGlobal()
+	if err != nil {
+		return nil, err
+	}
+	resolved.Global = global
+
+	// Find project config
+	projectPath, err := Find(explicitPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Determine source and load project config
+	if projectPath == "" {
+		// No project config found
+		resolved.Project = DefaultConfig()
+		resolved.Source = GlobalOnly
+	} else {
+		// Load project config
+		project, err := Load(projectPath)
+		if err != nil {
+			return nil, err
+		}
+		resolved.Project = project
+
+		// Check if global config has hosts (file existed and was non-empty)
+		if len(global.Hosts) > 0 {
+			resolved.Source = Both
+		} else {
+			resolved.Source = ProjectOnly
+		}
+	}
+
+	return resolved, nil
+}
+
+// ResolveHost determines which host to use based on resolution order:
+// 1. preferred (from --host flag)
+// 2. project.Host (from .rr.yaml host field)
+// 3. global.Defaults.Host (from ~/.rr/config.yaml defaults.host)
+// 4. First host alphabetically from global.Hosts
+//
+// Returns host name, host config, and error.
+func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, error) {
+	// Resolution order: flag -> project -> global defaults -> first alphabetically
+	hostName := ""
+
+	// 1. Preferred from flag
+	if preferred != "" {
+		hostName = preferred
+	}
+
+	// 2. Project config host reference
+	if hostName == "" && resolved.Project != nil && resolved.Project.Host != "" {
+		hostName = resolved.Project.Host
+	}
+
+	// 3. Global defaults host
+	if hostName == "" && resolved.Global != nil && resolved.Global.Defaults.Host != "" {
+		hostName = resolved.Global.Defaults.Host
+	}
+
+	// 4. First host alphabetically
+	if hostName == "" && resolved.Global != nil && len(resolved.Global.Hosts) > 0 {
+		var names []string
+		for name := range resolved.Global.Hosts {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		hostName = names[0]
+	}
+
+	// No hosts available
+	if hostName == "" {
+		return "", nil, errors.New(errors.ErrConfig,
+			"No hosts configured",
+			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
+	}
+
+	// Look up host config
+	if resolved.Global == nil {
+		return "", nil, errors.New(errors.ErrConfig,
+			"Global config not loaded",
+			"This is unexpected - try running the command again.")
+	}
+
+	host, ok := resolved.Global.Hosts[hostName]
+	if !ok {
+		var available []string
+		for name := range resolved.Global.Hosts {
+			available = append(available, name)
+		}
+		return "", nil, errors.New(errors.ErrConfig,
+			"Host '"+hostName+"' not found in global config",
+			"Available hosts: "+formatHostList(available)+". Check ~/.rr/config.yaml.")
+	}
+
+	return hostName, &host, nil
+}
+
+// formatHostList formats a list of host names for display.
+func formatHostList(names []string) string {
+	if len(names) == 0 {
+		return "(none)"
+	}
+	result := names[0]
+	for i := 1; i < len(names); i++ {
+		result += ", " + names[i]
+	}
+	return result
+}
+
 // parseConfig converts viper config to our Config struct with defaults merged in.
 func parseConfig(v *viper.Viper, path string) (*Config, error) {
 	// Start with defaults
@@ -141,16 +375,10 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
-	// Expand variables in host directories (use ExpandRemote to preserve ~ for remote shell)
-	for name, host := range cfg.Hosts {
-		host.Dir = ExpandRemote(host.Dir)
-		cfg.Hosts[name] = host
-	}
-
 	return cfg, nil
 }
 
-// setDurationDefaults configures viper to handle duration strings.
+// setDurationDefaults configures viper to handle duration strings for project config.
 func setDurationDefaults(v *viper.Viper) {
 	// Viper handles duration parsing automatically for time.Duration fields
 	// but we need to help with nested structs using DecodeHook
@@ -164,5 +392,4 @@ func setDurationDefaults(v *viper.Viper) {
 	v.SetDefault("output.format", "auto")
 	v.SetDefault("output.timing", true)
 	v.SetDefault("output.verbosity", "normal")
-	v.SetDefault("local_fallback", false)
 }

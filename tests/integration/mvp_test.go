@@ -24,16 +24,29 @@ import (
 
 func TestConfigLoadFromTempFile(t *testing.T) {
 	dir := t.TempDir()
-	configPath := filepath.Join(dir, ".rr.yaml")
 
-	content := `
+	// Set up global config with hosts
+	globalDir := filepath.Join(dir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   test-host:
     ssh:
       - localhost
     dir: /tmp/rr-test-${USER}
-default: test-host
+defaults:
+  host: test-host
+`
+	err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", dir)
+
+	// Create project config
+	configPath := filepath.Join(dir, ".rr.yaml")
+	projectContent := `
+version: 1
+host: test-host
 sync:
   exclude:
     - .git/
@@ -47,22 +60,31 @@ output:
   color: auto
   timing: true
 `
-	err := os.WriteFile(configPath, []byte(content), 0644)
+	err = os.WriteFile(configPath, []byte(projectContent), 0644)
 	require.NoError(t, err)
 
+	// Load global config
+	globalCfg, err := config.LoadGlobal()
+	require.NoError(t, err)
+
+	// Verify global config hosts
+	assert.Equal(t, 1, globalCfg.Version)
+	assert.Len(t, globalCfg.Hosts, 1)
+	assert.Contains(t, globalCfg.Hosts, "test-host")
+	assert.Equal(t, "test-host", globalCfg.Defaults.Host)
+
+	// Verify host config
+	host := globalCfg.Hosts["test-host"]
+	assert.Equal(t, []string{"localhost"}, host.SSH)
+	assert.Contains(t, host.Dir, "/tmp/rr-test-")
+
+	// Load project config
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
 
-	// Verify basic structure
+	// Verify project config structure
 	assert.Equal(t, 1, cfg.Version)
-	assert.Len(t, cfg.Hosts, 1)
-	assert.Contains(t, cfg.Hosts, "test-host")
-	assert.Equal(t, "test-host", cfg.Default)
-
-	// Verify host config
-	host := cfg.Hosts["test-host"]
-	assert.Equal(t, []string{"localhost"}, host.SSH)
-	assert.Contains(t, host.Dir, "/tmp/rr-test-")
+	assert.Equal(t, "test-host", cfg.Host)
 
 	// Verify sync config
 	assert.Contains(t, cfg.Sync.Exclude, ".git/")
@@ -83,31 +105,42 @@ func TestConfigValidation(t *testing.T) {
 	t.Run("valid config passes validation", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts: map[string]config.Host{
-				"test": {SSH: []string{"localhost"}, Dir: "/tmp/test"},
-			},
-			Default: "test",
+			Host:    "test-host",
 		}
 		err := config.Validate(cfg)
 		assert.NoError(t, err)
 	})
 
-	t.Run("missing hosts fails validation", func(t *testing.T) {
-		cfg := &config.Config{
+	t.Run("valid global config passes validation", func(t *testing.T) {
+		globalCfg := &config.GlobalConfig{
 			Version: 1,
-			Hosts:   map[string]config.Host{},
+			Hosts: map[string]config.Host{
+				"test": {SSH: []string{"localhost"}, Dir: "/tmp/test"},
+			},
+			Defaults: config.GlobalDefaults{
+				Host: "test",
+			},
 		}
-		err := config.Validate(cfg)
+		err := config.ValidateGlobal(globalCfg)
+		assert.NoError(t, err)
+	})
+
+	t.Run("missing hosts fails resolved validation", func(t *testing.T) {
+		resolved := &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Version: 1,
+				Hosts:   map[string]config.Host{},
+			},
+			Project: &config.Config{Version: 1},
+		}
+		err := config.ValidateResolved(resolved)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "No hosts set up yet")
+		assert.Contains(t, err.Error(), "No hosts configured")
 	})
 
 	t.Run("reserved task name fails validation", func(t *testing.T) {
 		cfg := &config.Config{
 			Version: 1,
-			Hosts: map[string]config.Host{
-				"test": {SSH: []string{"localhost"}, Dir: "/tmp/test"},
-			},
 			Tasks: map[string]config.TaskConfig{
 				"run": {Run: "echo test"}, // Reserved name
 			},

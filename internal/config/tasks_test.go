@@ -66,17 +66,16 @@ func TestGetTask_NoTasks(t *testing.T) {
 }
 
 func TestGetTaskWithMergedEnv(t *testing.T) {
-	cfg := &Config{
-		Hosts: map[string]Host{
-			"server": {
-				SSH: []string{"server"},
-				Dir: "/home/user",
-				Env: map[string]string{
-					"HOST_VAR":   "host_value",
-					"SHARED_VAR": "from_host",
-				},
-			},
+	host := &Host{
+		SSH: []string{"server"},
+		Dir: "/home/user",
+		Env: map[string]string{
+			"HOST_VAR":   "host_value",
+			"SHARED_VAR": "from_host",
 		},
+	}
+
+	cfg := &Config{
 		Tasks: map[string]TaskConfig{
 			"test": {
 				Run: "make test",
@@ -88,7 +87,7 @@ func TestGetTaskWithMergedEnv(t *testing.T) {
 		},
 	}
 
-	task, env, err := GetTaskWithMergedEnv(cfg, "test", "server")
+	task, env, err := GetTaskWithMergedEnv(cfg, "test", host)
 	require.NoError(t, err)
 	assert.NotNil(t, task)
 
@@ -114,7 +113,7 @@ func TestGetTaskWithMergedEnv_NoHost(t *testing.T) {
 		},
 	}
 
-	task, env, err := GetTaskWithMergedEnv(cfg, "test", "")
+	task, env, err := GetTaskWithMergedEnv(cfg, "test", nil)
 	require.NoError(t, err)
 	assert.NotNil(t, task)
 	assert.Equal(t, "task_value", env["TASK_VAR"])
