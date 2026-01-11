@@ -145,6 +145,18 @@ func TestIsDependencyNotFound(t *testing.T) {
 			wantFound: true,
 		},
 		{
+			name:      "/bin/sh with line number can't find uv",
+			stderr:    "/bin/sh: line 1: uv: command not found",
+			wantCmd:   "uv",
+			wantFound: true,
+		},
+		{
+			name:      "/bin/sh with line number in multiline output",
+			stderr:    "some output\n/bin/sh: line 1: uv: command not found\nmake: *** [test] Error 127",
+			wantCmd:   "uv",
+			wantFound: true,
+		},
+		{
 			name:      "windows style not recognized",
 			stderr:    "'cargo' is not recognized as an internal or external command",
 			wantCmd:   "cargo",

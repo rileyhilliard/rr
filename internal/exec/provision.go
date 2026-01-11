@@ -113,6 +113,238 @@ var toolInstallers = map[string]ToolInstaller{
 		},
 		PathAdditions: []string{},
 	},
+	"bun": {
+		Name: "bun",
+		Installers: map[string]string{
+			"darwin": `curl -fsSL https://bun.sh/install | bash`,
+			"linux":  `curl -fsSL https://bun.sh/install | bash`,
+		},
+		PathAdditions: []string{"$HOME/.bun/bin"},
+	},
+	"uv": {
+		Name: "uv",
+		Installers: map[string]string{
+			"darwin": `curl -LsSf https://astral.sh/uv/install.sh | sh`,
+			"linux":  `curl -LsSf https://astral.sh/uv/install.sh | sh`,
+		},
+		PathAdditions: []string{"$HOME/.local/bin"},
+	},
+	"uvx": {
+		Name: "uvx",
+		Installers: map[string]string{
+			"darwin": `curl -LsSf https://astral.sh/uv/install.sh | sh`,
+			"linux":  `curl -LsSf https://astral.sh/uv/install.sh | sh`,
+		},
+		PathAdditions: []string{"$HOME/.local/bin"},
+	},
+	"deno": {
+		Name: "deno",
+		Installers: map[string]string{
+			"darwin": `curl -fsSL https://deno.land/install.sh | sh`,
+			"linux":  `curl -fsSL https://deno.land/install.sh | sh`,
+		},
+		PathAdditions: []string{"$HOME/.deno/bin"},
+	},
+	"yarn": {
+		Name: "yarn",
+		Installers: map[string]string{
+			"darwin": `if command -v npm &>/dev/null; then npm install -g yarn; elif command -v brew &>/dev/null; then brew install yarn; else echo "npm or Homebrew required" && exit 1; fi`,
+			"linux":  `if command -v npm &>/dev/null; then npm install -g yarn; else echo "npm required to install yarn" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"pnpm": {
+		Name: "pnpm",
+		Installers: map[string]string{
+			"darwin": `curl -fsSL https://get.pnpm.io/install.sh | sh -`,
+			"linux":  `curl -fsSL https://get.pnpm.io/install.sh | sh -`,
+		},
+		PathAdditions: []string{"$HOME/.local/share/pnpm"},
+	},
+	"ruby": {
+		Name: "ruby",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install ruby; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y ruby-full; elif command -v yum &>/dev/null; then sudo yum install -y ruby; elif command -v dnf &>/dev/null; then sudo dnf install -y ruby; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"gem": {
+		Name: "gem",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install ruby; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y ruby-full; elif command -v yum &>/dev/null; then sudo yum install -y ruby; elif command -v dnf &>/dev/null; then sudo dnf install -y ruby; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"java": {
+		Name: "java",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install openjdk; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y default-jdk; elif command -v yum &>/dev/null; then sudo yum install -y java-17-openjdk-devel; elif command -v dnf &>/dev/null; then sudo dnf install -y java-17-openjdk-devel; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"javac": {
+		Name: "javac",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install openjdk; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y default-jdk; elif command -v yum &>/dev/null; then sudo yum install -y java-17-openjdk-devel; elif command -v dnf &>/dev/null; then sudo dnf install -y java-17-openjdk-devel; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"docker": {
+		Name: "docker",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install --cask docker && echo "Docker Desktop installed. Please open Docker.app to complete setup."; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER && echo "Log out and back in for docker group to take effect"`,
+		},
+		PathAdditions: []string{},
+	},
+	"kubectl": {
+		Name: "kubectl",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install kubectl; else curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/darwin/arm64/kubectl" && chmod +x kubectl && sudo mv kubectl /usr/local/bin/; fi`,
+			"linux":  `curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl && sudo mv kubectl /usr/local/bin/`,
+		},
+		PathAdditions: []string{},
+	},
+	"terraform": {
+		Name: "terraform",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew tap hashicorp/tap && brew install hashicorp/tap/terraform; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y gnupg software-properties-common && wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg >/dev/null && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list && sudo apt-get update && sudo apt-get install -y terraform; else echo "apt-get required" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"aws": {
+		Name: "aws",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install awscli; else curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg" && sudo installer -pkg AWSCLIV2.pkg -target / && rm AWSCLIV2.pkg; fi`,
+			"linux":  `curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip -q awscliv2.zip && sudo ./aws/install && rm -rf aws awscliv2.zip`,
+		},
+		PathAdditions: []string{},
+	},
+	"gcloud": {
+		Name: "gcloud",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install --cask google-cloud-sdk; else curl https://sdk.cloud.google.com | bash; fi`,
+			"linux":  `curl https://sdk.cloud.google.com | bash`,
+		},
+		PathAdditions: []string{"$HOME/google-cloud-sdk/bin"},
+	},
+	"jq": {
+		Name: "jq",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install jq; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y jq; elif command -v yum &>/dev/null; then sudo yum install -y jq; elif command -v dnf &>/dev/null; then sudo dnf install -y jq; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"curl": {
+		Name: "curl",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install curl; else echo "curl should be pre-installed on macOS" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y curl; elif command -v yum &>/dev/null; then sudo yum install -y curl; elif command -v dnf &>/dev/null; then sudo dnf install -y curl; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"wget": {
+		Name: "wget",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install wget; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y wget; elif command -v yum &>/dev/null; then sudo yum install -y wget; elif command -v dnf &>/dev/null; then sudo dnf install -y wget; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"htop": {
+		Name: "htop",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install htop; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y htop; elif command -v yum &>/dev/null; then sudo yum install -y htop; elif command -v dnf &>/dev/null; then sudo dnf install -y htop; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"tmux": {
+		Name: "tmux",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install tmux; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &>/dev/null; then sudo yum install -y tmux; elif command -v dnf &>/dev/null; then sudo dnf install -y tmux; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"vim": {
+		Name: "vim",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install vim; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y vim; elif command -v yum &>/dev/null; then sudo yum install -y vim; elif command -v dnf &>/dev/null; then sudo dnf install -y vim; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"nvim": {
+		Name: "nvim",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install neovim; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y neovim; elif command -v yum &>/dev/null; then sudo yum install -y neovim; elif command -v dnf &>/dev/null; then sudo dnf install -y neovim; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"neovim": {
+		Name: "neovim",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install neovim; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y neovim; elif command -v yum &>/dev/null; then sudo yum install -y neovim; elif command -v dnf &>/dev/null; then sudo dnf install -y neovim; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"ripgrep": {
+		Name: "ripgrep",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install ripgrep; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y ripgrep; elif command -v yum &>/dev/null; then sudo yum install -y ripgrep; elif command -v dnf &>/dev/null; then sudo dnf install -y ripgrep; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"rg": {
+		Name: "rg",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install ripgrep; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y ripgrep; elif command -v yum &>/dev/null; then sudo yum install -y ripgrep; elif command -v dnf &>/dev/null; then sudo dnf install -y ripgrep; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"fd": {
+		Name: "fd",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install fd; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y fd-find; elif command -v yum &>/dev/null; then sudo yum install -y fd-find; elif command -v dnf &>/dev/null; then sudo dnf install -y fd-find; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"fzf": {
+		Name: "fzf",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install fzf; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y fzf; elif command -v yum &>/dev/null; then sudo yum install -y fzf; elif command -v dnf &>/dev/null; then sudo dnf install -y fzf; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"tree": {
+		Name: "tree",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install tree; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tree; elif command -v yum &>/dev/null; then sudo yum install -y tree; elif command -v dnf &>/dev/null; then sudo dnf install -y tree; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"rsync": {
+		Name: "rsync",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install rsync; else echo "rsync should be pre-installed on macOS" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y rsync; elif command -v yum &>/dev/null; then sudo yum install -y rsync; elif command -v dnf &>/dev/null; then sudo dnf install -y rsync; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
 }
 
 // GetToolInstaller returns the installer for a tool, if one exists.
@@ -226,6 +458,24 @@ func GetInstallCommandDescription(toolName, osName string) string {
 	}
 	if strings.Contains(cmd, "nodesource") {
 		return "nodesource + apt-get install nodejs"
+	}
+	if strings.Contains(cmd, "bun.sh/install") {
+		return "bun.sh (official installer)"
+	}
+	if strings.Contains(cmd, "astral.sh/uv") {
+		return "astral.sh (official installer)"
+	}
+	if strings.Contains(cmd, "deno.land/install") {
+		return "deno.land (official installer)"
+	}
+	if strings.Contains(cmd, "get.pnpm.io") {
+		return "pnpm (official installer)"
+	}
+	if strings.Contains(cmd, "get.docker.com") {
+		return "docker (official installer)"
+	}
+	if strings.Contains(cmd, "sdk.cloud.google.com") {
+		return "gcloud (official installer)"
 	}
 
 	// Fallback: truncate if too long
