@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-01-11
+
+### Added
+
+- DNS and connection reset probe failure types for better SSH error categorization
+- Host key mismatch errors now preserve original error for detailed suggestions
+- Monitor cards show parsed error parts with word-wrapped suggestions for unreachable hosts
+
+### Fixed
+
+- Rsync progress parsing now handles carriage returns for real-time progress updates
+- SSH config parsing continues reading Host blocks after Match blocks instead of stopping
+
+### Changed
+
+- Improved error suggestions to be more actionable and concise
+- Updated troubleshooting docs with better host key verification advice
+
 ## [0.7.0] - 2026-01-11
 
 ### Added
