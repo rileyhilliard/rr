@@ -68,12 +68,17 @@ func (m Model) renderHeader() string {
 		Bold(true).
 		Render("rr monitor")
 
-	// Sort indicator with down arrow for descending (except name which is ascending)
-	sortArrow := "\u2193" // down arrow for descending
-	if m.sortOrder == SortByName {
-		sortArrow = "\u2191" // up arrow for ascending (alphabetical)
+	// Sort indicator: default has no arrow, name is ascending, others descending
+	var sortArrow string
+	switch m.sortOrder {
+	case SortByDefault:
+		sortArrow = "" // No arrow for default (online first, config order)
+	case SortByName:
+		sortArrow = " \u2191" // up arrow for ascending (alphabetical)
+	default:
+		sortArrow = " \u2193" // down arrow for descending
 	}
-	sortIndicator := fmt.Sprintf(" sorted by: %s %s", m.sortOrder.String(), sortArrow)
+	sortIndicator := fmt.Sprintf(" sorted by: %s%s", m.sortOrder.String(), sortArrow)
 
 	// Adjust stats display based on layout mode
 	var stats string

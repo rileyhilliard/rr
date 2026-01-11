@@ -9,7 +9,8 @@ import (
 type SortOrder int
 
 const (
-	SortByName SortOrder = iota
+	SortByDefault SortOrder = iota // Online first, then config order (default host, fallbacks)
+	SortByName
 	SortByCPU
 	SortByRAM
 	SortByGPU
@@ -18,6 +19,8 @@ const (
 // String returns a human-readable label for the sort order.
 func (s SortOrder) String() string {
 	switch s {
+	case SortByDefault:
+		return "default"
 	case SortByName:
 		return "name"
 	case SortByCPU:
@@ -27,13 +30,13 @@ func (s SortOrder) String() string {
 	case SortByGPU:
 		return "GPU"
 	default:
-		return "name"
+		return "default"
 	}
 }
 
 // Next cycles to the next sort order.
 func (s SortOrder) Next() SortOrder {
-	return SortOrder((int(s) + 1) % 4)
+	return SortOrder((int(s) + 1) % 5)
 }
 
 // ViewMode defines the current display mode of the dashboard.
@@ -87,12 +90,12 @@ var keys = keyMap{
 		key.WithHelp("s", "sort"),
 	),
 	SelectPrev: key.NewBinding(
-		key.WithKeys("up", "k"),
-		key.WithHelp("↑/k", "prev"),
+		key.WithKeys("up", "k", "left", "h"),
+		key.WithHelp("↑/←/k/h", "prev"),
 	),
 	SelectNext: key.NewBinding(
-		key.WithKeys("down", "j"),
-		key.WithHelp("↓/j", "next"),
+		key.WithKeys("down", "j", "right", "l"),
+		key.WithHelp("↓/→/j/l", "next"),
 	),
 	SelectFirst: key.NewBinding(
 		key.WithKeys("home"),

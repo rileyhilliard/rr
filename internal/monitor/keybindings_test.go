@@ -11,11 +11,12 @@ func TestSortOrder_String(t *testing.T) {
 		order  SortOrder
 		expect string
 	}{
+		{SortByDefault, "default"},
 		{SortByName, "name"},
 		{SortByCPU, "CPU"},
 		{SortByRAM, "RAM"},
 		{SortByGPU, "GPU"},
-		{SortOrder(99), "name"}, // Unknown defaults to name
+		{SortOrder(99), "default"}, // Unknown defaults to default
 	}
 
 	for _, tt := range tests {
@@ -31,10 +32,11 @@ func TestSortOrder_Next(t *testing.T) {
 		current SortOrder
 		next    SortOrder
 	}{
+		{SortByDefault, SortByName},
 		{SortByName, SortByCPU},
 		{SortByCPU, SortByRAM},
 		{SortByRAM, SortByGPU},
-		{SortByGPU, SortByName}, // Wraps around
+		{SortByGPU, SortByDefault}, // Wraps around
 	}
 
 	for _, tt := range tests {
@@ -47,10 +49,11 @@ func TestSortOrder_Next(t *testing.T) {
 
 func TestSortOrder_Constants(t *testing.T) {
 	// Verify sort order constants are defined in expected order
-	assert.Equal(t, SortOrder(0), SortByName)
-	assert.Equal(t, SortOrder(1), SortByCPU)
-	assert.Equal(t, SortOrder(2), SortByRAM)
-	assert.Equal(t, SortOrder(3), SortByGPU)
+	assert.Equal(t, SortOrder(0), SortByDefault)
+	assert.Equal(t, SortOrder(1), SortByName)
+	assert.Equal(t, SortOrder(2), SortByCPU)
+	assert.Equal(t, SortOrder(3), SortByRAM)
+	assert.Equal(t, SortOrder(4), SortByGPU)
 }
 
 func TestViewMode_Constants(t *testing.T) {
@@ -102,9 +105,9 @@ func TestKeys_ViewBindings(t *testing.T) {
 
 func TestSortOrder_CycleComplete(t *testing.T) {
 	// Verify that cycling through all sort orders returns to start
-	order := SortByName
-	for i := 0; i < 4; i++ {
+	order := SortByDefault
+	for i := 0; i < 5; i++ {
 		order = order.Next()
 	}
-	assert.Equal(t, SortByName, order)
+	assert.Equal(t, SortByDefault, order)
 }
