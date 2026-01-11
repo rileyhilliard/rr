@@ -45,6 +45,91 @@ func TestDefaultGlobalConfig(t *testing.T) {
 	assert.False(t, cfg.Defaults.LocalFallback)
 }
 
+func TestGlobalConfigPath(t *testing.T) {
+	path, err := GlobalConfigPath()
+	require.NoError(t, err)
+
+	home, _ := os.UserHomeDir()
+	expected := filepath.Join(home, ".rr", "config.yaml")
+	assert.Equal(t, expected, path)
+}
+
+func TestEnsureGlobalConfigDir(t *testing.T) {
+	// Save original home and restore after test
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	// Use temp dir as home
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	err := EnsureGlobalConfigDir()
+	require.NoError(t, err)
+
+	// Check directory was created
+	configDir := filepath.Join(tmpHome, ".rr")
+	info, err := os.Stat(configDir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
+func TestLoadGlobal_NoFile(t *testing.T) {
+	// Save original home and restore after test
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	// Use temp dir as home (no config exists)
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+
+	// Should return defaults
+	assert.Equal(t, CurrentGlobalConfigVersion, cfg.Version)
+	assert.Empty(t, cfg.Hosts)
+}
+
+func TestLoadGlobal_WithFile(t *testing.T) {
+	// Save original home and restore after test
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	// Set up temp home with config
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".rr")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+
+	content := `
+version: 1
+hosts:
+  dev:
+    ssh:
+      - dev-lan
+      - dev-vpn
+    dir: ~/projects
+defaults:
+  host: dev
+  probe_timeout: 5s
+  local_fallback: true
+`
+	configPath := filepath.Join(configDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0644))
+
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, cfg.Version)
+	assert.Len(t, cfg.Hosts, 1)
+	assert.Contains(t, cfg.Hosts, "dev")
+	assert.Equal(t, []string{"dev-lan", "dev-vpn"}, cfg.Hosts["dev"].SSH)
+	assert.Equal(t, "dev", cfg.Defaults.Host)
+	assert.Equal(t, 5*time.Second, cfg.Defaults.ProbeTimeout)
+	assert.True(t, cfg.Defaults.LocalFallback)
+}
+
 func TestLoad(t *testing.T) {
 	// Create a temp project config file (no hosts - those are in global config now)
 	dir := t.TempDir()

@@ -11,13 +11,13 @@ import (
 const (
 	// ConfigFileName is the default config file name.
 	ConfigFileName = ".rr.yaml"
-	// GlobalConfigDir is the directory for global config.
-	GlobalConfigDir = ".config/rr"
+	// GlobalConfigDir is the directory for global config (~/.rr/).
+	GlobalConfigDir = ".rr"
 	// GlobalConfigFile is the global config file name.
 	GlobalConfigFile = "config.yaml"
 )
 
-// Load reads config from the specified path.
+// Load reads project config from the specified path.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -34,6 +34,109 @@ func Load(path string) (*Config, error) {
 	}
 
 	return parseConfig(v, path)
+}
+
+// GlobalConfigPath returns the path to the global config file.
+func GlobalConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't find your home directory",
+			"This is unusual - check your environment.")
+	}
+	return filepath.Join(home, GlobalConfigDir, GlobalConfigFile), nil
+}
+
+// EnsureGlobalConfigDir creates ~/.rr/ if it doesn't exist.
+func EnsureGlobalConfigDir() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't find your home directory",
+			"This is unusual - check your environment.")
+	}
+
+	dir := filepath.Join(home, GlobalConfigDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't create global config directory "+dir,
+			"Check your permissions.")
+	}
+	return nil
+}
+
+// LoadGlobal reads global config from ~/.rr/config.yaml.
+// Returns default global config if file doesn't exist.
+func LoadGlobal() (*GlobalConfig, error) {
+	path, err := GlobalConfigPath()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Return defaults if no global config exists yet
+		return DefaultGlobalConfig(), nil
+	}
+
+	v := viper.New()
+	v.SetConfigFile(path)
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't read global config",
+			"Check your ~/.rr/config.yaml for valid YAML syntax.")
+	}
+
+	return parseGlobalConfig(v, path)
+}
+
+// SaveGlobal writes global config to ~/.rr/config.yaml.
+func SaveGlobal(cfg *GlobalConfig) error {
+	if err := EnsureGlobalConfigDir(); err != nil {
+		return err
+	}
+
+	path, err := GlobalConfigPath()
+	if err != nil {
+		return err
+	}
+
+	v := viper.New()
+	v.Set("version", cfg.Version)
+	v.Set("hosts", cfg.Hosts)
+	v.Set("defaults", cfg.Defaults)
+
+	if err := v.WriteConfigAs(path); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't save global config to "+path,
+			"Check your permissions.")
+	}
+
+	return nil
+}
+
+// parseGlobalConfig converts viper config to GlobalConfig struct.
+func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
+	cfg := DefaultGlobalConfig()
+
+	// Set duration defaults for global config
+	v.SetDefault("defaults.probe_timeout", "2s")
+	v.SetDefault("defaults.local_fallback", false)
+
+	if err := v.Unmarshal(cfg); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			"Global config has some issues",
+			"Check the YAML syntax in "+path+" - something's not parsing right.")
+	}
+
+	// Expand variables in host directories
+	for name, host := range cfg.Hosts {
+		host.Dir = ExpandRemote(host.Dir)
+		cfg.Hosts[name] = host
+	}
+
+	return cfg, nil
 }
 
 // Find locates the config file using the search order:
