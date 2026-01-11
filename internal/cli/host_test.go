@@ -482,3 +482,70 @@ hosts: {}
 	cfg, _, err := loadExistingConfig()
 	return cfg, err
 }
+
+func TestShellQuote(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"simple string", "hello", "'hello'"},
+		{"string with spaces", "hello world", "'hello world'"},
+		{"string with single quote", "it's", "'it'\\''s'"},
+		{"empty string", "", "''"},
+		{"path", "/home/user/project", "'/home/user/project'"},
+		{"path with spaces", "/home/user/my project", "'/home/user/my project'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shellQuote(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestShellQuotePreserveTilde(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"tilde path", "~/project", "~/'project'"},
+		{"tilde nested path", "~/rr/myproject", "~/'rr/myproject'"},
+		{"standalone tilde", "~", "~"},
+		{"absolute path", "/home/user/project", "'/home/user/project'"},
+		{"no tilde", "project", "'project'"},
+		{"tilde in middle", "some/~/path", "'some/~/path'"},
+		{"path with spaces after tilde", "~/my project", "~/'my project'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shellQuotePreserveTilde(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCleanupRemoteArtifacts_NoSSHAliases(t *testing.T) {
+	// Should return early without error if no SSH aliases configured
+	hostConfig := config.Host{
+		SSH: []string{},
+		Dir: "/some/dir",
+	}
+
+	// This should not panic or error - it just returns early
+	cleanupRemoteArtifacts("test", hostConfig)
+}
+
+func TestCleanupRemoteArtifacts_NoDir(t *testing.T) {
+	// Should return early without error if no Dir configured
+	hostConfig := config.Host{
+		SSH: []string{"example.com"},
+		Dir: "",
+	}
+
+	// This should not panic or error - it just returns early
+	cleanupRemoteArtifacts("test", hostConfig)
+}

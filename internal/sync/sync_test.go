@@ -93,6 +93,8 @@ func TestBuildArgs(t *testing.T) {
 						assert.Contains(t, sshCmd, "ControlMaster=auto", "should use ControlMaster=auto")
 						assert.Contains(t, sshCmd, "ControlPath=", "should specify ControlPath")
 						assert.Contains(t, sshCmd, "ControlPersist=", "should specify ControlPersist")
+						// BatchMode prevents SSH from prompting for input (would hang rsync)
+						assert.Contains(t, sshCmd, "BatchMode=yes", "should use BatchMode=yes to prevent prompts")
 						break
 					}
 				}
@@ -227,6 +229,44 @@ func TestBuildArgs(t *testing.T) {
 			tt.checkArgs(t, args)
 		})
 	}
+}
+
+// TestBuildArgs_SSHBatchMode verifies that BatchMode=yes is included in the SSH command.
+// This is critical to prevent rsync from hanging when SSH would prompt for input
+// (e.g., host key verification, password). Without BatchMode, SSH waits for input
+// that never comes since there's no terminal attached, causing the sync to hang
+// indefinitely on first run.
+func TestBuildArgs_SSHBatchMode(t *testing.T) {
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/app"},
+	}
+
+	args, err := BuildArgs(conn, "/home/user/app", config.SyncConfig{})
+	require.NoError(t, err)
+
+	// Find the SSH command passed via -e flag
+	var sshCmd string
+	for i, arg := range args {
+		if arg == "-e" && i+1 < len(args) {
+			sshCmd = args[i+1]
+			break
+		}
+	}
+
+	require.NotEmpty(t, sshCmd, "expected -e flag with SSH command")
+
+	// BatchMode=yes is required to prevent SSH from prompting for input.
+	// Without this, rsync hangs on first run if SSH needs to verify host keys
+	// or prompt for credentials, since there's no terminal for user input.
+	assert.Contains(t, sshCmd, "BatchMode=yes",
+		"SSH command must include BatchMode=yes to prevent hanging on prompts")
+
+	// Also verify the other expected SSH options are present
+	assert.Contains(t, sshCmd, "ControlMaster=auto")
+	assert.Contains(t, sshCmd, "ControlPath=")
+	assert.Contains(t, sshCmd, "ControlPersist=")
 }
 
 func TestParseProgress(t *testing.T) {

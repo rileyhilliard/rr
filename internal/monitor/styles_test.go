@@ -123,8 +123,10 @@ func TestCompactProgressBar(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := CompactProgressBar(tt.width, tt.percent)
 			assert.NotEmpty(t, result)
-			// Should NOT contain brackets
-			assert.NotContains(t, result, "[")
+			// Should NOT contain decorative brackets (but may have ANSI escape codes)
+			assert.NotContains(t, result, "[█")
+			assert.NotContains(t, result, "[░")
+			assert.NotContains(t, result, "]")
 		})
 	}
 }
