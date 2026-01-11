@@ -284,68 +284,100 @@ func LoadResolved(explicitPath string) (*ResolvedConfig, error) {
 	return resolved, nil
 }
 
-// ResolveHost determines which host to use based on resolution order:
-// 1. preferred (from --host flag)
-// 2. project.Host (from .rr.yaml host field)
-// 3. global.Defaults.Host (from ~/.rr/config.yaml defaults.host)
-// 4. First host alphabetically from global.Hosts
+// ResolveHosts determines which hosts to use based on resolution order:
+// 1. preferred (from --host flag) - single host
+// 2. project.Hosts (from .rr.yaml hosts field) - multiple hosts
+// 3. project.Host (from .rr.yaml host field) - single host (backwards compat)
+// 4. All global hosts (default behavior for load balancing)
 //
-// Returns host name, host config, and error.
-func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, error) {
-	// Resolution order: flag -> project -> global defaults -> first alphabetically
-	hostName := ""
-
-	// 1. Preferred from flag
-	if preferred != "" {
-		hostName = preferred
-	}
-
-	// 2. Project config host reference
-	if hostName == "" && resolved.Project != nil && resolved.Project.Host != "" {
-		hostName = resolved.Project.Host
-	}
-
-	// 3. Global defaults host
-	if hostName == "" && resolved.Global != nil && resolved.Global.Defaults.Host != "" {
-		hostName = resolved.Global.Defaults.Host
-	}
-
-	// 4. First host alphabetically
-	if hostName == "" && resolved.Global != nil && len(resolved.Global.Hosts) > 0 {
-		var names []string
-		for name := range resolved.Global.Hosts {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		hostName = names[0]
-	}
-
-	// No hosts available
-	if hostName == "" {
-		return "", nil, errors.New(errors.ErrConfig,
-			"No hosts configured",
-			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
-	}
-
-	// Look up host config
+// Returns list of host names and map of host configs.
+func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[string]Host, error) {
 	if resolved.Global == nil {
-		return "", nil, errors.New(errors.ErrConfig,
+		return nil, nil, errors.New(errors.ErrConfig,
 			"Global config not loaded",
 			"This is unexpected - try running the command again.")
 	}
 
-	host, ok := resolved.Global.Hosts[hostName]
-	if !ok {
-		var available []string
-		for name := range resolved.Global.Hosts {
-			available = append(available, name)
-		}
-		return "", nil, errors.New(errors.ErrConfig,
-			"Host '"+hostName+"' not found in global config",
-			"Available hosts: "+formatHostList(available)+". Check ~/.rr/config.yaml.")
+	if len(resolved.Global.Hosts) == 0 {
+		return nil, nil, errors.New(errors.ErrConfig,
+			"No hosts configured",
+			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
 	}
 
-	return hostName, &host, nil
+	var hostNames []string
+
+	// 1. Preferred from flag - single host
+	if preferred != "" {
+		hostNames = []string{preferred}
+	}
+
+	// 2. Project config hosts list (plural)
+	if len(hostNames) == 0 && resolved.Project != nil && len(resolved.Project.Hosts) > 0 {
+		hostNames = resolved.Project.Hosts
+	}
+
+	// 3. Project config host reference (singular, backwards compat)
+	if len(hostNames) == 0 && resolved.Project != nil && resolved.Project.Host != "" {
+		hostNames = []string{resolved.Project.Host}
+	}
+
+	// 4. All global hosts (default - enables load balancing across everything)
+	// Put global default first, then rest alphabetically
+	if len(hostNames) == 0 {
+		defaultHost := resolved.Global.Defaults.Host
+		var others []string
+		for name := range resolved.Global.Hosts {
+			if name == defaultHost {
+				continue
+			}
+			others = append(others, name)
+		}
+		sort.Strings(others)
+
+		// Default host first (if it exists), then others
+		if defaultHost != "" {
+			if _, ok := resolved.Global.Hosts[defaultHost]; ok {
+				hostNames = append(hostNames, defaultHost)
+			}
+		}
+		hostNames = append(hostNames, others...)
+	}
+
+	// Validate all hosts exist and build config map
+	hosts := make(map[string]Host)
+	var available []string
+	for name := range resolved.Global.Hosts {
+		available = append(available, name)
+	}
+
+	for _, name := range hostNames {
+		host, ok := resolved.Global.Hosts[name]
+		if !ok {
+			return nil, nil, errors.New(errors.ErrConfig,
+				"Host '"+name+"' not found in global config",
+				"Available hosts: "+formatHostList(available)+". Check ~/.rr/config.yaml.")
+		}
+		hosts[name] = host
+	}
+
+	return hostNames, hosts, nil
+}
+
+// ResolveHost determines which host to use based on resolution order.
+// This is a convenience wrapper around ResolveHosts that returns only the first host.
+// Used when a single host is needed (e.g., for display purposes).
+func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, error) {
+	names, hosts, err := ResolveHosts(resolved, preferred)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(names) == 0 {
+		return "", nil, errors.New(errors.ErrConfig,
+			"No hosts configured",
+			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
+	}
+	host := hosts[names[0]]
+	return names[0], &host, nil
 }
 
 // formatHostList formats a list of host names for display.

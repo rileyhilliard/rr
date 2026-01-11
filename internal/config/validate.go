@@ -53,6 +53,22 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		}
 	}
 
+	// Validate Hosts list (if set)
+	if len(cfg.Hosts) > 0 {
+		seen := make(map[string]bool)
+		for _, h := range cfg.Hosts {
+			if err := validateHostReference(h); err != nil {
+				return err
+			}
+			if seen[h] {
+				return errors.New(errors.ErrConfig,
+					fmt.Sprintf("Duplicate host '%s' in hosts list", h),
+					"Each host should only appear once in the hosts list.")
+			}
+			seen[h] = true
+		}
+	}
+
 	// Check for reserved task names
 	for name := range cfg.Tasks {
 		if ReservedTaskNames[name] {
@@ -173,6 +189,16 @@ func ValidateResolved(r *ResolvedConfig) error {
 				return errors.New(errors.ErrConfig,
 					fmt.Sprintf("Project references host '%s' which doesn't exist in global config", r.Project.Host),
 					fmt.Sprintf("Available hosts: %s. Add it to ~/.rr/config.yaml or change the host in .rr.yaml.", strings.Join(hostNames, ", ")))
+			}
+		}
+
+		// Validate project's Hosts list references exist in global (if set)
+		for _, h := range r.Project.Hosts {
+			if _, ok := r.Global.Hosts[h]; !ok {
+				hostNames := getHostNames(r.Global.Hosts)
+				return errors.New(errors.ErrConfig,
+					fmt.Sprintf("Project references host '%s' which doesn't exist in global config", h),
+					fmt.Sprintf("Available hosts: %s. Add it to ~/.rr/config.yaml or remove it from .rr.yaml.", strings.Join(hostNames, ", ")))
 			}
 		}
 	}

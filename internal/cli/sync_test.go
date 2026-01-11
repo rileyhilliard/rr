@@ -194,20 +194,26 @@ func TestSyncCommand_PassesDryRunFlag(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// Test that dry-run flag is passed through syncCommand
 	err = syncCommand("myhost", "gpu", "5s", true)
 	require.Error(t, err)
-	// Should fail on config, but all flags were parsed
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured, but all flags were parsed
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSync_InvalidConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -258,13 +264,16 @@ func TestSyncCommand_AllFlagsEmpty(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// Test with all flags empty - should use defaults
 	err = syncCommand("", "", "", false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config")
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSyncOptions_AllFlagCombinations(t *testing.T) {
@@ -314,13 +323,16 @@ func TestSyncOptions_AllFlagCombinations(t *testing.T) {
 			origDir, _ := os.Getwd()
 			defer os.Chdir(origDir)
 
+			// Isolate from real user config
+			t.Setenv("HOME", tmpDir)
+
 			err := os.Chdir(tmpDir)
 			require.NoError(t, err)
 
 			err = Sync(tt.opts)
 			require.Error(t, err)
-			// All should fail on config, proving flags are accepted
-			assert.Contains(t, err.Error(), "config")
+			// All should fail on no hosts configured, proving flags are accepted
+			assert.Contains(t, err.Error(), "No hosts configured")
 		})
 	}
 }
@@ -330,11 +342,16 @@ func TestSync_ConfigWithNoDefaultHost(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	// Config with hosts but no default
-	configContent := `
+	// Set up global config with a host
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   dev:
@@ -342,7 +359,16 @@ hosts:
       - dev.example.com
     dir: /home/user/project
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+
+	// Project config references the host
+	projectContent := `
+version: 1
+hosts:
+  - dev
+`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	// Sync without host flag should still work (selector will pick first)
@@ -367,13 +393,16 @@ func TestSyncCommand_EmptyFlags(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	// All empty flags should use defaults
 	err = syncCommand("", "", "", false)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config")
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSyncCommand_WithAllFlags(t *testing.T) {
@@ -381,13 +410,16 @@ func TestSyncCommand_WithAllFlags(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
 	err = syncCommand("myhost", "gpu", "10s", true)
 	require.Error(t, err)
-	// Should fail on config, all flags were accepted
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSync_MultipleProbeTimeouts(t *testing.T) {
@@ -407,6 +439,9 @@ func TestSync_MultipleProbeTimeouts(t *testing.T) {
 			origDir, _ := os.Getwd()
 			defer os.Chdir(origDir)
 
+			// Isolate from real user config
+			t.Setenv("HOME", tmpDir)
+
 			err := os.Chdir(tmpDir)
 			require.NoError(t, err)
 
@@ -414,8 +449,8 @@ func TestSync_MultipleProbeTimeouts(t *testing.T) {
 				ProbeTimeout: tt.timeout,
 			})
 			require.Error(t, err)
-			// Should fail on config, not probe timeout
-			assert.Contains(t, err.Error(), "config")
+			// Should fail on no hosts configured
+			assert.Contains(t, err.Error(), "No hosts configured")
 		})
 	}
 }
@@ -445,6 +480,9 @@ func TestSync_DryRunWithHost(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
@@ -453,14 +491,17 @@ func TestSync_DryRunWithHost(t *testing.T) {
 		DryRun: true,
 	})
 	require.Error(t, err)
-	// Should fail on config
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSync_DryRunWithTag(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -470,13 +511,17 @@ func TestSync_DryRunWithTag(t *testing.T) {
 		DryRun: true,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSync_CustomWorkingDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -489,13 +534,17 @@ func TestSync_CustomWorkingDir(t *testing.T) {
 		WorkingDir: customDir,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSync_NonExistentWorkingDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -504,14 +553,17 @@ func TestSync_NonExistentWorkingDir(t *testing.T) {
 		WorkingDir: "/nonexistent/path/to/project",
 	})
 	require.Error(t, err)
-	// Should fail on config first
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
 
 func TestSync_HostAndTagCombined(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
@@ -521,6 +573,6 @@ func TestSync_HostAndTagCombined(t *testing.T) {
 		Tag:  "gpu",
 	})
 	require.Error(t, err)
-	// Should fail on config
-	assert.Contains(t, err.Error(), "config")
+	// Should fail on no hosts configured
+	assert.Contains(t, err.Error(), "No hosts configured")
 }
