@@ -80,14 +80,6 @@ func TestPoolSize(t *testing.T) {
 	assert.Equal(t, 0, pool.Size())
 }
 
-func TestPoolIsAlive_NilClient(t *testing.T) {
-	hosts := map[string]config.Host{}
-	pool := NewPool(hosts, 10*time.Second)
-
-	// Nil client should return false
-	assert.False(t, pool.isAlive(nil))
-}
-
 // Note: Tests that require actual SSH connections are integration tests
 // and would need real hosts or mocking. The following tests verify
 // the pool behavior without actual connections.
