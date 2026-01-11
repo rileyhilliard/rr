@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
@@ -45,15 +46,29 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	projectHash := hashProject(ctx.WorkDir)
 	hostNames := ctx.selector.GetHostNames()
 
+	// Get default host from resolution order
+	defaultHost := ""
+	if ctx.Resolved.Project != nil && ctx.Resolved.Project.Host != "" {
+		defaultHost = ctx.Resolved.Project.Host
+	} else if ctx.Resolved.Global.Defaults.Host != "" {
+		defaultHost = ctx.Resolved.Global.Defaults.Host
+	}
+
 	// Put default host first if configured
-	if ctx.Config.Default != "" {
-		hostNames = reorderWithDefault(hostNames, ctx.Config.Default)
+	if defaultHost != "" {
+		hostNames = reorderWithDefault(hostNames, defaultHost)
 	}
 
 	if len(hostNames) == 0 {
 		return nil, rrerrors.New(rrerrors.ErrConfig,
 			"No hosts configured",
-			"Add at least one host to your .rr.yaml file.")
+			"Add at least one host with 'rr host add'.")
+	}
+
+	// Get lock config from project or use defaults
+	lockCfg := config.DefaultConfig().Lock
+	if ctx.Resolved.Project != nil {
+		lockCfg = ctx.Resolved.Project.Lock
 	}
 
 	// Track state for each host
@@ -84,7 +99,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Skip lock if disabled
-		if !ctx.Config.Lock.Enabled || opts.SkipLock {
+		if !lockCfg.Enabled || opts.SkipLock {
 			return &findAvailableHostResult{
 				conn:       conn,
 				lock:       nil,
@@ -93,7 +108,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Try non-blocking lock acquisition
-		lck, err := lock.TryAcquire(conn, ctx.Config.Lock, projectHash)
+		lck, err := lock.TryAcquire(conn, lockCfg, projectHash)
 		if err == nil {
 			// Got the lock
 			return &findAvailableHostResult{
@@ -105,7 +120,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 		if errors.Is(err, lock.ErrLocked) {
 			// Host is locked, record who holds it and try next
-			attempt.lockHolder = lock.GetLockHolder(conn, ctx.Config.Lock, projectHash)
+			attempt.lockHolder = lock.GetLockHolder(conn, lockCfg, projectHash)
 			lockedHosts = append(lockedHosts, attempt)
 			attempts = append(attempts, attempt)
 			// Keep connection open for potential round-robin
@@ -121,7 +136,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	// Phase 2: All hosts tried - handle "all locked" scenario
 	if len(lockedHosts) > 0 {
 		// If local_fallback is enabled, go local immediately
-		if ctx.Config.LocalFallback {
+		if ctx.Resolved.Global.Defaults.LocalFallback {
 			// Close all locked host connections
 			for _, a := range lockedHosts {
 				if a.conn != nil {
@@ -141,7 +156,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Otherwise, round-robin wait for a host to become available
-		return roundRobinWait(ctx, lockedHosts, projectHash, attempts)
+		return roundRobinWait(ctx, lockedHosts, lockCfg, projectHash, attempts)
 	}
 
 	// No hosts could be connected to at all
@@ -149,8 +164,8 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 }
 
 // roundRobinWait cycles through locked hosts until one becomes available or timeout.
-func roundRobinWait(ctx *WorkflowContext, lockedHosts []hostAttempt, projectHash string, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
-	waitTimeout := ctx.Config.Lock.WaitTimeout
+func roundRobinWait(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, projectHash string, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
+	waitTimeout := lockCfg.WaitTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 1 * time.Minute // Default
 	}
@@ -180,7 +195,7 @@ func roundRobinWait(ctx *WorkflowContext, lockedHosts []hostAttempt, projectHash
 			}
 
 			// Try to acquire lock
-			lck, err := lock.TryAcquire(attempt.conn, ctx.Config.Lock, projectHash)
+			lck, err := lock.TryAcquire(attempt.conn, lockCfg, projectHash)
 			if err == nil {
 				spinner.Success()
 				// Close other connections

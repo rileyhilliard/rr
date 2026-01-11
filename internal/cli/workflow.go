@@ -29,7 +29,7 @@ type WorkflowOptions struct {
 
 // WorkflowContext holds state from workflow setup for use during execution.
 type WorkflowContext struct {
-	Config       *config.Config
+	Resolved     *config.ResolvedConfig
 	Conn         *host.Connection
 	Lock         *lock.Lock
 	WorkDir      string
@@ -77,24 +77,20 @@ func (w *WorkflowContext) Close() {
 	})
 }
 
-// loadAndValidateConfig loads and validates the config file.
+// loadAndValidateConfig loads and validates both global and project config.
 func loadAndValidateConfig(ctx *WorkflowContext) error {
-	cfgPath, err := config.Find(Config())
-	if err != nil {
-		return err
-	}
-	if cfgPath == "" {
-		return errors.New(errors.ErrConfig,
-			"No config file found",
-			"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
-	}
-
-	ctx.Config, err = config.Load(cfgPath)
+	resolved, err := config.LoadResolved(Config())
 	if err != nil {
 		return err
 	}
 
-	return config.Validate(ctx.Config)
+	// Validate the resolved configuration
+	if err := config.ValidateResolved(resolved); err != nil {
+		return err
+	}
+
+	ctx.Resolved = resolved
+	return nil
 }
 
 // setupWorkDir determines the working directory.
@@ -114,10 +110,10 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 
 // setupHostSelector creates and configures the host selector.
 func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
-	ctx.selector = host.NewSelector(ctx.Config.Hosts)
-	ctx.selector.SetLocalFallback(ctx.Config.LocalFallback)
+	ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
+	ctx.selector.SetLocalFallback(ctx.Resolved.Global.Defaults.LocalFallback)
 
-	probeTimeout := ctx.Config.ProbeTimeout
+	probeTimeout := ctx.Resolved.Global.Defaults.ProbeTimeout
 	if opts.ProbeTimeout > 0 {
 		probeTimeout = opts.ProbeTimeout
 	}
@@ -132,7 +128,15 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 		return preferredHost, nil
 	}
 
-	hostInfos := ctx.selector.HostInfo(ctx.Config.Default)
+	// Get default host from resolution order
+	defaultHost := ""
+	if ctx.Resolved.Project != nil && ctx.Resolved.Project.Host != "" {
+		defaultHost = ctx.Resolved.Project.Host
+	} else if ctx.Resolved.Global.Defaults.Host != "" {
+		defaultHost = ctx.Resolved.Global.Defaults.Host
+	}
+
+	hostInfos := ctx.selector.HostInfo(defaultHost)
 	uiHosts := make([]ui.HostInfo, len(hostInfos))
 	for i, h := range hostInfos {
 		uiHosts[i] = ui.HostInfo{
@@ -160,9 +164,14 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	connDisplay.SetQuiet(opts.Quiet)
 	connDisplay.Start()
 
+	// Resolve preferred host using resolution order
 	preferredHost := opts.Host
 	if preferredHost == "" {
-		preferredHost = ctx.Config.Default
+		// Use config.ResolveHost to get the host following resolution order
+		hostName, _, err := config.ResolveHost(ctx.Resolved, "")
+		if err == nil {
+			preferredHost = hostName
+		}
 	}
 
 	// Interactive host selection
@@ -234,7 +243,13 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, progressWriter)
+	// Use project sync config if available, otherwise use defaults
+	syncCfg := config.DefaultConfig().Sync
+	if ctx.Resolved.Project != nil {
+		syncCfg = ctx.Resolved.Project.Sync
+	}
+
+	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter)
 	if err != nil {
 		syncProgress.Fail()
 		return err
@@ -250,7 +265,13 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, nil)
+	// Use project sync config if available, otherwise use defaults
+	syncCfg := config.DefaultConfig().Sync
+	if ctx.Resolved.Project != nil {
+		syncCfg = ctx.Resolved.Project.Sync
+	}
+
+	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
 	if err != nil {
 		syncSpinner.Fail()
 		return err
@@ -263,7 +284,13 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 
 // lockPhase handles the lock acquisition phase of the workflow.
 func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	if !ctx.Config.Lock.Enabled || opts.SkipLock || ctx.Conn.IsLocal {
+	// Use project lock config if available, otherwise use defaults
+	lockCfg := config.DefaultConfig().Lock
+	if ctx.Resolved.Project != nil {
+		lockCfg = ctx.Resolved.Project.Lock
+	}
+
+	if !lockCfg.Enabled || opts.SkipLock || ctx.Conn.IsLocal {
 		return nil
 	}
 
@@ -273,7 +300,7 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 
 	projectHash := hashProject(ctx.WorkDir)
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, ctx.Config.Lock, projectHash)
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, projectHash)
 	if err != nil {
 		lockSpinner.Fail()
 		return err
