@@ -78,6 +78,8 @@ var dependencyNotFoundPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)make: (\S+): No such file or directory`),
 	// npm: 'go' is not recognized as an internal or external command
 	regexp.MustCompile(`(?i)'(\S+)' is not recognized`),
+	// /bin/sh: line 1: uv: command not found (bash via sh)
+	regexp.MustCompile(`(?i)/bin/sh:.*: (\S+): command not found`),
 	// /bin/sh: go: not found (from scripts)
 	regexp.MustCompile(`(?i)/bin/sh: (\S+): not found`),
 	// env: go: No such file or directory (from #!/usr/bin/env go)

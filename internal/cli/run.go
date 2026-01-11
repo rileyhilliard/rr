@@ -80,6 +80,7 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Check for command-not-found and other special exit codes
+	failureExplained := false
 	if exitCode != 0 {
 		// Check for command not found (exit code 127)
 		// Pass SSH client for PATH probing if available (remote execution only)
@@ -91,6 +92,7 @@ func Run(opts RunOptions) (int, error) {
 		// Try to detect a missing tool error
 		missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
 		if missingTool != nil {
+			failureExplained = true
 			// Show the error message
 			fmt.Println()
 			fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
@@ -117,6 +119,7 @@ func Run(opts RunOptions) (int, error) {
 			// Check for test failures and render summary if available
 			failures := provider.GetTestFailures()
 			if len(failures) > 0 {
+				failureExplained = true
 				passed, failed, skipped, errors := provider.GetTestCounts()
 				summary := &ui.TestSummary{
 					Passed:   passed,
@@ -144,6 +147,11 @@ func Run(opts RunOptions) (int, error) {
 	// Show final status
 	wf.PhaseDisplay.ThinDivider()
 	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
+
+	// Show contextual help for unexplained failures
+	if exitCode != 0 && !failureExplained {
+		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
+	}
 
 	return exitCode, nil
 }
@@ -179,6 +187,51 @@ func renderFinalStatus(_ *ui.PhaseDisplay, exitCode int, totalTime, execTime tim
 			exitCode,
 			mutedStyle.Render(fmt.Sprintf("(%.1fs)", totalTime.Seconds())),
 		)
+	}
+}
+
+// renderFailureHelp displays contextual help for command failures.
+// This is shown when the failure wasn't already explained (e.g., missing tool).
+func renderFailureHelp(exitCode int, command, host string) {
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	var hint string
+	switch exitCode {
+	case 1:
+		hint = "General error. Check command output above for details."
+	case 2:
+		hint = "Misuse or command failed. Check if a dependency is missing or command syntax is wrong."
+	case 126:
+		hint = "Command found but not executable. Check file permissions on remote."
+	case 127:
+		hint = "Command not found. The tool may not be installed or not in PATH."
+	case 128:
+		hint = "Invalid exit argument. The command may have a bug."
+	case 130:
+		hint = "Interrupted by Ctrl+C."
+	case 137:
+		hint = "Killed (likely OOM). The remote may have run out of memory."
+	case 139:
+		hint = "Segmentation fault. The command crashed."
+	case 143:
+		hint = "Terminated by SIGTERM."
+	default:
+		if exitCode > 128 && exitCode < 165 {
+			signal := exitCode - 128
+			hint = fmt.Sprintf("Killed by signal %d.", signal)
+		}
+	}
+
+	if hint != "" {
+		fmt.Printf("\n%s\n", mutedStyle.Render(hint))
+	}
+
+	// Always show recovery suggestions for non-trivial failures
+	if exitCode != 130 && exitCode != 143 { // Skip for user interrupts
+		fmt.Printf("\n%s\n", mutedStyle.Render("Troubleshooting:"))
+		fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
+		fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))
+		fmt.Printf("%s\n", mutedStyle.Render("  - Run 'rr doctor' to verify configuration"))
 	}
 }
 
