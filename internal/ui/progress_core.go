@@ -6,10 +6,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Progress bar block characters.
+// Progress bar block characters - Gen Z neon style
 const (
-	BarFilled = '█'
-	BarEmpty  = '░'
+	BarFilled = '▰' // Filled square
+	BarEmpty  = '▱' // Empty square
 )
 
 // ProgressColorFunc is a function that returns a color based on percentage.
@@ -24,16 +24,18 @@ func ProgressColorThreshold(percent float64) lipgloss.Color {
 	return getThresholdColor(percent)
 }
 
-// ProgressColorProgress returns colors for progress bars.
-// Higher values are better: 0-50% secondary (blue), 50-80% warning (yellow), 80%+ success (green).
+// ProgressColorProgress returns gradient colors for progress bars.
+// Creates a pink -> purple -> cyan gradient effect as progress increases.
 func ProgressColorProgress(percent float64) lipgloss.Color {
 	switch {
-	case percent >= 80:
-		return ColorSuccess
+	case percent >= 75:
+		return ColorNeonCyan // Cyan at completion
 	case percent >= 50:
-		return ColorWarning
+		return ColorNeonPurple // Purple in middle
+	case percent >= 25:
+		return ColorNeonPink // Pink in early-mid
 	default:
-		return ColorSecondary
+		return ColorNeonPink // Start with pink
 	}
 }
 
@@ -49,7 +51,7 @@ type BarConfig struct {
 func DefaultBarConfig(width int) BarConfig {
 	return BarConfig{
 		Width:       width,
-		Brackets:    true,
+		Brackets:    false, // Clean, bracketless style
 		ColorFunc:   ProgressColorThreshold,
 		ShowPercent: true,
 	}
@@ -59,7 +61,7 @@ func DefaultBarConfig(width int) BarConfig {
 func ProgressBarConfig(width int) BarConfig {
 	return BarConfig{
 		Width:       width,
-		Brackets:    true,
+		Brackets:    false, // Clean, bracketless style
 		ColorFunc:   ProgressColorProgress,
 		ShowPercent: false,
 	}

@@ -10,9 +10,9 @@ import (
 )
 
 func TestBubblesSpinnerFrames(t *testing.T) {
-	// Verify custom frames are configured correctly
-	assert.Equal(t, []string{"◐", "◓", "◑", "◒"}, SpinnerFrames.Frames)
-	assert.Equal(t, time.Second/10, SpinnerFrames.FPS)
+	// Verify braille scan frames are configured correctly
+	assert.Equal(t, []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}, SpinnerFrames.Frames)
+	assert.Equal(t, time.Second/16, SpinnerFrames.FPS)
 }
 
 func TestNewSpinnerComponent(t *testing.T) {

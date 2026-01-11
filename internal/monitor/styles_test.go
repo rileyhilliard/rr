@@ -7,6 +7,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// stripAnsi removes ANSI escape codes from a string for test assertions.
+func stripAnsi(s string) string {
+	result := strings.Builder{}
+	inEscape := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
+}
+
 func TestMetricColor(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -97,9 +117,10 @@ func TestProgressBar(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := ProgressBar(tt.width, tt.percent)
 			assert.NotEmpty(t, result)
-			// Should contain brackets
-			assert.Contains(t, result, "[")
-			assert.Contains(t, result, "]")
+			// Gen Z style: no brackets, uses ▰ and ▱
+			// Should contain either filled or empty chars
+			hasChars := strings.Contains(result, "▰") || strings.Contains(result, "▱")
+			assert.True(t, hasChars, "should contain ▰ or ▱")
 		})
 	}
 }
@@ -123,10 +144,11 @@ func TestCompactProgressBar(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := CompactProgressBar(tt.width, tt.percent)
 			assert.NotEmpty(t, result)
-			// Should NOT contain decorative brackets (but may have ANSI escape codes)
-			assert.NotContains(t, result, "[█")
-			assert.NotContains(t, result, "[░")
-			assert.NotContains(t, result, "]")
+			// Should NOT contain brackets - Gen Z style uses ▰ and ▱
+			// Strip ANSI codes first since they contain [ characters
+			stripped := stripAnsi(result)
+			assert.NotContains(t, stripped, "[")
+			assert.NotContains(t, stripped, "]")
 		})
 	}
 }
@@ -178,9 +200,9 @@ func TestSectionHeader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := SectionHeader(tt.title, tt.value, tt.width)
 			assert.NotEmpty(t, result)
-			// Should contain corners
-			assert.Contains(t, result, "┌")
-			assert.Contains(t, result, "┐")
+			// Should contain rounded corners - Gen Z style
+			assert.Contains(t, result, "╭")
+			assert.Contains(t, result, "╮")
 		})
 	}
 }
@@ -200,9 +222,9 @@ func TestSectionFooter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := SectionFooter(tt.width)
 			assert.NotEmpty(t, result)
-			// Should contain corners
-			assert.Contains(t, result, "└")
-			assert.Contains(t, result, "┘")
+			// Should contain rounded corners - Gen Z style
+			assert.Contains(t, result, "╰")
+			assert.Contains(t, result, "╯")
 		})
 	}
 }
@@ -242,8 +264,9 @@ func TestThresholdConstants(t *testing.T) {
 }
 
 func TestStatusIndicatorConstants(t *testing.T) {
-	assert.Equal(t, "●", StatusConnected)
-	assert.Equal(t, "○", StatusUnreachable)
+	assert.Equal(t, "◉", StatusConnected)   // Cyber glyph
+	assert.Equal(t, "◌", StatusUnreachable) // Cyber glyph
+	assert.Equal(t, "◔", StatusSlow)        // Cyber glyph
 }
 
 func TestColorConstants(t *testing.T) {

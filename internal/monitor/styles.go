@@ -6,29 +6,29 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Dashboard color palette - btop-inspired monochrome with cyan accent
+// Dashboard color palette - Gen Z Electric Synthwave
 const (
-	// Background colors
-	ColorDarkBg    = lipgloss.Color("#0d1117")
-	ColorSurfaceBg = lipgloss.Color("#161b22")
-	ColorBorder    = lipgloss.Color("#30363d")
+	// Background colors (glassmorphism-inspired)
+	ColorDarkBg    = lipgloss.Color("#0A0A0F") // Deep void
+	ColorSurfaceBg = lipgloss.Color("#12121A") // Dark surface
+	ColorBorder    = lipgloss.Color("#2A2A4A") // Glass border (purple tint)
 
-	// Semantic colors for metrics
-	ColorHealthy  = lipgloss.Color("#3fb950")
-	ColorWarning  = lipgloss.Color("#d29922")
-	ColorCritical = lipgloss.Color("#f85149")
+	// Semantic colors for metrics - neon style
+	ColorHealthy  = lipgloss.Color("#39FF14") // Neon green
+	ColorWarning  = lipgloss.Color("#FFAA00") // Electric amber
+	ColorCritical = lipgloss.Color("#FF0055") // Hot red-pink
 
 	// Text colors
-	ColorTextPrimary   = lipgloss.Color("#e6edf3")
-	ColorTextSecondary = lipgloss.Color("#8b949e")
-	ColorTextMuted     = lipgloss.Color("#6e7681")
+	ColorTextPrimary   = lipgloss.Color("#FFFFFF") // Pure white
+	ColorTextSecondary = lipgloss.Color("#B4B4D0") // Lavender gray
+	ColorTextMuted     = lipgloss.Color("#6B6B8D") // Purple-gray
 
-	// Accent colors - cyan for btop-style look
-	ColorAccent    = lipgloss.Color("#00d7d7")
-	ColorAccentDim = lipgloss.Color("#005f5f")
+	// Accent colors - neon pink primary, cyan secondary
+	ColorAccent    = lipgloss.Color("#FF2E97") // Neon pink
+	ColorAccentDim = lipgloss.Color("#BF40FF") // Neon purple
 
 	// Graph colors
-	ColorGraph = lipgloss.Color("#00d7d7")
+	ColorGraph = lipgloss.Color("#00FFFF") // Neon cyan
 )
 
 // Thresholds for metric severity levels
@@ -86,10 +86,11 @@ var (
 				Foreground(ColorCritical)
 )
 
-// Status indicator characters
+// Status indicator characters - cyber glyphs
 const (
-	StatusConnected   = "●"
-	StatusUnreachable = "○"
+	StatusConnected   = "◉" // Filled target
+	StatusUnreachable = "◌" // Dashed circle
+	StatusSlow        = "◔" // Partially filled
 )
 
 // MetricColor returns the appropriate color for a percentage-based metric.
@@ -123,10 +124,10 @@ func MetricStyleWithThresholds(percent float64, warning, critical int) lipgloss.
 }
 
 // ProgressBar renders a progress bar with the given width and percentage.
-// The bar uses threshold-based coloring.
+// Uses bracketless Gen Z style with threshold-based coloring.
 func ProgressBar(width int, percent float64) string {
-	if width < 3 {
-		width = 3
+	if width < 1 {
+		width = 1
 	}
 
 	// Clamp percentage to 0-100
@@ -138,27 +139,25 @@ func ProgressBar(width int, percent float64) string {
 	}
 
 	// Calculate filled portion
-	innerWidth := width - 2 // Account for brackets
-	filled := int(percent / 100.0 * float64(innerWidth))
-	if filled > innerWidth {
-		filled = innerWidth
+	filled := int(percent / 100.0 * float64(width))
+	if filled > width {
+		filled = width
 	}
 
-	// Build the bar
+	// Build the bar with Gen Z style characters
 	bar := ""
-	for i := 0; i < innerWidth; i++ {
+	for i := 0; i < width; i++ {
 		if i < filled {
-			bar += "█"
+			bar += "▰"
 		} else {
-			bar += "░"
+			bar += "▱"
 		}
 	}
 
 	// Apply color based on percentage
 	barStyle := lipgloss.NewStyle().Foreground(MetricColor(percent))
-	bracketStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
 
-	return bracketStyle.Render("[") + barStyle.Render(bar) + bracketStyle.Render("]")
+	return barStyle.Render(bar)
 }
 
 // CompactProgressBar renders a minimal progress bar without brackets.
@@ -188,9 +187,9 @@ func CompactProgressBarWithThresholds(width int, percent float64, warning, criti
 	bar := ""
 	for i := 0; i < width; i++ {
 		if i < filled {
-			bar += "█"
+			bar += "▰"
 		} else {
-			bar += "░"
+			bar += "▱"
 		}
 	}
 
@@ -235,17 +234,17 @@ func ThinProgressBarWithThresholds(width int, percent float64, warning, critical
 }
 
 // SectionHeader renders a section header with the title on the left and value on the right.
-// Format: ┌─ Title ────────────────────────────────────── Value ┐
+// Format: ╭─ Title ────────────────────────────────────── Value ╮
 func SectionHeader(title, value string, width int) string {
 	if width < 10 {
 		width = 10
 	}
 
 	// Calculate visible widths using lipgloss.Width for ANSI-aware measurement
-	// Left: "┌─ " (3 chars) + title + " " (1 char)
+	// Left: "╭─ " (3 chars) + title + " " (1 char)
 	leftWidth := 3 + lipgloss.Width(title) + 1
 
-	// Right: " " (1 char) + value + " ┐" (2 chars)
+	// Right: " " (1 char) + value + " ╮" (2 chars)
 	rightWidth := 1 + lipgloss.Width(value) + 2
 
 	// Calculate middle fill width
@@ -257,30 +256,30 @@ func SectionHeader(title, value string, width int) string {
 	// Build middle with ─ characters
 	middle := strings.Repeat("─", fillWidth)
 
-	// Style the parts
+	// Style the parts - neon pink title, cyan value
 	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	titleStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	valueStyle := lipgloss.NewStyle().Foreground(ColorTextPrimary).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF")).Bold(true)
 
-	return borderStyle.Render("┌─ ") +
+	return borderStyle.Render("╭─ ") +
 		titleStyle.Render(title) +
 		borderStyle.Render(" "+middle+" ") +
 		valueStyle.Render(value) +
-		borderStyle.Render(" ┐")
+		borderStyle.Render(" ╮")
 }
 
 // SectionFooter renders the bottom border of a section.
-// Format: └────────────────────────────────────────────────────┘
+// Format: ╰────────────────────────────────────────────────────╯
 func SectionFooter(width int) string {
 	if width < 2 {
 		width = 2
 	}
 
-	// └ and ┘ are each 1 display character
+	// ╰ and ╯ are each 1 display character
 	middle := strings.Repeat("─", width-2)
 
 	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	return borderStyle.Render("└" + middle + "┘")
+	return borderStyle.Render("╰" + middle + "╯")
 }
 
 // SectionBorder renders the left border character for section content.

@@ -97,8 +97,8 @@ func TestInlineProgressRenderBar(t *testing.T) {
 	for _, tt := range tests {
 		bar := p.renderBarWithPercent(tt.percent)
 
-		// Count filled characters (█)
-		filledCount := strings.Count(bar, "█")
+		// Count filled characters - Gen Z style (▰)
+		filledCount := strings.Count(bar, "▰")
 		assert.Equal(t, tt.filledCount, filledCount, "For percent %v", tt.percent)
 	}
 }

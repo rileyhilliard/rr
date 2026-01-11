@@ -20,8 +20,8 @@ const (
 	SpinnerSkipped
 )
 
-// Spinner animation frames for the in-progress state.
-var spinnerFrames = []string{"◐", "◓", "◑", "◒"}
+// Spinner animation frames - braille scan pattern for Y2K techy feel
+var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
 // Spinner displays an animated status indicator with a label.
 type Spinner struct {
@@ -147,7 +147,7 @@ func (s *Spinner) SetLabel(label string) {
 }
 
 func (s *Spinner) animate() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(60 * time.Millisecond) // Faster for more energy
 	defer ticker.Stop()
 	defer close(s.doneChan)
 
@@ -169,7 +169,9 @@ func (s *Spinner) render() {
 	defer s.mu.Unlock()
 
 	symbol := spinnerFrames[s.frame]
-	style := lipgloss.NewStyle().Foreground(ColorSecondary) // Blue for in-progress
+	// Cycle through gradient colors (pink -> purple -> cyan -> green)
+	colorIndex := (s.frame / 2) % len(GradientColors)
+	style := lipgloss.NewStyle().Foreground(GradientColors[colorIndex])
 
 	line := fmt.Sprintf("\r%s %s...", style.Render(symbol), s.label)
 

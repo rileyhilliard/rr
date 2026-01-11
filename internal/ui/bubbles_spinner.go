@@ -8,11 +8,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// SpinnerFrames defines the custom animation frames (◐ ◓ ◑ ◒) for use in Bubble Tea programs.
-// This provides consistent styling between CLI spinners and TUI components.
+// SpinnerFrames defines braille scan animation frames for use in Bubble Tea programs.
+// Y2K techy feel with faster animation for more energy.
 var SpinnerFrames = spinner.Spinner{
-	Frames: []string{"◐", "◓", "◑", "◒"},
-	FPS:    time.Second / 10, // 100ms per frame
+	Frames: []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"},
+	FPS:    time.Second / 16, // 60ms per frame - faster for more energy
 }
 
 // SpinnerComponentState represents the state of a spinner in a Bubble Tea model.
@@ -39,7 +39,7 @@ type SpinnerComponent struct {
 func NewSpinnerComponent(label string) SpinnerComponent {
 	sp := spinner.New()
 	sp.Spinner = SpinnerFrames
-	sp.Style = lipgloss.NewStyle().Foreground(ColorSecondary)
+	sp.Style = lipgloss.NewStyle().Foreground(ColorNeonPink) // Start with neon pink
 
 	return SpinnerComponent{
 		spinner: sp,

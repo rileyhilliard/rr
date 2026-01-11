@@ -1,15 +1,18 @@
 package ui
 
-// Unicode symbols for status indicators.
-// Matches proof-of-concept.sh symbols where applicable:
-//
-//	SYM_PASS='✓'
-//	SYM_FAIL='✗'
+// Cyber glyph symbols for status indicators - Gen Z aesthetic
 const (
-	SymbolSuccess  = "✓" // Task completed successfully
-	SymbolFail     = "✗" // Task failed
-	SymbolPending  = "○" // Task not yet started
-	SymbolProgress = "◐" // Task in progress
-	SymbolComplete = "●" // Task done (alternative to success)
-	SymbolSkipped  = "⊘" // Task skipped
+	SymbolSuccess  = "◉" // Task completed successfully (filled target)
+	SymbolFail     = "✕" // Task failed (clean X)
+	SymbolPending  = "◇" // Task not yet started (empty diamond)
+	SymbolProgress = "◆" // Task in progress (filled diamond)
+	SymbolComplete = "●" // Task done (solid circle)
+	SymbolSkipped  = "⊖" // Task skipped (circled minus)
+)
+
+// Connection status symbols
+const (
+	SymbolConnected   = "◉" // Connected (solid signal)
+	SymbolUnreachable = "◌" // Unreachable (dashed circle)
+	SymbolSlow        = "◔" // Slow connection (partially filled)
 )

@@ -14,29 +14,46 @@ func DisableColors() {
 	lipgloss.SetColorProfile(termenv.Ascii)
 }
 
-// Color palette using ANSI color codes for terminal compatibility.
-// Maps to proof-of-concept.sh color definitions:
-//   RED='\033[0;31m'    -> ANSI 1
-//   GREEN='\033[0;32m'  -> ANSI 2
-//   YELLOW='\033[0;33m' -> ANSI 3
-//   BLUE='\033[0;34m'   -> ANSI 4
-//   CYAN='\033[0;36m'   -> ANSI 6
-//   GRAY='\033[0;90m'   -> ANSI 8 (bright black)
+// Electric Synthwave color palette - Gen Z dopamine-inducing neons
+// Primary accent colors
+const (
+	ColorNeonPink   lipgloss.Color = "#FF2E97" // Primary accent, selected states
+	ColorNeonCyan   lipgloss.Color = "#00FFFF" // Secondary accent, info, values
+	ColorNeonPurple lipgloss.Color = "#BF40FF" // Tertiary, gradient midpoint
+	ColorNeonGreen  lipgloss.Color = "#39FF14" // Success states
+	ColorNeonOrange lipgloss.Color = "#FF6B35" // Warnings (alt)
+	ColorNeonAmber  lipgloss.Color = "#FFAA00" // Warnings
+)
+
+// Background colors (glassmorphism-inspired)
+const (
+	ColorDeepVoid    lipgloss.Color = "#0A0A0F" // Main background
+	ColorDarkSurface lipgloss.Color = "#12121A" // Card backgrounds
+	ColorGlassBorder lipgloss.Color = "#2A2A4A" // Borders (purple tint)
+)
 
 // Semantic colors for status indication
 const (
-	ColorSuccess lipgloss.Color = "2" // Green
-	ColorError   lipgloss.Color = "1" // Red
-	ColorWarning lipgloss.Color = "3" // Yellow
-	ColorInfo    lipgloss.Color = "6" // Cyan
+	ColorSuccess lipgloss.Color = "#39FF14" // Neon Green
+	ColorError   lipgloss.Color = "#FF0055" // Hot Red-Pink
+	ColorWarning lipgloss.Color = "#FFAA00" // Electric Amber
+	ColorInfo    lipgloss.Color = "#00FFFF" // Neon Cyan
 )
 
 // Text colors for content hierarchy
 const (
-	ColorPrimary   lipgloss.Color = "7" // White/default
-	ColorSecondary lipgloss.Color = "4" // Blue
-	ColorMuted     lipgloss.Color = "8" // Gray (bright black)
+	ColorPrimary   lipgloss.Color = "#FFFFFF" // Pure white
+	ColorSecondary lipgloss.Color = "#B4B4D0" // Lavender gray
+	ColorMuted     lipgloss.Color = "#6B6B8D" // Purple-gray
 )
+
+// Gradient colors for animations and progress bars
+var GradientColors = []lipgloss.Color{
+	"#FF2E97", // Neon Pink
+	"#BF40FF", // Neon Purple
+	"#00FFFF", // Neon Cyan
+	"#39FF14", // Neon Green
+}
 
 // Style helpers for common text styling
 

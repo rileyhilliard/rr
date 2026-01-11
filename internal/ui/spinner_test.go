@@ -161,8 +161,8 @@ func TestSpinnerDoubleStop(t *testing.T) {
 }
 
 func TestSpinnerFrames(t *testing.T) {
-	// Verify spinner frames are the expected Unicode characters
-	expected := []string{"◐", "◓", "◑", "◒"}
+	// Verify braille scan spinner frames
+	expected := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 	assert.Equal(t, expected, spinnerFrames)
 }
 
