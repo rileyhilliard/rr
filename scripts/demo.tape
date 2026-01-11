@@ -3,27 +3,41 @@
 # Record with: vhs scripts/demo.tape
 # Install VHS: brew install charmbracelet/tap/vhs
 # Docs: https://github.com/charmbracelet/vhs
+#
+# Prerequisites:
+# - rr installed and in PATH
+# - Working .rr.yaml with configured host
+# - SSH access to the remote
 
 Output demo.gif
 
-Set FontSize 14
+# Visual settings - clean and readable
+Set FontSize 18
 Set Width 800
 Set Height 500
 Set Theme "Catppuccin Mocha"
+Set Padding 24
+Set TypingSpeed 40ms
+Set WindowBar Colorful
+Set CursorBlink false
 
-Type "# Sync code and run tests on a remote machine"
-Enter
-Sleep 1s
+# Let terminal settle
+Sleep 300ms
 
+# The hero shot: sync + run in one command
 Type "rr run 'make test'"
+Sleep 300ms
 Enter
-Sleep 500ms
 
-# Simulate output - customize based on actual rr output
-# The actual recording should show real rr output
+# Wait for the workflow: connect -> sync -> lock -> execute
+# Adjust timing based on actual execution speed
+Sleep 6s
 
-Sleep 3s
-
-Type "# That's it! Files synced, tests ran remotely."
+# Quick follow-up showing exec (no sync)
+Type "rr exec 'uptime'"
+Sleep 200ms
 Enter
-Sleep 2s
+Sleep 2500ms
+
+# End with a bit of breathing room
+Sleep 1s

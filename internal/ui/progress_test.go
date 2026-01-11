@@ -24,8 +24,8 @@ func TestRenderProgressBar_ZeroPercent(t *testing.T) {
 	assert.Contains(t, stripped, "[", "should have opening bracket")
 	assert.Contains(t, stripped, "]", "should have closing bracket")
 	assert.Contains(t, stripped, "0%", "should show 0%")
-	// All empty blocks
-	assert.Contains(t, stripped, "░░░░░░░░░░", "should be all empty blocks")
+	// All empty blocks - Gen Z style
+	assert.Contains(t, stripped, "▱▱▱▱▱▱▱▱▱▱", "should be all empty blocks")
 }
 
 func TestRenderProgressBar_HundredPercent(t *testing.T) {
@@ -35,8 +35,8 @@ func TestRenderProgressBar_HundredPercent(t *testing.T) {
 	assert.Contains(t, stripped, "[", "should have opening bracket")
 	assert.Contains(t, stripped, "]", "should have closing bracket")
 	assert.Contains(t, stripped, "100%", "should show 100%")
-	// All filled blocks
-	assert.Contains(t, stripped, "██████████", "should be all filled blocks")
+	// All filled blocks - Gen Z style
+	assert.Contains(t, stripped, "▰▰▰▰▰▰▰▰▰▰", "should be all filled blocks")
 }
 
 func TestRenderProgressBar_FiftyPercent(t *testing.T) {
@@ -44,8 +44,8 @@ func TestRenderProgressBar_FiftyPercent(t *testing.T) {
 	stripped := stripANSI(result)
 
 	assert.Contains(t, stripped, "50%", "should show 50%")
-	// Should have 5 filled and 5 empty
-	assert.Contains(t, stripped, "█████░░░░░", "should be half filled")
+	// Should have 5 filled and 5 empty - Gen Z style
+	assert.Contains(t, stripped, "▰▰▰▰▰▱▱▱▱▱", "should be half filled")
 }
 
 func TestRenderProgressBar_NegativePercent(t *testing.T) {
@@ -54,7 +54,7 @@ func TestRenderProgressBar_NegativePercent(t *testing.T) {
 
 	// Should clamp to 0%
 	assert.Contains(t, stripped, "0%", "negative should clamp to 0%")
-	assert.Contains(t, stripped, "░░░░░░░░░░", "should be all empty")
+	assert.Contains(t, stripped, "▱▱▱▱▱▱▱▱▱▱", "should be all empty")
 }
 
 func TestRenderProgressBar_OverHundredPercent(t *testing.T) {
@@ -63,7 +63,7 @@ func TestRenderProgressBar_OverHundredPercent(t *testing.T) {
 
 	// Should clamp to 100%
 	assert.Contains(t, stripped, "100%", "over 100 should clamp to 100%")
-	assert.Contains(t, stripped, "██████████", "should be all filled")
+	assert.Contains(t, stripped, "▰▰▰▰▰▰▰▰▰▰", "should be all filled")
 }
 
 func TestRenderProgressBar_VariousPercentages(t *testing.T) {
@@ -91,8 +91,8 @@ func TestRenderProgressBar_VariousPercentages(t *testing.T) {
 
 			assert.Contains(t, stripped, tt.percentString, "should show correct percentage")
 
-			// Count filled blocks
-			filled := strings.Count(stripped, "█")
+			// Count filled blocks - Gen Z style
+			filled := strings.Count(stripped, "▰")
 			assert.Equal(t, tt.filledBlocks, filled, "should have correct number of filled blocks")
 		})
 	}
@@ -115,9 +115,9 @@ func TestRenderProgressBar_DifferentWidths(t *testing.T) {
 			result := RenderProgressBar(50, tt.width)
 			stripped := stripANSI(result)
 
-			// Remove brackets and percentage for block counting
+			// Remove brackets and percentage for block counting - Gen Z style
 			barOnly := extractBarOnly(stripped)
-			totalBlocks := strings.Count(barOnly, "█") + strings.Count(barOnly, "░")
+			totalBlocks := strings.Count(barOnly, "▰") + strings.Count(barOnly, "▱")
 			assert.Equal(t, tt.totalBlocks, totalBlocks, "should have correct total blocks")
 		})
 	}
@@ -168,7 +168,7 @@ func TestRenderProgressBarSimple_FiftyPercent(t *testing.T) {
 	result := RenderProgressBarSimple(50, 10)
 	stripped := stripANSI(result)
 
-	assert.Contains(t, stripped, "█████░░░░░", "should have 5 filled and 5 empty")
+	assert.Contains(t, stripped, "▰▰▰▰▰▱▱▱▱▱", "should have 5 filled and 5 empty")
 	assert.Contains(t, stripped, "50%", "should show 50%")
 }
 
@@ -193,8 +193,8 @@ func TestRenderProgressBarSimple_EdgeCases(t *testing.T) {
 }
 
 func TestProgressConstants(t *testing.T) {
-	assert.Equal(t, '█', progressFilled, "filled block should be solid")
-	assert.Equal(t, '░', progressEmpty, "empty block should be shaded")
+	assert.Equal(t, '▰', progressFilled, "filled block should be solid square")
+	assert.Equal(t, '▱', progressEmpty, "empty block should be empty square")
 }
 
 func TestRenderProgressBar_FormatAlignment(t *testing.T) {

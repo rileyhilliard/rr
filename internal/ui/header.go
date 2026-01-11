@@ -7,17 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Road runner ASCII art - Looney Tunes style with tall crest and running pose
-var roadRunnerArt = []string{
-	"       //",
-	"      //",
-	"     //",
-	"    (o>",
-	" __/   \\___",
-	"<__   /|   >",
-	"     /_\\",
-}
-
 // HeaderInfo contains information to display in the header.
 type HeaderInfo struct {
 	Version string // Version string (e.g., "v0.4.0")
@@ -25,71 +14,49 @@ type HeaderInfo struct {
 	WorkDir string // Optional working directory to display
 }
 
-// RenderHeader renders a styled header with road runner art and version info.
-// Similar to Claude Code's header style but with road runner branding.
+// HeaderWidth is the default width of the header divider
+const HeaderWidth = 50
+
+// RenderHeader renders a clean, branded header in Claude Code style.
+// No ASCII art - just clean typography with neon accents.
 func RenderHeader(info HeaderInfo) string {
-	// Define colors
-	artColor := lipgloss.Color("208")  // Orange (similar to Claude Code's coral)
-	titleColor := lipgloss.Color("34") // Green for "rr"
-	mutedColor := ColorMuted
+	titleStyle := lipgloss.NewStyle().
+		Foreground(ColorNeonPink).
+		Bold(true)
 
-	artStyle := lipgloss.NewStyle().Foreground(artColor)
-	titleStyle := lipgloss.NewStyle().Foreground(titleColor).Bold(true)
-	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("7")) // White
-	mutedStyle := lipgloss.NewStyle().Foreground(mutedColor)
+	versionStyle := lipgloss.NewStyle().
+		Foreground(ColorNeonCyan)
 
-	// Build the right side content
-	var rightLines []string
+	taglineStyle := lipgloss.NewStyle().
+		Foreground(ColorSecondary)
 
-	// Title line: "rr v0.4.0"
-	titleLine := fmt.Sprintf("%s %s", titleStyle.Render("rr"), versionStyle.Render(info.Version))
-	rightLines = append(rightLines, titleLine)
+	dividerStyle := lipgloss.NewStyle().
+		Foreground(ColorGlassBorder)
+
+	var output strings.Builder
+
+	// Title line: "rr v0.5.0"
+	output.WriteString(titleStyle.Render("rr"))
+	output.WriteString(" ")
+	output.WriteString(versionStyle.Render(info.Version))
+	output.WriteString("\n")
 
 	// Tagline (if provided)
 	if info.Tagline != "" {
-		rightLines = append(rightLines, mutedStyle.Render(info.Tagline))
+		output.WriteString(taglineStyle.Render(info.Tagline))
+		output.WriteString("\n")
 	}
 
 	// Working directory (if provided)
 	if info.WorkDir != "" {
-		rightLines = append(rightLines, mutedStyle.Render(info.WorkDir))
-	}
-
-	// Calculate dimensions
-	artWidth := maxLineWidth(roadRunnerArt)
-	gap := 3 // Space between art and text
-
-	// Build output by combining art and right content
-	var output strings.Builder
-
-	// Calculate vertical centering for right content
-	artHeight := len(roadRunnerArt)
-	rightHeight := len(rightLines)
-	rightStartLine := (artHeight - rightHeight) / 2
-	if rightStartLine < 0 {
-		rightStartLine = 0
-	}
-
-	for i := 0; i < artHeight; i++ {
-		// Render art line
-		artLine := ""
-		if i < len(roadRunnerArt) {
-			artLine = roadRunnerArt[i]
-		}
-		paddedArt := padRight(artLine, artWidth)
-		output.WriteString(artStyle.Render(paddedArt))
-
-		// Add gap
-		output.WriteString(strings.Repeat(" ", gap))
-
-		// Render right content if we're in the right range
-		rightIndex := i - rightStartLine
-		if rightIndex >= 0 && rightIndex < len(rightLines) {
-			output.WriteString(rightLines[rightIndex])
-		}
-
+		workDirStyle := lipgloss.NewStyle().Foreground(ColorMuted)
+		output.WriteString(workDirStyle.Render(info.WorkDir))
 		output.WriteString("\n")
 	}
+
+	// Divider line
+	output.WriteString(dividerStyle.Render(strings.Repeat("━", HeaderWidth)))
+	output.WriteString("\n")
 
 	return output.String()
 }
@@ -97,15 +64,4 @@ func RenderHeader(info HeaderInfo) string {
 // PrintHeader prints the styled header to stdout.
 func PrintHeader(info HeaderInfo) {
 	fmt.Print(RenderHeader(info))
-}
-
-// maxLineWidth returns the maximum width among the given lines.
-func maxLineWidth(lines []string) int {
-	maxWidth := 0
-	for _, line := range lines {
-		if len(line) > maxWidth {
-			maxWidth = len(line)
-		}
-	}
-	return maxWidth
 }

@@ -83,12 +83,12 @@ func TestBuildBarString(t *testing.T) {
 		brackets bool
 		expected string
 	}{
-		{"all empty with brackets", 0, 5, true, "[░░░░░]"},
-		{"all filled with brackets", 5, 0, true, "[█████]"},
-		{"mixed with brackets", 3, 2, true, "[███░░]"},
-		{"all empty no brackets", 0, 5, false, "░░░░░"},
-		{"all filled no brackets", 5, 0, false, "█████"},
-		{"mixed no brackets", 3, 2, false, "███░░"},
+		{"all empty with brackets", 0, 5, true, "[▱▱▱▱▱]"},
+		{"all filled with brackets", 5, 0, true, "[▰▰▰▰▰]"},
+		{"mixed with brackets", 3, 2, true, "[▰▰▰▱▱]"},
+		{"all empty no brackets", 0, 5, false, "▱▱▱▱▱"},
+		{"all filled no brackets", 5, 0, false, "▰▰▰▰▰"},
+		{"mixed no brackets", 3, 2, false, "▰▰▰▱▱"},
 	}
 
 	for _, tt := range tests {
@@ -125,14 +125,14 @@ func TestProgressColorProgress(t *testing.T) {
 		percent  float64
 		expected string
 	}{
-		{0, string(ColorSecondary)},    // Blue for low
-		{30, string(ColorSecondary)},   // Blue
-		{49.9, string(ColorSecondary)}, // Blue at boundary
-		{50, string(ColorWarning)},     // Yellow at 50
-		{70, string(ColorWarning)},     // Yellow
-		{79.9, string(ColorWarning)},   // Yellow at boundary
-		{80, string(ColorSuccess)},     // Green at 80
-		{100, string(ColorSuccess)},    // Green
+		{0, string(ColorNeonPink)},      // Pink for low
+		{20, string(ColorNeonPink)},     // Pink
+		{24.9, string(ColorNeonPink)},   // Pink at boundary
+		{25, string(ColorNeonPink)},     // Pink at 25
+		{50, string(ColorNeonPurple)},   // Purple at 50
+		{74.9, string(ColorNeonPurple)}, // Purple at boundary
+		{75, string(ColorNeonCyan)},     // Cyan at 75
+		{100, string(ColorNeonCyan)},    // Cyan
 	}
 
 	for _, tt := range tests {
@@ -142,14 +142,14 @@ func TestProgressColorProgress(t *testing.T) {
 }
 
 func TestBarConstants(t *testing.T) {
-	assert.Equal(t, '█', BarFilled, "filled block constant")
-	assert.Equal(t, '░', BarEmpty, "empty block constant")
+	assert.Equal(t, '▰', BarFilled, "filled block constant")
+	assert.Equal(t, '▱', BarEmpty, "empty block constant")
 }
 
 func TestDefaultBarConfig(t *testing.T) {
 	config := DefaultBarConfig(20)
 	assert.Equal(t, 20, config.Width)
-	assert.True(t, config.Brackets)
+	assert.False(t, config.Brackets) // Gen Z style: no brackets
 	assert.True(t, config.ShowPercent)
 	assert.NotNil(t, config.ColorFunc)
 }
@@ -157,7 +157,7 @@ func TestDefaultBarConfig(t *testing.T) {
 func TestProgressBarConfig(t *testing.T) {
 	config := ProgressBarConfig(30)
 	assert.Equal(t, 30, config.Width)
-	assert.True(t, config.Brackets)
+	assert.False(t, config.Brackets) // Gen Z style: no brackets
 	assert.False(t, config.ShowPercent)
 	assert.NotNil(t, config.ColorFunc)
 }

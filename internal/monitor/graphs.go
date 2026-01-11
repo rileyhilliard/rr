@@ -303,7 +303,7 @@ func RenderTimeSeriesGraph(data []float64, width, height int, color lipgloss.Col
 }
 
 // RenderGradientBar renders a horizontal bar with gradient fill.
-// Colors transition from green to yellow to red based on position (btop-style).
+// Colors transition from green to yellow to red based on position.
 func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
 	if width < 1 {
 		width = 1
@@ -329,11 +329,11 @@ func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
 			posPercent := float64(i+1) / float64(width) * 100
 			color := MetricColor(posPercent)
 			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
-			result.WriteString(style.Render("█"))
+			result.WriteString(style.Render("▰"))
 		} else {
 			// Empty portion - use muted color
 			style := lipgloss.NewStyle().Foreground(ColorTextMuted).Background(ColorSurfaceBg)
-			result.WriteString(style.Render("░"))
+			result.WriteString(style.Render("▱"))
 		}
 	}
 

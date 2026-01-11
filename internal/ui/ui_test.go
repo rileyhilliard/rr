@@ -45,45 +45,44 @@ func TestTextColorsExist(t *testing.T) {
 }
 
 func TestColorValues(t *testing.T) {
-	// Verify colors match expected ANSI values from proof-of-concept.sh
-	// These map to standard terminal colors
+	// Verify colors are using hex format for Gen Z Electric Synthwave palette
 	tests := []struct {
 		name     string
 		color    lipgloss.Color
 		expected string
 	}{
-		// Semantic colors mapped to ANSI
-		{"ColorSuccess is green", ColorSuccess, "2"},  // ANSI green (32 -> 2)
-		{"ColorError is red", ColorError, "1"},        // ANSI red (31 -> 1)
-		{"ColorWarning is yellow", ColorWarning, "3"}, // ANSI yellow (33 -> 3)
-		{"ColorInfo is cyan", ColorInfo, "6"},         // ANSI cyan (36 -> 6)
+		// Semantic colors - neon style
+		{"ColorSuccess is neon green", ColorSuccess, "#39FF14"},
+		{"ColorError is hot red-pink", ColorError, "#FF0055"},
+		{"ColorWarning is electric amber", ColorWarning, "#FFAA00"},
+		{"ColorInfo is neon cyan", ColorInfo, "#00FFFF"},
 
 		// Text colors
-		{"ColorPrimary is white", ColorPrimary, "7"},    // ANSI white/default
-		{"ColorSecondary is blue", ColorSecondary, "4"}, // ANSI blue (34 -> 4)
-		{"ColorMuted is gray", ColorMuted, "8"},         // ANSI bright black/gray (90 -> 8)
+		{"ColorPrimary is white", ColorPrimary, "#FFFFFF"},
+		{"ColorSecondary is lavender", ColorSecondary, "#B4B4D0"},
+		{"ColorMuted is purple-gray", ColorMuted, "#6B6B8D"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, string(tt.color), "%s should be ANSI color %s", tt.name, tt.expected)
+			assert.Equal(t, tt.expected, string(tt.color), "%s should be hex color %s", tt.name, tt.expected)
 		})
 	}
 }
 
 func TestSymbolsExist(t *testing.T) {
-	// Verify symbols are correct Unicode characters
+	// Verify symbols are correct cyber glyph characters
 	tests := []struct {
 		name     string
 		symbol   string
 		expected string
 	}{
-		{"SymbolSuccess", SymbolSuccess, "✓"},
-		{"SymbolFail", SymbolFail, "✗"},
-		{"SymbolPending", SymbolPending, "○"},
-		{"SymbolProgress", SymbolProgress, "◐"},
+		{"SymbolSuccess", SymbolSuccess, "◉"},
+		{"SymbolFail", SymbolFail, "✕"},
+		{"SymbolPending", SymbolPending, "◇"},
+		{"SymbolProgress", SymbolProgress, "◆"},
 		{"SymbolComplete", SymbolComplete, "●"},
-		{"SymbolSkipped", SymbolSkipped, "⊘"},
+		{"SymbolSkipped", SymbolSkipped, "⊖"},
 	}
 
 	for _, tt := range tests {
