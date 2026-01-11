@@ -164,7 +164,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 }
 
 // roundRobinWait cycles through locked hosts until one becomes available or timeout.
-func roundRobinWait(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, projectHash string, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
+func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, projectHash string, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
 	waitTimeout := lockCfg.WaitTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 1 * time.Minute // Default

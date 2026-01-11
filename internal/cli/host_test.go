@@ -33,82 +33,98 @@ func TestHostAddOptions_WithValues(t *testing.T) {
 	assert.True(t, opts.SkipProbe)
 }
 
-func TestLoadExistingConfig_NoConfig(t *testing.T) {
+func TestLoadGlobalConfig_NoConfig(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	cfg, path, err := loadGlobalConfig()
+	// Should succeed with empty hosts (global config is created if not exists)
 	require.NoError(t, err)
-
-	cfg, path, err := loadExistingConfig()
-	require.Error(t, err)
-	assert.Nil(t, cfg)
-	assert.Empty(t, path)
-	assert.Contains(t, err.Error(), "No config file found")
+	require.NotNil(t, cfg)
+	assert.NotEmpty(t, path)
+	assert.Empty(t, cfg.Hosts)
 }
 
-func TestLoadExistingConfig_ValidConfig(t *testing.T) {
+func TestLoadGlobalConfig_ValidConfig(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
-	// Write valid config
+	// Write valid global config
 	configContent := `
-version: 1
 hosts:
   dev:
     ssh:
       - dev.example.com
     dir: /home/user/project
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
-	cfg, path, err := loadExistingConfig()
+	cfg, path, err := loadGlobalConfig()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.NotEmpty(t, path)
 	assert.Contains(t, cfg.Hosts, "dev")
+	assert.Equal(t, "dev", cfg.Defaults.Host)
 }
 
-func TestLoadExistingConfig_InvalidYAML(t *testing.T) {
+func TestLoadGlobalConfig_InvalidYAML(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	// Write invalid YAML
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte("invalid: yaml: content:"), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte("invalid: yaml: content:"), 0644)
 	require.NoError(t, err)
 
-	cfg, path, err := loadExistingConfig()
+	cfg, path, err := loadGlobalConfig()
 	require.Error(t, err)
 	assert.Nil(t, cfg)
 	assert.Empty(t, path)
 }
 
-func TestSaveConfig_ValidConfig(t *testing.T) {
+func TestSaveGlobalConfig_ValidConfig(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, ".rr.yaml")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	cfg, err := loadExistingConfigForTest(t, tmpDir)
-	require.NoError(t, err)
+	// Create initial global config
+	cfg := &config.GlobalConfig{
+		Hosts: map[string]config.Host{
+			"test": testHost(),
+		},
+		Defaults: config.GlobalDefaults{
+			Host: "test",
+		},
+	}
 
-	// Add a host
-	cfg.Hosts["test"] = testHost()
-	cfg.Default = "test"
-
-	err = saveConfig(configPath, cfg)
+	err := saveGlobalConfig(cfg)
 	require.NoError(t, err)
 
 	// Verify file exists
+	configPath := filepath.Join(tmpDir, ".rr", "config.yaml")
 	_, err = os.Stat(configPath)
 	require.NoError(t, err)
 
@@ -116,51 +132,37 @@ func TestSaveConfig_ValidConfig(t *testing.T) {
 	content, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "test.example.com")
-	assert.Contains(t, string(content), "Road Runner configuration")
-}
-
-func TestSaveConfig_WritesHeader(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, ".rr.yaml")
-
-	cfg, err := loadExistingConfigForTest(t, tmpDir)
-	require.NoError(t, err)
-
-	err = saveConfig(configPath, cfg)
-	require.NoError(t, err)
-
-	content, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(content), "# Road Runner configuration")
-	assert.Contains(t, string(content), "rr run <command>")
 }
 
 func TestHostList_NoConfig(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// hostList now uses global config which auto-creates
+	err := hostList()
+	// Should not error, just print "No hosts configured"
 	require.NoError(t, err)
-
-	err = hostList()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
 }
 
 func TestHostList_EmptyHosts(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and empty config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts: {}
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	// Should not error, just print "No hosts configured"
@@ -169,15 +171,18 @@ hosts: {}
 }
 
 func TestHostList_WithHosts(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts:
   dev:
     ssh:
@@ -187,79 +192,80 @@ hosts:
     ssh:
       - prod.example.com
     dir: /home/user/project
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	err = hostList()
 	require.NoError(t, err)
 }
 
-func TestHostRemove_NoConfig(t *testing.T) {
+func TestHostRemove_EmptyHosts(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory with empty hosts
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
-	err = hostRemove("nonexistent")
+	configContent := `hosts: {}`
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	err = hostRemove("")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	assert.Contains(t, err.Error(), "No hosts")
 }
 
 func TestHostRemove_HostNotFound(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts:
   dev:
     ssh:
       - dev.example.com
     dir: /home/user/project
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	// Try to remove a host that doesn't exist
-	// Note: This will prompt for confirmation in interactive mode,
-	// so we test the error case for a non-existent host
 	err = hostRemove("nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestHostAdd_NoConfig(t *testing.T) {
-	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
-
-	err := os.Chdir(tmpDir)
-	require.NoError(t, err)
-
-	err = hostAdd(HostAddOptions{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
-}
-
 func TestHostList_MultipleSSHAliases(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts:
   dev:
     ssh:
@@ -267,9 +273,10 @@ hosts:
       - dev-lan.local
       - dev-vpn.example.com
     dir: /home/user/project
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	err = hostList()
@@ -277,22 +284,26 @@ default: dev
 }
 
 func TestHostList_NoDir(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts:
   dev:
     ssh:
       - dev.example.com
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	err = hostList()
@@ -300,15 +311,18 @@ default: dev
 }
 
 func TestHostList_SortedOutput(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts:
   zebra:
     ssh:
@@ -319,61 +333,50 @@ hosts:
   middle:
     ssh:
       - middle.example.com
-default: alpha
+defaults:
+  host: alpha
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
 	err = hostList()
 	require.NoError(t, err)
 }
 
-func TestSaveConfig_OverwritesExisting(t *testing.T) {
+func TestSaveGlobalConfig_OverwritesExisting(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, ".rr.yaml")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	// Write initial config
-	initialContent := "version: 1\nhosts: {}\n"
-	err := os.WriteFile(configPath, []byte(initialContent), 0644)
+	// Create .rr directory and initial config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
-	// Load and modify
-	cfg := &config.Config{
+	initialContent := "hosts: {}\n"
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(initialContent), 0644)
+	require.NoError(t, err)
+
+	// Create new config
+	cfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{
 			"new": {SSH: []string{"new.example.com"}, Dir: "/new/dir"},
 		},
-		Default: "new",
+		Defaults: config.GlobalDefaults{
+			Host: "new",
+		},
 	}
 
-	err = saveConfig(configPath, cfg)
+	err = saveGlobalConfig(cfg)
 	require.NoError(t, err)
 
 	// Verify overwritten content
-	content, err := os.ReadFile(configPath)
+	content, err := os.ReadFile(filepath.Join(rrDir, "config.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "new.example.com")
 	assert.Contains(t, string(content), "new")
-}
-
-func TestHostRemove_EmptyHostsConfig(t *testing.T) {
-	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
-
-	err := os.Chdir(tmpDir)
-	require.NoError(t, err)
-
-	configContent := `
-version: 1
-hosts: {}
-`
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
-	require.NoError(t, err)
-
-	// Try to remove with no hosts configured
-	err = hostRemove("")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No hosts")
 }
 
 func TestHostAddOptions_AllFieldsCombined(t *testing.T) {
@@ -390,16 +393,19 @@ func TestHostAddOptions_AllFieldsCombined(t *testing.T) {
 	assert.True(t, opts.SkipProbe)
 }
 
-func TestLoadExistingConfig_MultipleHosts(t *testing.T) {
+func TestLoadGlobalConfig_MultipleHosts(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	err := os.Chdir(tmpDir)
+	// Create .rr directory and config
+	rrDir := filepath.Join(tmpDir, ".rr")
+	err := os.MkdirAll(rrDir, 0755)
 	require.NoError(t, err)
 
 	configContent := `
-version: 1
 hosts:
   dev:
     ssh:
@@ -413,12 +419,13 @@ hosts:
     ssh:
       - prod.example.com
     dir: /home/user/prod
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
 
-	cfg, path, err := loadExistingConfig()
+	cfg, path, err := loadGlobalConfig()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	assert.NotEmpty(t, path)
@@ -428,23 +435,28 @@ default: dev
 	assert.Contains(t, cfg.Hosts, "prod")
 }
 
-func TestSaveConfig_PreservesAllHosts(t *testing.T) {
+func TestSaveGlobalConfig_PreservesAllHosts(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, ".rr.yaml")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
 
-	cfg := &config.Config{
+	cfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{
 			"host1": {SSH: []string{"h1.example.com"}, Dir: "/dir1"},
 			"host2": {SSH: []string{"h2.example.com"}, Dir: "/dir2"},
 			"host3": {SSH: []string{"h3.example.com"}, Dir: "/dir3"},
 		},
-		Default: "host1",
+		Defaults: config.GlobalDefaults{
+			Host: "host1",
+		},
 	}
 
-	err := saveConfig(configPath, cfg)
+	err := saveGlobalConfig(cfg)
 	require.NoError(t, err)
 
-	content, err := os.ReadFile(configPath)
+	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr", "config.yaml"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "h1.example.com")
 	assert.Contains(t, string(content), "h2.example.com")
@@ -458,29 +470,6 @@ func testHost() config.Host {
 		SSH: []string{"test.example.com"},
 		Dir: "/home/user/project",
 	}
-}
-
-func loadExistingConfigForTest(t *testing.T, tmpDir string) (*config.Config, error) {
-	t.Helper()
-	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
-
-	err := os.Chdir(tmpDir)
-	if err != nil {
-		return nil, err
-	}
-
-	configContent := `
-version: 1
-hosts: {}
-`
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg, _, err := loadExistingConfig()
-	return cfg, err
 }
 
 func TestShellQuote(t *testing.T) {

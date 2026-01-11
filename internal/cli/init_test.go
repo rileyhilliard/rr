@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -172,7 +173,7 @@ func TestMergeInitOptions(t *testing.T) {
 	})
 }
 
-func TestInit_NonInteractive_RequiresHost(t *testing.T) {
+func TestInit_NonInteractive_NoHostCreatesEmptyConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
@@ -180,14 +181,26 @@ func TestInit_NonInteractive_RequiresHost(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	opts := InitOptions{
 		NonInteractive: true,
-		// Host is empty - should fail
+		// Host is empty - in the new model, this creates a project config without a host reference
 	}
 
 	err = Init(opts)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Need an SSH host")
+	require.NoError(t, err)
+
+	// Verify project config was created
+	configPath := filepath.Join(tmpDir, ".rr.yaml")
+	_, err = os.Stat(configPath)
+	require.NoError(t, err)
+
+	// Project config should exist but not have a host reference
+	content, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "version: 1")
 }
 
 func TestInit_NonInteractive_Success(t *testing.T) {
@@ -197,6 +210,9 @@ func TestInit_NonInteractive_Success(t *testing.T) {
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	opts := InitOptions{
 		NonInteractive: true,
@@ -208,16 +224,25 @@ func TestInit_NonInteractive_Success(t *testing.T) {
 	err = Init(opts)
 	require.NoError(t, err)
 
-	// Verify config was created
+	// Verify project config was created
 	configPath := filepath.Join(tmpDir, ".rr.yaml")
 	_, err = os.Stat(configPath)
 	require.NoError(t, err)
 
-	// Verify contents
+	// Verify project config contains host reference (hostname extracted from user@example.com)
 	content, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "user@example.com")
-	assert.Contains(t, string(content), "/tmp/test")
+	assert.Contains(t, string(content), "host: example.com")
+
+	// Verify global config was created with host details
+	globalConfigPath := filepath.Join(tmpDir, ".rr", "config.yaml")
+	_, err = os.Stat(globalConfigPath)
+	require.NoError(t, err)
+
+	globalContent, err := os.ReadFile(globalConfigPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(globalContent), "user@example.com")
+	assert.Contains(t, string(globalContent), "/tmp/test")
 }
 
 func TestInit_NonInteractive_ExtractsHostname(t *testing.T) {
@@ -227,6 +252,9 @@ func TestInit_NonInteractive_ExtractsHostname(t *testing.T) {
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	opts := InitOptions{
 		NonInteractive: true,
@@ -238,11 +266,11 @@ func TestInit_NonInteractive_ExtractsHostname(t *testing.T) {
 	err = Init(opts)
 	require.NoError(t, err)
 
-	// Verify config was created with extracted hostname
+	// Verify project config was created with extracted hostname as host reference
 	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
 	require.NoError(t, err)
-	// The hostname "192.168.1.100" should be used as the host name
-	assert.Contains(t, string(content), "192.168.1.100")
+	// The hostname "192.168.1.100" should be used as the host reference
+	assert.Contains(t, string(content), "host: 192.168.1.100")
 }
 
 func TestInit_NonInteractive_ConfigExists(t *testing.T) {
@@ -252,6 +280,9 @@ func TestInit_NonInteractive_ConfigExists(t *testing.T) {
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	// Create existing config
 	configPath := filepath.Join(tmpDir, ".rr.yaml")
@@ -278,6 +309,9 @@ func TestInit_NonInteractive_ForceOverwrite(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	// Create existing config
 	configPath := filepath.Join(tmpDir, ".rr.yaml")
 	err = os.WriteFile(configPath, []byte("existing: config"), 0644)
@@ -293,11 +327,16 @@ func TestInit_NonInteractive_ForceOverwrite(t *testing.T) {
 	err = Init(opts)
 	require.NoError(t, err)
 
-	// Verify config was overwritten
+	// Verify project config was overwritten with host reference
 	content, err := os.ReadFile(configPath)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "user@example.com")
+	assert.Contains(t, string(content), "host: example.com")
 	assert.NotContains(t, string(content), "existing: config")
+
+	// Verify global config has SSH details
+	globalContent, err := os.ReadFile(filepath.Join(tmpDir, ".rr", "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(globalContent), "user@example.com")
 }
 
 func TestInit_NonInteractive_DefaultRemoteDir(t *testing.T) {
@@ -307,6 +346,9 @@ func TestInit_NonInteractive_DefaultRemoteDir(t *testing.T) {
 
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
 
 	opts := InitOptions{
 		NonInteractive: true,
@@ -318,10 +360,10 @@ func TestInit_NonInteractive_DefaultRemoteDir(t *testing.T) {
 	err = Init(opts)
 	require.NoError(t, err)
 
-	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
+	// Default remote dir should be in global config
+	globalContent, err := os.ReadFile(filepath.Join(tmpDir, ".rr", "config.yaml"))
 	require.NoError(t, err)
-	// Default remote dir should be used
-	assert.Contains(t, string(content), "${HOME}/rr/${PROJECT}")
+	assert.Contains(t, string(globalContent), "${HOME}/rr/${PROJECT}")
 }
 
 func TestInitOptions_Defaults(t *testing.T) {
@@ -476,57 +518,79 @@ func TestCheckExistingConfig_NonInteractive_NoOverwrite(t *testing.T) {
 	assert.Contains(t, err.Error(), "already a config file")
 }
 
-func TestCollectNonInteractiveValues_RequiresHost(t *testing.T) {
-	vals, err := collectNonInteractiveValues(InitOptions{})
-	require.Error(t, err)
-	assert.Nil(t, vals)
-	assert.Contains(t, err.Error(), "Need an SSH host")
-}
-
-func TestCollectNonInteractiveValues_WithHost(t *testing.T) {
-	vals, err := collectNonInteractiveValues(InitOptions{
-		Host: "user@example.com",
-	})
+func TestCollectNonInteractiveValues_NoHostNoGlobal(t *testing.T) {
+	// With no host specified and no global hosts, vals.hostRef should be empty
+	globalCfg := &config.GlobalConfig{
+		Hosts: map[string]config.Host{},
+	}
+	vals, err := collectNonInteractiveValues(InitOptions{}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Len(t, vals.machines, 1)
-	assert.Equal(t, "example.com", vals.machines[0].name)
-	assert.Equal(t, []string{"user@example.com"}, vals.machines[0].sshHosts)
+	assert.Empty(t, vals.hostRef) // No host to reference
 }
 
-func TestCollectNonInteractiveValues_WithName(t *testing.T) {
-	vals, err := collectNonInteractiveValues(InitOptions{
-		Host: "user@example.com",
-		Name: "myhost",
-	})
+func TestCollectNonInteractiveValues_WithExistingGlobalHost(t *testing.T) {
+	globalCfg := &config.GlobalConfig{
+		Hosts: map[string]config.Host{
+			"dev": {SSH: []string{"dev.example.com"}, Dir: "/home/user/dev"},
+		},
+		Defaults: config.GlobalDefaults{Host: "dev"},
+	}
+	vals, err := collectNonInteractiveValues(InitOptions{}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Equal(t, "myhost", vals.machines[0].name)
+	assert.Equal(t, "dev", vals.hostRef) // References the default host
 }
 
-func TestCollectNonInteractiveValues_WithDir(t *testing.T) {
+func TestCollectNonInteractiveValues_WithHostAddsToGlobal(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	globalCfg := &config.GlobalConfig{
+		Hosts: map[string]config.Host{},
+	}
 	vals, err := collectNonInteractiveValues(InitOptions{
-		Host: "user@example.com",
-		Dir:  "/custom/dir",
-	})
+		Host:      "user@example.com",
+		SkipProbe: true,
+	}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Equal(t, "/custom/dir", vals.remoteDir)
+	assert.Equal(t, "example.com", vals.hostRef) // Uses extracted hostname as hostRef
 }
 
-func TestCollectNonInteractiveValues_DefaultDir(t *testing.T) {
+func TestCollectNonInteractiveValues_WithExplicitName(t *testing.T) {
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	globalCfg := &config.GlobalConfig{
+		Hosts: map[string]config.Host{},
+	}
 	vals, err := collectNonInteractiveValues(InitOptions{
-		Host: "user@example.com",
-	})
+		Host:      "user@example.com",
+		Name:      "myhost",
+		SkipProbe: true,
+	}, globalCfg)
 	require.NoError(t, err)
 	require.NotNil(t, vals)
-	assert.Equal(t, "${HOME}/rr/${PROJECT}", vals.remoteDir)
+	assert.Equal(t, "myhost", vals.hostRef) // Uses explicit name
 }
 
 func TestInitCommand_MergesOptions(t *testing.T) {
 	// Save original env and restore after test
 	origHost := os.Getenv("RR_HOST")
 	defer os.Setenv("RR_HOST", origHost)
+
+	// Save and restore home directory
+	origHome := os.Getenv("HOME")
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+	defer os.Setenv("HOME", origHome)
 
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
@@ -538,34 +602,21 @@ func TestInitCommand_MergesOptions(t *testing.T) {
 	// Set env var
 	os.Setenv("RR_HOST", "env@example.com")
 
-	// Run with NonInteractive (will fail without host, but mergeInitOptions should merge env)
+	// Run with NonInteractive
 	err = initCommand(InitOptions{
 		NonInteractive: true,
 		SkipProbe:      true,
 	})
 	require.NoError(t, err)
 
-	// Verify config was created with env var host
+	// Verify project config was created
 	content, err := os.ReadFile(filepath.Join(tmpDir, ".rr.yaml"))
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "env@example.com")
-}
+	// Project config should reference the host, not contain the SSH details
+	assert.Contains(t, string(content), "host:")
 
-func TestGetAllSelectedSSHHosts(t *testing.T) {
-	machines := []machineConfig{
-		{name: "dev", sshHosts: []string{"dev1", "dev2"}},
-		{name: "prod", sshHosts: []string{"prod1"}},
-	}
-
-	all := getAllSelectedSSHHosts(machines)
-	assert.Len(t, all, 3)
-	assert.Contains(t, all, "dev1")
-	assert.Contains(t, all, "dev2")
-	assert.Contains(t, all, "prod1")
-}
-
-func TestGetAllSelectedSSHHosts_Empty(t *testing.T) {
-	machines := []machineConfig{}
-	all := getAllSelectedSSHHosts(machines)
-	assert.Empty(t, all)
+	// Verify global config was created with the host
+	globalContent, err := os.ReadFile(filepath.Join(tmpHome, ".rr", "config.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(globalContent), "env@example.com")
 }

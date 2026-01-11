@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func TestWorkflowContext_ZeroValues(t *testing.T) {
 	ctx := &WorkflowContext{}
 
 	// Zero values should be safe
-	assert.Nil(t, ctx.Config)
+	assert.Nil(t, ctx.Resolved)
 	assert.Nil(t, ctx.Conn)
 	assert.Nil(t, ctx.Lock)
 	assert.Empty(t, ctx.WorkDir)
@@ -113,12 +114,16 @@ func TestSetupWorkDir_DefaultsToCwd(t *testing.T) {
 
 func TestSetupHostSelector_WithConfig(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					LocalFallback: true,
+					ProbeTimeout:  5 * time.Second,
+				},
 			},
-			LocalFallback: true,
-			ProbeTimeout:  5 * time.Second,
 		},
 	}
 
@@ -132,11 +137,15 @@ func TestSetupHostSelector_WithConfig(t *testing.T) {
 
 func TestSetupHostSelector_ProbeTimeoutOverride(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					ProbeTimeout: 2 * time.Second,
+				},
 			},
-			ProbeTimeout: 2 * time.Second,
 		},
 	}
 
@@ -152,8 +161,10 @@ func TestSetupHostSelector_ProbeTimeoutOverride(t *testing.T) {
 
 func TestSetupHostSelector_NoHosts(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{},
+			},
 		},
 	}
 
@@ -171,7 +182,10 @@ func TestSelectHostInteractively_WithPreferredHost(t *testing.T) {
 			"dev":  {SSH: []string{"dev.example.com"}},
 			"prod": {SSH: []string{"prod.example.com"}},
 		}),
-		Config: &config.Config{},
+		Resolved: &config.ResolvedConfig{
+			Global:  &config.GlobalConfig{},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -185,7 +199,10 @@ func TestSelectHostInteractively_SingleHost(t *testing.T) {
 		selector: host.NewSelector(map[string]config.Host{
 			"dev": {SSH: []string{"dev.example.com"}},
 		}),
-		Config: &config.Config{},
+		Resolved: &config.ResolvedConfig{
+			Global:  &config.GlobalConfig{},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -201,7 +218,10 @@ func TestSelectHostInteractively_QuietMode(t *testing.T) {
 			"dev":  {SSH: []string{"dev.example.com"}},
 			"prod": {SSH: []string{"prod.example.com"}},
 		}),
-		Config: &config.Config{},
+		Resolved: &config.ResolvedConfig{
+			Global:  &config.GlobalConfig{},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -220,14 +240,20 @@ func TestLoadAndValidateConfig_NoConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	ctx := &WorkflowContext{}
 	err = loadAndValidateConfig(ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	// Should fail because no config file and no hosts in global config
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestLoadAndValidateConfig_ValidConfig(t *testing.T) {
-	// Create temp dir with valid config
+	// Create temp dir with valid project config and global config
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
@@ -235,24 +261,37 @@ func TestLoadAndValidateConfig_ValidConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	// Write a valid config
-	configContent := `
+	// Set up global config with hosts
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   dev:
     ssh:
       - dev.example.com
     dir: /home/user/project
-default: dev
+defaults:
+  host: dev
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", tmpDir)
+
+	// Write a valid project config
+	projectContent := `
+version: 1
+host: dev
+`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
 	err = loadAndValidateConfig(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, ctx.Config)
-	assert.Equal(t, "dev", ctx.Config.Default)
+	require.NotNil(t, ctx.Resolved)
+	require.NotNil(t, ctx.Resolved.Project)
+	assert.Equal(t, "dev", ctx.Resolved.Project.Host)
 }
 
 func TestSyncPhase_LocalConnection(t *testing.T) {
@@ -287,9 +326,12 @@ func TestSyncPhase_SkipSync(t *testing.T) {
 
 func TestLockPhase_Disabled(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: false,
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: false,
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -306,9 +348,12 @@ func TestLockPhase_Disabled(t *testing.T) {
 
 func TestLockPhase_SkipLock(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: true,
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: true,
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -327,9 +372,12 @@ func TestLockPhase_SkipLock(t *testing.T) {
 
 func TestLockPhase_LocalConnection(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: true,
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: true,
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -353,9 +401,15 @@ func TestSetupWorkflow_NoConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
 	_, err = SetupWorkflow(WorkflowOptions{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "No config file found")
+	// Should fail because no config file and no hosts in global config
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
 func TestLoadAndValidateConfig_InvalidYAML(t *testing.T) {
@@ -383,12 +437,20 @@ func TestLoadAndValidateConfig_MissingHosts(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	// Write config with no hosts
-	configContent := `
+	// Set up global config with no hosts
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts: {}
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", tmpDir)
+
+	// Write project config
+	projectContent := `version: 1`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
@@ -399,11 +461,15 @@ hosts: {}
 
 func TestSetupHostSelector_ZeroProbeTimeout(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					ProbeTimeout: 0, // No default timeout
+				},
 			},
-			ProbeTimeout: 0, // No default timeout
 		},
 	}
 
@@ -419,11 +485,15 @@ func TestSetupHostSelector_ZeroProbeTimeout(t *testing.T) {
 
 func TestSetupHostSelector_LocalFallbackEnabled(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					LocalFallback: true,
+				},
 			},
-			LocalFallback: true,
 		},
 	}
 
@@ -436,11 +506,15 @@ func TestSetupHostSelector_LocalFallbackEnabled(t *testing.T) {
 
 func TestSetupHostSelector_LocalFallbackDisabled(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					LocalFallback: false,
+				},
 			},
-			LocalFallback: false,
 		},
 	}
 
@@ -453,11 +527,13 @@ func TestSetupHostSelector_LocalFallbackDisabled(t *testing.T) {
 
 func TestSetupHostSelector_MultipleHosts(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev":     {SSH: []string{"dev.example.com"}},
-				"staging": {SSH: []string{"staging.example.com"}},
-				"prod":    {SSH: []string{"prod.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev":     {SSH: []string{"dev.example.com"}},
+					"staging": {SSH: []string{"staging.example.com"}},
+					"prod":    {SSH: []string{"prod.example.com"}},
+				},
 			},
 		},
 	}
@@ -473,7 +549,10 @@ func TestSetupHostSelector_MultipleHosts(t *testing.T) {
 func TestSelectHostInteractively_NoHosts(t *testing.T) {
 	ctx := &WorkflowContext{
 		selector: host.NewSelector(map[string]config.Host{}),
-		Config:   &config.Config{},
+		Resolved: &config.ResolvedConfig{
+			Global:  &config.GlobalConfig{},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -487,7 +566,10 @@ func TestSelectHostInteractively_NonExistentPreferredHost(t *testing.T) {
 		selector: host.NewSelector(map[string]config.Host{
 			"dev": {SSH: []string{"dev.example.com"}},
 		}),
-		Config: &config.Config{},
+		Resolved: &config.ResolvedConfig{
+			Global:  &config.GlobalConfig{},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -578,9 +660,12 @@ func TestLockPhase_AllDisableConditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &WorkflowContext{
-				Config: &config.Config{
-					Lock: config.LockConfig{
-						Enabled: tt.enabled,
+				Resolved: &config.ResolvedConfig{
+					Global: &config.GlobalConfig{},
+					Project: &config.Config{
+						Lock: config.LockConfig{
+							Enabled: tt.enabled,
+						},
 					},
 				},
 				Conn: &host.Connection{
@@ -656,10 +741,13 @@ func TestWorkflowContext_Close_WithSelector(t *testing.T) {
 func TestWorkflowContext_Close_WithSelectorAndConfig(t *testing.T) {
 	// Set up a full context as would happen in normal workflow
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"test": {SSH: []string{"test.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"test": {SSH: []string{"test.example.com"}},
+				},
 			},
+			Project: &config.Config{},
 		},
 		WorkDir:   "/test/dir",
 		StartTime: time.Now(),
@@ -672,7 +760,7 @@ func TestWorkflowContext_Close_WithSelectorAndConfig(t *testing.T) {
 	ctx.Close()
 
 	// Context should still have its data
-	assert.NotNil(t, ctx.Config)
+	assert.NotNil(t, ctx.Resolved)
 	assert.Equal(t, "/test/dir", ctx.WorkDir)
 }
 
@@ -697,11 +785,15 @@ func TestWorkflowContext_Close_IdempotentSelector(t *testing.T) {
 
 func TestSetupHostSelector_ConfigProbeTimeoutApplied(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					ProbeTimeout: 15 * time.Second,
+				},
 			},
-			ProbeTimeout: 15 * time.Second,
 		},
 	}
 
@@ -716,11 +808,15 @@ func TestSetupHostSelector_ConfigProbeTimeoutApplied(t *testing.T) {
 
 func TestSetupHostSelector_OptsOverrideConfigTimeout(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {SSH: []string{"dev.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {SSH: []string{"dev.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					ProbeTimeout: 5 * time.Second, // Config says 5s
+				},
 			},
-			ProbeTimeout: 5 * time.Second, // Config says 5s
 		},
 	}
 
@@ -736,12 +832,14 @@ func TestSetupHostSelector_OptsOverrideConfigTimeout(t *testing.T) {
 
 func TestSetupHostSelector_HostsWithMultipleAliases(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"dev": {
-					SSH:  []string{"dev-local", "dev-vpn", "dev-public"},
-					Dir:  "/home/user/project",
-					Tags: []string{"fast", "gpu"},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"dev": {
+						SSH:  []string{"dev-local", "dev-vpn", "dev-public"},
+						Dir:  "/home/user/project",
+						Tags: []string{"fast", "gpu"},
+					},
 				},
 			},
 		},
@@ -757,15 +855,17 @@ func TestSetupHostSelector_HostsWithMultipleAliases(t *testing.T) {
 
 func TestSetupHostSelector_HostsWithTags(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"gpu-box": {
-					SSH:  []string{"gpu.example.com"},
-					Tags: []string{"gpu", "fast"},
-				},
-				"cpu-box": {
-					SSH:  []string{"cpu.example.com"},
-					Tags: []string{"cpu"},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"gpu-box": {
+						SSH:  []string{"gpu.example.com"},
+						Tags: []string{"gpu", "fast"},
+					},
+					"cpu-box": {
+						SSH:  []string{"cpu.example.com"},
+						Tags: []string{"cpu"},
+					},
 				},
 			},
 		},
@@ -793,9 +893,12 @@ func TestSyncPhase_RemoteConnectionNotSkipped(t *testing.T) {
 			Alias:   "remote.example.com",
 		},
 		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
-		Config: &config.Config{
-			Sync: config.SyncConfig{
-				Exclude: []string{".git", "node_modules"},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Sync: config.SyncConfig{
+					Exclude: []string{".git", "node_modules"},
+				},
 			},
 		},
 		WorkDir: "/tmp/test-project",
@@ -850,11 +953,14 @@ func TestSyncPhase_LocalTakesPrecedenceOverSkip(t *testing.T) {
 
 func TestLockPhase_EnabledButLocalConnection(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: true,
-				Timeout: 5 * time.Second,
-				Stale:   10 * time.Minute,
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: true,
+					Timeout: 5 * time.Second,
+					Stale:   10 * time.Minute,
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -870,9 +976,12 @@ func TestLockPhase_EnabledButLocalConnection(t *testing.T) {
 
 func TestLockPhase_DisabledWithRemoteConnection(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: false, // Explicitly disabled
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: false, // Explicitly disabled
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -889,10 +998,13 @@ func TestLockPhase_DisabledWithRemoteConnection(t *testing.T) {
 
 func TestLockPhase_SkipFlagWithEnabledConfig(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: true, // Enabled in config
-				Timeout: 30 * time.Second,
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: true, // Enabled in config
+					Timeout: 30 * time.Second,
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -968,10 +1080,13 @@ func TestLockPhase_SkipConditions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := &WorkflowContext{
-				Config: &config.Config{
-					Lock: config.LockConfig{
-						Enabled: tt.lockEnabled,
-						Timeout: time.Second,
+				Resolved: &config.ResolvedConfig{
+					Global: &config.GlobalConfig{},
+					Project: &config.Config{
+						Lock: config.LockConfig{
+							Enabled: tt.lockEnabled,
+							Timeout: time.Second,
+						},
 					},
 				},
 				Conn: &host.Connection{
@@ -1007,7 +1122,12 @@ func TestSelectHostInteractively_PreferredHostReturned(t *testing.T) {
 			"dev":  {SSH: []string{"dev.example.com"}},
 			"prod": {SSH: []string{"prod.example.com"}},
 		}),
-		Config: &config.Config{Default: "prod"},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Defaults: config.GlobalDefaults{Host: "prod"},
+			},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -1022,7 +1142,10 @@ func TestSelectHostInteractively_EmptyPreferredWithOneHost(t *testing.T) {
 		selector: host.NewSelector(map[string]config.Host{
 			"only": {SSH: []string{"only.example.com"}},
 		}),
-		Config: &config.Config{},
+		Resolved: &config.ResolvedConfig{
+			Global:  &config.GlobalConfig{},
+			Project: &config.Config{},
+		},
 	}
 	defer ctx.selector.Close()
 
@@ -1080,22 +1203,26 @@ func TestSetupWorkDir_PreservesExistingWorkDir(t *testing.T) {
 
 func TestSetupHostSelector_FullConfiguration(t *testing.T) {
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"primary": {
-					SSH:  []string{"primary-lan", "primary-vpn"},
-					Dir:  "/home/user/project",
-					Tags: []string{"fast"},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"primary": {
+						SSH:  []string{"primary-lan", "primary-vpn"},
+						Dir:  "/home/user/project",
+						Tags: []string{"fast"},
+					},
+					"secondary": {
+						SSH:  []string{"secondary.example.com"},
+						Dir:  "/opt/project",
+						Tags: []string{"backup"},
+					},
 				},
-				"secondary": {
-					SSH:  []string{"secondary.example.com"},
-					Dir:  "/opt/project",
-					Tags: []string{"backup"},
+				Defaults: config.GlobalDefaults{
+					Host:          "primary",
+					LocalFallback: true,
+					ProbeTimeout:  10 * time.Second,
 				},
 			},
-			Default:       "primary",
-			LocalFallback: true,
-			ProbeTimeout:  10 * time.Second,
 		},
 	}
 
@@ -1123,11 +1250,16 @@ func TestSetupHostSelector_FullConfiguration(t *testing.T) {
 func TestWorkflowContext_FullLifecycle(t *testing.T) {
 	// Test a complete workflow context lifecycle
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"test": {SSH: []string{"test.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"test": {SSH: []string{"test.example.com"}},
+				},
+				Defaults: config.GlobalDefaults{
+					LocalFallback: true,
+				},
 			},
-			LocalFallback: true,
+			Project: &config.Config{},
 		},
 		WorkDir:      "/tmp/project",
 		StartTime:    time.Now(),
@@ -1149,7 +1281,7 @@ func TestWorkflowContext_FullLifecycle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test lock phase with local connection
-	ctx.Config.Lock = config.LockConfig{Enabled: true}
+	ctx.Resolved.Project.Lock = config.LockConfig{Enabled: true}
 	err = lockPhase(ctx, WorkflowOptions{})
 	require.NoError(t, err)
 
@@ -1213,9 +1345,12 @@ func TestSyncPhase_QuietModeRemoteAttempt(t *testing.T) {
 			Alias:   "remote.example.com",
 		},
 		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
-		Config: &config.Config{
-			Sync: config.SyncConfig{
-				Exclude: []string{".git"},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Sync: config.SyncConfig{
+					Exclude: []string{".git"},
+				},
 			},
 		},
 		WorkDir: "/tmp/test-project",
@@ -1238,12 +1373,15 @@ func TestLockPhase_AttemptLockWithoutConnection(t *testing.T) {
 	// This tests the path where locking is enabled but will fail
 	// because there's no SSH client
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: true,
-				Timeout: 100 * time.Millisecond, // Short timeout
-				Stale:   10 * time.Minute,
-				Dir:     "/tmp",
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: true,
+					Timeout: 100 * time.Millisecond, // Short timeout
+					Stale:   10 * time.Minute,
+					Dir:     "/tmp",
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -1293,8 +1431,10 @@ func TestLoadAndValidateConfig_WithDefaultHost(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	// Write a config with default host set
-	configContent := `
+	// Set up global config with hosts
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   prod:
@@ -1305,17 +1445,28 @@ hosts:
     ssh:
       - staging.example.com
     dir: /home/user/staging
-default: prod
+defaults:
+  host: prod
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", tmpDir)
+
+	// Write a project config with host reference
+	projectContent := `
+version: 1
+host: prod
+`
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
 	err = loadAndValidateConfig(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, ctx.Config)
-	assert.Equal(t, "prod", ctx.Config.Default)
-	assert.Len(t, ctx.Config.Hosts, 2)
+	require.NotNil(t, ctx.Resolved)
+	require.NotNil(t, ctx.Resolved.Project)
+	assert.Equal(t, "prod", ctx.Resolved.Project.Host)
+	assert.Len(t, ctx.Resolved.Global.Hosts, 2)
 }
 
 func TestLoadAndValidateConfig_WithSyncExcludes(t *testing.T) {
@@ -1326,28 +1477,41 @@ func TestLoadAndValidateConfig_WithSyncExcludes(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	configContent := `
+	// Set up global config with hosts
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   dev:
     ssh:
       - dev.example.com
     dir: /home/user/project
+`
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", tmpDir)
+
+	// Write project config with sync excludes
+	projectContent := `
+version: 1
+host: dev
 sync:
   exclude:
     - .git
     - node_modules
     - "*.pyc"
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
 	err = loadAndValidateConfig(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, ctx.Config)
-	assert.Contains(t, ctx.Config.Sync.Exclude, ".git")
-	assert.Contains(t, ctx.Config.Sync.Exclude, "node_modules")
+	require.NotNil(t, ctx.Resolved)
+	require.NotNil(t, ctx.Resolved.Project)
+	assert.Contains(t, ctx.Resolved.Project.Sync.Exclude, ".git")
+	assert.Contains(t, ctx.Resolved.Project.Sync.Exclude, "node_modules")
 }
 
 func TestLoadAndValidateConfig_WithLockConfig(t *testing.T) {
@@ -1358,28 +1522,41 @@ func TestLoadAndValidateConfig_WithLockConfig(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	configContent := `
+	// Set up global config with hosts
+	globalDir := filepath.Join(tmpDir, ".rr")
+	require.NoError(t, os.MkdirAll(globalDir, 0755))
+	globalContent := `
 version: 1
 hosts:
   dev:
     ssh:
       - dev.example.com
     dir: /home/user/project
+`
+	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
+	require.NoError(t, err)
+	t.Setenv("HOME", tmpDir)
+
+	// Write project config with lock settings
+	projectContent := `
+version: 1
+host: dev
 lock:
   enabled: true
   timeout: 30s
   stale: 5m
 `
-	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(configContent), 0644)
+	err = os.WriteFile(filepath.Join(tmpDir, ".rr.yaml"), []byte(projectContent), 0644)
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
 	err = loadAndValidateConfig(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, ctx.Config)
-	assert.True(t, ctx.Config.Lock.Enabled)
-	assert.Equal(t, 30*time.Second, ctx.Config.Lock.Timeout)
-	assert.Equal(t, 5*time.Minute, ctx.Config.Lock.Stale)
+	require.NotNil(t, ctx.Resolved)
+	require.NotNil(t, ctx.Resolved.Project)
+	assert.True(t, ctx.Resolved.Project.Lock.Enabled)
+	assert.Equal(t, 30*time.Second, ctx.Resolved.Project.Lock.Timeout)
+	assert.Equal(t, 5*time.Minute, ctx.Resolved.Project.Lock.Stale)
 }
 
 // ============================================================================
@@ -1430,9 +1607,12 @@ func TestSyncPhase_SkipSyncFlag(t *testing.T) {
 func TestLockPhase_AllSkipConditionsCombined(t *testing.T) {
 	// Test with all conditions that should skip locking
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Lock: config.LockConfig{
-				Enabled: false, // Disabled
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{},
+			Project: &config.Config{
+				Lock: config.LockConfig{
+					Enabled: false, // Disabled
+				},
 			},
 		},
 		Conn: &host.Connection{
@@ -1511,10 +1691,13 @@ func TestWorkflowContext_Close_WithAllResources(t *testing.T) {
 func TestWorkflowContext_SignalHandler_CleanupOrder(t *testing.T) {
 	// Verify that Close() properly handles all resources regardless of order
 	ctx := &WorkflowContext{
-		Config: &config.Config{
-			Hosts: map[string]config.Host{
-				"test": {SSH: []string{"test.example.com"}},
+		Resolved: &config.ResolvedConfig{
+			Global: &config.GlobalConfig{
+				Hosts: map[string]config.Host{
+					"test": {SSH: []string{"test.example.com"}},
+				},
 			},
+			Project: &config.Config{},
 		},
 		WorkDir:   "/test/dir",
 		StartTime: time.Now(),
@@ -1528,6 +1711,6 @@ func TestWorkflowContext_SignalHandler_CleanupOrder(t *testing.T) {
 	ctx.Close()
 
 	// Verify we can still access the context data (Close doesn't nil fields)
-	assert.NotNil(t, ctx.Config)
+	assert.NotNil(t, ctx.Resolved)
 	assert.Equal(t, "/test/dir", ctx.WorkDir)
 }

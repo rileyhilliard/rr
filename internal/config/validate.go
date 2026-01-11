@@ -340,7 +340,7 @@ func validateMonitorConfig(monitor MonitorConfig) error {
 
 // validateMonitor checks monitor configuration with host validation.
 // Used when we have access to the hosts map (from global config).
-func validateMonitor(monitor MonitorConfig, hosts map[string]Host) error {
+func validateMonitor(monitor MonitorConfig, _ map[string]Host) error {
 	// First run the basic validation
 	if err := validateMonitorConfig(monitor); err != nil {
 		return err

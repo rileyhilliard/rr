@@ -47,7 +47,14 @@ func RunTask(opts TaskOptions) (int, error) {
 	defer wf.Close()
 
 	// Get the task from loaded config
-	task, mergedEnv, err := config.GetTaskWithMergedEnv(wf.Config, opts.TaskName, opts.Host)
+	// Get host config from global hosts if connected to a remote host
+	var hostCfg *config.Host
+	if !wf.Conn.IsLocal {
+		if h, ok := wf.Resolved.Global.Hosts[wf.Conn.Name]; ok {
+			hostCfg = &h
+		}
+	}
+	task, mergedEnv, err := config.GetTaskWithMergedEnv(wf.Resolved.Project, opts.TaskName, hostCfg)
 	if err != nil {
 		return 1, err
 	}

@@ -189,9 +189,9 @@ func TestResolveHost(t *testing.T) {
 			resolved: &ResolvedConfig{
 				Global: &GlobalConfig{
 					Hosts: map[string]Host{
-						"zeta": {SSH: []string{"zeta"}, Dir: "/home/zeta"},
+						"zeta":  {SSH: []string{"zeta"}, Dir: "/home/zeta"},
 						"alpha": {SSH: []string{"alpha"}, Dir: "/home/alpha"},
-						"beta": {SSH: []string{"beta"}, Dir: "/home/beta"},
+						"beta":  {SSH: []string{"beta"}, Dir: "/home/beta"},
 					},
 				},
 				Project: &Config{},

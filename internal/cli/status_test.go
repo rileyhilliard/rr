@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,16 +67,14 @@ func TestFormatLatency(t *testing.T) {
 
 func TestFindSelectedHost(t *testing.T) {
 	tests := []struct {
-		name     string
-		cfg      *config.Config
-		results  map[string]probeResult
-		expected *Selected
+		name        string
+		defaultHost string
+		results     map[string]probeResult
+		expected    *Selected
 	}{
 		{
-			name: "returns nil when no hosts are healthy",
-			cfg: &config.Config{
-				Default: "auto",
-			},
+			name:        "returns nil when no hosts are healthy",
+			defaultHost: "auto",
 			results: map[string]probeResult{
 				"dev": {
 					HostName: "dev",
@@ -90,10 +87,8 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name: "auto mode selects first healthy host",
-			cfg: &config.Config{
-				Default: "auto",
-			},
+			name:        "auto mode selects first healthy host",
+			defaultHost: "auto",
 			results: map[string]probeResult{
 				"dev": {
 					HostName: "dev",
@@ -106,10 +101,8 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: &Selected{Host: "dev", Alias: "dev-vpn"},
 		},
 		{
-			name: "empty default behaves like auto",
-			cfg: &config.Config{
-				Default: "",
-			},
+			name:        "empty default behaves like auto",
+			defaultHost: "",
 			results: map[string]probeResult{
 				"prod": {
 					HostName: "prod",
@@ -121,10 +114,8 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: &Selected{Host: "prod", Alias: "prod-direct"},
 		},
 		{
-			name: "explicit default selects specified host",
-			cfg: &config.Config{
-				Default: "staging",
-			},
+			name:        "explicit default selects specified host",
+			defaultHost: "staging",
 			results: map[string]probeResult{
 				"dev": {
 					HostName: "dev",
@@ -142,10 +133,8 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: &Selected{Host: "staging", Alias: "staging-vpn"},
 		},
 		{
-			name: "explicit default with unhealthy host returns nil",
-			cfg: &config.Config{
-				Default: "prod",
-			},
+			name:        "explicit default with unhealthy host returns nil",
+			defaultHost: "prod",
 			results: map[string]probeResult{
 				"dev": {
 					HostName: "dev",
@@ -163,10 +152,8 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name: "explicit default for non-existent host returns nil",
-			cfg: &config.Config{
-				Default: "nonexistent",
-			},
+			name:        "explicit default for non-existent host returns nil",
+			defaultHost: "nonexistent",
 			results: map[string]probeResult{
 				"dev": {
 					HostName: "dev",
@@ -178,10 +165,8 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name: "selects first successful alias for preferred host",
-			cfg: &config.Config{
-				Default: "gpu-box",
-			},
+			name:        "selects first successful alias for preferred host",
+			defaultHost: "gpu-box",
 			results: map[string]probeResult{
 				"gpu-box": {
 					HostName: "gpu-box",
@@ -195,18 +180,16 @@ func TestFindSelectedHost(t *testing.T) {
 			expected: &Selected{Host: "gpu-box", Alias: "gpu-vpn"},
 		},
 		{
-			name: "empty results returns nil",
-			cfg: &config.Config{
-				Default: "auto",
-			},
-			results:  map[string]probeResult{},
-			expected: nil,
+			name:        "empty results returns nil",
+			defaultHost: "auto",
+			results:     map[string]probeResult{},
+			expected:    nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findSelectedHost(tt.cfg, tt.results)
+			got := findSelectedHost(tt.defaultHost, tt.results)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -214,17 +197,15 @@ func TestFindSelectedHost(t *testing.T) {
 
 func TestOutputStatusJSON(t *testing.T) {
 	tests := []struct {
-		name     string
-		cfg      *config.Config
-		results  map[string]probeResult
-		selected *Selected
-		validate func(t *testing.T, output StatusOutput)
+		name        string
+		defaultHost string
+		results     map[string]probeResult
+		selected    *Selected
+		validate    func(t *testing.T, output StatusOutput)
 	}{
 		{
-			name: "includes all hosts with their aliases",
-			cfg: &config.Config{
-				Default: "dev",
-			},
+			name:        "includes all hosts with their aliases",
+			defaultHost: "dev",
 			results: map[string]probeResult{
 				"dev": {
 					HostName: "dev",
@@ -268,10 +249,8 @@ func TestOutputStatusJSON(t *testing.T) {
 			},
 		},
 		{
-			name: "healthy is false when no aliases succeed",
-			cfg: &config.Config{
-				Default: "auto",
-			},
+			name:        "healthy is false when no aliases succeed",
+			defaultHost: "auto",
 			results: map[string]probeResult{
 				"unreachable": {
 					HostName: "unreachable",
@@ -289,22 +268,18 @@ func TestOutputStatusJSON(t *testing.T) {
 			},
 		},
 		{
-			name: "empty results produces empty hosts array",
-			cfg: &config.Config{
-				Default: "",
-			},
-			results:  map[string]probeResult{},
-			selected: nil,
+			name:        "empty results produces empty hosts array",
+			defaultHost: "",
+			results:     map[string]probeResult{},
+			selected:    nil,
 			validate: func(t *testing.T, output StatusOutput) {
 				assert.Empty(t, output.Hosts)
 				assert.Nil(t, output.Selected)
 			},
 		},
 		{
-			name: "nil error does not appear in output",
-			cfg: &config.Config{
-				Default: "test",
-			},
+			name:        "nil error does not appear in output",
+			defaultHost: "test",
 			results: map[string]probeResult{
 				"test": {
 					HostName: "test",
@@ -331,7 +306,7 @@ func TestOutputStatusJSON(t *testing.T) {
 			os.Stdout = w
 
 			// Run the function
-			outputErr := outputStatusJSON(tt.cfg, tt.results, tt.selected)
+			outputErr := outputStatusJSON(tt.defaultHost, tt.results, tt.selected)
 			require.NoError(t, outputErr)
 
 			// Restore stdout and read captured output
@@ -356,17 +331,15 @@ func TestOutputStatusJSON(t *testing.T) {
 func TestOutputStatusText(t *testing.T) {
 	tests := []struct {
 		name           string
-		cfg            *config.Config
+		defaultHost    string
 		results        map[string]probeResult
 		selected       *Selected
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
-			name: "shows default host",
-			cfg: &config.Config{
-				Default: "dev-machine",
-			},
+			name:        "shows default host",
+			defaultHost: "dev-machine",
 			results: map[string]probeResult{
 				"dev-machine": {
 					HostName: "dev-machine",
@@ -379,10 +352,8 @@ func TestOutputStatusText(t *testing.T) {
 			wantContains: []string{"Default: dev-machine", "Selected: dev-machine"},
 		},
 		{
-			name: "shows auto for empty or auto default",
-			cfg: &config.Config{
-				Default: "auto",
-			},
+			name:        "shows auto for empty or auto default",
+			defaultHost: "auto",
 			results: map[string]probeResult{
 				"server": {
 					HostName: "server",
@@ -395,10 +366,8 @@ func TestOutputStatusText(t *testing.T) {
 			wantContains: []string{"auto", "Selected: server"},
 		},
 		{
-			name: "shows none when no hosts reachable",
-			cfg: &config.Config{
-				Default: "auto",
-			},
+			name:        "shows none when no hosts reachable",
+			defaultHost: "auto",
 			results: map[string]probeResult{
 				"broken": {
 					HostName: "broken",
@@ -411,10 +380,8 @@ func TestOutputStatusText(t *testing.T) {
 			wantContains: []string{"none"},
 		},
 		{
-			name: "shows via alias for selected host",
-			cfg: &config.Config{
-				Default: "gpu",
-			},
+			name:        "shows via alias for selected host",
+			defaultHost: "gpu",
 			results: map[string]probeResult{
 				"gpu": {
 					HostName: "gpu",
@@ -437,7 +404,7 @@ func TestOutputStatusText(t *testing.T) {
 			os.Stdout = w
 
 			// Run the function
-			outputErr := outputStatusText(tt.cfg, tt.results, tt.selected)
+			outputErr := outputStatusText(tt.defaultHost, tt.results, tt.selected)
 			require.NoError(t, outputErr)
 
 			// Restore stdout and read captured output
