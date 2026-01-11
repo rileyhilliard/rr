@@ -289,12 +289,23 @@ rr doctor
 # Look for "stale locks" in the output
 ```
 
-**Force release a stale lock:**
+**Release a stuck lock:**
 
 ```bash
-# Manually remove the lock directory on remote
-rr exec "rm -rf /tmp/rr-locks/myproject.lock"
+rr unlock              # Release lock on default host
+rr unlock gpu-box      # Release lock on specific host
+rr unlock --all        # Release locks on all configured hosts
 ```
+
+The lock is project-specific (based on your current directory), so this only affects locks for your project.
+
+**When do locks get stuck?**
+
+- Process crashed or was killed (Ctrl+C during lock phase)
+- Network disconnected during a run
+- SSH connection dropped unexpectedly
+
+Stale locks are automatically cleaned up after the configured `stale` duration (default: 1 hour), but you can use `rr unlock` if you need to release one immediately.
 
 **Increase lock timeout** for long-running commands:
 

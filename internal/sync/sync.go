@@ -132,7 +132,9 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	// ControlPath uses a hash of the host to create unique socket files.
 	// ControlMaster=auto: reuse existing socket or create new one if needed.
 	// ControlPersist=60: keep the socket alive for 60s after last use.
-	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60",
+	// BatchMode=yes: prevent SSH from prompting for input (passwords, host keys, etc.)
+	//   which would cause rsync to hang since there's no terminal attached.
+	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
 		controlSocketDir)
 	args = append(args, "-e", sshCmd)
 

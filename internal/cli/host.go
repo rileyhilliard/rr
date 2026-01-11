@@ -14,6 +14,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -154,7 +155,8 @@ func hostRemove(name string) error {
 	}
 
 	// Check if host exists
-	if _, exists := cfg.Hosts[name]; !exists {
+	hostConfig, exists := cfg.Hosts[name]
+	if !exists {
 		// List available hosts in error message
 		var available []string
 		for k := range cfg.Hosts {
@@ -185,6 +187,9 @@ func hostRemove(name string) error {
 		fmt.Println("Cancelled.")
 		return nil
 	}
+
+	// Try to clean up remote artifacts before removing from config
+	cleanupRemoteArtifacts(name, hostConfig)
 
 	// Remove the host
 	delete(cfg.Hosts, name)
@@ -345,4 +350,72 @@ func testConnectionForAdd(sshHost string) error {
 			"Make sure the host is up and SSH is working: ssh "+sshHost)
 	}
 	return nil
+}
+
+// cleanupRemoteArtifacts attempts to remove synced files from the remote host.
+// If the host is unreachable, it logs a warning but doesn't fail.
+func cleanupRemoteArtifacts(hostName string, hostConfig config.Host) {
+	if len(hostConfig.SSH) == 0 || hostConfig.Dir == "" {
+		return
+	}
+
+	// Try each SSH alias until one works
+	var client *sshutil.Client
+	var connErr error
+	for _, sshAlias := range hostConfig.SSH {
+		client, _, connErr = host.ProbeAndConnect(sshAlias, 10*time.Second)
+		if connErr == nil {
+			break
+		}
+	}
+
+	if connErr != nil {
+		remoteDir := config.ExpandRemote(hostConfig.Dir)
+		fmt.Printf("  %s Host '%s' is unreachable, skipping remote cleanup\n", ui.SymbolWarning, hostName)
+		fmt.Printf("    Synced files remain at: %s\n", remoteDir)
+		fmt.Printf("    To remove manually: ssh %s 'rm -rf %s'\n", hostConfig.SSH[0], remoteDir)
+		return
+	}
+	defer client.Close()
+
+	// Expand the remote directory path
+	remoteDir := config.ExpandRemote(hostConfig.Dir)
+
+	// Build rm command with proper quoting for tilde expansion
+	rmCmd := fmt.Sprintf("rm -rf %s", shellQuotePreserveTilde(remoteDir))
+
+	spinner := ui.NewSpinner("Cleaning up remote files")
+	spinner.Start()
+
+	_, stderr, exitCode, err := client.Exec(rmCmd)
+	if err != nil || exitCode != 0 {
+		spinner.Fail()
+		errMsg := strings.TrimSpace(string(stderr))
+		if err != nil {
+			errMsg = err.Error()
+		}
+		fmt.Printf("  %s Remote cleanup failed: %s\n", ui.SymbolWarning, errMsg)
+		fmt.Printf("    Synced files remain at: %s\n", remoteDir)
+		fmt.Printf("    To remove manually: ssh %s 'rm -rf %s'\n", hostConfig.SSH[0], remoteDir)
+		return
+	}
+
+	spinner.Success()
+}
+
+// shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
+func shellQuotePreserveTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		return "~/" + shellQuote(path[2:])
+	}
+	if path == "~" {
+		return "~"
+	}
+	return shellQuote(path)
+}
+
+// shellQuote wraps a string in single quotes, escaping any existing single quotes.
+func shellQuote(s string) string {
+	escaped := strings.ReplaceAll(s, "'", "'\\''")
+	return "'" + escaped + "'"
 }

@@ -1447,3 +1447,87 @@ func TestLockPhase_AllSkipConditionsCombined(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, ctx.Lock)
 }
+
+// ============================================================================
+// Tests for signal handling
+// ============================================================================
+
+func TestWorkflowContext_SetupSignalHandler(t *testing.T) {
+	ctx := &WorkflowContext{}
+
+	// Setup signal handler
+	ctx.setupSignalHandler()
+
+	// Signal channel should be initialized
+	assert.NotNil(t, ctx.signalChan)
+
+	// Clean up
+	ctx.Close()
+}
+
+func TestWorkflowContext_Close_StopsSignalHandler(t *testing.T) {
+	ctx := &WorkflowContext{}
+	ctx.setupSignalHandler()
+
+	// Close should stop the signal handler
+	ctx.Close()
+
+	// Verify signalChan is closed (sending would panic on closed channel)
+	// We can't directly test this without risking panic, but we verify
+	// that Close() completes without hanging
+}
+
+func TestWorkflowContext_Close_WithSignalHandler_MultipleTimes(t *testing.T) {
+	ctx := &WorkflowContext{}
+	ctx.setupSignalHandler()
+
+	// Multiple closes should be safe due to sync.Once
+	ctx.Close()
+	ctx.Close()
+	ctx.Close()
+}
+
+func TestWorkflowContext_Close_WithAllResources(t *testing.T) {
+	// Test Close with all resources initialized
+	mockLock := &lock.Lock{
+		Dir:  "/tmp/rr-test.lock",
+		Info: &lock.LockInfo{},
+	}
+
+	selector := host.NewSelector(map[string]config.Host{
+		"dev": {SSH: []string{"dev.example.com"}},
+	})
+
+	ctx := &WorkflowContext{
+		Lock:     mockLock,
+		selector: selector,
+	}
+	ctx.setupSignalHandler()
+
+	// Close should clean up everything
+	ctx.Close()
+}
+
+func TestWorkflowContext_SignalHandler_CleanupOrder(t *testing.T) {
+	// Verify that Close() properly handles all resources regardless of order
+	ctx := &WorkflowContext{
+		Config: &config.Config{
+			Hosts: map[string]config.Host{
+				"test": {SSH: []string{"test.example.com"}},
+			},
+		},
+		WorkDir:   "/test/dir",
+		StartTime: time.Now(),
+	}
+
+	// Setup resources
+	setupHostSelector(ctx, WorkflowOptions{})
+	ctx.setupSignalHandler()
+
+	// Close should handle all resources
+	ctx.Close()
+
+	// Verify we can still access the context data (Close doesn't nil fields)
+	assert.NotNil(t, ctx.Config)
+	assert.Equal(t, "/test/dir", ctx.WorkDir)
+}

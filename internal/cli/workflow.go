@@ -2,13 +2,16 @@ package cli
 
 import (
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
-	"github.com/rileyhilliard/rr/internal/sync"
+	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"golang.org/x/term"
 )
@@ -34,17 +37,44 @@ type WorkflowContext struct {
 	StartTime    time.Time
 
 	// Internal state
-	selector *host.Selector
+	selector   *host.Selector
+	signalChan chan os.Signal
+	closeOnce  sync.Once
 }
 
-// Close releases workflow resources.
+// setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
+func (w *WorkflowContext) setupSignalHandler() {
+	w.signalChan = make(chan os.Signal, 1)
+	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig, ok := <-w.signalChan
+		if !ok {
+			// Channel was closed by Close(), not a signal
+			return
+		}
+		// Received actual signal, clean up and exit
+		_ = sig
+		w.Close()
+		os.Exit(130) // 128 + SIGINT(2) = 130, standard exit code for Ctrl+C
+	}()
+}
+
+// Close releases workflow resources. Safe to call multiple times.
 func (w *WorkflowContext) Close() {
-	if w.Lock != nil {
-		w.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
-	}
-	if w.selector != nil {
-		w.selector.Close()
-	}
+	w.closeOnce.Do(func() {
+		// Stop listening for signals
+		if w.signalChan != nil {
+			signal.Stop(w.signalChan)
+			close(w.signalChan)
+		}
+		if w.Lock != nil {
+			w.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
+		}
+		if w.selector != nil {
+			w.selector.Close()
+		}
+	})
 }
 
 // loadAndValidateConfig loads and validates the config file.
@@ -204,7 +234,7 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 
-	err := sync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, progressWriter)
+	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, progressWriter)
 	if err != nil {
 		syncProgress.Fail()
 		return err
@@ -220,7 +250,7 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
 
-	err := sync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, nil)
+	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, ctx.Config.Sync, nil)
 	if err != nil {
 		syncSpinner.Fail()
 		return err
@@ -270,6 +300,9 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 		StartTime:    time.Now(),
 		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
 	}
+
+	// Set up signal handler early to ensure cleanup on Ctrl+C
+	ctx.setupSignalHandler()
 
 	// Load and validate config
 	if err := loadAndValidateConfig(ctx); err != nil {

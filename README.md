@@ -162,6 +162,8 @@ rr status               # Show connection and sync status
 rr host list            # List configured hosts
 rr host add             # Add a new host interactively
 rr host remove mini     # Remove a host from config
+rr unlock               # Release a stuck lock on the default host
+rr unlock --all         # Release locks on all configured hosts
 rr update               # Update rr to latest version
 rr update --check       # Just check if update is available
 rr completion bash      # Shell completions (also zsh, fish, powershell)
@@ -193,11 +195,15 @@ sync:
 
 **Lock stuck?**
 
-If a previous run crashed and left a lock:
+If a previous run crashed or lost connection and left a lock behind:
 
 ```bash
-rr run --force-unlock "your command"
+rr unlock              # Release lock on default host
+rr unlock gpu-box      # Release lock on specific host
+rr unlock --all        # Release locks on all hosts
 ```
+
+The lock is project-specific, so this only affects the current directory's project.
 
 For more, see the [troubleshooting guide](docs/troubleshooting.md).
 

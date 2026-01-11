@@ -4,9 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	// Force TrueColor output in tests so we can verify ANSI color codes
+	lipgloss.SetColorProfile(termenv.TrueColor)
+}
 
 func TestFindMinMax(t *testing.T) {
 	tests := []struct {
@@ -296,6 +303,81 @@ func TestRenderBrailleSparkline_RightAlignedWhenPartial(t *testing.T) {
 	}
 }
 
+func TestRenderBrailleSparkline_ColorBasedOnValue(t *testing.T) {
+	// This test ensures braille sparkline colors are based on data values,
+	// not the row position in the graph. Previously there was a bug where
+	// all braille dots were red because of row-based gradient coloring.
+
+	// ANSI color codes for reference:
+	// ColorHealthy (#3fb950) appears as 38;2;63;185;80
+	// ColorWarning (#d29922) appears as 38;2;210;153;34
+	// ColorCritical (#f85149) appears as 38;2;248;81;73
+
+	tests := []struct {
+		name           string
+		data           []float64
+		shouldContain  string // partial ANSI code to look for
+		shouldNotMatch string // color that should NOT appear for this data
+		description    string
+	}{
+		{
+			name:           "low values should be green",
+			data:           []float64{20, 25, 30, 20, 25, 30}, // all under 70%
+			shouldContain:  "38;2;63;185;80",                  // green RGB
+			shouldNotMatch: "38;2;248;81;73",                  // should NOT be red
+			description:    "values under 70% should use healthy (green) color",
+		},
+		{
+			name:           "medium values should be yellow",
+			data:           []float64{75, 80, 85, 75, 80, 85}, // all 70-90%
+			shouldContain:  "38;2;210;153;34",                 // yellow RGB
+			shouldNotMatch: "",
+			description:    "values 70-90% should use warning (yellow) color",
+		},
+		{
+			name:           "high values should be red",
+			data:           []float64{92, 95, 98, 92, 95, 98}, // all over 90%
+			shouldContain:  "38;2;248;81;73",                  // red RGB
+			shouldNotMatch: "",
+			description:    "values over 90% should use critical (red) color",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Use height=2 which was problematic with the old row-based coloring
+			result := RenderBrailleSparkline(tt.data, 10, 2, ColorGraph)
+
+			assert.Contains(t, result, tt.shouldContain,
+				"%s: expected color code %s in output", tt.description, tt.shouldContain)
+
+			if tt.shouldNotMatch != "" {
+				assert.NotContains(t, result, tt.shouldNotMatch,
+					"%s: should not contain color code %s", tt.description, tt.shouldNotMatch)
+			}
+		})
+	}
+}
+
+func TestRenderBrailleSparkline_LowValuesNotRedInShortGraphs(t *testing.T) {
+	// Regression test: with height=2 (card view), low values like 26% RAM
+	// were incorrectly showing as red due to row-based gradient logic.
+	// The fix ensures coloring is purely value-based.
+
+	lowData := []float64{26, 27, 25, 26, 28, 25, 26, 27} // ~26% - well under warning threshold
+	redColorCode := "38;2;248;81;73"                     // ColorCritical RGB
+
+	// Test with various small heights that are used in card views
+	for _, height := range []int{1, 2, 3} {
+		t.Run(strings.ReplaceAll("height_"+string(rune('0'+height)), " ", "_"), func(t *testing.T) {
+			result := RenderBrailleSparkline(lowData, 10, height, ColorGraph)
+
+			assert.NotContains(t, result, redColorCode,
+				"height=%d: low values (26%%) should not be colored red", height)
+		})
+	}
+}
+
 func TestRenderMiniSparkline(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -376,13 +458,6 @@ func TestRenderGradientBar(t *testing.T) {
 			assert.NotEmpty(t, result)
 		})
 	}
-}
-
-func TestColorSeverity(t *testing.T) {
-	assert.Equal(t, 2, colorSeverity(ColorCritical))
-	assert.Equal(t, 1, colorSeverity(ColorWarning))
-	assert.Equal(t, 0, colorSeverity(ColorHealthy))
-	assert.Equal(t, 0, colorSeverity(ColorGraph)) // default case
 }
 
 func TestRenderCleanSparkline(t *testing.T) {

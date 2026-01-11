@@ -30,6 +30,7 @@ var (
 	monitorHostsFlag     string
 	monitorIntervalFlag  string
 	hostAddSkipProbe     bool
+	unlockAllFlag        bool
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -338,6 +339,36 @@ Examples:
 	},
 }
 
+// unlockCmd releases the lock on a remote host
+var unlockCmd = &cobra.Command{
+	Use:   "unlock [host]",
+	Short: "Release lock on remote host",
+	Long: `Force-release the project lock on a remote host.
+
+Use this when a lock is stuck due to a crashed process or lost connection.
+The lock is project-specific, so this only releases the lock for the current
+directory's project.
+
+If no host is specified, uses the default host. With --all, releases locks
+on all configured hosts.
+
+Examples:
+  rr unlock              # Unlock default host
+  rr unlock dev-box      # Unlock specific host
+  rr unlock --all        # Unlock all configured hosts`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		hostArg := ""
+		if len(args) > 0 {
+			hostArg = args[0]
+		}
+		return unlockCommand(UnlockOptions{
+			Host: hostArg,
+			All:  unlockAllFlag,
+		})
+	},
+}
+
 func init() {
 	// run command flags
 	runCmd.Flags().StringVar(&runHostFlag, "host", "", "target host name")
@@ -370,6 +401,9 @@ func init() {
 	// host command flags
 	hostAddCmd.Flags().BoolVar(&hostAddSkipProbe, "skip-probe", false, "skip SSH connection testing")
 
+	// unlock command flags
+	unlockCmd.Flags().BoolVarP(&unlockAllFlag, "all", "a", false, "unlock all configured hosts")
+
 	// Register host subcommands
 	hostCmd.AddCommand(hostAddCmd)
 	hostCmd.AddCommand(hostRemoveCmd)
@@ -386,4 +420,5 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(completionCmd)
 	rootCmd.AddCommand(hostCmd)
+	rootCmd.AddCommand(unlockCmd)
 }

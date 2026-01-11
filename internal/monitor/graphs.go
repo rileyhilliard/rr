@@ -155,31 +155,17 @@ func RenderBrailleSparkline(data []float64, width, height int, baseColor lipglos
 		}
 	}
 
-	// Convert grid to string with per-column coloring
+	// Convert grid to string with per-column coloring based on data values
 	var lines []string
-	for rowIdx, row := range grid {
+	for _, row := range grid {
 		var lineBuilder strings.Builder
 		for colIdx, char := range row {
-			// Determine color based on value at this column
+			// Determine color based on max value at this column
 			var color lipgloss.Color
 			if isPercentage {
 				color = MetricColor(colMaxValues[colIdx])
 			} else {
 				color = baseColor
-			}
-
-			// For rows near the top, use the threshold color of the row height
-			// This creates a gradient effect where higher parts of the graph are more red
-			if isPercentage && char != brailleBase {
-				// Calculate what percentage this row represents
-				rowFromBottom := height - 1 - rowIdx
-				rowPercent := float64(rowFromBottom+1) / float64(height) * 100
-				// Blend between column value color and row threshold color
-				rowColor := MetricColor(rowPercent)
-				// Use the more severe color
-				if colorSeverity(rowColor) > colorSeverity(color) {
-					color = rowColor
-				}
 			}
 
 			// Apply both foreground and background color
@@ -190,18 +176,6 @@ func RenderBrailleSparkline(data []float64, width, height int, baseColor lipglos
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-// colorSeverity returns a numeric severity for color comparison (higher = more severe)
-func colorSeverity(c lipgloss.Color) int {
-	switch c {
-	case ColorCritical:
-		return 2
-	case ColorWarning:
-		return 1
-	default:
-		return 0
-	}
 }
 
 // RenderMiniSparkline renders a single-row sparkline using block characters.
