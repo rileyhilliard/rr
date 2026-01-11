@@ -4,8 +4,6 @@
 
 ![demo-extended](https://github.com/user-attachments/assets/418782f4-04ac-4f93-a04e-dddf4f9f6125)
 
-![rr](https://github.com/user-attachments/assets/d0ba88a9-6220-49ad-87eb-a06b234fbfb5)
-
 </p>
 
 [![CI](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml/badge.svg)](https://github.com/rileyhilliard/rr/actions/workflows/ci.yml)
