@@ -21,10 +21,6 @@ rr run "make test"
 
 This rsyncs your project to the remote host, runs `make test`, and streams the output back. If you switch from your home LAN to a VPN, it figures out which hostname works. If someone else is using the machine, it waits for them to finish.
 
-<p align="center">
-  <video src="assets/rr.mp4" controls width="600"></video>
-</p>
-
 ## Quick start
 
 ```bash
