@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-01-11
+
+### Added
+
+- New "default" sort order in monitor that shows online hosts first, then follows config priority order (default host, then fallbacks)
+- Horizontal navigation keys (left/right/h/l) for host selection in monitor TUI
+- VHS demo tapes reorganized to `tapes/` directory with new demos for doctor, init, failover, and tasks commands
+- Mock rr binary for deterministic VHS demo recordings without requiring SSH
+- `make demos` target for batch recording all demo GIFs
+
 ## [0.7.1] - 2026-01-11
 
 ### Added
