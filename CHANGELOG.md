@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-01-12
+
+### Added
+
+- Project-level `defaults` section in `.rr.yaml` to reduce task config verbosity
+  - `defaults.setup`: Commands run before every task (e.g., `source ~/.local/bin/env`)
+  - `defaults.env`: Environment variables applied to all tasks
+  - Merge order: host env → project defaults → task env
+- Multi-step task progress output showing step-by-step execution
+  - Clear step headers with name and number (e.g., "Step 1/3: Build")
+  - Command display and timing per step
+  - Success/failure indicators for each step
+
+### Fixed
+
+- `rr run` now applies project `defaults.setup` consistently with task execution
+
+### Changed
+
+- Lowered Go version requirement from 1.24.11 to 1.24 for broader compatibility
+
 ## [0.8.0] - 2026-01-11
 
 ### Added
