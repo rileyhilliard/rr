@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-01-11
+
+### Added
+
+- New `rr tasks` command to list all available tasks with descriptions and commands
+- Task argument passthrough: extra args passed to tasks are appended to the command
+  - Example: `rr test tests/test_api.py` runs `pytest -v tests/test_api.py`
+  - Only supported for single-command tasks, not multi-step tasks
+- "tasks" and "unlock" added to reserved task names to prevent conflicts
+
+### Changed
+
+- Task commands now show `[args...]` in usage to indicate arg support
+- Task help output includes example of argument passthrough
+
 ## [0.7.3] - 2026-01-11
 
 ### Added
