@@ -7,7 +7,8 @@ For full documentation, see [docs/claude-code.md](../docs/claude-code.md).
 ## Quick install
 
 ```bash
-claude /plugin install rileyhilliard/rr
+/plugin marketplace add https://github.com/rileyhilliard/rr
+/plugin install rr@rr
 ```
 
 ## Available skills
