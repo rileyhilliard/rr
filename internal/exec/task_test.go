@@ -26,7 +26,7 @@ func TestExecuteTask_SingleCommand(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -43,7 +43,7 @@ func TestExecuteTask_SingleCommandWithArgs(t *testing.T) {
 	args := []string{"world", "foo"}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, args, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, args, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -59,7 +59,7 @@ func TestExecuteTask_SingleCommandWithEnv(t *testing.T) {
 	env := map[string]string{"MY_VAR": "test_value"}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, env, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, env, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -73,7 +73,7 @@ func TestExecuteTask_SingleCommandFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err) // No error - command ran but returned non-zero
 	assert.Equal(t, 42, result.ExitCode)
@@ -91,7 +91,7 @@ func TestExecuteTask_MultiStepAllPassing(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -119,7 +119,7 @@ func TestExecuteTask_MultiStepFailureWithStop(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ExitCode)
@@ -146,7 +146,7 @@ func TestExecuteTask_MultiStepFailureWithContinue(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ExitCode)   // Final exit code is from failed step
@@ -175,7 +175,7 @@ func TestExecuteTask_MultiStepMixedOnFail(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.ExitCode)   // Exit code from step3
@@ -203,7 +203,7 @@ func TestExecuteTask_StepNamesDefault(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	require.Len(t, result.StepResults, 3)
@@ -224,7 +224,7 @@ func TestExecuteTask_OnFailDefaults(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	require.Len(t, result.StepResults, 4)
@@ -240,7 +240,7 @@ func TestExecuteTask_NilTask(t *testing.T) {
 	conn := createLocalConn()
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, nil, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, nil, nil, nil, "", &stdout, &stderr, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -252,7 +252,7 @@ func TestExecuteTask_EmptyTask(t *testing.T) {
 	task := &config.TaskConfig{}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr)
+	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -324,7 +324,7 @@ func TestBuildCommand_Local(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildCommand(tt.cmd, tt.env, tt.workDir, true)
+			result := buildCommand(tt.cmd, tt.env, tt.workDir, nil, true)
 			if len(tt.env) == 0 {
 				assert.Equal(t, tt.expected, result)
 			} else {
@@ -337,10 +337,20 @@ func TestBuildCommand_Local(t *testing.T) {
 }
 
 func TestBuildCommand_Remote(t *testing.T) {
-	result := buildCommand("make test", nil, "/home/user/project", false)
+	result := buildCommand("make test", nil, "/home/user/project", nil, false)
 	assert.Contains(t, result, "cd")
 	assert.Contains(t, result, "/home/user/project")
 	assert.Contains(t, result, "make test")
+}
+
+func TestBuildCommand_WithSetupCommands(t *testing.T) {
+	setup := []string{"source ~/.env", "export PATH=/opt/bin:$PATH"}
+	result := buildCommand("make test", nil, "", setup, true)
+	assert.Contains(t, result, "source ~/.env")
+	assert.Contains(t, result, "export PATH=/opt/bin:$PATH")
+	assert.Contains(t, result, "make test")
+	// Should be joined with &&
+	assert.Contains(t, result, " && ")
 }
 
 func TestBuildRemoteCommand_DefaultShell(t *testing.T) {

@@ -94,8 +94,24 @@ func RunTask(opts TaskOptions) (int, error) {
 		remoteDir = config.ExpandRemote(wf.Conn.Host.Dir)
 	}
 
+	// Get merged setup commands (host + project defaults)
+	setupCommands := config.GetMergedSetupCommands(wf.Resolved.Project, hostCfg)
+
+	// Create exec options with setup commands and step handler for multi-step tasks
+	execOpts := &exec.TaskExecOptions{
+		SetupCommands: setupCommands,
+	}
+
+	// Add step handler for multi-step tasks to show progress
+	if len(task.Steps) > 0 {
+		execOpts.StepHandler = &taskStepHandler{
+			phaseDisplay: wf.PhaseDisplay,
+			quiet:        opts.Quiet,
+		}
+	}
+
 	// Execute the task
-	result, err := exec.ExecuteTask(wf.Conn, task, opts.Args, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr())
+	result, err := exec.ExecuteTask(wf.Conn, task, opts.Args, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr(), execOpts)
 	execDuration := time.Since(execStart)
 
 	if err != nil {
@@ -347,4 +363,68 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 	}
 
 	return nil
+}
+
+// taskStepHandler implements exec.StepHandler to show step progress during multi-step tasks.
+type taskStepHandler struct {
+	phaseDisplay *ui.PhaseDisplay
+	quiet        bool
+}
+
+// OnStepStart is called before a step begins execution.
+func (h *taskStepHandler) OnStepStart(stepNum, totalSteps int, step config.TaskStep) {
+	if h.quiet {
+		return
+	}
+
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	boldStyle := lipgloss.NewStyle().Bold(true)
+
+	stepName := step.Name
+	if stepName == "" {
+		stepName = fmt.Sprintf("step %d", stepNum)
+	}
+
+	// Show step header: ━━━ Step 1/3: Sync dependencies ━━━
+	header := fmt.Sprintf("Step %d/%d: %s", stepNum, totalSteps, stepName)
+	headerLine := fmt.Sprintf("━━━ %s ━━━", header)
+	fmt.Printf("\n%s\n", boldStyle.Render(headerLine))
+
+	// Show the command being run
+	fmt.Printf("%s %s\n\n", mutedStyle.Render("$"), step.Run)
+}
+
+// OnStepComplete is called after a step finishes execution.
+func (h *taskStepHandler) OnStepComplete(stepNum, totalSteps int, step config.TaskStep, duration time.Duration, exitCode int) {
+	if h.quiet {
+		return
+	}
+
+	var symbol string
+	var symbolColor lipgloss.Color
+
+	if exitCode == 0 {
+		symbol = ui.SymbolSuccess
+		symbolColor = ui.ColorSuccess
+	} else {
+		symbol = ui.SymbolFail
+		symbolColor = ui.ColorError
+	}
+
+	symbolStyle := lipgloss.NewStyle().Foreground(symbolColor)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	stepName := step.Name
+	if stepName == "" {
+		stepName = fmt.Sprintf("step %d", stepNum)
+	}
+
+	// Show step completion: ● Step 1/3 complete (2.3s)
+	fmt.Printf("\n%s Step %d/%d: %s %s\n",
+		symbolStyle.Render(symbol),
+		stepNum,
+		totalSteps,
+		stepName,
+		mutedStyle.Render(fmt.Sprintf("(%.1fs)", duration.Seconds())),
+	)
 }

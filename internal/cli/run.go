@@ -65,7 +65,12 @@ func Run(opts RunOptions) (int, error) {
 		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		// Remote execution - build command with shell config, setup commands, and working directory
-		fullCmd := exec.BuildRemoteCommand(opts.Command, &wf.Conn.Host)
+		// Prepend project defaults setup to the command for consistency with task execution
+		cmd := opts.Command
+		if len(wf.Resolved.Project.Defaults.Setup) > 0 {
+			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+		}
+		fullCmd := exec.BuildRemoteCommand(cmd, &wf.Conn.Host)
 		exitCode, err = wf.Conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
