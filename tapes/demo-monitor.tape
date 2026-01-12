@@ -19,7 +19,7 @@ Output tapes/demo-monitor.gif
 Set FontSize 15
 Set Width 1100
 Set Height 700
-Set FontFamily "JetBrains Mono"
+Set FontFamily "Menlo"
 Set Theme "Catppuccin Mocha"
 Set Padding 16
 Set TypingSpeed 40ms

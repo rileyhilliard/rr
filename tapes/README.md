@@ -10,42 +10,38 @@ Install VHS (terminal recorder):
 brew install charmbracelet/tap/vhs
 ```
 
-Ensure JetBrains Mono font is available (or adjust tapes to use your preferred font).
+Tapes use Menlo font (built into macOS). On Linux, install a monospace font and update tapes if needed.
 
 ## Recording
 
-**Record all demos:**
+**Record all demos with real rr (requires SSH setup):**
 
 ```bash
 make demos
 ```
 
+**Record all demos with mock (deterministic, no SSH needed):**
+
+```bash
+make demos-mock
+```
+
 **Record individual demo:**
 
 ```bash
-vhs tapes/demo.tape
+vhs tapes/demo.tape                                    # uses real rr
+PATH="$(pwd)/tapes/mock:$PATH" vhs tapes/demo.tape    # uses mock
 ```
 
 ## Mock Environment
 
 The `mock/` directory contains tools for recording demos without live SSH:
 
+- `mock/rr` - Symlink to mock script
 - `mock/rr-mock` - Shell script that simulates rr output
 - `mock/.rr.yaml` - Sample configuration for demos
 
-To use the mock:
-
-```bash
-# Add mock directory to PATH before recording
-PATH="$(pwd)/tapes/mock:$PATH" vhs tapes/demo.tape
-```
-
-Or update the tape to explicitly call the mock:
-
-```tape
-Set Shell "bash"
-Set Env { "PATH": "./tapes/mock:$PATH" }
-```
+The mock produces deterministic output for consistent demo recordings.
 
 ## Available Tapes
 
@@ -53,8 +49,8 @@ Set Env { "PATH": "./tapes/mock:$PATH" }
 |------|-------------|----------|--------|
 | `demo.tape` | Hero shot: run + exec | ~8s | `demo.gif` |
 | `demo-extended.tape` | Full feature showcase | ~18s | `demo-extended.gif` |
-| `demo-monitor.tape` | TUI dashboard | ~20s | `demo-monitor.gif` |
-| `demo-init.tape` | First-time setup | ~12s | `demo-init.gif` |
+| `demo-monitor.tape` | TUI dashboard (requires real rr) | ~20s | `demo-monitor.gif` |
+| `demo-init.tape` | First-time setup (requires real rr) | ~12s | `demo-init.gif` |
 | `demo-failover.tape` | Host failover | ~10s | `demo-failover.gif` |
 | `demo-tasks.tape` | Named tasks | ~10s | `demo-tasks.gif` |
 | `demo-doctor.tape` | Diagnostics | ~12s | `demo-doctor.gif` |
@@ -64,8 +60,7 @@ Set Env { "PATH": "./tapes/mock:$PATH" }
 All tapes use consistent settings:
 
 ```tape
-Set Shell "bash"
-Set FontFamily "JetBrains Mono"
+Set FontFamily "Menlo"
 Set Theme "Catppuccin Mocha"
 Set Padding 20
 Set WindowBar Colorful
@@ -82,11 +77,8 @@ Set TypingSpeed 35ms
 
 ## Real vs Mock Recording
 
-The mock environment produces deterministic output for consistent demos. For authentic recordings with actual SSH:
-
-1. Ensure `.rr.yaml` is configured with real hosts
-2. Don't add `mock/` to PATH
-3. Adjust Sleep timings to match actual execution speed
+- **Mock** (`make demos-mock`): Deterministic output, no SSH needed. Best for CI/consistent demos.
+- **Real** (`make demos`): Authentic recordings with actual SSH. Adjust Sleep timings to match execution speed.
 
 ## Troubleshooting
 
@@ -97,7 +89,7 @@ VHS requires a terminal with 24-bit color support. The Catppuccin Mocha theme wo
 Adjust `Sleep` durations in tape files. Mock output has fixed delays; real SSH varies.
 
 **Font not found:**
-Install JetBrains Mono or change `Set FontFamily` to a font you have installed.
+Tapes use Menlo (built into macOS). On other systems, change `Set FontFamily` to an available monospace font.
 
 **GIF too large:**
 Reduce dimensions or duration. Consider using `Set Quality` to adjust compression.
