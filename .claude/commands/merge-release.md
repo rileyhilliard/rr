@@ -134,10 +134,24 @@ Insert new section following Keep a Changelog format:
 
 ### Step 7: Commit and Push Changelog
 
+**Important**: Most repos have branch protection rules. Always create a PR for the changelog instead of pushing directly to main.
+
 ```bash
+# Create changelog branch
+git checkout -b "docs/changelog-$NEW_TAG"
 git add CHANGELOG.md
 git commit -m "docs: update changelog for $NEW_TAG"
-git push origin main
+git push -u origin "docs/changelog-$NEW_TAG"
+
+# Create and merge PR
+gh pr create --title "docs: update changelog for $NEW_TAG" --body "Update CHANGELOG.md for $NEW_TAG release."
+PR_NUMBER=$(gh pr view --json number -q .number)
+gh pr merge $PR_NUMBER --squash --delete-branch
+
+# Sync local main
+git checkout main
+git fetch origin
+git reset --hard origin/main
 ```
 
 ### Step 8: Create GitHub Release
