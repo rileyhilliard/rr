@@ -57,6 +57,45 @@ defaults:
   probe_timeout: 2s
 ```
 
+#### Host Options
+
+| Field | Purpose |
+|-------|---------|
+| `ssh` | List of SSH connection strings, tried in order |
+| `dir` | Working directory on remote (supports variable expansion) |
+| `tags` | Labels for filtering with `--tag` flag |
+| `env` | Environment variables set for all commands |
+| `shell` | Custom shell (default: `$SHELL` or `/bin/bash`) |
+| `setup_commands` | Commands run before every task (reduces repetition) |
+
+#### Reducing Task Verbosity with `setup_commands`
+
+If you find yourself repeating the same setup in every task (sourcing environments, setting PATH, etc.), move it to `setup_commands` in the host config:
+
+```yaml
+# ~/.rr/config.yaml
+hosts:
+  dev-box:
+    ssh: [dev.local, dev-tailscale]
+    dir: ~/projects/${PROJECT}
+    setup_commands:
+      - source ~/.local/bin/env     # Load uv, pyenv, etc.
+      - export PATH="$HOME/.bun/bin:$PATH"
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+```
+
+These commands are automatically prepended to every task, so your `.rr.yaml` tasks stay clean:
+
+```yaml
+# .rr.yaml - no need to repeat setup in each task
+tasks:
+  test:
+    run: uv run pytest -v
+  build:
+    run: bun run build
+```
+
 **SSH entries can be:**
 - Hostnames: `mac-mini.local`, `192.168.1.50`
 - User@host: `deploy@server.example.com`
@@ -76,6 +115,14 @@ hosts:
   - mini
   - server
 
+# Defaults applied to all tasks (reduces repetition)
+defaults:
+  setup:
+    - source ~/.local/bin/env     # Source environment (uv, pyenv, etc.)
+    - set -o pipefail             # Fail on pipe errors
+  env:
+    PYTHONDONTWRITEBYTECODE: "1"
+
 sync:
   exclude:
     - .git/
@@ -91,10 +138,29 @@ lock:
 
 tasks:
   test:
-    run: pytest -v
+    run: pytest -v      # defaults.setup runs first automatically
   build:
     run: make build
 ```
+
+#### Project Defaults
+
+The `defaults` section reduces repetition across tasks:
+
+| Field | Purpose |
+|-------|---------|
+| `setup` | Commands run before every task (sourcing envs, shell options) |
+| `env` | Environment variables applied to all tasks |
+
+**Merge order** (lowest to highest precedence):
+1. Host `env` (from global config)
+2. Project `defaults.env`
+3. Task-specific `env`
+
+For setup commands:
+1. Host `setup_commands` (from global config)
+2. Project `defaults.setup`
+3. Then the task command runs
 
 ## Commands
 
@@ -186,6 +252,27 @@ rr test -k "test_login"      # Runs: pytest -v -k "test_login"
 ```
 
 Note: Args are only supported for tasks with a single `run` command, not multi-step tasks.
+
+#### Multi-Step Task Progress
+
+Multi-step tasks show progress as each step runs:
+
+```
+━━━ Step 1/3: Build ━━━
+$ make build
+[output...]
+● Step 1/3: Build (2.3s)
+
+━━━ Step 2/3: Test ━━━
+$ pytest -v
+[output...]
+● Step 2/3: Test (45.1s)
+
+━━━ Step 3/3: Deploy ━━━
+$ ./deploy.sh
+[output...]
+● Step 3/3: Deploy (5.2s)
+```
 
 ## How It Works
 

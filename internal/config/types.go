@@ -29,17 +29,31 @@ type GlobalDefaults struct {
 	LocalFallback bool `yaml:"local_fallback" mapstructure:"local_fallback"`
 }
 
+// ProjectDefaults contains default settings applied to all tasks in a project.
+// These are merged with host-level and task-level settings.
+type ProjectDefaults struct {
+	// Setup commands run before each task command.
+	// These are prepended after host setup_commands but before the task command.
+	// Useful for sourcing environments, setting shell options, etc.
+	Setup []string `yaml:"setup" mapstructure:"setup"`
+
+	// Env contains environment variables applied to all tasks.
+	// These override host env but are overridden by task-specific env.
+	Env map[string]string `yaml:"env" mapstructure:"env"`
+}
+
 // Config represents the project-level .rr.yaml configuration file.
 // This is shareable with the team and doesn't contain host connection details.
 type Config struct {
-	Version int                   `yaml:"version" mapstructure:"version"`
-	Host    string                `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
-	Hosts   []string              `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
-	Sync    SyncConfig            `yaml:"sync" mapstructure:"sync"`
-	Lock    LockConfig            `yaml:"lock" mapstructure:"lock"`
-	Tasks   map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
-	Output  OutputConfig          `yaml:"output" mapstructure:"output"`
-	Monitor MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
+	Version  int                   `yaml:"version" mapstructure:"version"`
+	Host     string                `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
+	Hosts    []string              `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
+	Defaults ProjectDefaults       `yaml:"defaults" mapstructure:"defaults"`
+	Sync     SyncConfig            `yaml:"sync" mapstructure:"sync"`
+	Lock     LockConfig            `yaml:"lock" mapstructure:"lock"`
+	Tasks    map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
+	Output   OutputConfig          `yaml:"output" mapstructure:"output"`
+	Monitor  MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
 }
 
 // Host defines a remote machine and its connection settings.

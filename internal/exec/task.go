@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -25,14 +26,40 @@ type StepResult struct {
 	OnFail   string // The on_fail behavior for this step
 }
 
+// TaskExecOptions contains options for task execution.
+type TaskExecOptions struct {
+	// SetupCommands are prepended to each command (from host + project defaults).
+	SetupCommands []string
+
+	// StepHandler is called before and after each step in multi-step tasks.
+	// If nil, steps run silently without progress output.
+	StepHandler StepHandler
+}
+
+// StepHandler receives callbacks during multi-step task execution.
+type StepHandler interface {
+	// OnStepStart is called before a step begins.
+	// stepNum is 1-indexed, totalSteps is the total number of steps.
+	OnStepStart(stepNum, totalSteps int, step config.TaskStep)
+
+	// OnStepComplete is called after a step finishes.
+	// duration is how long the step took, exitCode is the result.
+	OnStepComplete(stepNum, totalSteps int, step config.TaskStep, duration time.Duration, exitCode int)
+}
+
 // ExecuteTask runs a task on the given connection.
 // Handles both single-command tasks (Run field) and multi-step tasks (Steps field).
 // Extra args are appended to single-command tasks (not supported for multi-step).
-func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, env map[string]string, workDir string, stdout, stderr io.Writer) (*TaskResult, error) {
+func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, env map[string]string, workDir string, stdout, stderr io.Writer, opts *TaskExecOptions) (*TaskResult, error) {
 	if task == nil {
 		return nil, errors.New(errors.ErrExec,
 			"No task provided",
 			"This shouldn't happen - please report this bug!")
+	}
+
+	// Normalize options
+	if opts == nil {
+		opts = &TaskExecOptions{}
 	}
 
 	// Single-command task
@@ -42,7 +69,7 @@ func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, 
 		if len(args) > 0 {
 			cmd = cmd + " " + strings.Join(args, " ")
 		}
-		exitCode, err := executeCommand(conn, cmd, env, workDir, stdout, stderr)
+		exitCode, err := executeCommand(conn, cmd, env, workDir, opts.SetupCommands, stdout, stderr)
 		if err != nil {
 			return nil, err
 		}
@@ -59,33 +86,49 @@ func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, 
 			"Add a 'run' command or 'steps' to your task config.")
 	}
 
-	return executeSteps(conn, task.Steps, env, workDir, stdout, stderr)
+	return executeSteps(conn, task.Steps, env, workDir, opts, stdout, stderr)
 }
 
 // executeSteps runs multiple steps in sequence.
-func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string]string, workDir string, stdout, stderr io.Writer) (*TaskResult, error) {
+func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string]string, workDir string, opts *TaskExecOptions, stdout, stderr io.Writer) (*TaskResult, error) {
 	result := &TaskResult{
 		StepResults: make([]StepResult, 0, len(steps)),
 		FailedStep:  -1,
 	}
 
+	totalSteps := len(steps)
+
 	for i, step := range steps {
+		stepNum := i + 1
 		stepResult := StepResult{
 			Name:   step.Name,
 			OnFail: config.GetStepOnFail(step),
 		}
 
 		if step.Name == "" {
-			stepResult.Name = fmt.Sprintf("step %d", i+1)
+			stepResult.Name = fmt.Sprintf("step %d", stepNum)
 		}
 
-		exitCode, err := executeCommand(conn, step.Run, env, workDir, stdout, stderr)
+		// Notify handler that step is starting
+		if opts.StepHandler != nil {
+			opts.StepHandler.OnStepStart(stepNum, totalSteps, step)
+		}
+
+		stepStart := time.Now()
+		exitCode, err := executeCommand(conn, step.Run, env, workDir, opts.SetupCommands, stdout, stderr)
+		stepDuration := time.Since(stepStart)
+
 		if err != nil {
 			return nil, err
 		}
 
 		stepResult.ExitCode = exitCode
 		result.StepResults = append(result.StepResults, stepResult)
+
+		// Notify handler that step completed
+		if opts.StepHandler != nil {
+			opts.StepHandler.OnStepComplete(stepNum, totalSteps, step, stepDuration, exitCode)
+		}
 
 		if exitCode != 0 {
 			if result.FailedStep == -1 {
@@ -106,9 +149,9 @@ func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string
 }
 
 // executeCommand runs a single command on the connection.
-func executeCommand(conn *host.Connection, cmd string, env map[string]string, workDir string, stdout, stderr io.Writer) (int, error) {
-	// Build the full command with environment variables and working directory
-	fullCmd := buildCommand(cmd, env, workDir, conn.IsLocal)
+func executeCommand(conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
+	// Build the full command with environment variables, working directory, and setup commands
+	fullCmd := buildCommand(cmd, env, workDir, setupCommands, conn.IsLocal)
 
 	if conn.IsLocal {
 		return ExecuteLocal(fullCmd, "", stdout, stderr)
@@ -118,23 +161,26 @@ func executeCommand(conn *host.Connection, cmd string, env map[string]string, wo
 	return conn.Client.ExecStream(fullCmd, stdout, stderr)
 }
 
-// buildCommand constructs the full command string with env vars and cd.
-func buildCommand(cmd string, env map[string]string, workDir string, isLocal bool) string {
+// buildCommand constructs the full command string with setup commands, env vars, and cd.
+func buildCommand(cmd string, env map[string]string, workDir string, setupCommands []string, isLocal bool) string {
+	var parts []string
+
 	// For local execution, we handle workDir via the exec.Command.Dir field
 	// But for remote, we need to cd to the directory
-	if isLocal {
-		// For local, env is handled by the shell's environment
-		// We'll prepend env exports to the command
-		return buildEnvPrefix(env) + cmd
-	}
-
-	// Remote execution: cd to workDir and set env
-	if workDir != "" {
+	if !isLocal && workDir != "" {
 		workDir = config.ExpandRemote(workDir)
-		return fmt.Sprintf("cd %s && %s%s", shellQuotePreserveTilde(workDir), buildEnvPrefix(env), cmd)
+		parts = append(parts, fmt.Sprintf("cd %s", shellQuotePreserveTilde(workDir)))
 	}
 
-	return buildEnvPrefix(env) + cmd
+	// Add setup commands (these run shell commands like "source ~/.local/bin/env")
+	parts = append(parts, setupCommands...)
+
+	// Add env prefix and actual command
+	cmdWithEnv := buildEnvPrefix(env) + cmd
+	parts = append(parts, cmdWithEnv)
+
+	// Join with && so each part must succeed
+	return strings.Join(parts, " && ")
 }
 
 // buildEnvPrefix creates the environment variable prefix for a command.
@@ -168,7 +214,7 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 		IsLocal: true,
 	}
 
-	return ExecuteTask(conn, task, nil, env, workDir, os.Stdout, os.Stderr)
+	return ExecuteTask(conn, task, nil, env, workDir, os.Stdout, os.Stderr, nil)
 }
 
 // DefaultShell is used when no shell is configured.
