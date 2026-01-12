@@ -218,7 +218,7 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 	}
 
 	// Prompt for remote directory
-	machine.remoteDir = "${HOME}/rr/${PROJECT}"
+	machine.remoteDir = "~/rr/${PROJECT}"
 	if err := promptRemoteDir(&machine.remoteDir); err != nil {
 		return nil, false, err
 	}
@@ -325,7 +325,7 @@ func promptRemoteDir(remoteDir *string) error {
 			huh.NewInput().
 				Title("Remote directory").
 				Description("Where files sync to (supports ${PROJECT}, ${USER}, ${HOME}, ~)").
-				Placeholder("${HOME}/rr/${PROJECT}").
+				Placeholder("~/rr/${PROJECT}").
 				Value(remoteDir).
 				Validate(func(s string) error {
 					if strings.TrimSpace(s) == "" {
@@ -532,6 +532,11 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 		sb.WriteString("#   - my-host\n")
 		sb.WriteString("#   - other-host\n\n")
 	}
+
+	// Local fallback
+	sb.WriteString("# Run locally when all remote hosts fail or are unreachable\n")
+	sb.WriteString("# Set to true to fall back to local execution instead of failing\n")
+	sb.WriteString("# local_fallback: false\n\n")
 
 	// Sync section
 	sb.WriteString("# File sync settings (uses rsync under the hood)\n")
@@ -884,7 +889,7 @@ func collectNonInteractiveValues(opts InitOptions, globalCfg *config.GlobalConfi
 				remoteDir: opts.Dir,
 			}
 			if machine.remoteDir == "" {
-				machine.remoteDir = "${HOME}/rr/${PROJECT}"
+				machine.remoteDir = "~/rr/${PROJECT}"
 			}
 
 			// Test connection if not skipping probe

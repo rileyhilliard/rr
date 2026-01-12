@@ -325,6 +325,34 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 // The local fallback (when enabled) lets users work offline or when all remotes are down.
 // It's opt-in because most users want to know if their remote is unreachable.
 func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
+	// If no hosts configured and local fallback is enabled, go straight to local
+	if len(s.hosts) == 0 && s.localFallback {
+		// Check for cached local connection
+		if s.cached != nil && s.cached.IsLocal {
+			s.emit(ConnectionEvent{
+				Type:    EventCacheHit,
+				Alias:   "local",
+				Message: "reusing local execution",
+			})
+			return s.cached, nil
+		}
+
+		s.emit(ConnectionEvent{
+			Type:    EventLocalFallback,
+			Alias:   "local",
+			Message: "No remote hosts configured, using local execution",
+		})
+		localConn := &Connection{
+			Name:    "local",
+			Alias:   "local",
+			Client:  nil,
+			Host:    config.Host{},
+			IsLocal: true,
+		}
+		s.cached = localConn
+		return localConn, nil
+	}
+
 	// If we have a cached connection for the preferred host, return it
 	if s.cached != nil {
 		// Local fallback connections are reused regardless of preferred host

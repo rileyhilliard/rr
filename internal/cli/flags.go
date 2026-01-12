@@ -14,13 +14,15 @@ type CommonFlags struct {
 	Host         string
 	Tag          string
 	ProbeTimeout string
+	Local        bool
 }
 
-// AddCommonFlags registers --host, --tag, and --probe-timeout flags on a command.
+// AddCommonFlags registers --host, --tag, --probe-timeout, and --local flags on a command.
 func AddCommonFlags(cmd *cobra.Command, flags *CommonFlags) {
 	cmd.Flags().StringVar(&flags.Host, "host", "", "target host name")
 	cmd.Flags().StringVar(&flags.Tag, "tag", "", "select host by tag")
 	cmd.Flags().StringVar(&flags.ProbeTimeout, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
+	cmd.Flags().BoolVar(&flags.Local, "local", false, "force local execution (skip remote hosts)")
 }
 
 // ParseProbeTimeout parses a probe timeout string into a duration.

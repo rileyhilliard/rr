@@ -25,6 +25,7 @@ type WorkflowOptions struct {
 	SkipLock     bool          // Skip lock acquisition
 	WorkingDir   string        // Override local working directory
 	Quiet        bool          // Minimize output
+	Local        bool          // Force local execution (skip remote hosts)
 }
 
 // WorkflowContext holds state from workflow setup for use during execution.
@@ -111,8 +112,19 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 // setupHostSelector creates and configures the host selector.
 // It uses ResolveHosts to determine which hosts this project can use.
 func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
+	// Resolve local_fallback from project config (overrides global)
+	localFallback := config.ResolveLocalFallback(ctx.Resolved)
+
+	// If --local flag is set, force local execution (empty hosts + local fallback)
+	if opts.Local {
+		ctx.selector = host.NewSelector(make(map[string]config.Host))
+		ctx.selector.SetLocalFallback(true)
+		return
+	}
+
 	// Get the hosts this project is allowed to use
 	// (respects project.Hosts list if specified, otherwise uses all global hosts)
+	// Empty hosts with nil error indicates local-only mode
 	_, projectHosts, err := config.ResolveHosts(ctx.Resolved, opts.Host)
 	if err != nil {
 		// Fall back to all global hosts if resolution fails
@@ -120,7 +132,7 @@ func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 	} else {
 		ctx.selector = host.NewSelector(projectHosts)
 	}
-	ctx.selector.SetLocalFallback(ctx.Resolved.Global.Defaults.LocalFallback)
+	ctx.selector.SetLocalFallback(localFallback)
 
 	probeTimeout := ctx.Resolved.Global.Defaults.ProbeTimeout
 	if opts.ProbeTimeout > 0 {
