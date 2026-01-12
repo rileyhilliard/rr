@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-01-12
+
+### Security
+
+- Updated Go from 1.24.2 to 1.24.11 to address 14 stdlib vulnerabilities
+  - crypto/x509: Certificate wildcard SAN bypass (GO-2025-4175)
+  - crypto/x509: DoS via HostnameError.Error() (GO-2025-4155)
+  - archive/tar: DoS via sparse file memory allocation (GO-2025-4014, GO-2025-4013, GO-2025-4012)
+  - net/http: Multiple HTTP vulnerabilities (GO-2025-4011, GO-2025-4010, GO-2025-4009, GO-2025-3751, GO-2025-3750)
+  - crypto/x509: Certificate verification issues (GO-2025-4008, GO-2025-4007)
+  - os/exec: LookPath unexpected binary return (GO-2025-3956)
+- Updated golang.org/x/crypto to v0.47.0 (fixes GO-2025-3749 SSH vulnerability)
+
 ## [0.9.0] - 2026-01-12
 
 ### Added
