@@ -1,0 +1,38 @@
+{
+  "name": "rr",
+  "owner": {
+    "name": "Riley Hilliard",
+    "url": "https://github.com/rileyhilliard"
+  },
+  "metadata": {
+    "description": "Claude Code plugin for the rr CLI - sync code and run commands on remote machines",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "rr",
+      "source": "./",
+      "description": "Teaches Claude to use the rr CLI for syncing code and running commands on remote machines",
+      "version": "1.0.0",
+      "author": {
+        "name": "Riley Hilliard",
+        "url": "https://github.com/rileyhilliard"
+      },
+      "homepage": "https://github.com/rileyhilliard/rr",
+      "repository": "https://github.com/rileyhilliard/rr",
+      "license": "MIT",
+      "keywords": [
+        "remote",
+        "ssh",
+        "sync",
+        "rsync",
+        "development",
+        "cli"
+      ],
+      "category": "tools",
+      "skills": [
+        "./skills/rr"
+      ]
+    }
+  ]
+}
