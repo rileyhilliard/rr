@@ -1,13 +1,13 @@
 # Configuration reference
 
-This document covers all configuration options for `.rr.yaml`.
+`rr` uses two configuration files: a **global config** for your personal host definitions and a **project config** for shareable project settings.
 
 ## Contents
 
-- [File location](#file-location)
-- [Complete example](#complete-example)
-- [Top-level fields](#top-level-fields)
-- [Hosts](#hosts)
+- [Configuration overview](#configuration-overview)
+- [Global config (~/.rr/config.yaml)](#global-config-rrconfigyaml)
+- [Project config (.rr.yaml)](#project-config-rryaml)
+- [Host resolution order](#host-resolution-order)
 - [Sync](#sync)
 - [Lock](#lock)
 - [Tasks](#tasks)
@@ -17,16 +17,24 @@ This document covers all configuration options for `.rr.yaml`.
 - [Validation rules](#validation-rules)
 - [Minimal config](#minimal-config)
 
-## File location
+## Configuration overview
 
-`rr` searches for configuration in this order:
+| Config | Location | Purpose | Share with team? |
+|--------|----------|---------|------------------|
+| Global | `~/.rr/config.yaml` | Host definitions and personal defaults | No |
+| Project | `.rr.yaml` in project root | Sync rules, tasks, output settings | Yes |
 
-1. Explicit path via `--config` flag
-2. `.rr.yaml` in the current directory
-3. `.rr.yaml` in parent directories (stops at git root or home directory)
-4. `~/.config/rr/config.yaml` (global defaults)
+**Why the split?** Host configurations include personal SSH settings, directory paths, and machine-specific details that differ between team members. Keeping them in a global config means your `.rr.yaml` can be committed to version control without conflicts.
 
-## Complete example
+## Global config (~/.rr/config.yaml)
+
+The global config stores your personal host definitions. Create it with `rr host add` or manually.
+
+### Location
+
+The global config is always at `~/.rr/config.yaml`. If the file doesn't exist, `rr` uses defaults.
+
+### Complete global config example
 
 ```yaml
 version: 1
@@ -52,9 +60,105 @@ hosts:
     tags:
       - linux
 
-default: mini
-local_fallback: false
-probe_timeout: 2s
+defaults:
+  host: mini
+  local_fallback: false
+  probe_timeout: 2s
+```
+
+### Global config fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `version` | int | `1` | Config schema version. Currently must be `1`. |
+| `hosts` | map | `{}` | Remote host definitions (see below). |
+| `defaults.host` | string | first host | Default host when `--host` is not specified. |
+| `defaults.local_fallback` | bool | `false` | Run locally if no hosts are reachable. |
+| `defaults.probe_timeout` | duration | `2s` | How long to wait when testing SSH connectivity. |
+
+### Host fields
+
+Each host entry configures a remote machine.
+
+```yaml
+hosts:
+  mini:
+    ssh:
+      - mac-mini.local
+      - mac-mini-tailscale
+    dir: ${HOME}/projects/${PROJECT}
+    tags:
+      - fast
+    env:
+      DEBUG: "1"
+    shell: "zsh -l -c"
+    setup_commands:
+      - export PATH=$HOME/.local/bin:$PATH
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ssh` | list | yes | SSH connection strings, tried in order. |
+| `dir` | string | yes | Working directory on remote. Supports variable expansion. |
+| `tags` | list | no | Tags for filtering with `--tag` flag. |
+| `env` | map | no | Environment variables for commands on this host. |
+| `shell` | string | no | Shell invocation format (e.g., `zsh -l -c`). Default uses `$SHELL -l -c`. |
+| `setup_commands` | list | no | Commands to run before each command (e.g., `source ~/.nvm/nvm.sh`). |
+
+### SSH connection strings
+
+Each entry in `ssh` can be:
+
+- **Hostname**: `mac-mini.local`
+- **User@host**: `deploy@server.example.com`
+- **SSH config alias**: `dev-server` (from `~/.ssh/config`)
+- **IP address**: `192.168.1.50`
+
+`rr` tries each SSH alias in order until one connects. This is useful when a machine is reachable via multiple networks (e.g., local network vs. VPN).
+
+**Passwordless SSH is required.** You must be able to run `ssh <alias>` without entering a password. See the [SSH setup guide](ssh-setup.md) if you need to configure key-based auth.
+
+### Variable expansion
+
+The `dir` field supports these variables:
+
+| Variable | Expands to | Example |
+|----------|------------|---------|
+| `${PROJECT}` | Current directory name | `myapp` |
+| `${USER}` | Local username | `riley` |
+| `${HOME}` | Remote user's home directory | `/home/riley` |
+
+```yaml
+# If your local project is /Users/riley/code/myapp
+dir: ~/projects/${PROJECT}
+# Expands to: ~/projects/myapp
+```
+
+## Project config (.rr.yaml)
+
+The project config lives in your project root and contains settings that can be shared with your team.
+
+### Location
+
+`rr` searches for project configuration in this order:
+
+1. Explicit path via `--config` flag
+2. `.rr.yaml` in the current directory
+3. `.rr.yaml` in parent directories (stops at git root or home directory)
+
+### Complete project config example
+
+```yaml
+version: 1
+
+# Reference hosts from global config
+# If omitted, all global hosts are available for load balancing
+hosts:
+  - mini
+  - server
+
+# Or use a single host
+# host: mini
 
 sync:
   exclude:
@@ -76,6 +180,7 @@ sync:
 lock:
   enabled: true
   timeout: 5m
+  wait_timeout: 1m
   stale: 10m
   dir: /tmp/rr-locks
 
@@ -116,75 +221,29 @@ monitor:
   exclude: []
 ```
 
-## Top-level fields
+### Project config fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
-| `hosts` | map | required | Remote host definitions. |
-| `default` | string | first host | Default host when `--host` is not specified. |
-| `local_fallback` | bool | `false` | Run locally if no hosts are reachable. |
-| `probe_timeout` | duration | `2s` | How long to wait when testing SSH connectivity. |
+| `host` | string | - | Single host reference (from global config). |
+| `hosts` | list | all global hosts | List of host references for load balancing. |
 | `sync` | object | see below | File synchronization settings. |
 | `lock` | object | see below | Distributed lock settings. |
 | `tasks` | map | `{}` | Named command sequences. |
 | `output` | object | see below | Terminal output formatting. |
 | `monitor` | object | see below | Resource monitoring dashboard settings. |
 
-## Hosts
+**Note:** Use either `host` (singular) or `hosts` (plural), not both. If neither is specified, all hosts from your global config are available for load balancing.
 
-Each host entry configures a remote machine.
+## Host resolution order
 
-```yaml
-hosts:
-  mini:
-    ssh:
-      - mac-mini.local
-      - mac-mini-tailscale
-    dir: ${HOME}/projects/${PROJECT}
-    tags:
-      - fast
-    env:
-      DEBUG: "1"
-```
+When you run a command, `rr` determines which host(s) to use in this order:
 
-### Host fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `ssh` | list | yes | SSH connection strings, tried in order. |
-| `dir` | string | yes | Working directory on remote. Supports variable expansion. |
-| `tags` | list | no | Tags for filtering with `--tag` flag. |
-| `env` | map | no | Environment variables for commands on this host. |
-| `shell` | string | no | Shell invocation format (e.g., `zsh -l -c`). Default uses `$SHELL -l -c`. |
-| `setup_commands` | list | no | Commands to run before each command (e.g., `source ~/.nvm/nvm.sh`). |
-
-### SSH connection strings
-
-Each entry in `ssh` can be:
-
-- **Hostname**: `mac-mini.local`
-- **User@host**: `deploy@server.example.com`
-- **SSH config alias**: `dev-server` (from `~/.ssh/config`)
-- **IP address**: `192.168.1.50`
-
-`rr` tries each SSH alias in order until one connects. This is useful when a machine is reachable via multiple networks (e.g., local network vs. VPN).
-
-### Variable expansion
-
-The `dir` field supports these variables:
-
-| Variable | Expands to | Example |
-|----------|------------|---------|
-| `${PROJECT}` | Current directory name | `myapp` |
-| `${USER}` | Local username | `riley` |
-| `${HOME}` | Remote user's home directory | `/home/riley` |
-
-```yaml
-# If your local project is /Users/riley/code/myapp
-dir: ~/projects/${PROJECT}
-# Expands to: ~/projects/myapp
-```
+1. `--host` flag (explicit CLI argument)
+2. `.rr.yaml` `hosts:` field (project's preferred hosts for load balancing)
+3. `.rr.yaml` `host:` field (project's single preferred host)
+4. All hosts from global config (default behavior for load balancing)
 
 ## Sync
 
@@ -511,18 +570,19 @@ Fields that accept durations use Go's duration format:
 
 | Error | Fix |
 |-------|-----|
-| "no hosts configured" | Add at least one host under `hosts:` |
-| "host 'X' has no SSH aliases" | Add `ssh:` list to the host |
-| "host 'X' has no dir" | Add `dir:` to the host |
-| "default host 'X' not found" | Set `default:` to a configured host name |
+| "no hosts configured" | Add at least one host to `~/.rr/config.yaml` or run `rr host add` |
+| "host 'X' not found in global config" | The host referenced in `.rr.yaml` doesn't exist in `~/.rr/config.yaml` |
+| "host 'X' has no SSH aliases" | Add `ssh:` list to the host in global config |
+| "host 'X' has no dir" | Add `dir:` to the host in global config |
 | "reserved task name 'X'" | Rename the task to avoid built-in command names |
 | "task 'X' has both run and steps" | Use either `run` or `steps`, not both |
 
 ## Minimal config
 
-The smallest valid config:
+The smallest working setup requires a global config with at least one host:
 
 ```yaml
+# ~/.rr/config.yaml
 version: 1
 
 hosts:
@@ -530,6 +590,18 @@ hosts:
     ssh:
       - myserver.example.com
     dir: ${HOME}/projects/${PROJECT}
+```
+
+A project config (`.rr.yaml`) is optional. If not present, `rr` uses all hosts from your global config with default sync/lock settings.
+
+```yaml
+# .rr.yaml (optional, for project-specific settings)
+version: 1
+
+sync:
+  exclude:
+    - .git/
+    - node_modules/
 ```
 
 Everything else uses sensible defaults.

@@ -446,23 +446,34 @@ Every error follows this structure:
 
 ### File Location
 
-Config is loaded from (first match wins):
+`rr` uses two configuration files:
+
+**Global config** (`~/.rr/config.yaml`):
+- Contains host definitions (SSH connections, remote directories, tags, env vars)
+- Personal settings not shared with team
+- Created with `rr host add` or manually
+
+**Project config** (`.rr.yaml`):
+- Contains sync rules, tasks, output settings
+- Shareable with team via version control
+- Created with `rr init`
+
+Project config is loaded from (first match wins):
 
 1. `--config` flag
 2. `.rr.yaml` in current directory
 3. `.rr.yaml` in parent directories (stops at git root or home)
-4. `~/.config/rr/config.yaml` (global defaults)
 
 **Design decision**: Use `.rr.yaml` not `.road-runner.yaml`. It's shorter, matches the command name, and follows the pattern of `.npmrc`, `.nvmrc`, etc.
 
 ### Complete Schema
 
-```yaml
-# .rr.yaml
-# Road Runner configuration
-# Docs: https://github.com/yourorg/rr#configuration
+**Global config** (`~/.rr/config.yaml`):
 
-# Schema version (for future migrations)
+```yaml
+# ~/.rr/config.yaml
+# Personal host definitions
+
 version: 1
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -498,13 +509,46 @@ hosts:
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
 
-# Which host to use by default (if not specified)
-# Can be a host name or "auto" to use first available
-default: mini
+# ─────────────────────────────────────────────────────────────────────────────
+# DEFAULTS
+# Personal default settings
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Fall back to local execution if all remotes fail
-# Useful for CI environments or when traveling
-local_fallback: false
+defaults:
+  # Which host to use by default (if not specified)
+  host: mini
+
+  # Fall back to local execution if all remotes fail
+  # Useful for CI environments or when traveling
+  local_fallback: false
+
+  # SSH probe timeout
+  probe_timeout: 2s
+```
+
+**Project config** (`.rr.yaml`):
+
+```yaml
+# .rr.yaml
+# Road Runner project configuration
+# Docs: https://github.com/yourorg/rr#configuration
+
+# Schema version (for future migrations)
+version: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HOST REFERENCES
+# Reference hosts defined in ~/.rr/config.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+# List of hosts this project can use for load balancing
+# If omitted, all global hosts are available
+hosts:
+  - mini
+  - gpu-box
+
+# Or use a single host (mutually exclusive with hosts:)
+# host: mini
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SYNC
@@ -630,15 +674,17 @@ output:
 
 ### Minimal Config
 
-For the simplest case, only host is required:
+For the simplest case, you need at least one host in your global config:
 
 ```yaml
+# ~/.rr/config.yaml
 hosts:
   mini:
     ssh: [mini-local, mini]
+    dir: ~/projects/${PROJECT}
 ```
 
-Everything else has sensible defaults. This enables:
+A project config (`.rr.yaml`) is optional. Everything else has sensible defaults. This enables:
 
 ```bash
 rr run "pytest"
@@ -647,7 +693,7 @@ rr run "make build"
 
 ### Zero-Config Mode
 
-If no config exists and user runs `rr run`, we offer to create one:
+If no global hosts are configured and user runs `rr run`, we offer to create one:
 
 ```bash
 $ rr run "pytest"

@@ -1,22 +1,16 @@
 # Example: Go project
 #
-# This config is for a Go project that builds and tests on a remote Linux
-# machine (useful when developing on macOS but deploying to Linux).
+# This is a PROJECT config (.rr.yaml) for a Go project that builds and tests
+# on a remote Linux machine (useful when developing on macOS but deploying to Linux).
+#
+# NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
+# See go-global.yaml for an example global config.
 
 version: 1
 
-hosts:
-  linux-box:
-    ssh:
-      - linux.local
-      - linux-vpn
-    dir: ${HOME}/code/${PROJECT}
-    env:
-      GOOS: linux
-      GOARCH: amd64
-      CGO_ENABLED: "0"
-
-default: linux-box
+# Reference the host from your global config
+# If omitted, all global hosts are available
+host: linux-box
 
 sync:
   exclude:

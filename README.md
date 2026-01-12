@@ -107,7 +107,9 @@ rr build
 
 ## Config
 
-The `.rr.yaml` file lives in your project root:
+`rr` uses two config files:
+
+**Global config** (`~/.rr/config.yaml`) - Your personal host definitions, not shared with team:
 
 ```yaml
 version: 1
@@ -119,7 +121,18 @@ hosts:
             - mac-mini-tailscale # Fall back to VPN
         dir: ${HOME}/projects/${PROJECT}
 
-default: mini
+defaults:
+    host: mini
+```
+
+**Project config** (`.rr.yaml` in project root) - Shareable settings for your project:
+
+```yaml
+version: 1
+
+# Reference hosts from global config (optional - uses all hosts if omitted)
+hosts:
+    - mini
 
 sync:
     exclude:
@@ -137,6 +150,7 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 1. **Smart connection failover**: `rr` tries SSH connections in order and picks the first one that's reachable AND not busy. This handles three scenarios automatically:
 
     ```yaml
+    # ~/.rr/config.yaml
     hosts:
         gpu-box:
             ssh:
@@ -213,6 +227,16 @@ The lock is project-specific, so this only affects the current directory's proje
 
 For more, see the [troubleshooting guide](docs/troubleshooting.md).
 
+## Claude Code integration
+
+If you use [Claude Code](https://claude.ai/code), install the rr plugin to teach Claude how to use the CLI:
+
+```bash
+claude /plugin install rileyhilliard/rr
+```
+
+Claude will then understand rr commands, the two-config system, and can help with setup and troubleshooting. See [docs/claude-code.md](docs/claude-code.md) for details.
+
 ## Docs
 
 -   [SSH setup guide](docs/ssh-setup.md) - Get passwordless SSH working
@@ -221,6 +245,7 @@ For more, see the [troubleshooting guide](docs/troubleshooting.md).
 -   [Migration guide](docs/MIGRATION.md)
 -   [Example configs](docs/examples/)
 -   [Architecture](docs/ARCHITECTURE.md)
+-   [Claude Code plugin](docs/claude-code.md) - AI-assisted rr usage
 -   [Contributing](CONTRIBUTING.md)
 
 ## License

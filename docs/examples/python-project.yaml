@@ -1,20 +1,16 @@
 # Example: Python project with pytest
 #
-# This config is for a typical Python project that runs tests on a remote
-# machine with more CPU/RAM than your laptop.
+# This is a PROJECT config (.rr.yaml) for a typical Python project that runs
+# tests on a remote machine with more CPU/RAM than your laptop.
+#
+# NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
+# See python-global.yaml for an example global config.
 
 version: 1
 
-hosts:
-  build-box:
-    ssh:
-      - build.local          # Try local network first
-      - build-tailscale      # Fall back to Tailscale
-    dir: ${HOME}/projects/${PROJECT}
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
-
-default: build-box
+# Reference the host from your global config
+# If omitted, all global hosts are available
+host: build-box
 
 sync:
   exclude:

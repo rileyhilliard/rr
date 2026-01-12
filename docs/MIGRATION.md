@@ -134,9 +134,36 @@ If you're upgrading from early pre-release versions, here's what changed:
 
 ### Config changes
 
+**Hosts moved to global config**
+
+Host definitions now live in `~/.rr/config.yaml` (global) instead of `.rr.yaml` (per-project). This allows you to commit `.rr.yaml` to version control without including personal SSH settings.
+
+```yaml
+# Before: hosts in .rr.yaml (per-project)
+# After: hosts in ~/.rr/config.yaml (global)
+```
+
+Move your `hosts:` section from `.rr.yaml` to `~/.rr/config.yaml`. Your project's `.rr.yaml` now references hosts by name:
+
+```yaml
+# ~/.rr/config.yaml (global - not shared)
+version: 1
+hosts:
+  mini:
+    ssh: [mini-local, mini-tailscale]
+    dir: ~/projects/${PROJECT}
+
+# .rr.yaml (project - can be committed)
+version: 1
+host: mini   # Reference to global host
+sync:
+  exclude:
+    - .git/
+```
+
 **Schema version added**
 
-Add `version: 1` at the top of your `.rr.yaml`:
+Add `version: 1` at the top of both config files:
 
 ```yaml
 # Before (v0.x)
@@ -144,12 +171,13 @@ hosts:
   mini:
     ssh: [mini-local]
 
-# After (v1.x)
+# After (v1.x) in ~/.rr/config.yaml
 version: 1
 
 hosts:
   mini:
     ssh: [mini-local]
+    dir: ~/projects/${PROJECT}
 ```
 
 **Host SSH field is now a list**
