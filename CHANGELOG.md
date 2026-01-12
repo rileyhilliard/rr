@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-01-11
+
+### Added
+
+- Claude Code plugin with `rr` skill for AI-assisted CLI usage
+- Plugin installation via `claude /plugin install rileyhilliard/rr`
+
+### Changed
+
+- Documentation updated for global host config architecture (`~/.rr/config.yaml` + `.rr.yaml`)
+- SSH setup guide now shows `IdentityFile` for explicit passwordless auth configuration
+- Example configs split into global and project examples
+
 ## [0.7.2] - 2026-01-11
 
 ### Added
