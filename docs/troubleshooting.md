@@ -115,10 +115,11 @@ DEPENDENCIES
 2. **Network issue** - Check your connection (VPN, firewall, etc.)
 3. **Wrong hostname/IP** - Verify the address in your config
 
-**Increase probe timeout** if hosts are slow to respond:
+**Increase probe timeout** if hosts are slow to respond (in `~/.rr/config.yaml`):
 
 ```yaml
-probe_timeout: 10s
+defaults:
+  probe_timeout: 10s
 ```
 
 Or per-command:
@@ -169,12 +170,14 @@ fi
        ProxyJump bastion
    ```
 
-2. **Use explicit `user@hostname` format** in `.rr.yaml` instead of SSH aliases:
+2. **Use explicit `user@hostname` format** in your global config instead of SSH aliases:
    ```yaml
+   # ~/.rr/config.yaml
    hosts:
      myserver:
        ssh:
          - deploy@192.168.1.100  # Explicit format, doesn't need SSH config
+       dir: ~/projects/${PROJECT}
    ```
 
 ### "command not found" on remote
@@ -185,8 +188,9 @@ fi
 
 **Fixes:**
 
-1. **Add shell config to `.rr.yaml`** (recommended):
+1. **Add shell config to your global config** (recommended):
    ```yaml
+   # ~/.rr/config.yaml
    hosts:
      myserver:
        ssh:
@@ -197,6 +201,7 @@ fi
 
 2. **Or use setup_commands** for specific initialization:
    ```yaml
+   # ~/.rr/config.yaml
    hosts:
      myserver:
        setup_commands:
@@ -333,9 +338,10 @@ rr init
 
 ### "No hosts configured"
 
-Add at least one host to your `.rr.yaml`:
+Add at least one host to your global config (`~/.rr/config.yaml`):
 
 ```yaml
+# ~/.rr/config.yaml
 hosts:
   myhost:
     ssh:
@@ -343,11 +349,26 @@ hosts:
     dir: ${HOME}/projects/${PROJECT}
 ```
 
+Or use the interactive command:
+
+```bash
+rr host add
+```
+
+### "Host 'X' not found in global config"
+
+The host referenced in your project's `.rr.yaml` doesn't exist in `~/.rr/config.yaml`. Either:
+
+1. Add the host to your global config with `rr host add`
+2. Remove the reference from `.rr.yaml`
+3. Check for typos in the host name
+
 ### "Host 'X' has no SSH aliases"
 
-Each host needs at least one SSH connection string:
+Each host needs at least one SSH connection string in the global config:
 
 ```yaml
+# ~/.rr/config.yaml
 hosts:
   myhost:
     ssh:
@@ -357,9 +378,10 @@ hosts:
 
 ### "Host 'X' has no dir"
 
-Each host needs a working directory:
+Each host needs a working directory in the global config:
 
 ```yaml
+# ~/.rr/config.yaml
 hosts:
   myhost:
     ssh:

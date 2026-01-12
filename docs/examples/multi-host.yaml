@@ -1,51 +1,25 @@
 # Example: Multi-host setup with load balancing
 #
-# This config shows how to set up multiple hosts for load balancing and
-# targeting specific machines. Useful for small teams sharing build servers.
+# This is a PROJECT config (.rr.yaml) that shows how to reference multiple hosts
+# for load balancing and targeting specific machines. Useful for small teams
+# sharing build servers.
+#
+# NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
+# See multi-host-global.yaml for an example global config that pairs with this.
 #
 # With multiple hosts configured, rr automatically distributes work:
-# - Tries hosts in alphabetical order with non-blocking lock checks
+# - Tries hosts in order with non-blocking lock checks
 # - If a host is locked, immediately tries the next available host
 # - If all hosts are locked, waits and round-robins until one is free
 
 version: 1
 
+# Reference hosts from your global config for load balancing
+# If omitted, all global hosts are used
 hosts:
-  mac-mini:
-    ssh:
-      - mac-mini.local
-      - mac-mini-tailscale
-    dir: ${HOME}/builds/${PROJECT}
-    tags:
-      - fast
-      - macos
-      - gpu
-
-  linux-server:
-    ssh:
-      - linux-server.internal
-      - linux-tailscale
-    dir: /home/builds/${PROJECT}
-    tags:
-      - linux
-      - docker
-
-  raspberry-pi:
-    ssh:
-      - pi.local
-    dir: ${HOME}/projects/${PROJECT}
-    tags:
-      - arm
-      - linux
-
-# Default to the fastest machine
-default: mac-mini
-
-# Fall back to local if all remotes are down
-local_fallback: true
-
-# Longer timeout for flaky connections
-probe_timeout: 5s
+  - mac-mini
+  - linux-server
+  - raspberry-pi
 
 sync:
   exclude:

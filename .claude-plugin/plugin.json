@@ -1,0 +1,9 @@
+{
+  "name": "rr-cli",
+  "version": "1.0.0",
+  "description": "Teaches Claude how to use the rr (Road Runner) CLI for syncing code and running commands on remote machines.",
+  "author": "rileyhilliard",
+  "repository": "https://github.com/rileyhilliard/rr",
+  "license": "MIT",
+  "skills": ["skills/rr"]
+}

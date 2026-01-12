@@ -777,11 +777,36 @@ func promptAddMoreHosts() (bool, error) {
 	return addMore, nil
 }
 
+// getExistingGlobalHostSSHAliases returns all SSH aliases already configured in global hosts.
+func getExistingGlobalHostSSHAliases(globalCfg *config.GlobalConfig) []string {
+	var aliases []string
+	for _, host := range globalCfg.Hosts {
+		aliases = append(aliases, host.SSH...)
+	}
+	return aliases
+}
+
+// hasUnaddedSSHHosts checks if there are SSH config hosts not yet added to global config.
+func hasUnaddedSSHHosts(globalCfg *config.GlobalConfig) bool {
+	existingAliases := getExistingGlobalHostSSHAliases(globalCfg)
+	unadded := getSSHHostsForPicker(existingAliases...)
+	return len(unadded) > 0
+}
+
 // collectInteractiveValues collects project config values interactively.
 func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*projectConfigValues, error) {
 	vals := &projectConfigValues{}
 
-	// If no hosts, prompt to add at least one
+	// First, if we have existing hosts, let user select which ones to use
+	if len(globalCfg.Hosts) > 0 {
+		selected, err := promptHostsSelection(globalCfg)
+		if err != nil {
+			return nil, err
+		}
+		vals.hostRefs = selected
+	}
+
+	// If no hosts exist yet, prompt to add at least one
 	if len(globalCfg.Hosts) == 0 {
 		addHost, err := promptAddHost()
 		if err != nil {
@@ -805,8 +830,8 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 		}
 	}
 
-	// Loop to add more hosts to global config
-	for {
+	// Only offer to add more hosts if there are SSH hosts not yet added
+	for hasUnaddedSSHHosts(globalCfg) {
 		addMore, err := promptAddMoreHosts()
 		if err != nil {
 			return nil, err
@@ -815,13 +840,10 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 			break
 		}
 
-		// Get existing host names to exclude from picker
-		var existingHosts []string
-		for name := range globalCfg.Hosts {
-			existingHosts = append(existingHosts, name)
-		}
+		// Get existing SSH aliases to exclude from picker
+		existingAliases := getExistingGlobalHostSSHAliases(globalCfg)
 
-		machine, cancelled, err := collectMachineConfig(existingHosts, skipProbe)
+		machine, cancelled, err := collectMachineConfig(existingAliases, skipProbe)
 		if err != nil {
 			return nil, err
 		}
@@ -834,15 +856,6 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 			return nil, err
 		}
 		vals.hostRefs = append(vals.hostRefs, hostName)
-	}
-
-	// If we have hosts now, show multi-select
-	if len(globalCfg.Hosts) > 0 {
-		selected, err := promptHostsSelection(globalCfg)
-		if err != nil {
-			return nil, err
-		}
-		vals.hostRefs = selected
 	}
 
 	return vals, nil

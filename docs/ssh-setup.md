@@ -123,9 +123,12 @@ Edit `~/.ssh/config` (create it if it doesn't exist):
 Host devbox
     HostName 192.168.1.50
     User riley
+    IdentityFile ~/.ssh/id_ed25519
 ```
 
-Now `ssh devbox` connects to `riley@192.168.1.50`.
+Now `ssh devbox` connects to `riley@192.168.1.50` using your key.
+
+The `IdentityFile` line tells SSH which private key to use. This is what makes the connection passwordless (assuming you've copied the public key to the remote with `ssh-copy-id`).
 
 ### Multiple ways to reach the same machine
 
@@ -135,15 +138,18 @@ If your machine is reachable via LAN and Tailscale, set up both:
 Host devbox-lan
     HostName 192.168.1.50
     User riley
+    IdentityFile ~/.ssh/id_ed25519
 
 Host devbox-tailscale
     HostName devbox.tailnet-name.ts.net
     User riley
+    IdentityFile ~/.ssh/id_ed25519
 ```
 
-Then in your `.rr.yaml`, list both and rr will use whichever one is reachable:
+Then in your global config (`~/.rr/config.yaml`), list both and rr will use whichever one is reachable:
 
 ```yaml
+# ~/.rr/config.yaml
 hosts:
   devbox:
     ssh:

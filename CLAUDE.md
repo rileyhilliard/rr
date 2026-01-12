@@ -83,9 +83,14 @@ return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if ho
 - Integration tests use env vars: `RR_TEST_SSH_HOST`, `RR_TEST_SSH_KEY`, `RR_TEST_SSH_USER`
 - Use `./scripts/ci-ssh-server.sh` for Docker-based SSH testing
 
-## Config File
+## Config Files
 
-The tool uses `.rr.yaml` in project root. Key sections: `hosts` (SSH connection details), `sync` (exclude/preserve patterns), `lock` (timeout settings), `tasks` (named commands).
+The tool uses two config files:
+
+- **Global config** (`~/.rr/config.yaml`): Host definitions (SSH connections, directories, tags, env vars). Personal settings not shared with team.
+- **Project config** (`.rr.yaml` in project root): Shareable settings including host references, sync rules, lock settings, tasks.
+
+Key sections in project config: `host`/`hosts` (references to global hosts), `sync` (exclude/preserve patterns), `lock` (timeout settings), `tasks` (named commands).
 
 ## Dependencies
 

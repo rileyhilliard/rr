@@ -1,19 +1,16 @@
 # Example: Node.js/TypeScript project
 #
-# This config is for a Node.js project using npm/yarn and Jest for testing.
+# This is a PROJECT config (.rr.yaml) for a Node.js project using npm/yarn
+# and Jest for testing.
+#
+# NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
+# See node-global.yaml for an example global config.
 
 version: 1
 
-hosts:
-  dev-server:
-    ssh:
-      - dev.local
-      - dev-tailscale
-    dir: ${HOME}/projects/${PROJECT}
-    env:
-      NODE_ENV: development
-
-default: dev-server
+# Reference the host from your global config
+# If omitted, all global hosts are available
+host: dev-server
 
 sync:
   exclude:

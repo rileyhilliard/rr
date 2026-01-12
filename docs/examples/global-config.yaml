@@ -1,0 +1,76 @@
+# Example: Global config for host definitions
+#
+# This is a GLOBAL config (~/.rr/config.yaml) that defines your personal hosts.
+# This file is NOT shared with your team - each developer has their own.
+#
+# Hosts defined here can be referenced by name in any project's .rr.yaml file.
+
+version: 1
+
+hosts:
+  # Simple single-machine setup for Python/Go/Node projects
+  build-box:
+    ssh:
+      - build.local          # Try local network first
+      - build-tailscale      # Fall back to Tailscale
+    dir: ${HOME}/projects/${PROJECT}
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+
+  # Linux server for Go cross-compilation
+  linux-box:
+    ssh:
+      - linux.local
+      - linux-vpn
+    dir: ${HOME}/code/${PROJECT}
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+
+  # Node.js development server
+  dev-server:
+    ssh:
+      - dev.local
+      - dev-tailscale
+    dir: ${HOME}/projects/${PROJECT}
+    env:
+      NODE_ENV: development
+
+  # Multi-host setup hosts
+  mac-mini:
+    ssh:
+      - mac-mini.local
+      - mac-mini-tailscale
+    dir: ${HOME}/builds/${PROJECT}
+    tags:
+      - fast
+      - macos
+      - gpu
+
+  linux-server:
+    ssh:
+      - linux-server.internal
+      - linux-tailscale
+    dir: /home/builds/${PROJECT}
+    tags:
+      - linux
+      - docker
+
+  raspberry-pi:
+    ssh:
+      - pi.local
+    dir: ${HOME}/projects/${PROJECT}
+    tags:
+      - arm
+      - linux
+
+defaults:
+  # Your default host when not specified
+  host: build-box
+
+  # Fall back to local if all remotes are down
+  local_fallback: true
+
+  # Longer timeout for flaky connections
+  probe_timeout: 5s
