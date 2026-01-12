@@ -232,7 +232,8 @@ For more, see the [troubleshooting guide](docs/troubleshooting.md).
 If you use [Claude Code](https://claude.ai/code), install the rr plugin to teach Claude how to use the CLI:
 
 ```bash
-claude /plugin install rileyhilliard/rr
+/plugin marketplace add https://github.com/rileyhilliard/rr
+/plugin install rr@rr
 ```
 
 Claude will then understand rr commands, the two-config system, and can help with setup and troubleshooting. See [docs/claude-code.md](docs/claude-code.md) for details.

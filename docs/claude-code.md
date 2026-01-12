@@ -5,7 +5,8 @@ The rr plugin teaches [Claude Code](https://claude.ai/code) how to use the rr CL
 ## Install
 
 ```bash
-claude /plugin install rileyhilliard/rr
+/plugin marketplace add https://github.com/rileyhilliard/rr
+/plugin install rr@rr
 ```
 
 ## What it does
@@ -68,11 +69,11 @@ When working in the rr repository, the skill is automatically available.
 To get the latest version of the plugin:
 
 ```bash
-claude /plugin update rileyhilliard/rr
+/plugin update rr@rr
 ```
 
 ## Uninstalling
 
 ```bash
-claude /plugin uninstall rileyhilliard/rr
+/plugin uninstall rr@rr
 ```
