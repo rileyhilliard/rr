@@ -7,19 +7,16 @@
 
 Output tapes/demo-doctor.gif
 
-# Visual settings
-Set FontSize 16
-Set Width 900
-Set Height 550
-Set FontFamily "JetBrains Mono"
+# Visual settings (1.5x for crisp output)
+Set FontSize 24
+Set Width 1400
+Set Height 850
+Set FontFamily "Menlo"
 Set Theme "Catppuccin Mocha"
-Set Padding 20
+Set Padding 30
 Set TypingSpeed 35ms
 Set WindowBar Colorful
 Set CursorBlink false
-
-# Use mock environment
-Env PATH "./tapes/mock:$PATH"
 
 Sleep 300ms
 

@@ -11,15 +11,13 @@ Output tapes/demo-init.gif
 Set FontSize 16
 Set Width 900
 Set Height 550
-Set FontFamily "JetBrains Mono"
+Set FontFamily "Menlo"
 Set Theme "Catppuccin Mocha"
 Set Padding 20
 Set TypingSpeed 35ms
 Set WindowBar Colorful
 Set CursorBlink false
 
-# Use mock environment
-Env PATH "./tapes/mock:$PATH"
 
 Sleep 300ms
 

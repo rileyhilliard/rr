@@ -1,5 +1,5 @@
 .PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh completions
-.PHONY: setup setup-hooks verify check ci coverage-check fmt-check install-linter demos
+.PHONY: setup setup-hooks verify check ci coverage-check fmt-check install-linter demos demos-mock
 
 # Read golangci-lint version from file (shared with CI)
 GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.0")
@@ -106,12 +106,29 @@ clean:
 completions:
 	@./scripts/generate-completions.sh
 
-# VHS demo recordings
+# VHS demo recordings (uses real rr - requires working SSH setup)
 demos:
 	@command -v vhs >/dev/null 2>&1 || { echo "VHS not found. Install: brew install charmbracelet/tap/vhs"; exit 1; }
-	@echo "Recording demo tapes..."
+	@echo "Recording demo tapes (using real rr)..."
 	@for tape in tapes/*.tape; do \
 		echo "Recording $$tape..."; \
 		vhs "$$tape"; \
 	done
 	@echo "Demo recordings complete. GIFs saved to tapes/"
+
+# VHS demo recordings with mock (deterministic output, no SSH needed)
+# Note: demo-monitor.tape requires real rr (TUI too complex to mock)
+demos-mock:
+	@command -v vhs >/dev/null 2>&1 || { echo "VHS not found. Install: brew install charmbracelet/tap/vhs"; exit 1; }
+	@echo "Recording demo tapes (using mock)..."
+	@for tape in tapes/*.tape; do \
+		case "$$tape" in \
+			tapes/demo-monitor.tape|tapes/demo-init.tape) \
+				echo "Skipping $$tape (requires real rr)..."; \
+				continue ;; \
+		esac; \
+		echo "Recording $$tape..."; \
+		PATH="$(CURDIR)/tapes/mock:$$PATH" vhs "$$tape"; \
+	done
+	@echo "Demo recordings complete. GIFs saved to tapes/"
+	@echo "Note: Run 'make demos' with real rr for demo-monitor.tape and demo-init.tape"
