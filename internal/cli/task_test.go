@@ -82,7 +82,7 @@ func TestCreateTaskCommand_BasicCommand(t *testing.T) {
 
 	cmd := createTaskCommand("test", task)
 
-	assert.Equal(t, "test", cmd.Use)
+	assert.Equal(t, "test [args...]", cmd.Use)
 	assert.Equal(t, "Run tests", cmd.Short)
 	assert.NotNil(t, cmd.RunE)
 }
@@ -94,7 +94,7 @@ func TestCreateTaskCommand_EmptyDescription(t *testing.T) {
 
 	cmd := createTaskCommand("build", task)
 
-	assert.Equal(t, "build", cmd.Use)
+	assert.Equal(t, "build [args...]", cmd.Use)
 	assert.Equal(t, "Run the 'build' task", cmd.Short)
 }
 

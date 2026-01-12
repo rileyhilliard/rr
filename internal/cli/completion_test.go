@@ -234,7 +234,7 @@ func TestRegisterTaskCommandsAddsToRoot(t *testing.T) {
 	// Find the added command
 	var foundTask *cobra.Command
 	for _, cmd := range rootCmd.Commands() {
-		if cmd.Use == "mytask" {
+		if strings.HasPrefix(cmd.Use, "mytask") {
 			foundTask = cmd
 			break
 		}

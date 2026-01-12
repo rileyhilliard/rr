@@ -27,7 +27,8 @@ type StepResult struct {
 
 // ExecuteTask runs a task on the given connection.
 // Handles both single-command tasks (Run field) and multi-step tasks (Steps field).
-func ExecuteTask(conn *host.Connection, task *config.TaskConfig, env map[string]string, workDir string, stdout, stderr io.Writer) (*TaskResult, error) {
+// Extra args are appended to single-command tasks (not supported for multi-step).
+func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, env map[string]string, workDir string, stdout, stderr io.Writer) (*TaskResult, error) {
 	if task == nil {
 		return nil, errors.New(errors.ErrExec,
 			"No task provided",
@@ -36,7 +37,12 @@ func ExecuteTask(conn *host.Connection, task *config.TaskConfig, env map[string]
 
 	// Single-command task
 	if task.Run != "" {
-		exitCode, err := executeCommand(conn, task.Run, env, workDir, stdout, stderr)
+		cmd := task.Run
+		// Append extra args if provided
+		if len(args) > 0 {
+			cmd = cmd + " " + strings.Join(args, " ")
+		}
+		exitCode, err := executeCommand(conn, cmd, env, workDir, stdout, stderr)
 		if err != nil {
 			return nil, err
 		}
@@ -162,7 +168,7 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 		IsLocal: true,
 	}
 
-	return ExecuteTask(conn, task, env, workDir, os.Stdout, os.Stderr)
+	return ExecuteTask(conn, task, nil, env, workDir, os.Stdout, os.Stderr)
 }
 
 // DefaultShell is used when no shell is configured.

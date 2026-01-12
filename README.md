@@ -99,8 +99,10 @@ tasks:
 Then run them by name:
 
 ```bash
-rr test    # Same as: rr run "pytest -n auto"
+rr test                    # Same as: rr run "pytest -n auto"
 rr build
+rr test tests/test_api.py  # Pass extra args: pytest -n auto tests/test_api.py
+rr tasks                   # List all available tasks
 ```
 
 ![demo-tasks](https://github.com/user-attachments/assets/8d902e99-9b7a-4fa9-a2fa-bbdef8365e3b)
@@ -177,6 +179,7 @@ See [docs/configuration.md](docs/configuration.md) for all options.
 ## Other commands
 
 ```bash
+rr tasks                # List available tasks
 rr monitor              # TUI dashboard showing CPU/RAM/GPU across hosts
 rr status               # Show connection and sync status
 rr host list            # List configured hosts
