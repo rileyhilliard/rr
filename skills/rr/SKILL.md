@@ -106,6 +106,7 @@ tasks:
 | `rr exec "cmd"` | Run command without syncing |
 | `rr sync` | Just sync files, no command |
 | `rr <taskname>` | Run named task from config |
+| `rr tasks` | List all available tasks |
 
 ### Host Management
 
@@ -176,6 +177,15 @@ tasks:
 ```
 
 Run with: `rr test`, `rr deploy`
+
+Extra arguments are appended to single-command tasks:
+
+```bash
+rr test tests/test_api.py    # Runs: pytest -v tests/test_api.py
+rr test -k "test_login"      # Runs: pytest -v -k "test_login"
+```
+
+Note: Args are only supported for tasks with a single `run` command, not multi-step tasks.
 
 ## How It Works
 

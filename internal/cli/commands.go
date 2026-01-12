@@ -369,6 +369,22 @@ Examples:
 	},
 }
 
+// tasksCmd lists available tasks
+var tasksCmd = &cobra.Command{
+	Use:   "tasks",
+	Short: "List available tasks",
+	Long: `List all tasks defined in your .rr.yaml configuration.
+
+Shows task names, descriptions, commands, and any host restrictions.
+Tasks can be run directly as top-level commands (e.g., 'rr test').
+
+Examples:
+  rr tasks`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return ListTasks()
+	},
+}
+
 func init() {
 	// run command flags
 	runCmd.Flags().StringVar(&runHostFlag, "host", "", "target host name")
@@ -421,4 +437,5 @@ func init() {
 	rootCmd.AddCommand(completionCmd)
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(unlockCmd)
+	rootCmd.AddCommand(tasksCmd)
 }

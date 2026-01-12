@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -18,6 +19,7 @@ import (
 // TaskOptions holds options for task execution.
 type TaskOptions struct {
 	TaskName     string
+	Args         []string      // Extra arguments to append to task command
 	Host         string        // Preferred host name
 	Tag          string        // Filter hosts by tag
 	ProbeTimeout time.Duration // Override SSH probe timeout
@@ -66,6 +68,13 @@ func RunTask(opts TaskOptions) (int, error) {
 			fmt.Sprintf("This task is restricted to: %s", util.JoinOrNone(task.Hosts)))
 	}
 
+	// Validate args are only used with single-command tasks
+	if len(opts.Args) > 0 && len(task.Steps) > 0 {
+		return 1, errors.New(errors.ErrConfig,
+			"Can't pass arguments to multi-step tasks",
+			"Arguments are only supported for tasks with a single 'run' command.")
+	}
+
 	// Phase 4: Execute task
 	wf.PhaseDisplay.Divider()
 
@@ -86,7 +95,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Execute the task
-	result, err := exec.ExecuteTask(wf.Conn, task, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr())
+	result, err := exec.ExecuteTask(wf.Conn, task, opts.Args, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr())
 	execDuration := time.Since(execStart)
 
 	if err != nil {
@@ -165,6 +174,76 @@ func renderTaskSummary(_ *ui.PhaseDisplay, result *exec.TaskResult, taskName str
 	}
 }
 
+// ListTasks displays all available tasks from the configuration.
+func ListTasks() error {
+	// Find and load config
+	cfgPath, err := config.Find("")
+	if err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't find a config file",
+			"Run 'rr init' to create one.")
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+
+	if len(cfg.Tasks) == 0 {
+		fmt.Println("No tasks defined.")
+		fmt.Println()
+		fmt.Println("Add tasks to your .rr.yaml:")
+		fmt.Println("  tasks:")
+		fmt.Println("    test:")
+		fmt.Println("      run: pytest")
+		fmt.Println("      description: Run the test suite")
+		return nil
+	}
+
+	// Sort task names for consistent output
+	var names []string
+	for name := range cfg.Tasks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	boldStyle := lipgloss.NewStyle().Bold(true)
+
+	fmt.Printf("Available tasks (%d):\n\n", len(names))
+
+	for _, name := range names {
+		task := cfg.Tasks[name]
+
+		// Task name (bold)
+		fmt.Printf("  %s", boldStyle.Render(name))
+
+		// Description if present
+		if task.Description != "" {
+			fmt.Printf("  %s", mutedStyle.Render(task.Description))
+		}
+		fmt.Println()
+
+		// Command or steps
+		if task.Run != "" {
+			fmt.Printf("    %s\n", mutedStyle.Render(task.Run))
+		} else if len(task.Steps) > 0 {
+			fmt.Printf("    %s\n", mutedStyle.Render(fmt.Sprintf("(%d steps)", len(task.Steps))))
+		}
+
+		// Host restrictions if any
+		if len(task.Hosts) > 0 {
+			fmt.Printf("    %s\n", mutedStyle.Render("hosts: "+util.JoinOrNone(task.Hosts)))
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Run a task:")
+	fmt.Printf("  rr %s\n", names[0])
+
+	return nil
+}
+
 // RegisterTaskCommands dynamically registers task commands from config.
 // This should be called after config is loaded.
 func RegisterTaskCommands(cfg *config.Config) {
@@ -191,11 +270,11 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	var probeTimeoutFlag string
 
 	cmd := &cobra.Command{
-		Use:   name,
+		Use:   name + " [args...]",
 		Short: task.Description,
 		Long:  buildTaskLongDescription(name, task),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTaskCommand(name, hostFlag, tagFlag, probeTimeoutFlag)
+			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag)
 		},
 	}
 
@@ -222,6 +301,8 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 
 	if task.Run != "" {
 		desc += fmt.Sprintf("Command: %s\n", task.Run)
+		desc += "\nExtra arguments are appended to the command.\n"
+		desc += fmt.Sprintf("Example: rr %s -v  =>  %s -v\n", name, task.Run)
 	} else if len(task.Steps) > 0 {
 		desc += "Steps:\n"
 		for i, step := range task.Steps {
@@ -231,6 +312,7 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 			}
 			desc += fmt.Sprintf("  %d. %s: %s\n", i+1, stepName, step.Run)
 		}
+		desc += "\nNote: Extra arguments are not supported for multi-step tasks.\n"
 	}
 
 	if len(task.Hosts) > 0 {
@@ -241,7 +323,7 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 }
 
 // runTaskCommand is the implementation for task commands.
-func runTaskCommand(taskName, hostFlag, tagFlag, probeTimeoutFlag string) error {
+func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string) error {
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
@@ -249,6 +331,7 @@ func runTaskCommand(taskName, hostFlag, tagFlag, probeTimeoutFlag string) error 
 
 	exitCode, err := RunTask(TaskOptions{
 		TaskName:     taskName,
+		Args:         args,
 		Host:         hostFlag,
 		Tag:          tagFlag,
 		ProbeTimeout: probeTimeout,
