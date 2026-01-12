@@ -255,3 +255,7 @@ Claude will then understand rr commands, the two-config system, and can help wit
 ## License
 
 MIT
+
+<p align="center">
+  ![that&#39;s all folks GIF by Space Jam](https://github.com/user-attachments/assets/bb29dbcd-1c3d-4480-8acc-429fba16849d)
+</p>
