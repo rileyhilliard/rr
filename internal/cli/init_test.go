@@ -366,7 +366,7 @@ func TestInit_NonInteractive_DefaultRemoteDir(t *testing.T) {
 	// Default remote dir should be in global config
 	globalContent, err := os.ReadFile(filepath.Join(tmpDir, ".rr", "config.yaml"))
 	require.NoError(t, err)
-	assert.Contains(t, string(globalContent), "${HOME}/rr/${PROJECT}")
+	assert.Contains(t, string(globalContent), "~/rr/${PROJECT}")
 }
 
 func TestInitOptions_Defaults(t *testing.T) {

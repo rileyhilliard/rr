@@ -28,6 +28,7 @@ type TaskOptions struct {
 	DryRun       bool          // If true, show what would be done without doing it
 	WorkingDir   string        // Override local working directory
 	Quiet        bool          // If true, minimize output
+	Local        bool          // If true, force local execution (skip remote hosts)
 }
 
 // RunTask executes a named task from the configuration.
@@ -42,6 +43,7 @@ func RunTask(opts TaskOptions) (int, error) {
 		SkipLock:     opts.SkipLock,
 		WorkingDir:   opts.WorkingDir,
 		Quiet:        opts.Quiet,
+		Local:        opts.Local,
 	})
 	if err != nil {
 		return 1, err
@@ -284,13 +286,14 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	var hostFlag string
 	var tagFlag string
 	var probeTimeoutFlag string
+	var localFlag bool
 
 	cmd := &cobra.Command{
 		Use:   name + " [args...]",
 		Short: task.Description,
 		Long:  buildTaskLongDescription(name, task),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag)
+			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag)
 		},
 	}
 
@@ -303,6 +306,7 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	cmd.Flags().StringVar(&hostFlag, "host", "", "target host name")
 	cmd.Flags().StringVar(&tagFlag, "tag", "", "select host by tag")
 	cmd.Flags().StringVar(&probeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
+	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
 
 	return cmd
 }
@@ -339,7 +343,7 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 }
 
 // runTaskCommand is the implementation for task commands.
-func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string) error {
+func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag bool) error {
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
@@ -352,6 +356,7 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 		Tag:          tagFlag,
 		ProbeTimeout: probeTimeout,
 		Quiet:        Quiet(),
+		Local:        localFlag,
 	})
 
 	if err != nil {

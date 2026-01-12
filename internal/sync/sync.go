@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -77,21 +78,23 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 				"Make sure rsync is installed and the paths are valid.")
 		}
 
+		// Capture stderr for error analysis while also streaming to progress
+		var stderrBuf bytes.Buffer
+		stderrWriter := io.MultiWriter(&stderrBuf, progress)
+
 		// Stream stdout (progress info)
 		go streamOutput(stdout, progress)
-		// Stream stderr (errors/warnings)
-		go streamOutput(stderr, progress)
+		// Stream stderr (errors/warnings) to both buffer and progress
+		go streamOutput(stderr, stderrWriter)
 
 		if err := cmd.Wait(); err != nil {
-			return handleRsyncError(err, conn.Name)
+			return handleRsyncError(err, conn.Name, stderrBuf.String())
 		}
 	} else {
 		// No progress output, just run and wait
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrSync,
-				fmt.Sprintf("rsync failed: %s", strings.TrimSpace(string(output))),
-				"Check that the remote directory exists and you have write permissions.")
+			return handleRsyncError(err, conn.Name, string(output))
 		}
 	}
 
@@ -200,8 +203,23 @@ func scanLinesWithCR(data []byte, atEOF bool) (advance int, token []byte, err er
 	return 0, nil, nil
 }
 
+// isRsyncVersionError checks if the error output indicates an rsync version incompatibility.
+// The --info=progress2 flag requires rsync 3.1.0 or later.
+func isRsyncVersionError(output string) bool {
+	return strings.Contains(output, "unrecognized option") &&
+		strings.Contains(output, "--info=progress2")
+}
+
+// rsyncVersionSuggestion returns platform-specific upgrade instructions.
+func rsyncVersionSuggestion() string {
+	return "The --info=progress2 flag requires rsync 3.1.0+.\n" +
+		"  macOS: brew install rsync (then ensure /opt/homebrew/bin is in PATH)\n" +
+		"  Linux: apt install rsync or yum install rsync\n" +
+		"  Run 'rr doctor' to check your rsync version."
+}
+
 // handleRsyncError wraps rsync exit errors with helpful messages.
-func handleRsyncError(err error, hostName string) error {
+func handleRsyncError(err error, hostName string, stderrOutput string) error {
 	exitErr, ok := err.(*exec.ExitError)
 	if !ok {
 		return errors.WrapWithCode(err, errors.ErrSync,
@@ -213,6 +231,13 @@ func handleRsyncError(err error, hostName string) error {
 	// See: https://download.samba.org/pub/rsync/rsync.1
 	exitCode := exitErr.ExitCode()
 	var msg, suggestion string
+
+	// Check for rsync version incompatibility first (before generic exit code handling)
+	if isRsyncVersionError(stderrOutput) {
+		return errors.New(errors.ErrSync,
+			"rsync version too old",
+			rsyncVersionSuggestion())
+	}
 
 	switch exitCode {
 	case 1:

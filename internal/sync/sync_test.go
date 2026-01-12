@@ -531,7 +531,7 @@ func TestHandleRsyncError(t *testing.T) {
 			err := cmd.Run()
 			require.Error(t, err, "command should fail with exit code %d", tt.exitCode)
 
-			result := handleRsyncError(err, tt.hostName)
+			result := handleRsyncError(err, tt.hostName, "")
 			assert.Error(t, result)
 			assert.Contains(t, result.Error(), tt.wantContains)
 		})
@@ -541,10 +541,63 @@ func TestHandleRsyncError(t *testing.T) {
 func TestHandleRsyncError_NonExitError(t *testing.T) {
 	// Test with a non-ExitError
 	regularErr := assert.AnError
-	result := handleRsyncError(regularErr, "testhost")
+	result := handleRsyncError(regularErr, "testhost", "")
 
 	assert.Error(t, result)
 	assert.Contains(t, result.Error(), "rsync failed")
+}
+
+func TestHandleRsyncError_VersionTooOld(t *testing.T) {
+	// Simulate rsync exiting with code 1 and stderr containing the version error
+	cmd := exec.Command("sh", "-c", "exit 1")
+	err := cmd.Run()
+	require.Error(t, err)
+
+	stderrOutput := `rsync: unrecognized option '--info=progress2'
+usage: rsync [-v] [-q] [more options]`
+
+	result := handleRsyncError(err, "testhost", stderrOutput)
+
+	assert.Error(t, result)
+	assert.Contains(t, result.Error(), "rsync version too old")
+	assert.Contains(t, result.Error(), "rsync 3.1.0+")
+	assert.Contains(t, result.Error(), "brew install rsync")
+}
+
+func TestIsRsyncVersionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected bool
+	}{
+		{
+			name:     "version error detected",
+			output:   "rsync: unrecognized option '--info=progress2'\nusage: rsync [options]",
+			expected: true,
+		},
+		{
+			name:     "different unrecognized option",
+			output:   "rsync: unrecognized option '--foo'\nusage: rsync [options]",
+			expected: false,
+		},
+		{
+			name:     "empty output",
+			output:   "",
+			expected: false,
+		},
+		{
+			name:     "normal rsync error",
+			output:   "rsync: connection unexpectedly closed",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isRsyncVersionError(tt.output)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestStreamOutput(t *testing.T) {

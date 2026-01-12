@@ -64,7 +64,7 @@ func hostAdd(opts HostAddOptions) error {
 			}
 		}
 		if remoteDir == "" {
-			remoteDir = "${HOME}/rr/${PROJECT}"
+			remoteDir = "~/rr/${PROJECT}"
 		}
 
 		// Prompt to confirm or change

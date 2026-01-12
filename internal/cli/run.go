@@ -26,6 +26,7 @@ type RunOptions struct {
 	DryRun       bool          // If true, show what would be done without doing it
 	WorkingDir   string        // Override local working directory
 	Quiet        bool          // If true, minimize output (no individual connection attempts)
+	Local        bool          // If true, force local execution (skip remote hosts)
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -40,6 +41,7 @@ func Run(opts RunOptions) (int, error) {
 		SkipLock:     opts.SkipLock,
 		WorkingDir:   opts.WorkingDir,
 		Quiet:        opts.Quiet,
+		Local:        opts.Local,
 	})
 	if err != nil {
 		return 1, err
@@ -266,7 +268,7 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 }
 
 // runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error {
+func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag bool) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
@@ -287,6 +289,7 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string) error
 		Tag:          tagFlag,
 		ProbeTimeout: probeTimeout,
 		Quiet:        Quiet(),
+		Local:        localFlag,
 	})
 
 	if err != nil {

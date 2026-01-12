@@ -288,9 +288,11 @@ func LoadResolved(explicitPath string) (*ResolvedConfig, error) {
 // 1. preferred (from --host flag) - single host
 // 2. project.Hosts (from .rr.yaml hosts field) - multiple hosts
 // 3. project.Host (from .rr.yaml host field) - single host (backwards compat)
-// 4. All global hosts (default behavior for load balancing)
+// 4. If local_fallback is enabled and no hosts specified in project, return empty (local mode)
+// 5. All global hosts (default behavior for load balancing)
 //
 // Returns list of host names and map of host configs.
+// Empty hosts list with nil error indicates local-only mode.
 func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[string]Host, error) {
 	if resolved.Global == nil {
 		return nil, nil, errors.New(errors.ErrConfig,
@@ -298,13 +300,17 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 			"This is unexpected - try running the command again.")
 	}
 
-	if len(resolved.Global.Hosts) == 0 {
+	localFallback := ResolveLocalFallback(resolved)
+
+	// Check for hosts early, but allow empty if local_fallback is enabled
+	if len(resolved.Global.Hosts) == 0 && !localFallback {
 		return nil, nil, errors.New(errors.ErrConfig,
 			"No hosts configured",
 			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
 	}
 
 	var hostNames []string
+	projectSpecifiesHosts := false
 
 	// 1. Preferred from flag - single host
 	if preferred != "" {
@@ -314,14 +320,25 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	// 2. Project config hosts list (plural)
 	if len(hostNames) == 0 && resolved.Project != nil && len(resolved.Project.Hosts) > 0 {
 		hostNames = resolved.Project.Hosts
+		projectSpecifiesHosts = true
 	}
 
 	// 3. Project config host reference (singular, backwards compat)
 	if len(hostNames) == 0 && resolved.Project != nil && resolved.Project.Host != "" {
 		hostNames = []string{resolved.Project.Host}
+		projectSpecifiesHosts = true
 	}
 
-	// 4. All global hosts (default - enables load balancing across everything)
+	// 4. If project explicitly sets local_fallback: true and doesn't specify hosts, run locally
+	// This allows users to set local_fallback: true with no hosts to force local execution
+	// Only triggers when PROJECT config has local_fallback (not just global), so existing
+	// setups that rely on global hosts + global local_fallback continue to work.
+	projectSetsLocalFallback := resolved.Project != nil && resolved.Project.LocalFallback != nil && *resolved.Project.LocalFallback
+	if len(hostNames) == 0 && projectSetsLocalFallback && !projectSpecifiesHosts {
+		return []string{}, make(map[string]Host), nil
+	}
+
+	// 5. All global hosts (default - enables load balancing across everything)
 	// Put global default first, then rest alphabetically
 	if len(hostNames) == 0 {
 		defaultHost := resolved.Global.Defaults.Host
@@ -390,6 +407,20 @@ func formatHostList(names []string) string {
 		result += ", " + names[i]
 	}
 	return result
+}
+
+// ResolveLocalFallback determines whether local fallback is enabled.
+// Project config overrides global config when explicitly set.
+func ResolveLocalFallback(resolved *ResolvedConfig) bool {
+	// Project config takes precedence when explicitly set
+	if resolved.Project != nil && resolved.Project.LocalFallback != nil {
+		return *resolved.Project.LocalFallback
+	}
+	// Fall back to global config
+	if resolved.Global != nil {
+		return resolved.Global.Defaults.LocalFallback
+	}
+	return false
 }
 
 // parseConfig converts viper config to our Config struct with defaults merged in.
