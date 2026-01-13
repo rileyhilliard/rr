@@ -269,6 +269,53 @@ func TestBuildArgs_SSHBatchMode(t *testing.T) {
 	assert.Contains(t, sshCmd, "ControlPersist=")
 }
 
+// TestBuildArgs_SSHConfigFile verifies that a custom SSH config file is included
+// when SSHConfigFile is set. This is used for testing with non-standard SSH setups.
+func TestBuildArgs_SSHConfigFile(t *testing.T) {
+	// Save and restore the global SSHConfigFile
+	origConfigFile := SSHConfigFile
+	defer func() { SSHConfigFile = origConfigFile }()
+
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/app"},
+	}
+
+	t.Run("without custom config", func(t *testing.T) {
+		SSHConfigFile = ""
+		args, err := BuildArgs(conn, "/home/user/app", config.SyncConfig{})
+		require.NoError(t, err)
+
+		var sshCmd string
+		for i, arg := range args {
+			if arg == "-e" && i+1 < len(args) {
+				sshCmd = args[i+1]
+				break
+			}
+		}
+
+		assert.NotContains(t, sshCmd, "-F ", "should not include -F flag when SSHConfigFile is empty")
+	})
+
+	t.Run("with custom config", func(t *testing.T) {
+		SSHConfigFile = "/tmp/test-ssh-config"
+		args, err := BuildArgs(conn, "/home/user/app", config.SyncConfig{})
+		require.NoError(t, err)
+
+		var sshCmd string
+		for i, arg := range args {
+			if arg == "-e" && i+1 < len(args) {
+				sshCmd = args[i+1]
+				break
+			}
+		}
+
+		assert.Contains(t, sshCmd, "-F /tmp/test-ssh-config",
+			"should include -F flag with SSHConfigFile path")
+	})
+}
+
 func TestParseProgress(t *testing.T) {
 	tests := []struct {
 		name     string
