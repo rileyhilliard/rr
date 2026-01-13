@@ -3,12 +3,14 @@ package integration
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
@@ -46,12 +48,31 @@ func GetSSHConnection(t *testing.T) *host.Connection {
 		client.Close()
 	})
 
-	// Parse host and port for the config
+	// Parse host and port for rsync configuration
+	sshHost, sshPort := parseHostPort(hostAddr)
+	sshUser := GetTestSSHUser()
+	sshKey := GetTestSSHKey()
+
+	// Build the SSH alias for rsync (user@host format)
+	sshAlias := sshHost
+	if sshUser != "" {
+		sshAlias = sshUser + "@" + sshHost
+	}
+
+	// If using non-standard port or explicit key, create SSH config file
+	if sshPort != "" || sshKey != "" {
+		configPath := setupSSHConfigForTests(t, sshHost, sshPort, sshUser, sshKey)
+		sync.SSHConfigFile = configPath
+		t.Cleanup(func() {
+			sync.SSHConfigFile = ""
+		})
+	}
+
 	remoteDir := fmt.Sprintf("/tmp/rr-test-%d", time.Now().UnixNano())
 
 	conn := &host.Connection{
 		Name:   "test-host",
-		Alias:  hostAddr,
+		Alias:  sshAlias,
 		Client: client,
 		Host: config.Host{
 			Dir: remoteDir,
@@ -60,6 +81,59 @@ func GetSSHConnection(t *testing.T) *host.Connection {
 	}
 
 	return conn
+}
+
+// parseHostPort splits a host:port string into its components.
+// Returns (host, port) where port may be empty for default port 22.
+func parseHostPort(addr string) (string, string) {
+	// Handle user@host:port format - strip user first
+	if idx := strings.Index(addr, "@"); idx != -1 {
+		addr = addr[idx+1:]
+	}
+
+	// Split host:port
+	if idx := strings.LastIndex(addr, ":"); idx != -1 {
+		return addr[:idx], addr[idx+1:]
+	}
+	return addr, ""
+}
+
+// setupSSHConfigForTests creates a temporary SSH config file for rsync.
+// This allows rsync to connect using non-standard ports and explicit keys.
+func setupSSHConfigForTests(t *testing.T, sshHost, port, user, keyPath string) string {
+	t.Helper()
+
+	// Create temp directory for SSH config
+	tmpDir, err := os.MkdirTemp("", "rr-ssh-config-")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir for SSH config: %v", err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(tmpDir)
+	})
+
+	// Build SSH config content
+	var config strings.Builder
+	config.WriteString(fmt.Sprintf("Host %s\n", sshHost))
+	config.WriteString(fmt.Sprintf("  HostName %s\n", sshHost))
+	if port != "" {
+		config.WriteString(fmt.Sprintf("  Port %s\n", port))
+	}
+	if user != "" {
+		config.WriteString(fmt.Sprintf("  User %s\n", user))
+	}
+	if keyPath != "" {
+		config.WriteString(fmt.Sprintf("  IdentityFile %s\n", keyPath))
+	}
+	config.WriteString("  StrictHostKeyChecking no\n")
+	config.WriteString("  UserKnownHostsFile /dev/null\n")
+
+	configPath := filepath.Join(tmpDir, "config")
+	if err := os.WriteFile(configPath, []byte(config.String()), 0600); err != nil {
+		t.Fatalf("Failed to write SSH config: %v", err)
+	}
+
+	return configPath
 }
 
 // CleanupRemoteDir removes a directory on the remote host.
@@ -117,6 +191,27 @@ func RemoteDirExists(t *testing.T, conn *host.Connection, path string) bool {
 		return false
 	}
 	return exitCode == 0
+}
+
+// EnsureRemoteDir creates a directory on the remote host if it doesn't exist.
+func EnsureRemoteDir(t *testing.T, conn *host.Connection, path string) {
+	t.Helper()
+	_, stderr, exitCode, err := conn.Client.Exec(fmt.Sprintf("mkdir -p %q", path))
+	if err != nil {
+		t.Fatalf("Failed to create remote directory %s: %v", path, err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("Failed to create remote directory %s: %s", path, string(stderr))
+	}
+}
+
+// RequireRemoteRsync skips the test if rsync is not available on the remote host.
+func RequireRemoteRsync(t *testing.T, conn *host.Connection) {
+	t.Helper()
+	_, _, exitCode, err := conn.Client.Exec("which rsync")
+	if err != nil || exitCode != 0 {
+		t.Skip("Skipping: rsync not available on remote host")
+	}
 }
 
 // ListRemoteDir lists files in a remote directory.

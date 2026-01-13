@@ -20,6 +20,11 @@ import (
 // Using /tmp for cross-platform compatibility.
 var controlSocketDir = filepath.Join(os.TempDir(), "rr-ssh")
 
+// SSHConfigFile can be set to use a custom SSH config file for rsync.
+// If empty, uses the default SSH config. Useful for testing with custom
+// host configurations.
+var SSHConfigFile string
+
 // Sync transfers files from localDir to the remote host using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
@@ -140,6 +145,10 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	//   which would cause rsync to hang since there's no terminal attached.
 	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
 		controlSocketDir)
+	// Support custom SSH config file (useful for testing)
+	if SSHConfigFile != "" {
+		sshCmd = fmt.Sprintf("%s -F %q", sshCmd, SSHConfigFile)
+	}
 	args = append(args, "-e", sshCmd)
 
 	// Add progress info flag for parsing

@@ -15,6 +15,7 @@ import (
 // TestSyncBasicTransfer tests that files are actually transferred via rsync.
 func TestSyncBasicTransfer(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// Create local directory with test files
@@ -47,6 +48,7 @@ func TestSyncBasicTransfer(t *testing.T) {
 // TestSyncWithExclude tests that exclude patterns work correctly.
 func TestSyncWithExclude(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// Create local directory with files that should be excluded
@@ -78,6 +80,7 @@ func TestSyncWithExclude(t *testing.T) {
 // TestSyncDeletesRemovedFiles tests that --delete removes files no longer in source.
 func TestSyncDeletesRemovedFiles(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// Create local directory with initial files
@@ -111,6 +114,7 @@ func TestSyncDeletesRemovedFiles(t *testing.T) {
 // TestSyncWithPreserve tests that preserve patterns protect remote files from deletion.
 func TestSyncWithPreserve(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// First, create a file on the remote that should be preserved
@@ -140,6 +144,7 @@ func TestSyncWithPreserve(t *testing.T) {
 // TestSyncProgressOutput tests that progress output is captured.
 func TestSyncProgressOutput(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// Create a file with some content
@@ -161,6 +166,7 @@ func TestSyncProgressOutput(t *testing.T) {
 // TestSyncEmptyDirectory tests syncing an empty directory.
 func TestSyncEmptyDirectory(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// Create empty local directory
@@ -200,6 +206,7 @@ func TestSyncLocalConnectionSkipped(t *testing.T) {
 // TestSyncCreatesRemoteDir tests that ensureRemoteDir creates the directory.
 func TestSyncCreatesRemoteDir(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 
 	// Use a unique subdirectory that doesn't exist
 	originalDir := conn.Host.Dir
@@ -223,6 +230,7 @@ func TestSyncCreatesRemoteDir(t *testing.T) {
 // TestSyncLargeFile tests syncing a larger file.
 func TestSyncLargeFile(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// Create a 100KB file
@@ -247,6 +255,7 @@ func TestSyncLargeFile(t *testing.T) {
 // TestSyncMultipleTimes tests that repeated syncs work correctly.
 func TestSyncMultipleTimes(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	localDir := TempSyncDir(t, "rr-multi-test-")
