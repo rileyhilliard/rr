@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-01-12
+
+### Fixed
+
+- Version comparison in update command now correctly handles semver (0.10.0 > 0.9.1)
+  - Previously used string comparison which incorrectly treated 0.10.0 as older than 0.9.1
+  - Now properly parses and compares version components numerically
+
 ## [0.10.0] - 2026-01-12
 
 ### Changed
