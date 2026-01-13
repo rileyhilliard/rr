@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - 2026-01-13
+
+### Fixed
+
+- **Signal cancellation for parallel tasks** - Ctrl+C now properly terminates remote processes
+  - Added `ExecStreamContext` to SSH client with context cancellation support
+  - Sends SIGINT to remote process when context is cancelled
+  - Signal handler in parallel CLI cancels context on SIGINT/SIGTERM
+
+### Added
+
+- Parallel test tasks in `.rr.yaml`: `test-all` (unit + integration) and `verify-all` (lint + all tests)
+- Makefile now uses `rr` by default with automatic local fallback when unavailable
+
 ## [0.11.1] - 2026-01-13
 
 ### Added
