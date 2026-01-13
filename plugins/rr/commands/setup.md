@@ -109,7 +109,7 @@ After installing, update the host's `setup_commands` in `~/.rr/config.yaml` to s
 ```yaml
 setup_commands:
     - source ~/.local/bin/env # uv
-    - source ~/.bun/bin/bun # bun
+    - export PATH="$HOME/.bun/bin:$PATH" # bun
     - export PATH="$HOME/.local/bin:$PATH"
 ```
 

@@ -1,0 +1,70 @@
+# Code Rabbit Configuration
+# https://docs.coderabbit.ai/configuration/configuration-file/
+
+language: en-US
+
+reviews:
+  # Enable high-level PR summary
+  high_level_summary: true
+
+  # Enable walkthrough of changes
+  poem: false
+
+  # Review status (enable AI reviews)
+  review_status: true
+
+  # Collapse walkthrough in PR description
+  collapse_walkthrough: false
+
+  # Request changes workflow (auto requests changes for high-severity issues)
+  request_changes_workflow: false
+
+  # Path-based instructions for different file types
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        - Check for idiomatic Go patterns and error handling
+        - Ensure errors are wrapped with context using the internal/errors package
+        - Verify proper use of testify assertions in tests
+        - Look for potential race conditions
+        - Check for proper resource cleanup (defer statements)
+
+    - path: "internal/cli/**"
+      instructions: |
+        - Verify Cobra command patterns are followed consistently
+        - Check that commands have proper descriptions and examples
+        - Ensure flags are properly validated
+
+    - path: "**/*_test.go"
+      instructions: |
+        - Prefer table-driven tests
+        - Use testify/assert and testify/require appropriately
+        - Ensure test names are descriptive
+
+    - path: "**/*.yaml"
+      instructions: |
+        - Validate YAML syntax
+        - Check for consistent formatting
+
+  # Auto-review configuration
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+# Chat configuration (allow contributors to interact with the bot)
+chat:
+  auto_reply: true
+
+# Tone configuration (250 char limit)
+tone_instructions: "Be direct and practical. Prioritize security, error handling, performance, and logic issues. Skip style nitpicks already covered by linters."
+
+# Early access features
+early_access: false
+
+# Knowledge base (learns from repo patterns)
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: auto
