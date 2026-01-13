@@ -52,8 +52,16 @@ func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, resolved *c
 }
 
 // Run executes all tasks in parallel across available hosts.
-// It uses a work-stealing queue pattern where each host worker grabs tasks
-// from a shared queue.
+//
+// Work-stealing queue design: Tasks are placed in a buffered channel that acts
+// as a shared queue. Each host worker pulls tasks from this channel independently
+// (work stealing). This approach:
+//   - Naturally load-balances: fast hosts grab more work
+//   - Handles heterogeneous hosts: no pre-assignment needed
+//   - Simplifies cancellation: just close the channel
+//
+// The channel-based approach avoids explicit locking on the queue itself since
+// Go channels are already synchronized.
 func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	if len(o.tasks) == 0 {
 		return &Result{}, nil
@@ -79,7 +87,9 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 
 	startTime := time.Now()
 
-	// Create task queue (channel-based work stealing)
+	// Create task queue (channel-based work stealing).
+	// The channel is sized to hold all tasks, filled immediately, then closed.
+	// Workers range over this channel, naturally competing for work.
 	taskQueue := make(chan TaskInfo, len(o.tasks))
 	for _, task := range o.tasks {
 		taskQueue <- task

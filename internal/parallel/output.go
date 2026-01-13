@@ -36,8 +36,19 @@ type OutputManager struct {
 }
 
 // NewOutputManager creates a new output manager with the specified mode.
+//
+// Output mode selection logic:
+//   - progress: Live updating display with spinners (requires TTY)
+//   - stream: Real-time interleaved output with [host:task] prefixes
+//   - verbose: Full output per task shown on completion
+//   - quiet: Summary only, no per-task output
+//
+// TTY detection fallback: If progress mode is requested but stdout isn't a TTY
+// (e.g., piped to a file or CI environment), we fall back to quiet mode since
+// progress updates would be meaningless without terminal control.
 func NewOutputManager(mode OutputMode, isTTY bool) *OutputManager {
-	// Fall back to simple output for non-TTY in progress mode
+	// Fall back to simple output for non-TTY in progress mode.
+	// Progress mode uses terminal control sequences that don't work in pipes.
 	effectiveMode := mode
 	if !isTTY && mode == OutputProgress {
 		effectiveMode = OutputQuiet

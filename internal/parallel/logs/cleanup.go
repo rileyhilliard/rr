@@ -19,7 +19,17 @@ type logDir struct {
 }
 
 // Cleanup removes old log directories based on retention policy.
-// Priority: MaxSizeMB > KeepDays > KeepRuns
+//
+// Log cleanup policy precedence (all constraints are applied in order):
+//  1. MaxSizeMB - Enforced first to prevent disk exhaustion. Deletes oldest
+//     directories until total size is under limit.
+//  2. KeepDays - Applied second for time-based retention. Deletes any directory
+//     older than the specified number of days.
+//  3. KeepRuns - Applied last for count-based retention per task. Keeps only
+//     the N most recent runs for each unique task name.
+//
+// This ordering ensures disk space is always respected (safety), then age-based
+// cleanup removes stale data, and finally run count limits prevent accumulation.
 // Returns nil if no cleanup is needed or cfg has no retention settings.
 func Cleanup(cfg config.LogsConfig) error {
 	baseDir := cfg.Dir
