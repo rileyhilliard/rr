@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -160,8 +162,19 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// Create orchestrator
 	orchestrator := parallel.NewOrchestrator(tasks, hosts, resolved, parallelCfg)
 
+	// Create context with signal handling for graceful cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle SIGINT/SIGTERM to cancel running tasks
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
 	// Execute
-	ctx := context.Background()
 	result, err := orchestrator.Run(ctx)
 	if err != nil {
 		return 1, err

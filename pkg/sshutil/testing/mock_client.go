@@ -1,6 +1,7 @@
 package testing
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -70,6 +71,18 @@ func (m *MockClient) Exec(cmd string) (stdout, stderr []byte, exitCode int, err 
 
 // ExecStream runs a command and writes output to the provided writers.
 func (m *MockClient) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
+	return m.ExecStreamContext(context.Background(), cmd, stdout, stderr)
+}
+
+// ExecStreamContext runs a command with context cancellation support.
+func (m *MockClient) ExecStreamContext(ctx context.Context, cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return 130, ctx.Err()
+	default:
+	}
+
 	out, errOut, code, execErr := m.Exec(cmd)
 	if execErr != nil {
 		return -1, execErr

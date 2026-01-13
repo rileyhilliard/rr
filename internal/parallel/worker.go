@@ -205,7 +205,7 @@ func (w *hostWorker) execCommand(
 		return 1, fmt.Errorf("no SSH connection available for host %s", w.hostName)
 	}
 
-	return w.conn.Client.ExecStream(fullCmd, stdout, stderr)
+	return w.conn.Client.ExecStreamContext(ctx, fullCmd, stdout, stderr)
 }
 
 // buildFullCommand constructs the command with setup commands, env, and workdir.
