@@ -57,17 +57,8 @@ auto_review:
 chat:
   auto_reply: true
 
-# Tone configuration
-tone_instructions: |
-  Be direct, practical, and clear. Focus on substantive issues rather than nitpicks.
-  Prioritize:
-  - Security concerns
-  - Error handling issues
-  - Performance problems
-  - Logic errors
-  Avoid commenting on:
-  - Minor style preferences already covered by linters
-  - Trivial formatting issues
+# Tone configuration (250 char limit)
+tone_instructions: "Be direct and practical. Prioritize security, error handling, performance, and logic issues. Skip style nitpicks already covered by linters."
 
 # Early access features
 early_access: false
