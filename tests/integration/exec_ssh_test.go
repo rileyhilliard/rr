@@ -163,6 +163,7 @@ func TestExecWithQuotes(t *testing.T) {
 // TestFullWorkflowSyncLockExec tests the complete sync -> lock -> exec workflow.
 func TestFullWorkflowSyncLockExec(t *testing.T) {
 	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
 
 	// 1. Create local files to sync
@@ -249,6 +250,7 @@ func TestExecSpecialCharacters(t *testing.T) {
 func TestExecuteTask(t *testing.T) {
 	conn := GetSSHConnection(t)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
+	EnsureRemoteDir(t, conn, conn.Host.Dir)
 
 	task := &config.TaskConfig{
 		Run: "echo 'task executed'",
@@ -267,6 +269,7 @@ func TestExecuteTask(t *testing.T) {
 func TestExecuteTaskWithArgs(t *testing.T) {
 	conn := GetSSHConnection(t)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
+	EnsureRemoteDir(t, conn, conn.Host.Dir)
 
 	task := &config.TaskConfig{
 		Run: "echo",
@@ -286,6 +289,7 @@ func TestExecuteTaskWithArgs(t *testing.T) {
 func TestExecuteTaskWithEnv(t *testing.T) {
 	conn := GetSSHConnection(t)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
+	EnsureRemoteDir(t, conn, conn.Host.Dir)
 
 	task := &config.TaskConfig{
 		Run: "echo $MY_VAR",
@@ -308,6 +312,7 @@ func TestExecuteTaskWithEnv(t *testing.T) {
 func TestExecuteMultiStepTask(t *testing.T) {
 	conn := GetSSHConnection(t)
 	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
+	EnsureRemoteDir(t, conn, conn.Host.Dir)
 
 	task := &config.TaskConfig{
 		Steps: []config.TaskStep{

@@ -193,6 +193,27 @@ func RemoteDirExists(t *testing.T, conn *host.Connection, path string) bool {
 	return exitCode == 0
 }
 
+// EnsureRemoteDir creates a directory on the remote host if it doesn't exist.
+func EnsureRemoteDir(t *testing.T, conn *host.Connection, path string) {
+	t.Helper()
+	_, stderr, exitCode, err := conn.Client.Exec(fmt.Sprintf("mkdir -p %q", path))
+	if err != nil {
+		t.Fatalf("Failed to create remote directory %s: %v", path, err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("Failed to create remote directory %s: %s", path, string(stderr))
+	}
+}
+
+// RequireRemoteRsync skips the test if rsync is not available on the remote host.
+func RequireRemoteRsync(t *testing.T, conn *host.Connection) {
+	t.Helper()
+	_, _, exitCode, err := conn.Client.Exec("which rsync")
+	if err != nil || exitCode != 0 {
+		t.Skip("Skipping: rsync not available on remote host")
+	}
+}
+
 // ListRemoteDir lists files in a remote directory.
 func ListRemoteDir(t *testing.T, conn *host.Connection, path string) []string {
 	t.Helper()
