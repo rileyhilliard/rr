@@ -15,11 +15,10 @@ import (
 
 // HostInfo contains information about a host for display in the picker.
 type HostInfo struct {
-	Name    string   // Host name from config (e.g., "gpu-box")
-	SSH     []string // SSH aliases
-	Dir     string   // Remote directory
-	Tags    []string // Tags for filtering
-	Default bool     // Whether this is the default host
+	Name string   // Host name from config (e.g., "gpu-box")
+	SSH  []string // SSH aliases
+	Dir  string   // Remote directory
+	Tags []string // Tags for filtering
 }
 
 // hostItem implements list.Item for the Bubbles list component.
@@ -28,11 +27,7 @@ type hostItem struct {
 }
 
 func (i hostItem) Title() string {
-	title := i.host.Name
-	if i.host.Default {
-		title += " (default)"
-	}
-	return title
+	return i.host.Name
 }
 
 func (i hostItem) Description() string {

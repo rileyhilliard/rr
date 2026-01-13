@@ -1,0 +1,46 @@
+# Sample .rr.yaml configuration for demo recordings
+# This config demonstrates multi-host setup with failover
+
+version: 1
+
+hosts:
+    mini:
+        ssh:
+            - mini-local        # LAN - fastest, try first
+            - mini (tailscale)  # VPN - fallback
+        dir: ~/projects/${PROJECT}
+
+    gpu-box:
+        ssh:
+            - 192.168.1.50     # LAN IP
+            - gpu-tailscale    # VPN fallback
+        dir: ~/dev/${PROJECT}
+        tags:
+            - gpu
+            - fast
+
+default: mini
+
+sync:
+    exclude:
+        - .git/
+        - node_modules/
+        - .venv/
+        - __pycache__/
+        - "*.pyc"
+        - .pytest_cache/
+        - dist/
+        - build/
+
+tasks:
+    test:
+        run: pytest -n auto
+        description: Run tests in parallel
+
+    build:
+        run: make build
+        description: Build the project
+
+    lint:
+        run: make lint
+        description: Run linters

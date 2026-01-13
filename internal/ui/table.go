@@ -97,7 +97,7 @@ type StatusTableRow struct {
 }
 
 // RenderStatusTable renders the status output as a formatted table.
-func RenderStatusTable(rows []StatusTableRow, defaultHost string, selected *StatusTableSelection) string {
+func RenderStatusTable(rows []StatusTableRow, selected *StatusTableSelection) string {
 	if len(rows) == 0 {
 		return "No hosts configured"
 	}

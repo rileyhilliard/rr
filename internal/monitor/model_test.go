@@ -26,9 +26,9 @@ func TestNewModel(t *testing.T) {
 	assert.NotNil(t, m.status)
 	assert.NotNil(t, m.errors)
 
-	// All hosts should start as unreachable
+	// All hosts should start as connecting (not yet determined)
 	for _, status := range m.status {
-		assert.Equal(t, StatusUnreachableState, status)
+		assert.Equal(t, StatusConnectingState, status)
 	}
 
 	// Should have the collector
@@ -43,6 +43,7 @@ func TestHostStatus_String(t *testing.T) {
 		status HostStatus
 		expect string
 	}{
+		{StatusConnectingState, "connecting"},
 		{StatusConnectedState, "connected"},
 		{StatusSlowState, "slow"},
 		{StatusUnreachableState, "unreachable"},

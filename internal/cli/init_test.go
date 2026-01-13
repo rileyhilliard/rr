@@ -537,7 +537,6 @@ func TestCollectNonInteractiveValues_WithExistingGlobalHost(t *testing.T) {
 		Hosts: map[string]config.Host{
 			"dev": {SSH: []string{"dev.example.com"}, Dir: "/home/user/dev"},
 		},
-		Defaults: config.GlobalDefaults{Host: "dev"},
 	}
 	vals, err := collectNonInteractiveValues(InitOptions{}, globalCfg)
 	require.NoError(t, err)

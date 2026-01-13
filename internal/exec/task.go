@@ -10,6 +10,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // TaskResult contains the result of a task execution.
@@ -169,7 +170,7 @@ func buildCommand(cmd string, env map[string]string, workDir string, setupComman
 	// But for remote, we need to cd to the directory
 	if !isLocal && workDir != "" {
 		workDir = config.ExpandRemote(workDir)
-		parts = append(parts, fmt.Sprintf("cd %s", shellQuotePreserveTilde(workDir)))
+		parts = append(parts, fmt.Sprintf("cd %s", util.ShellQuotePreserveTilde(workDir)))
 	}
 
 	// Add setup commands (these run shell commands like "source ~/.local/bin/env")
@@ -240,7 +241,7 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	// Add cd to working directory
 	if host.Dir != "" {
 		dir := config.ExpandRemote(host.Dir)
-		parts = append(parts, fmt.Sprintf("cd %s", shellQuotePreserveTilde(dir)))
+		parts = append(parts, fmt.Sprintf("cd %s", util.ShellQuotePreserveTilde(dir)))
 	}
 
 	// Add the actual command
@@ -272,25 +273,4 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	// Shell format is "bash -c" or custom - we append the quoted command.
 	// Using manual "%s" instead of %q because we've already escaped the string properly.
 	return fmt.Sprintf("%s -c \"%s\"", shell, escapedCmd) //nolint:gocritic // Manual escaping required
-}
-
-// shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
-// For paths starting with ~/, the tilde is kept unquoted and the rest is single-quoted.
-// For other paths, the entire path is single-quoted.
-func shellQuotePreserveTilde(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		// Keep ~ unquoted, quote the rest
-		return "~/" + shellQuote(path[2:])
-	}
-	if path == "~" {
-		return "~"
-	}
-	return shellQuote(path)
-}
-
-// shellQuote wraps a string in single quotes, escaping any existing single quotes.
-func shellQuote(s string) string {
-	// Replace ' with '\'' (end quote, escaped quote, start quote)
-	escaped := strings.ReplaceAll(s, "'", "'\\''")
-	return "'" + escaped + "'"
 }

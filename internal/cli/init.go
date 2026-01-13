@@ -666,11 +666,6 @@ func addHostToGlobal(globalCfg *config.GlobalConfig, machine *machineConfig) (st
 		SetupCommands: machine.setupCommands,
 	}
 
-	// Set as default if first host
-	if globalCfg.Defaults.Host == "" {
-		globalCfg.Defaults.Host = machine.name
-	}
-
 	// Save global config
 	if err := config.SaveGlobal(globalCfg); err != nil {
 		return "", err
@@ -707,9 +702,6 @@ func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
 
 	for _, name := range hostNames {
 		label := name
-		if name == globalCfg.Defaults.Host {
-			label += " (default)"
-		}
 		// Add first SSH connection as hint
 		if h, ok := globalCfg.Hosts[name]; ok && len(h.SSH) > 0 {
 			label += " - " + h.SSH[0]

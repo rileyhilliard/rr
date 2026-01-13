@@ -140,16 +140,6 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 		}
 	}
 
-	// Check default host exists (if specified)
-	if cfg.Defaults.Host != "" {
-		if _, ok := cfg.Hosts[cfg.Defaults.Host]; !ok {
-			hostNames := getHostNames(cfg.Hosts)
-			return errors.New(errors.ErrConfig,
-				fmt.Sprintf("Default host '%s' doesn't exist", cfg.Defaults.Host),
-				fmt.Sprintf("Did you rename or remove it? Available hosts: %s", strings.Join(hostNames, ", ")))
-		}
-	}
-
 	return nil
 }
 

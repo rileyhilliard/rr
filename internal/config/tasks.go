@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // OnFail constants define what happens when a step fails.
@@ -32,7 +33,7 @@ func GetTask(cfg *Config, name string) (*TaskConfig, error) {
 		available := getTaskNames(cfg.Tasks)
 		hint := "Check your .rr.yaml for available tasks."
 		if len(available) > 0 {
-			hint = fmt.Sprintf("Available tasks: %s", formatList(available))
+			hint = fmt.Sprintf("Available tasks: %s", util.JoinOrNone(available))
 		}
 		return nil, errors.New(errors.ErrConfig,
 			fmt.Sprintf("No task named '%s'", name),
@@ -105,18 +106,6 @@ func getTaskNames(tasks map[string]TaskConfig) []string {
 		names = append(names, name)
 	}
 	return names
-}
-
-// formatList formats a string slice as a comma-separated list.
-func formatList(items []string) string {
-	if len(items) == 0 {
-		return "(none)"
-	}
-	result := items[0]
-	for i := 1; i < len(items); i++ {
-		result += ", " + items[i]
-	}
-	return result
 }
 
 // IsTaskHostAllowed checks if a task is allowed to run on a given host.

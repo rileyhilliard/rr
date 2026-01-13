@@ -19,9 +19,6 @@ type GlobalConfig struct {
 
 // GlobalDefaults contains default settings for host selection and connection.
 type GlobalDefaults struct {
-	// Host is the default host name to use when not specified.
-	Host string `yaml:"host" mapstructure:"host"`
-
 	// ProbeTimeout is how long to wait when probing SSH hosts.
 	ProbeTimeout time.Duration `yaml:"probe_timeout" mapstructure:"probe_timeout"`
 
@@ -196,7 +193,6 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Version: CurrentGlobalConfigVersion,
 		Hosts:   make(map[string]Host),
 		Defaults: GlobalDefaults{
-			Host:          "",
 			ProbeTimeout:  2 * time.Second,
 			LocalFallback: false,
 		},

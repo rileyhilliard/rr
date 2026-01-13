@@ -149,26 +149,15 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 		return preferredHost, nil
 	}
 
-	// Get default host from resolution order
-	// Priority: project.Hosts[0], project.Host, global defaults
-	defaultHost := ""
-	if ctx.Resolved.Project != nil && len(ctx.Resolved.Project.Hosts) > 0 {
-		defaultHost = ctx.Resolved.Project.Hosts[0]
-	} else if ctx.Resolved.Project != nil && ctx.Resolved.Project.Host != "" {
-		defaultHost = ctx.Resolved.Project.Host
-	} else if ctx.Resolved.Global.Defaults.Host != "" {
-		defaultHost = ctx.Resolved.Global.Defaults.Host
-	}
-
-	hostInfos := ctx.selector.HostInfo(defaultHost)
+	// Get host info for picker (no default host - list order determines priority)
+	hostInfos := ctx.selector.HostInfo("")
 	uiHosts := make([]ui.HostInfo, len(hostInfos))
 	for i, h := range hostInfos {
 		uiHosts[i] = ui.HostInfo{
-			Name:    h.Name,
-			SSH:     h.SSH,
-			Dir:     h.Dir,
-			Tags:    h.Tags,
-			Default: h.Default,
+			Name: h.Name,
+			SSH:  h.SSH,
+			Dir:  h.Dir,
+			Tags: h.Tags,
 		}
 	}
 

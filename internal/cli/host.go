@@ -12,6 +12,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
@@ -86,11 +87,6 @@ func hostAdd(opts HostAddOptions) error {
 		Dir: remoteDir,
 	}
 
-	// If this is the first host, make it the default
-	if cfg.Defaults.Host == "" {
-		cfg.Defaults.Host = machine.name
-	}
-
 	// Save config
 	if err := saveGlobalConfig(cfg); err != nil {
 		return err
@@ -126,9 +122,6 @@ func hostRemove(name string) error {
 		options := make([]huh.Option[string], len(hostNames))
 		for i, h := range hostNames {
 			label := h
-			if h == cfg.Defaults.Host {
-				label += " (default)"
-			}
 			// Add first SSH connection as hint
 			if host, ok := cfg.Hosts[h]; ok && len(host.SSH) > 0 {
 				label += " - " + host.SSH[0]
@@ -191,22 +184,6 @@ func hostRemove(name string) error {
 	// Remove the host
 	delete(cfg.Hosts, name)
 
-	// Handle default host
-	if cfg.Defaults.Host == name {
-		cfg.Defaults.Host = ""
-		// Pick a new default if there are other hosts
-		if len(cfg.Hosts) > 0 {
-			// Pick first alphabetically for consistency
-			var remaining []string
-			for k := range cfg.Hosts {
-				remaining = append(remaining, k)
-			}
-			sort.Strings(remaining)
-			cfg.Defaults.Host = remaining[0]
-			fmt.Printf("  Default host changed to '%s'\n", cfg.Defaults.Host)
-		}
-	}
-
 	// Save config
 	if err := saveGlobalConfig(cfg); err != nil {
 		return err
@@ -239,7 +216,6 @@ func hostList() error {
 	// Styles
 	nameStyle := lipgloss.NewStyle().Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	defaultStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("green"))
 
 	// Show config location
 	fmt.Printf("%s\n\n", dimStyle.Render("Config: "+globalPath))
@@ -247,12 +223,8 @@ func hostList() error {
 	for _, name := range names {
 		h := cfg.Hosts[name]
 
-		// Name with default indicator
-		line := nameStyle.Render(name)
-		if name == cfg.Defaults.Host {
-			line += defaultStyle.Render(" (default)")
-		}
-		fmt.Println(line)
+		// Name
+		fmt.Println(nameStyle.Render(name))
 
 		// SSH connections
 		for i, ssh := range h.SSH {
@@ -358,7 +330,7 @@ func cleanupRemoteArtifacts(hostName string, hostConfig config.Host) {
 	remoteDir := config.ExpandRemote(hostConfig.Dir)
 
 	// Build rm command with proper quoting for tilde expansion
-	rmCmd := fmt.Sprintf("rm -rf %s", shellQuotePreserveTilde(remoteDir))
+	rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(remoteDir))
 
 	spinner := ui.NewSpinner("Cleaning up remote files")
 	spinner.Start()
@@ -377,21 +349,4 @@ func cleanupRemoteArtifacts(hostName string, hostConfig config.Host) {
 	}
 
 	spinner.Success()
-}
-
-// shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
-func shellQuotePreserveTilde(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		return "~/" + shellQuote(path[2:])
-	}
-	if path == "~" {
-		return "~"
-	}
-	return shellQuote(path)
-}
-
-// shellQuote wraps a string in single quotes, escaping any existing single quotes.
-func shellQuote(s string) string {
-	escaped := strings.ReplaceAll(s, "'", "'\\''")
-	return "'" + escaped + "'"
 }

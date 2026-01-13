@@ -52,7 +52,6 @@ hosts:
     dir: /var/projects/${PROJECT}
 
 defaults:
-  host: mini
   local_fallback: false
   probe_timeout: 2s
 ```

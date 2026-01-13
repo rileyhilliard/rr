@@ -487,18 +487,17 @@ func formatTags(tags []string) string {
 
 // HostInfo returns information about all configured hosts.
 // This is useful for interactive host selection UIs.
-func (s *Selector) HostInfo(defaultHost string) []HostInfoItem {
+func (s *Selector) HostInfo(_ string) []HostInfoItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	items := make([]HostInfoItem, 0, len(s.hosts))
 	for name, host := range s.hosts {
 		items = append(items, HostInfoItem{
-			Name:    name,
-			SSH:     host.SSH,
-			Dir:     host.Dir,
-			Tags:    host.Tags,
-			Default: name == defaultHost,
+			Name: name,
+			SSH:  host.SSH,
+			Dir:  host.Dir,
+			Tags: host.Tags,
 		})
 	}
 
@@ -512,11 +511,10 @@ func (s *Selector) HostInfo(defaultHost string) []HostInfoItem {
 
 // HostInfoItem contains information about a host for display purposes.
 type HostInfoItem struct {
-	Name    string   // Host name from config
-	SSH     []string // SSH aliases
-	Dir     string   // Remote directory
-	Tags    []string // Tags for filtering
-	Default bool     // Whether this is the default host
+	Name string   // Host name from config
+	SSH  []string // SSH aliases
+	Dir  string   // Remote directory
+	Tags []string // Tags for filtering
 }
 
 // HostCount returns the number of configured hosts.
