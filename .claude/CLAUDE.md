@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Test Commands
 
-This project uses `rr` itself for remote execution. Tasks are defined in `.rr.yaml`.
+This project uses `rr` itself for remote execution. Tasks are defined in `.rr.yaml`. The config has `local_fallback: true`, so if no remote hosts are available, commands run locally.
 
 ```bash
 # Setup (run once after cloning)
@@ -17,12 +17,17 @@ make setup              # Installs lefthook hooks + dependencies
 # Build
 rr build                # Build ./rr binary on remote
 
-# Testing (use rr to run on remote hosts)
+# Testing (use rr for remote execution with local fallback)
 rr test                 # Run all unit tests
+rr test-integration     # Run integration tests
+rr test-all             # Run unit + integration tests in parallel
 rr test-v               # Tests with verbose output
 rr test-race            # Tests with race detector
+
+# Verification
 rr lint                 # Run golangci-lint
-rr verify               # Full verification (lint + test)
+rr verify               # lint + unit tests
+rr verify-all           # lint + unit + integration tests in parallel
 rr ci                   # Complete CI suite
 
 # Other useful tasks
@@ -31,15 +36,16 @@ rr bench                # Run benchmarks
 rr fmt                  # Format code
 rr deps                 # Download/tidy dependencies
 
-# Integration tests (require SSH on remote)
-rr test-integration     # Run integration tests
-
-# Run single test (via rr run)
+# Run single test
 rr run "go test ./internal/lock/... -run TestLockAcquisition -v"
 
-# Local fallback (if remotes unavailable)
-make test               # Run tests locally
-make verify             # Lint + test locally
+# Make targets (auto-use rr with local fallback)
+make test               # Uses rr test (falls back to local if rr unavailable)
+make test-all           # Uses rr test-all (parallel unit + integration)
+make verify             # Uses rr verify
+make verify-all         # Uses rr verify-all (parallel lint + all tests)
+make test-local         # Force local execution (skip rr)
+make lint-local         # Force local lint (skip rr)
 ```
 
 ## Git Hooks (Lefthook)

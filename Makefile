@@ -1,18 +1,85 @@
 .PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh completions
 .PHONY: setup setup-hooks verify check ci coverage-check fmt-check install-linter demos demos-mock
+.PHONY: test-local lint-local verify-local test-all verify-all
 
 # Read golangci-lint version from file (shared with CI)
 GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.0")
 
+# =============================================================================
+# Primary targets (use rr for remote execution)
+# =============================================================================
+
 # Build
 build:
-	go build -o rr ./cmd/rr
+	@if command -v rr >/dev/null 2>&1; then \
+		rr build; \
+	else \
+		go build -o rr ./cmd/rr; \
+	fi
 
-# Testing
+# Testing via rr (syncs to remote, runs there)
 test:
-	go test ./...
+	@if command -v rr >/dev/null 2>&1; then \
+		rr test; \
+	else \
+		echo "rr not found, running locally..."; \
+		go test ./...; \
+	fi
 
 test-integration:
+	@if command -v rr >/dev/null 2>&1; then \
+		rr test-integration; \
+	else \
+		echo "rr not found, running locally..."; \
+		go test ./tests/integration/... -v; \
+	fi
+
+# Run unit and integration tests in parallel across hosts
+test-all:
+	@if command -v rr >/dev/null 2>&1; then \
+		rr test-all; \
+	else \
+		echo "rr not found, running sequentially locally..."; \
+		go test ./... && go test ./tests/integration/... -v; \
+	fi
+
+# Linting via rr
+lint:
+	@if command -v rr >/dev/null 2>&1; then \
+		rr lint; \
+	else \
+		echo "rr not found, running locally..."; \
+		$(MAKE) install-linter && golangci-lint run; \
+	fi
+
+# Full verification in parallel (lint + unit + integration)
+verify-all:
+	@if command -v rr >/dev/null 2>&1; then \
+		rr verify-all; \
+	else \
+		echo "rr not found, running sequentially locally..."; \
+		$(MAKE) lint-local && go test ./... && go test ./tests/integration/... -v; \
+	fi
+
+# Quick verify (lint + unit tests)
+verify:
+	@if command -v rr >/dev/null 2>&1; then \
+		rr verify; \
+	else \
+		echo "rr not found, running locally..."; \
+		$(MAKE) lint-local && go test ./...; \
+	fi
+
+check: verify
+
+# =============================================================================
+# Local-only targets (run directly without rr)
+# =============================================================================
+
+test-local:
+	go test ./...
+
+test-integration-local:
 	go test ./tests/integration/... -v
 
 test-integration-ssh:
@@ -34,12 +101,14 @@ coverage-check:
 		exit 1; \
 	fi
 
-# Linting and formatting
-lint: install-linter
+lint-local: install-linter
 	golangci-lint run
 
 lint-fix: install-linter
 	golangci-lint run --fix
+
+verify-local: lint-local test-local
+	@echo "All local checks passed"
 
 # Install golangci-lint at the pinned version (from .golangci-version)
 install-linter:
@@ -83,12 +152,6 @@ hooks-run:
 	else \
 		echo "Lefthook not installed. Run: brew install lefthook && lefthook install"; \
 	fi
-
-# Full verification (run before commits/PRs)
-verify: lint test
-	@echo "All checks passed"
-
-check: verify
 
 # Development setup (run once after cloning)
 setup: setup-hooks install-linter
