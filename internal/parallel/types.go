@@ -74,7 +74,8 @@ type TaskStatus int
 
 const (
 	TaskPending TaskStatus = iota
-	TaskRunning
+	TaskSyncing            // Assigned to host, connecting/syncing/waiting for lock
+	TaskRunning            // Actually executing the command
 	TaskPassed
 	TaskFailed
 )
@@ -84,6 +85,8 @@ func (s TaskStatus) String() string {
 	switch s {
 	case TaskPending:
 		return "pending"
+	case TaskSyncing:
+		return "syncing"
 	case TaskRunning:
 		return "running"
 	case TaskPassed:

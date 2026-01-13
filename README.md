@@ -35,6 +35,7 @@ Your project rsyncs to the remote, the command runs, and output streams back. Wo
 -   [Install](#install)
 -   [Setup](#setup)
 -   [Usage](#usage)
+-   [Parallel execution](#parallel-execution)
 -   [Configuration](#configuration)
 -   [How It Works](#how-it-works)
 -   [Commands](#commands)
@@ -63,10 +64,11 @@ rr fills the gap: **a single binary that handles sync, execution, locking, load 
 
 ## Features
 
+-   **Parallel task execution** — Run multiple tasks across multiple hosts simultaneously with animated progress indicators
 -   **Smart connection failover** — Configure multiple SSH paths (LAN, Tailscale, backup host) and `rr` picks the first one that works
 -   **File sync with rsync** — Excludes `.git`, `node_modules`, etc. by default; preserves remote-only dirs like `.venv`
 -   **Distributed locking** — Prevents concurrent runs on shared machines; auto-detects and waits if someone else is working
--   **Load balancing** — Distribute work across multiple machines automatically
+-   **Load balancing** — Single tasks are distributed across available hosts; parallel tasks use all hosts concurrently
 -   **Agentic coding friendly** — Queues parallel test runs from AI agents (Claude Code, Cursor, etc.) across your machine pool
 -   **Claude Code skill** — Install the `rr` skill and let Claude set up your environment and troubleshoot issues
 -   **Named tasks** — Define `test`, `build`, `deploy` commands in config, run with `rr test`
@@ -154,6 +156,66 @@ rr tasks                   # List all available tasks
 ```
 
 ![demo-tasks](https://github.com/user-attachments/assets/8d902e99-9b7a-4fa9-a2fa-bbdef8365e3b)
+
+## Parallel execution
+
+Run multiple tasks across multiple hosts simultaneously. Define a parallel task that references other tasks, and `rr` distributes them across your machine pool with animated progress:
+
+```yaml
+# .rr.yaml
+tasks:
+    test-backend:
+        run: cd backend && pytest
+    test-frontend:
+        run: cd frontend && npm test
+    test-opendata:
+        run: cd opendata && python -m pytest
+
+    # Parallel task - runs all three simultaneously across hosts
+    test:
+        parallel: [test-backend, test-frontend, test-opendata]
+        fail_fast: false     # Continue even if one fails
+        max_parallel: 3      # Limit concurrency (optional)
+```
+
+```bash
+rr test
+```
+
+```
+⣾ test-backend [m1-linux]
+⣽ test-frontend [m1-mini]
+⣻ test-opendata [m4-mini]
+```
+
+Tasks animate while running, then flip to success/failure in place:
+
+```
+◉ test-backend [m1-linux]
+◉ test-frontend [m1-mini]
+◉ test-opendata [m4-mini]
+
+Parallel Execution Summary
+
+  ◉ test-backend on m1-linux (52.9s)
+  ◉ test-frontend on m1-mini (4.0s)
+  ◉ test-opendata on m4-mini (40.0s)
+
+  ◉ 3 passed  ✕ 0 failed  ● 3 total  (52.9s)
+  Hosts: m1-linux, m1-mini, m4-mini
+```
+
+**Why this is powerful:** A 10-minute test suite split across 4 hosts finishes in ~2.5 minutes. For agentic coding workflows where AI agents constantly run tests to verify their work, this means faster feedback loops and less waiting. Multiple agents or features being developed simultaneously get distributed across your machine pool automatically.
+
+**Output modes:**
+
+```bash
+rr test              # Default: animated progress
+rr test --stream     # Real-time output with [host:task] prefixes
+rr test --verbose    # Full output shown when each task completes
+rr test --quiet      # Summary only
+rr test --dry-run    # Show plan without executing
+```
 
 ## Configuration
 
