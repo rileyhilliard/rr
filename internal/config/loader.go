@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/spf13/viper"
 )
 
@@ -339,25 +340,12 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	}
 
 	// 5. All global hosts (default - enables load balancing across everything)
-	// Put global default first, then rest alphabetically
+	// Uses alphabetical order for deterministic behavior
 	if len(hostNames) == 0 {
-		defaultHost := resolved.Global.Defaults.Host
-		var others []string
 		for name := range resolved.Global.Hosts {
-			if name == defaultHost {
-				continue
-			}
-			others = append(others, name)
+			hostNames = append(hostNames, name)
 		}
-		sort.Strings(others)
-
-		// Default host first (if it exists), then others
-		if defaultHost != "" {
-			if _, ok := resolved.Global.Hosts[defaultHost]; ok {
-				hostNames = append(hostNames, defaultHost)
-			}
-		}
-		hostNames = append(hostNames, others...)
+		sort.Strings(hostNames)
 	}
 
 	// Validate all hosts exist and build config map
@@ -372,7 +360,7 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 		if !ok {
 			return nil, nil, errors.New(errors.ErrConfig,
 				"Host '"+name+"' not found in global config",
-				"Available hosts: "+formatHostList(available)+". Check ~/.rr/config.yaml.")
+				"Available hosts: "+util.JoinOrNone(available)+". Check ~/.rr/config.yaml.")
 		}
 		hosts[name] = host
 	}
@@ -395,18 +383,6 @@ func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, err
 	}
 	host := hosts[names[0]]
 	return names[0], &host, nil
-}
-
-// formatHostList formats a list of host names for display.
-func formatHostList(names []string) string {
-	if len(names) == 0 {
-		return "(none)"
-	}
-	result := names[0]
-	for i := 1; i < len(names); i++ {
-		result += ", " + names[i]
-	}
-	return result
 }
 
 // ResolveLocalFallback determines whether local fallback is enabled.

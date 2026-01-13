@@ -271,8 +271,6 @@ hosts:
     ssh:
       - dev.example.com
     dir: /home/user/project
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
 	require.NoError(t, err)
@@ -1123,9 +1121,7 @@ func TestSelectHostInteractively_PreferredHostReturned(t *testing.T) {
 			"prod": {SSH: []string{"prod.example.com"}},
 		}),
 		Resolved: &config.ResolvedConfig{
-			Global: &config.GlobalConfig{
-				Defaults: config.GlobalDefaults{Host: "prod"},
-			},
+			Global:  &config.GlobalConfig{},
 			Project: &config.Config{},
 		},
 	}
@@ -1218,7 +1214,6 @@ func TestSetupHostSelector_FullConfiguration(t *testing.T) {
 					},
 				},
 				Defaults: config.GlobalDefaults{
-					Host:          "primary",
 					LocalFallback: true,
 					ProbeTimeout:  10 * time.Second,
 				},
@@ -1236,10 +1231,9 @@ func TestSetupHostSelector_FullConfiguration(t *testing.T) {
 	hostInfos := ctx.selector.HostInfo("primary")
 	assert.Len(t, hostInfos, 2)
 
-	// Find primary and verify default flag
+	// Find primary and verify tags
 	for _, h := range hostInfos {
 		if h.Name == "primary" {
-			assert.True(t, h.Default)
 			assert.Equal(t, []string{"fast"}, h.Tags)
 		}
 	}
@@ -1445,8 +1439,6 @@ hosts:
     ssh:
       - staging.example.com
     dir: /home/user/staging
-defaults:
-  host: prod
 `
 	err = os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
 	require.NoError(t, err)

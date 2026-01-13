@@ -8,24 +8,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Test Commands
 
+This project uses `rr` itself for remote execution. Tasks are defined in `.rr.yaml`.
+
 ```bash
 # Setup (run once after cloning)
 make setup              # Installs lefthook hooks + dependencies
 
 # Build
-make build              # Builds ./rr binary
+rr build                # Build ./rr binary on remote
 
-# Testing
-make test               # Run all unit tests
-make lint               # Run golangci-lint
-make verify             # Full verification (lint + test)
+# Testing (use rr to run on remote hosts)
+rr test                 # Run all unit tests
+rr test-v               # Tests with verbose output
+rr test-race            # Tests with race detector
+rr lint                 # Run golangci-lint
+rr verify               # Full verification (lint + test)
+rr ci                   # Complete CI suite
 
-# Integration tests (require SSH)
-RR_TEST_SSH_HOST=localhost make test-integration   # With local SSH
-RR_TEST_SKIP_SSH=1 go test ./tests/integration/... # Skip SSH tests
+# Other useful tasks
+rr coverage             # Generate coverage report
+rr bench                # Run benchmarks
+rr fmt                  # Format code
+rr deps                 # Download/tidy dependencies
 
-# Run single test
-go test ./internal/lock/... -run TestLockAcquisition -v
+# Integration tests (require SSH on remote)
+rr test-integration     # Run integration tests
+
+# Run single test (via rr run)
+rr run "go test ./internal/lock/... -run TestLockAcquisition -v"
+
+# Local fallback (if remotes unavailable)
+make test               # Run tests locally
+make verify             # Lint + test locally
 ```
 
 ## Git Hooks (Lefthook)

@@ -44,20 +44,8 @@ type findAvailableHostResult struct {
 //   - error if no host is available (after timeout if waiting)
 func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailableHostResult, error) {
 	projectHash := hashProject(ctx.WorkDir)
+	// Host order is determined by project config (hosts list order) or alphabetical for global hosts
 	hostNames := ctx.selector.GetHostNames()
-
-	// Get default host from resolution order
-	defaultHost := ""
-	if ctx.Resolved.Project != nil && ctx.Resolved.Project.Host != "" {
-		defaultHost = ctx.Resolved.Project.Host
-	} else if ctx.Resolved.Global.Defaults.Host != "" {
-		defaultHost = ctx.Resolved.Global.Defaults.Host
-	}
-
-	// Put default host first if configured
-	if defaultHost != "" {
-		hostNames = reorderWithDefault(hostNames, defaultHost)
-	}
 
 	if len(hostNames) == 0 {
 		return nil, rrerrors.New(rrerrors.ErrConfig,
@@ -324,38 +312,4 @@ func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error
 	}
 
 	return nil
-}
-
-// reorderWithDefault moves the default host to the front of the list.
-// If defaultHost is not in the list, returns the original slice unchanged.
-func reorderWithDefault(hostNames []string, defaultHost string) []string {
-	if defaultHost == "" {
-		return hostNames
-	}
-
-	// Find the default host in the list
-	defaultIdx := -1
-	for i, name := range hostNames {
-		if name == defaultHost {
-			defaultIdx = i
-			break
-		}
-	}
-
-	// Not found, return unchanged
-	if defaultIdx == -1 {
-		return hostNames
-	}
-
-	// Already first, nothing to do
-	if defaultIdx == 0 {
-		return hostNames
-	}
-
-	// Move default to front
-	result := make([]string, len(hostNames))
-	result[0] = defaultHost
-	copy(result[1:], hostNames[:defaultIdx])
-	copy(result[1+defaultIdx:], hostNames[defaultIdx+1:])
-	return result
 }

@@ -35,8 +35,6 @@ hosts:
     ssh:
       - localhost
     dir: /tmp/rr-test-${USER}
-defaults:
-  host: test-host
 `
 	err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(globalContent), 0644)
 	require.NoError(t, err)
@@ -71,7 +69,6 @@ output:
 	assert.Equal(t, 1, globalCfg.Version)
 	assert.Len(t, globalCfg.Hosts, 1)
 	assert.Contains(t, globalCfg.Hosts, "test-host")
-	assert.Equal(t, "test-host", globalCfg.Defaults.Host)
 
 	// Verify host config
 	host := globalCfg.Hosts["test-host"]
@@ -116,9 +113,6 @@ func TestConfigValidation(t *testing.T) {
 			Version: 1,
 			Hosts: map[string]config.Host{
 				"test": {SSH: []string{"localhost"}, Dir: "/tmp/test"},
-			},
-			Defaults: config.GlobalDefaults{
-				Host: "test",
 			},
 		}
 		err := config.ValidateGlobal(globalCfg)

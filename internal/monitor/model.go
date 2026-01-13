@@ -12,7 +12,8 @@ import (
 type HostStatus int
 
 const (
-	StatusConnectedState HostStatus = iota
+	StatusConnectingState HostStatus = iota
+	StatusConnectedState
 	StatusSlowState
 	StatusUnreachableState
 )
@@ -47,6 +48,8 @@ const (
 // String returns a human-readable status string.
 func (s HostStatus) String() string {
 	switch s {
+	case StatusConnectingState:
+		return "connecting"
 	case StatusConnectedState:
 		return "connected"
 	case StatusSlowState:
@@ -77,6 +80,9 @@ type Model struct {
 	viewMode   ViewMode
 	showHelp   bool
 
+	// Animation state
+	spinnerFrame int // Current frame for connecting spinner animation
+
 	// Detail view viewport for scrollable content
 	detailViewport viewport.Model
 	viewportReady  bool
@@ -85,12 +91,18 @@ type Model struct {
 // tickMsg signals a periodic refresh.
 type tickMsg time.Time
 
+// spinnerTickMsg signals a spinner animation frame update.
+type spinnerTickMsg time.Time
+
 // metricsMsg carries new metrics from the collector.
 type metricsMsg struct {
 	metrics map[string]*HostMetrics
 	errors  map[string]string // Connection errors per host
 	time    time.Time
 }
+
+// spinnerInterval is the animation frame rate for the connecting spinner
+const spinnerInterval = 150 * time.Millisecond
 
 // NewModel creates a new dashboard model with the given collector.
 // hostOrder is the priority order from config (default host first, then fallbacks).
@@ -110,10 +122,10 @@ func NewModel(collector *Collector, interval time.Duration, hostOrder []string) 
 		sort.Strings(configOrder)
 	}
 
-	// Initialize status map with all hosts unreachable
+	// Initialize status map with all hosts in connecting state
 	status := make(map[string]HostStatus)
 	for _, h := range hosts {
-		status[h] = StatusUnreachableState
+		status[h] = StatusConnectingState
 	}
 
 	m := Model{
@@ -145,6 +157,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.tickCmd(),
 		m.collectCmd(),
+		m.spinnerTickCmd(),
 	)
 }
 
@@ -182,6 +195,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m, tea.Batch(m.tickCmd(), m.collectCmd())
 
+	case spinnerTickMsg:
+		// Advance spinner animation frame
+		m.spinnerFrame = (m.spinnerFrame + 1) % len(ConnectingSpinnerFrames)
+		return m, m.spinnerTickCmd()
+
 	case metricsMsg:
 		m.lastUpdate = msg.time
 		m.updateMetrics(msg.metrics, msg.errors)
@@ -202,6 +220,13 @@ func (m Model) View() string {
 func (m Model) tickCmd() tea.Cmd {
 	return tea.Tick(m.interval, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+// spinnerTickCmd returns a command that sends a spinner tick for animation.
+func (m Model) spinnerTickCmd() tea.Cmd {
+	return tea.Tick(spinnerInterval, func(t time.Time) tea.Msg {
+		return spinnerTickMsg(t)
 	})
 }
 
@@ -265,6 +290,23 @@ func (m Model) SecondsSinceUpdate() int {
 		return 0
 	}
 	return int(time.Since(m.lastUpdate).Seconds())
+}
+
+// ConnectingSpinner returns the current spinner character for the connecting animation.
+func (m Model) ConnectingSpinner() string {
+	return ConnectingSpinnerFrames[m.spinnerFrame]
+}
+
+// ConnectingText returns the current animated "Connecting" text.
+func (m Model) ConnectingText() string {
+	return ConnectingTextFrames[m.spinnerFrame%len(ConnectingTextFrames)]
+}
+
+// ConnectingSubtext returns the current animated subtext for connecting state.
+func (m Model) ConnectingSubtext() string {
+	// Cycle through subtexts more slowly (every 2 spinner frames)
+	idx := (m.spinnerFrame / 2) % len(ConnectingSubtextFrames)
+	return ConnectingSubtextFrames[idx]
 }
 
 // LayoutMode returns the current layout mode based on terminal width.

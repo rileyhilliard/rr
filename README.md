@@ -122,9 +122,6 @@ hosts:
             - mac-mini.local # Try LAN first
             - mac-mini-tailscale # Fall back to VPN
         dir: ${HOME}/projects/${PROJECT}
-
-defaults:
-    host: mini
 ```
 
 **Project config** (`.rr.yaml` in project root) - Shareable settings for your project:
@@ -185,7 +182,7 @@ rr status               # Show connection and sync status
 rr host list            # List configured hosts
 rr host add             # Add a new host interactively
 rr host remove mini     # Remove a host from config
-rr unlock               # Release a stuck lock on the default host
+rr unlock               # Release a stuck lock (shows picker if multiple hosts)
 rr unlock --all         # Release locks on all configured hosts
 rr update               # Update rr to latest version
 rr update --check       # Just check if update is available
@@ -221,7 +218,7 @@ sync:
 If a previous run crashed or lost connection and left a lock behind:
 
 ```bash
-rr unlock              # Release lock on default host
+rr unlock              # Release lock (shows picker if multiple hosts)
 rr unlock gpu-box      # Release lock on specific host
 rr unlock --all        # Release locks on all hosts
 ```

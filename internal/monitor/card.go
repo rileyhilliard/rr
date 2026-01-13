@@ -133,7 +133,17 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	// If no metrics available, show status-appropriate placeholder with error details
 	if metrics == nil {
 		lines = append(lines, renderCardDivider(innerWidth))
-		if status == StatusUnreachableState {
+		switch status {
+		case StatusConnectingState:
+			// Show connecting state with animated content
+			lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
+			lines = append(lines, renderCardLine("", innerWidth))
+			lines = append(lines, renderCardDivider(innerWidth))
+			lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			// Add padding lines to roughly match online card height
+			lines = append(lines, renderCardLine("", innerWidth))
+			lines = append(lines, renderCardLine("", innerWidth))
+		case StatusUnreachableState:
 			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
 
 			// Show error details and suggestion on separate lines
@@ -184,8 +194,6 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 			// Add a few blank lines for visual consistency
 			lines = append(lines, renderCardLine("", innerWidth))
 			lines = append(lines, renderCardLine("", innerWidth))
-		} else {
-			lines = append(lines, renderCardLine(LabelStyle.Render("  Connecting..."), innerWidth))
 		}
 	} else {
 		// Divider after host name
@@ -227,6 +235,9 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	var indicatorStyle lipgloss.Style
 
 	switch status {
+	case StatusConnectingState:
+		indicator = m.ConnectingSpinner() // Animated spinner
+		indicatorStyle = StatusConnectingStyle
 	case StatusConnectedState:
 		indicator = StatusConnected
 		indicatorStyle = StatusConnectedStyle
@@ -426,7 +437,13 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	// If no metrics available, show status-appropriate placeholder with error details
 	if metrics == nil {
 		lines = append(lines, renderCardDivider(innerWidth))
-		if status == StatusUnreachableState {
+		switch status {
+		case StatusConnectingState:
+			// Show connecting state with animated content
+			lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
+			lines = append(lines, renderCardDivider(innerWidth))
+			lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+		case StatusUnreachableState:
 			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
 
 			// Show error details and suggestion
@@ -453,8 +470,6 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 				lines = append(lines, renderCardDivider(innerWidth))
 				lines = append(lines, renderCardLine(LabelStyle.Render("  No connection details"), innerWidth))
 			}
-		} else {
-			lines = append(lines, renderCardLine(LabelStyle.Render("  Connecting..."), innerWidth))
 		}
 	} else {
 		lines = append(lines, renderCardDivider(innerWidth))
@@ -568,9 +583,14 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 
 	// If no metrics available, show status-appropriate placeholder
 	if metrics == nil {
-		placeholder := "..."
-		if status == StatusUnreachableState {
+		var placeholder string
+		switch status {
+		case StatusConnectingState:
+			placeholder = m.ConnectingText()
+		case StatusUnreachableState:
 			placeholder = "Offline"
+		default:
+			placeholder = "..."
 		}
 		lines = append(lines, renderCardLine(LabelStyle.Render(placeholder), innerWidth))
 	} else {
@@ -590,6 +610,9 @@ func (m Model) renderMinimalHostLine(host string, status HostStatus, maxWidth in
 	var indicatorStyle lipgloss.Style
 
 	switch status {
+	case StatusConnectingState:
+		indicator = m.ConnectingSpinner() // Animated spinner
+		indicatorStyle = StatusConnectingStyle
 	case StatusConnectedState:
 		indicator = StatusConnected
 		indicatorStyle = StatusConnectedStyle

@@ -1,0 +1,112 @@
+# Road Runner project configuration
+# Run 'rr run <command>' to sync and execute remotely
+# See: https://github.com/rileyhilliard/rr for documentation
+
+version: 1
+
+# Hosts this project can use for load balancing (from ~/.rr/config.yaml)
+hosts:
+  - m1-linux
+  - m1-mini
+  - m4-mini
+
+# Run locally when all remote hosts fail or are unreachable
+local_fallback: true
+
+# File sync settings (uses rsync under the hood)
+sync:
+  # Files/directories to exclude from sync (rsync patterns)
+  exclude:
+    - .git/
+    - .DS_Store
+    - "*.log"
+    # Build artifacts
+    - rr
+    - dist/
+    - coverage.out
+    - coverage.html
+    # Go caches (rebuilt on remote anyway)
+    - .go/
+    # IDE/editor
+    - .idea/
+    - .vscode/
+    - "*.swp"
+    - "*~"
+
+  # Files to keep on remote even if deleted locally
+  preserve:
+    - .cache/
+
+# Distributed locking prevents concurrent runs on the same host
+lock:
+  enabled: true
+  timeout: 5m
+  wait_timeout: 1m
+  stale: 10m
+
+# Named tasks for common commands
+# Usage: rr test, rr lint, rr verify, etc.
+tasks:
+  test:
+    description: Run all unit tests
+    run: go test ./...
+
+  test-v:
+    description: Run tests with verbose output
+    run: go test -v ./...
+
+  test-race:
+    description: Run tests with race detector
+    run: go test -race ./...
+
+  test-integration:
+    description: Run integration tests (requires SSH)
+    run: go test ./tests/integration/... -v
+
+  coverage:
+    description: Generate test coverage report
+    run: go test -race -coverprofile=coverage.out -covermode=atomic ./... && go tool cover -func=coverage.out
+
+  lint:
+    description: Run golangci-lint
+    run: make lint
+
+  lint-fix:
+    description: Run golangci-lint with auto-fix
+    run: make lint-fix
+
+  fmt:
+    description: Format all Go code
+    run: go fmt ./... && goimports -w .
+
+  build:
+    description: Build the rr binary
+    run: go build -o rr ./cmd/rr
+
+  verify:
+    description: Full verification (lint + test)
+    run: make verify
+
+  ci:
+    description: Run full CI suite locally
+    run: make ci
+
+  clean:
+    description: Remove build artifacts
+    run: rm -f rr coverage.out coverage.html && rm -rf dist/
+
+  bench:
+    description: Run benchmarks
+    run: go test -bench=. -benchmem ./...
+
+  deps:
+    description: Download and tidy dependencies
+    run: go mod download && go mod tidy
+
+  vet:
+    description: Run go vet
+    run: go vet ./...
+
+# Output formatting
+output:
+  format: go # Use Go test formatter for nice output

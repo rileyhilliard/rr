@@ -139,7 +139,6 @@ hosts:
       - cpu.local
     dir: /home/user/projects
 defaults:
-  host: gpu-box
   local_fallback: true
 `
 	err := os.WriteFile(globalDir+"/config.yaml", []byte(globalContent), 0644)
@@ -154,9 +153,8 @@ defaults:
 	assert.Contains(t, globalCfg.Hosts, "gpu-box")
 	assert.Contains(t, globalCfg.Hosts, "cpu-box")
 
-	// Verify local_fallback and default host
+	// Verify local_fallback
 	assert.True(t, globalCfg.Defaults.LocalFallback)
-	assert.Equal(t, "gpu-box", globalCfg.Defaults.Host)
 
 	// Write project config with lock settings
 	projectContent := `

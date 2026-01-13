@@ -67,8 +67,6 @@ hosts:
     ssh:
       - dev.example.com
     dir: /home/user/project
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -78,7 +76,6 @@ defaults:
 	require.NotNil(t, cfg)
 	assert.NotEmpty(t, path)
 	assert.Contains(t, cfg.Hosts, "dev")
-	assert.Equal(t, "dev", cfg.Defaults.Host)
 }
 
 func TestLoadGlobalConfig_InvalidYAML(t *testing.T) {
@@ -114,9 +111,6 @@ func TestSaveGlobalConfig_ValidConfig(t *testing.T) {
 	cfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{
 			"test": testHost(),
-		},
-		Defaults: config.GlobalDefaults{
-			Host: "test",
 		},
 	}
 
@@ -192,8 +186,6 @@ hosts:
     ssh:
       - prod.example.com
     dir: /home/user/project
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -241,8 +233,6 @@ hosts:
     ssh:
       - dev.example.com
     dir: /home/user/project
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -273,8 +263,6 @@ hosts:
       - dev-lan.local
       - dev-vpn.example.com
     dir: /home/user/project
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -300,8 +288,6 @@ hosts:
   dev:
     ssh:
       - dev.example.com
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -333,8 +319,6 @@ hosts:
   middle:
     ssh:
       - middle.example.com
-defaults:
-  host: alpha
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -363,9 +347,6 @@ func TestSaveGlobalConfig_OverwritesExisting(t *testing.T) {
 	cfg := &config.GlobalConfig{
 		Hosts: map[string]config.Host{
 			"new": {SSH: []string{"new.example.com"}, Dir: "/new/dir"},
-		},
-		Defaults: config.GlobalDefaults{
-			Host: "new",
 		},
 	}
 
@@ -419,8 +400,6 @@ hosts:
     ssh:
       - prod.example.com
     dir: /home/user/prod
-defaults:
-  host: dev
 `
 	err = os.WriteFile(filepath.Join(rrDir, "config.yaml"), []byte(configContent), 0644)
 	require.NoError(t, err)
@@ -448,9 +427,6 @@ func TestSaveGlobalConfig_PreservesAllHosts(t *testing.T) {
 			"host2": {SSH: []string{"h2.example.com"}, Dir: "/dir2"},
 			"host3": {SSH: []string{"h3.example.com"}, Dir: "/dir3"},
 		},
-		Defaults: config.GlobalDefaults{
-			Host: "host1",
-		},
 	}
 
 	err := saveGlobalConfig(cfg)
@@ -472,50 +448,8 @@ func testHost() config.Host {
 	}
 }
 
-func TestShellQuote(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"simple string", "hello", "'hello'"},
-		{"string with spaces", "hello world", "'hello world'"},
-		{"string with single quote", "it's", "'it'\\''s'"},
-		{"empty string", "", "''"},
-		{"path", "/home/user/project", "'/home/user/project'"},
-		{"path with spaces", "/home/user/my project", "'/home/user/my project'"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shellQuote(tt.input)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestShellQuotePreserveTilde(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"tilde path", "~/project", "~/'project'"},
-		{"tilde nested path", "~/rr/myproject", "~/'rr/myproject'"},
-		{"standalone tilde", "~", "~"},
-		{"absolute path", "/home/user/project", "'/home/user/project'"},
-		{"no tilde", "project", "'project'"},
-		{"tilde in middle", "some/~/path", "'some/~/path'"},
-		{"path with spaces after tilde", "~/my project", "~/'my project'"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shellQuotePreserveTilde(tt.input)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
+// Note: Shell quoting functions (ShellQuote, ShellQuotePreserveTilde) were moved
+// to internal/util/shell.go. Tests are now in internal/util/shell_test.go.
 
 func TestCleanupRemoteArtifacts_NoSSHAliases(t *testing.T) {
 	// Should return early without error if no SSH aliases configured

@@ -13,6 +13,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // controlSocketDir is the directory for SSH ControlMaster sockets.
@@ -290,7 +291,7 @@ func ensureRemoteDir(conn *host.Connection) error {
 	remoteDir := config.ExpandRemote(conn.Host.Dir)
 	// Use single quotes around all but leading ~ so tilde expands but spaces are safe
 	// e.g. ~/rr/rr -> mkdir -p ~/'rr/rr'
-	mkdirCmd := fmt.Sprintf("mkdir -p %s", shellQuotePreserveTilde(remoteDir))
+	mkdirCmd := fmt.Sprintf("mkdir -p %s", util.ShellQuotePreserveTilde(remoteDir))
 
 	_, stderr, exitCode, err := conn.Client.Exec(mkdirCmd)
 	if err != nil {
@@ -305,25 +306,4 @@ func ensureRemoteDir(conn *host.Connection) error {
 	}
 
 	return nil
-}
-
-// shellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
-// For paths starting with ~/, the tilde is kept unquoted and the rest is single-quoted.
-// For other paths, the entire path is single-quoted.
-func shellQuotePreserveTilde(path string) string {
-	if strings.HasPrefix(path, "~/") {
-		// Keep ~ unquoted, quote the rest
-		return "~/" + shellQuote(path[2:])
-	}
-	if path == "~" {
-		return "~"
-	}
-	return shellQuote(path)
-}
-
-// shellQuote wraps a string in single quotes, escaping any existing single quotes.
-func shellQuote(s string) string {
-	// Replace ' with '\'' (end quote, escaped quote, start quote)
-	escaped := strings.ReplaceAll(s, "'", "'\\''")
-	return "'" + escaped + "'"
 }

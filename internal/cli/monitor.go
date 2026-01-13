@@ -20,7 +20,7 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 		return err
 	}
 
-	// Get hosts with proper priority order (default host first, then fallbacks)
+	// Get hosts with proper priority order (project hosts list order, or alphabetical for global)
 	hostOrder, hosts, err := config.ResolveHosts(resolved, "")
 	if err != nil {
 		// Fall back to just global hosts if resolution fails
@@ -30,20 +30,11 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 				"Add a host with 'rr host add' first.")
 		}
 		hosts = resolved.Global.Hosts
-		// Build order: default host first, then alphabetical
-		defaultHost := resolved.Global.Defaults.Host
-		var others []string
+		// Build order alphabetically
 		for name := range hosts {
-			if name != defaultHost {
-				others = append(others, name)
-			}
+			hostOrder = append(hostOrder, name)
 		}
-		sort.Strings(others)
-		if defaultHost != "" {
-			hostOrder = append([]string{defaultHost}, others...)
-		} else {
-			hostOrder = others
-		}
+		sort.Strings(hostOrder)
 	}
 
 	// Filter hosts if --hosts flag provided

@@ -40,7 +40,6 @@ func TestDefaultGlobalConfig(t *testing.T) {
 	assert.Equal(t, CurrentGlobalConfigVersion, cfg.Version)
 	assert.NotNil(t, cfg.Hosts)
 	assert.Empty(t, cfg.Hosts)
-	assert.Empty(t, cfg.Defaults.Host)
 	assert.Equal(t, 2*time.Second, cfg.Defaults.ProbeTimeout)
 	assert.False(t, cfg.Defaults.LocalFallback)
 }
@@ -111,7 +110,6 @@ hosts:
       - dev-vpn
     dir: ~/projects
 defaults:
-  host: dev
   probe_timeout: 5s
   local_fallback: true
 `
@@ -125,7 +123,6 @@ defaults:
 	assert.Len(t, cfg.Hosts, 1)
 	assert.Contains(t, cfg.Hosts, "dev")
 	assert.Equal(t, []string{"dev-lan", "dev-vpn"}, cfg.Hosts["dev"].SSH)
-	assert.Equal(t, "dev", cfg.Defaults.Host)
 	assert.Equal(t, 5*time.Second, cfg.Defaults.ProbeTimeout)
 	assert.True(t, cfg.Defaults.LocalFallback)
 }
@@ -147,7 +144,6 @@ func TestResolveHost(t *testing.T) {
 						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
 						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
 					},
-					Defaults: GlobalDefaults{Host: "dev"},
 				},
 				Project: &Config{Host: "prod"},
 			},
@@ -162,7 +158,6 @@ func TestResolveHost(t *testing.T) {
 						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
 						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
 					},
-					Defaults: GlobalDefaults{Host: "dev"},
 				},
 				Project: &Config{Host: "prod"},
 			},
@@ -170,19 +165,18 @@ func TestResolveHost(t *testing.T) {
 			wantName:  "prod",
 		},
 		{
-			name: "global default used when no flag or project host",
+			name: "alphabetical order used when no flag or project host",
 			resolved: &ResolvedConfig{
 				Global: &GlobalConfig{
 					Hosts: map[string]Host{
 						"dev":  {SSH: []string{"dev"}, Dir: "/home/dev"},
 						"prod": {SSH: []string{"prod"}, Dir: "/home/prod"},
 					},
-					Defaults: GlobalDefaults{Host: "prod"},
 				},
 				Project: &Config{Host: ""},
 			},
 			preferred: "",
-			wantName:  "prod",
+			wantName:  "dev", // "dev" comes before "prod" alphabetically
 		},
 		{
 			name: "first alphabetically when no other preference",
@@ -625,18 +619,6 @@ func TestValidateGlobal(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "needs at least one SSH",
-		},
-		{
-			name: "default host not found",
-			config: &GlobalConfig{
-				Version: 1,
-				Hosts: map[string]Host{
-					"dev": {SSH: []string{"dev"}, Dir: "/home/dev"},
-				},
-				Defaults: GlobalDefaults{Host: "nonexistent"},
-			},
-			wantErr:     true,
-			errContains: "doesn't exist",
 		},
 		{
 			name: "empty hosts is allowed for global config",

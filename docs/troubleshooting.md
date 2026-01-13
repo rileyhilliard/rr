@@ -297,7 +297,7 @@ rr doctor
 **Release a stuck lock:**
 
 ```bash
-rr unlock              # Release lock on default host
+rr unlock              # Release lock (shows picker if multiple hosts)
 rr unlock gpu-box      # Release lock on specific host
 rr unlock --all        # Release locks on all configured hosts
 ```

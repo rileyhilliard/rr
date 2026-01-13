@@ -222,33 +222,5 @@ func TestGetStepOnFail(t *testing.T) {
 	}
 }
 
-func TestFormatList(t *testing.T) {
-	tests := []struct {
-		name     string
-		items    []string
-		expected string
-	}{
-		{
-			name:     "empty",
-			items:    []string{},
-			expected: "(none)",
-		},
-		{
-			name:     "single",
-			items:    []string{"one"},
-			expected: "one",
-		},
-		{
-			name:     "multiple",
-			items:    []string{"one", "two", "three"},
-			expected: "one, two, three",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := formatList(tt.items)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
+// Note: formatList was removed - use util.JoinOrNone instead.
+// Tests are in internal/util/strings_test.go

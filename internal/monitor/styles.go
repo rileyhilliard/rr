@@ -76,6 +76,9 @@ var (
 			Foreground(ColorTextPrimary)
 
 	// Status indicator styles
+	StatusConnectingStyle = lipgloss.NewStyle().
+				Foreground(ColorTextSecondary)
+
 	StatusConnectedStyle = lipgloss.NewStyle().
 				Foreground(ColorHealthy)
 
@@ -88,10 +91,31 @@ var (
 
 // Status indicator characters - cyber glyphs
 const (
+	StatusConnecting  = "◐" // Half-filled (used as fallback when animation not available)
 	StatusConnected   = "◉" // Filled target
 	StatusUnreachable = "◌" // Dashed circle
 	StatusSlow        = "◔" // Partially filled
 )
+
+// ConnectingSpinnerFrames are the animation frames for the connecting state
+// Rotates through half-circle positions for a smooth spin effect
+var ConnectingSpinnerFrames = []string{"◐", "◓", "◑", "◒"}
+
+// ConnectingTextFrames are the animated text frames for the connecting message
+var ConnectingTextFrames = []string{
+	"Linking up ·",
+	"Linking up · ·",
+	"Linking up · · ·",
+	"Linking up · ·",
+}
+
+// ConnectingSubtextFrames are playful subtexts that cycle during connection
+var ConnectingSubtextFrames = []string{
+	"reaching out to host",
+	"establishing connection",
+	"waiting for response",
+	"almost there",
+}
 
 // MetricColor returns the appropriate color for a percentage-based metric.
 // Uses threshold-based coloring: green < 70%, yellow 70-90%, red > 90%.

@@ -24,7 +24,6 @@ func init() {
 // StatusOutput represents the JSON output for status command.
 type StatusOutput struct {
 	Hosts    []HostStatus `json:"hosts"`
-	Default  string       `json:"default"`
 	Selected *Selected    `json:"selected,omitempty"`
 }
 
@@ -63,20 +62,17 @@ func statusCommand() error {
 			"Add a host with 'rr host add' first.")
 	}
 
-	// Get default host from global config
-	defaultHost := globalCfg.Defaults.Host
-
 	// Probe all hosts in parallel
 	results := probeAllHosts(globalCfg.Hosts)
 
-	// Determine which host would be selected
-	selected := findSelectedHost(defaultHost, results)
+	// Determine which host would be selected (first healthy host)
+	selected := findSelectedHost(results)
 
 	if statusJSON {
-		return outputStatusJSON(defaultHost, results, selected)
+		return outputStatusJSON(results, selected)
 	}
 
-	return outputStatusText(defaultHost, results, selected)
+	return outputStatusText(results, selected)
 }
 
 // probeResult holds the result of probing a single host.
@@ -114,41 +110,22 @@ func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
 }
 
 // findSelectedHost determines which host/alias would be used for the next command.
-func findSelectedHost(defaultHost string, results map[string]probeResult) *Selected {
-	// Determine the preferred host
-	preferred := defaultHost
-	if preferred == "" || preferred == "auto" {
-		// Use first healthy host
-		for name, result := range results {
-			for _, alias := range result.Aliases {
-				if alias.Success {
-					return &Selected{Host: name, Alias: alias.SSHAlias}
-				}
+// Returns the first healthy host found.
+func findSelectedHost(results map[string]probeResult) *Selected {
+	for name, result := range results {
+		for _, alias := range result.Aliases {
+			if alias.Success {
+				return &Selected{Host: name, Alias: alias.SSHAlias}
 			}
 		}
-		return nil
 	}
-
-	// Use the specified default host
-	result, ok := results[preferred]
-	if !ok {
-		return nil
-	}
-
-	for _, alias := range result.Aliases {
-		if alias.Success {
-			return &Selected{Host: preferred, Alias: alias.SSHAlias}
-		}
-	}
-
 	return nil
 }
 
 // outputStatusJSON outputs status in JSON format.
-func outputStatusJSON(defaultHost string, results map[string]probeResult, selected *Selected) error {
+func outputStatusJSON(results map[string]probeResult, selected *Selected) error {
 	output := StatusOutput{
 		Hosts:    make([]HostStatus, 0, len(results)),
-		Default:  defaultHost,
 		Selected: selected,
 	}
 
@@ -185,7 +162,7 @@ func outputStatusJSON(defaultHost string, results map[string]probeResult, select
 }
 
 // outputStatusText outputs status in human-readable format using a table.
-func outputStatusText(defaultHost string, results map[string]probeResult, selected *Selected) error {
+func outputStatusText(results map[string]probeResult, selected *Selected) error {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 
@@ -226,15 +203,9 @@ func outputStatusText(defaultHost string, results map[string]probeResult, select
 	}
 
 	// Render the table
-	fmt.Println(ui.RenderStatusTable(rows, defaultHost, tableSelection))
+	fmt.Println(ui.RenderStatusTable(rows, tableSelection))
 
-	// Show default and selected summary
-	if defaultHost != "" && defaultHost != "auto" {
-		fmt.Printf("Default: %s\n", defaultHost)
-	} else {
-		fmt.Printf("Default: %s\n", mutedStyle.Render("auto"))
-	}
-
+	// Show selected summary
 	if selected != nil {
 		fmt.Printf("Selected: %s %s\n",
 			selected.Host,

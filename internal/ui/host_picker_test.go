@@ -8,11 +8,10 @@ import (
 
 func TestHostItem(t *testing.T) {
 	host := HostInfo{
-		Name:    "gpu-box",
-		SSH:     []string{"gpu-local", "gpu-vpn"},
-		Dir:     "/home/user/project",
-		Tags:    []string{"gpu", "fast"},
-		Default: true,
+		Name: "gpu-box",
+		SSH:  []string{"gpu-local", "gpu-vpn"},
+		Dir:  "/home/user/project",
+		Tags: []string{"gpu", "fast"},
 	}
 
 	item := hostItem{host: host}
@@ -20,7 +19,6 @@ func TestHostItem(t *testing.T) {
 	t.Run("Title", func(t *testing.T) {
 		title := item.Title()
 		assert.Contains(t, title, "gpu-box")
-		assert.Contains(t, title, "(default)")
 	})
 
 	t.Run("Description", func(t *testing.T) {

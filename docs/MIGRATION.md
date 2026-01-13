@@ -110,12 +110,10 @@ cat > ~/.rr/config.yaml << 'EOF'
 version: 1
 hosts:
   # Paste your hosts here from .rr.yaml
-defaults:
-  host: your-default-host
 EOF
 
-# Update .rr.yaml to reference the host
-# Replace the hosts section with: host: your-host-name
+# Update .rr.yaml to reference hosts by name
+# Add a hosts section with your preferred order (first = highest priority)
 ```
 
 ### Benefits
@@ -273,7 +271,7 @@ rr host remove mini
 
 **`RR_HOST` environment variable**
 
-You can now set the default host via environment variable:
+You can set the preferred host via environment variable (equivalent to `--host` flag):
 
 ```bash
 export RR_HOST=gpu-box

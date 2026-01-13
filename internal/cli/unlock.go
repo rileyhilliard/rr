@@ -81,16 +81,14 @@ func unlockCommand(opts UnlockOptions) error {
 		}
 		hostsToUnlock = []string{opts.Host}
 	} else {
-		// No host specified - use default or show picker
-		if globalCfg.Defaults.Host != "" {
-			hostsToUnlock = []string{globalCfg.Defaults.Host}
-		} else if len(globalCfg.Hosts) == 1 {
+		// No host specified - use single host or show picker
+		if len(globalCfg.Hosts) == 1 {
 			// Only one host, use it
 			for name := range globalCfg.Hosts {
 				hostsToUnlock = []string{name}
 			}
 		} else {
-			// Multiple hosts, no default - show picker
+			// Multiple hosts - show picker
 			selectedHost, err := pickHostForUnlock(globalCfg)
 			if err != nil {
 				return err
@@ -229,9 +227,6 @@ func pickHostForUnlock(globalCfg *config.GlobalConfig) (string, error) {
 	options := make([]huh.Option[string], len(hostNames))
 	for i, h := range hostNames {
 		label := h
-		if h == globalCfg.Defaults.Host {
-			label += " (default)"
-		}
 		if hostCfg, ok := globalCfg.Hosts[h]; ok && len(hostCfg.SSH) > 0 {
 			label += " - " + hostCfg.SSH[0]
 		}

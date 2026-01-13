@@ -61,7 +61,6 @@ hosts:
       - linux
 
 defaults:
-  host: mini
   local_fallback: false
   probe_timeout: 2s
 ```
@@ -72,7 +71,6 @@ defaults:
 |-------|------|---------|-------------|
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
 | `hosts` | map | `{}` | Remote host definitions (see below). |
-| `defaults.host` | string | first host | Default host when `--host` is not specified. |
 | `defaults.local_fallback` | bool | `false` | Run locally if no hosts are reachable. |
 | `defaults.probe_timeout` | duration | `2s` | How long to wait when testing SSH connectivity. |
 
@@ -243,7 +241,17 @@ When you run a command, `rr` determines which host(s) to use in this order:
 1. `--host` flag (explicit CLI argument)
 2. `.rr.yaml` `hosts:` field (project's preferred hosts for load balancing)
 3. `.rr.yaml` `host:` field (project's single preferred host)
-4. All hosts from global config (default behavior for load balancing)
+4. All hosts from global config, alphabetically (default for load balancing)
+
+**Important:** The order of hosts in your `hosts:` list determines priority. The first host is tried first. If it's busy or unreachable, `rr` moves to the next host in the list. This gives you explicit control over which machines are preferred.
+
+```yaml
+# .rr.yaml
+hosts:
+  - gpu-box      # Tried first (highest priority)
+  - mini-server  # Tried second
+  - backup-host  # Tried last (lowest priority)
+```
 
 ## Sync
 
