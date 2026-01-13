@@ -1,5 +1,5 @@
 ---
-name: setup
+name: rr:setup
 description: Set up rr for a project - creates configs, verifies SSH connectivity, tests remote execution, and ensures dependencies are available on remote hosts.
 allowed-tools:
     - Bash
@@ -13,6 +13,8 @@ load-skills:
 ---
 
 # rr Setup
+
+Use the `rr` skill
 
 Set up and verify rr for this project. Work through each step in order, fixing issues as they arise.
 

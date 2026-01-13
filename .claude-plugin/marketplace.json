@@ -6,12 +6,12 @@
   },
   "metadata": {
     "description": "Claude Code plugin for the rr CLI - sync code and run commands on remote machines",
-    "version": "1.0.0"
+    "version": "1.1.2"
   },
   "plugins": [
     {
       "name": "rr",
-      "source": "./",
+      "source": "./plugins/rr/",
       "description": "Teaches Claude to use the rr CLI for syncing code and running commands on remote machines",
       "version": "1.1.1",
       "author": {
@@ -23,8 +23,9 @@
       "license": "MIT",
       "keywords": ["remote", "ssh", "sync", "rsync", "development", "cli"],
       "category": "tools",
-      "skills": ["./plugin/skills/rr.md"],
-      "commands": ["./plugin/commands/setup.md"]
+      "strict": true,
+      "skills": ["./skills/rr"],
+      "commands": ["./commands/setup.md"]
     }
   ]
 }
