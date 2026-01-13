@@ -311,8 +311,25 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 			}
 		}
 
-		assert.Contains(t, sshCmd, "-F /tmp/test-ssh-config",
-			"should include -F flag with SSHConfigFile path")
+		assert.Contains(t, sshCmd, `-F "/tmp/test-ssh-config"`,
+			"should include -F flag with quoted SSHConfigFile path")
+	})
+
+	t.Run("with spaces in path", func(t *testing.T) {
+		SSHConfigFile = "/tmp/my ssh config/config"
+		args, err := BuildArgs(conn, "/home/user/app", config.SyncConfig{})
+		require.NoError(t, err)
+
+		var sshCmd string
+		for i, arg := range args {
+			if arg == "-e" && i+1 < len(args) {
+				sshCmd = args[i+1]
+				break
+			}
+		}
+
+		assert.Contains(t, sshCmd, `-F "/tmp/my ssh config/config"`,
+			"should properly quote paths with spaces")
 	})
 }
 

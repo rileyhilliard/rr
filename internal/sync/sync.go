@@ -147,7 +147,7 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 		controlSocketDir)
 	// Support custom SSH config file (useful for testing)
 	if SSHConfigFile != "" {
-		sshCmd = fmt.Sprintf("%s -F %s", sshCmd, SSHConfigFile)
+		sshCmd = fmt.Sprintf("%s -F %q", sshCmd, SSHConfigFile)
 	}
 	args = append(args, "-e", sshCmd)
 
