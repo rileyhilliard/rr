@@ -72,23 +72,51 @@ rr run "ls -la"
 
 If the remote directory is wrong, check the `dir` setting in global config.
 
-## Step 5: Verify Dependencies
+## Step 5: Verify and Install Dependencies
 
-Based on the detected tech stack, check if required tools exist on the remote:
+For EACH host in the project config, check if required tools exist. Do not skip hosts or disable them - fix them.
+
+Based on the detected tech stack, check each host:
 
 ```bash
-# Examples - run whichever applies
-rr exec "go version"
-rr exec "node --version"
-rr exec "python3 --version"
-rr exec "uv --version"
+# @example Test each host individually
+rr exec --host <hostname> "go version"      # Go projects
+rr exec --host <hostname> "node --version"  # Node projects
+rr exec --host <hostname> "python3 --version && uv --version"  # Python projects
+rr exec --host <hostname> "bun --version"   # If using bun
 ```
 
-If "command not found":
+**If a tool is missing, INSTALL IT on that host. Do not disable the host.**
 
-1. **Tool installed but not in PATH** (common): Add `shell: "zsh -l -c"` to host config, or add `setup_commands` to source the environment
-2. **Tool not installed**: Help install via `rr exec`
-3. **PATH needs updating**: Add `env` section to host config
+Common installation commands (run via `ssh <host-alias>` directly):
+
+```bash
+# uv (Python package manager)
+ssh <host-alias> "curl -LsSf https://astral.sh/uv/install.sh | sh"
+
+# bun (JavaScript runtime)
+ssh <host-alias> "curl -fsSL https://bun.sh/install | bash"
+
+# Node.js via nvm
+ssh <host-alias> "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && source ~/.bashrc && nvm install node"
+
+# Go
+ssh <host-alias> "curl -LO https://go.dev/dl/go1.22.0.linux-amd64.tar.gz && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz"
+```
+
+After installing, update the host's `setup_commands` in `~/.rr/config.yaml` to source the new tools:
+
+```yaml
+setup_commands:
+    - source ~/.local/bin/env # uv
+    - source ~/.bun/bin/bun # bun
+    - export PATH="$HOME/.local/bin:$PATH"
+```
+
+**If setup_commands reference missing files** (e.g., `source ~/.local/bin/env` fails):
+
+1. Install the tool that creates that file (e.g., uv creates `~/.local/bin/env`)
+2. Or remove/fix the setup_command in `~/.rr/config.yaml`
 
 ## Step 6: Final Verification
 
