@@ -128,51 +128,25 @@ jobs:
             -e PUBLIC_KEY="$(cat /tmp/rr-ci-ssh-keys/id_ed25519.pub)" \
             linuxserver/openssh-server
 
-          # Wait for SSH daemon to be fully ready (not just port open)
-          echo "Waiting for SSH server to initialize..."
-          for i in {1..60}; do
-            # Check if sshd process is running inside container
-            if docker exec rr-ci-ssh pgrep -x sshd >/dev/null 2>&1; then
-              # Also verify TCP port is accepting connections
-              if nc -z localhost 2222 2>/dev/null; then
-                echo "SSH server is ready (attempt $i)"
-                break
-              fi
-            fi
-            echo "Waiting... (attempt $i)"
-            sleep 2
-          done
-
-          # Additional settle time for key configuration
-          sleep 3
-
-          # Add to known_hosts
+          # Wait for SSH to be ready by testing actual connection
+          echo "Waiting for SSH server to be ready..."
           mkdir -p ~/.ssh
-          for i in {1..5}; do
-            if ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts 2>/dev/null; then
-              echo "Added host key to known_hosts"
-              break
-            fi
-            sleep 2
-          done
-
-          # Verify connection with retries
-          echo "Verifying SSH connection..."
-          for i in {1..5}; do
+          for i in {1..30}; do
             if ssh -i /tmp/rr-ci-ssh-keys/id_ed25519 \
                 -p 2222 \
-                -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=10 \
-                testuser@localhost "echo 'SSH connection successful'"; then
-              echo "Connection verified!"
+                -o StrictHostKeyChecking=accept-new \
+                -o ConnectTimeout=2 \
+                -o BatchMode=yes \
+                testuser@localhost "echo ok" >/dev/null 2>&1; then
+              echo "SSH server ready (attempt $i)"
               exit 0
             fi
-            echo "Connection attempt $i failed, retrying..."
-            sleep 3
+            echo "Waiting... (attempt $i)"
+            sleep 1
           done
 
           # If we get here, show logs for debugging
-          echo "SSH connection failed after retries. Container logs:"
+          echo "SSH connection failed after 30 attempts. Container logs:"
           docker logs rr-ci-ssh
           exit 1
 
