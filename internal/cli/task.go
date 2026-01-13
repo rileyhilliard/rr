@@ -242,8 +242,10 @@ func ListTasks() error {
 		}
 		fmt.Println()
 
-		// Command or steps
-		if task.Run != "" {
+		// Command, steps, or parallel
+		if config.IsParallelTask(&task) {
+			fmt.Printf("    %s\n", mutedStyle.Render(fmt.Sprintf("parallel: %d tasks", len(task.Parallel))))
+		} else if task.Run != "" {
 			fmt.Printf("    %s\n", mutedStyle.Render(task.Run))
 		} else if len(task.Steps) > 0 {
 			fmt.Printf("    %s\n", mutedStyle.Render(fmt.Sprintf("(%d steps)", len(task.Steps))))
@@ -269,13 +271,14 @@ func RegisterTaskCommands(cfg *config.Config) {
 		return
 	}
 
-	for name, task := range cfg.Tasks {
+	for name := range cfg.Tasks {
 		// Skip reserved names (validation should have caught these already)
 		if config.IsReservedTaskName(name) {
 			continue
 		}
 
 		// Create a command for this task
+		task := cfg.Tasks[name]
 		taskCmd := createTaskCommand(name, task)
 		rootCmd.AddCommand(taskCmd)
 	}
@@ -283,6 +286,11 @@ func RegisterTaskCommands(cfg *config.Config) {
 
 // createTaskCommand creates a cobra command for a task.
 func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
+	// Check if this is a parallel task
+	if config.IsParallelTask(&task) {
+		return createParallelTaskCommand(name, task)
+	}
+
 	var hostFlag string
 	var tagFlag string
 	var probeTimeoutFlag string
@@ -309,6 +317,76 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
 
 	return cmd
+}
+
+// createParallelTaskCommand creates a cobra command for a parallel task with special flags.
+func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Command {
+	var hostFlag string
+	var tagFlag string
+	var localFlag bool
+	var streamFlag bool
+	var verboseFlag bool
+	var quietFlag bool
+	var failFastFlag bool
+	var maxParallelFlag int
+	var noLogsFlag bool
+	var dryRunFlag bool
+
+	cmd := &cobra.Command{
+		Use:   name,
+		Short: task.Description,
+		Long:  buildParallelTaskLongDescription(name, task),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runParallelTaskCommand(name, ParallelTaskOptions{
+				TaskName:    name,
+				Host:        hostFlag,
+				Tag:         tagFlag,
+				Stream:      streamFlag,
+				Verbose:     verboseFlag,
+				Quiet:       quietFlag,
+				FailFast:    failFastFlag,
+				MaxParallel: maxParallelFlag,
+				NoLogs:      noLogsFlag,
+				DryRun:      dryRunFlag,
+				Local:       localFlag,
+			})
+		},
+	}
+
+	// Set description if empty
+	if cmd.Short == "" {
+		cmd.Short = fmt.Sprintf("Run '%s' parallel tasks", name)
+	}
+
+	// Add common flags
+	cmd.Flags().StringVar(&hostFlag, "host", "", "target host name")
+	cmd.Flags().StringVar(&tagFlag, "tag", "", "filter hosts by tag")
+	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
+
+	// Add parallel-specific flags
+	cmd.Flags().BoolVar(&streamFlag, "stream", false, "show real-time interleaved output")
+	cmd.Flags().BoolVar(&verboseFlag, "verbose", false, "show full output per task on completion")
+	cmd.Flags().BoolVar(&quietFlag, "quiet", false, "show summary only")
+	cmd.Flags().BoolVar(&failFastFlag, "fail-fast", false, "stop on first task failure")
+	cmd.Flags().IntVar(&maxParallelFlag, "max-parallel", 0, "limit concurrent task execution (0 = unlimited)")
+	cmd.Flags().BoolVar(&noLogsFlag, "no-logs", false, "don't save output to log files")
+	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show execution plan without running")
+
+	return cmd
+}
+
+// runParallelTaskCommand is the implementation for parallel task commands.
+func runParallelTaskCommand(_ string, opts ParallelTaskOptions) error {
+	exitCode, err := RunParallelTask(opts)
+	if err != nil {
+		return err
+	}
+
+	if exitCode != 0 {
+		return errors.NewExitError(exitCode)
+	}
+
+	return nil
 }
 
 // buildTaskLongDescription creates a detailed description for a task command.
@@ -338,6 +416,38 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 	if len(task.Hosts) > 0 {
 		desc += fmt.Sprintf("\nRestricted to hosts: %s\n", util.JoinOrNone(task.Hosts))
 	}
+
+	return desc
+}
+
+// buildParallelTaskLongDescription creates a detailed description for a parallel task command.
+func buildParallelTaskLongDescription(name string, task config.TaskConfig) string {
+	desc := fmt.Sprintf("Run the '%s' parallel task defined in .rr.yaml.\n\n", name)
+
+	if task.Description != "" {
+		desc += task.Description + "\n\n"
+	}
+
+	desc += fmt.Sprintf("Runs %d tasks concurrently:\n", len(task.Parallel))
+	for i, subtask := range task.Parallel {
+		desc += fmt.Sprintf("  %d. %s\n", i+1, subtask)
+	}
+
+	if task.FailFast {
+		desc += "\nStops on first failure (fail_fast: true)\n"
+	}
+	if task.MaxParallel > 0 {
+		desc += fmt.Sprintf("\nMax concurrent tasks: %d\n", task.MaxParallel)
+	}
+
+	desc += "\nParallel-specific flags:\n"
+	desc += "  --stream       Show real-time interleaved output\n"
+	desc += "  --verbose      Show full output per task on completion\n"
+	desc += "  --quiet        Show summary only\n"
+	desc += "  --fail-fast    Stop on first task failure\n"
+	desc += "  --max-parallel Limit concurrent execution\n"
+	desc += "  --no-logs      Don't save output to log files\n"
+	desc += "  --dry-run      Show plan without executing\n"
 
 	return desc
 }

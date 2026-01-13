@@ -99,6 +99,11 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'monitor' section in your .rr.yaml.")
 	}
 
+	// Validate parallel task references (must come after individual task validation)
+	if err := validateParallelTaskRefs(cfg); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your parallel task configuration in .rr.yaml.")
+	}
+
 	return nil
 }
 
@@ -263,12 +268,25 @@ func validateShellFormat(hostName, shell string) error {
 
 // validateTask checks a single task configuration.
 func validateTask(name string, task TaskConfig) error {
-	// Must have either run or steps, not both
 	hasRun := task.Run != ""
 	hasSteps := len(task.Steps) > 0
+	hasParallel := len(task.Parallel) > 0
 
+	// Parallel tasks are mutually exclusive with run and steps
+	if hasParallel {
+		if hasRun {
+			return fmt.Errorf("task '%s' has both 'parallel' and 'run' - parallel tasks can't have a run command", name)
+		}
+		if hasSteps {
+			return fmt.Errorf("task '%s' has both 'parallel' and 'steps' - parallel tasks can't have steps", name)
+		}
+		// Parallel-specific validation is done separately after all tasks are known
+		return nil
+	}
+
+	// Non-parallel tasks: must have either run or steps, not both
 	if !hasRun && !hasSteps {
-		return fmt.Errorf("task '%s' needs either 'run' (single command) or 'steps' (multiple commands)", name)
+		return fmt.Errorf("task '%s' needs either 'run' (single command), 'steps' (multiple commands), or 'parallel' (concurrent subtasks)", name)
 	}
 
 	if hasRun && hasSteps {
@@ -399,4 +417,50 @@ func getHostNames(hosts map[string]Host) []string {
 // IsReservedTaskName checks if a name is reserved.
 func IsReservedTaskName(name string) bool {
 	return ReservedTaskNames[name]
+}
+
+// ValidateParallelTasks validates parallel task references after individual tasks are validated.
+// This checks:
+// - All referenced tasks exist
+// - No circular references (task A -> task B -> task A)
+// - No nested parallel (parallel task can't reference another parallel task)
+func ValidateParallelTasks(cfg *Config) error {
+	if cfg == nil || cfg.Tasks == nil {
+		return nil
+	}
+
+	for name := range cfg.Tasks {
+		task := cfg.Tasks[name]
+		if len(task.Parallel) == 0 {
+			continue
+		}
+
+		// Check each referenced task
+		for _, ref := range task.Parallel {
+			refTask, ok := cfg.Tasks[ref]
+			if !ok {
+				available := getTaskNames(cfg.Tasks)
+				return fmt.Errorf("parallel task '%s' references non-existent task '%s'. Available tasks: %s",
+					name, ref, strings.Join(available, ", "))
+			}
+
+			// No nested parallel tasks
+			if len(refTask.Parallel) > 0 {
+				return fmt.Errorf("parallel task '%s' can't reference another parallel task '%s'. Parallel tasks can only run simple tasks (with 'run' or 'steps')",
+					name, ref)
+			}
+
+			// No self-reference
+			if ref == name {
+				return fmt.Errorf("parallel task '%s' can't reference itself", name)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validateParallelTaskRefs is called from Validate to check parallel task references.
+func validateParallelTaskRefs(cfg *Config) error {
+	return ValidateParallelTasks(cfg)
 }

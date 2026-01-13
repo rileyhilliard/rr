@@ -107,6 +107,23 @@ tasks:
     description: Run go vet
     run: go vet ./...
 
+  # Parallel task examples - run multiple tasks concurrently across hosts
+  test-all:
+    description: Run all tests in parallel across hosts
+    parallel:
+      - test
+      - lint
+    fail_fast: false
+    timeout: 10m
+
+  quick-check:
+    description: Fast parallel verification (vet + lint)
+    parallel:
+      - vet
+      - lint
+    fail_fast: true
+    max_parallel: 2
+
 # Output formatting
 output:
   format: go # Use Go test formatter for nice output

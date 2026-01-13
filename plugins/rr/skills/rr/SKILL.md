@@ -252,6 +252,70 @@ rr test -k "test_login"      # Runs: pytest -v -k "test_login"
 
 Note: Args are only supported for tasks with a single `run` command, not multi-step tasks.
 
+### Parallel Tasks
+
+Run multiple tasks concurrently across available hosts. Useful for running tests on multiple architectures or parallelizing independent jobs:
+
+```yaml
+tasks:
+  test-all:
+    description: Run all tests in parallel
+    parallel:
+      - test
+      - lint
+      - vet
+    fail_fast: false    # Continue even if one fails
+    timeout: 10m
+
+  quick-check:
+    description: Fast verification
+    parallel:
+      - vet
+      - lint
+    fail_fast: true     # Stop on first failure
+    max_parallel: 2     # Limit concurrency
+```
+
+Run with: `rr test-all`, `rr quick-check`
+
+#### Parallel Task Flags
+
+| Flag | Purpose |
+|------|---------|
+| `--stream` | Show real-time interleaved output with `[host:task]` prefixes |
+| `--verbose` | Show full output per task on completion |
+| `--quiet` | Summary only |
+| `--fail-fast` | Stop on first failure (overrides config) |
+| `--max-parallel N` | Limit concurrent tasks |
+| `--dry-run` | Show plan without executing |
+| `--local` | Force local execution (no remote hosts) |
+
+#### Output Modes
+
+- **progress** (default): Live status indicators with spinners
+- **stream**: Real-time output with `[host:task]` prefixes
+- **verbose**: Full output shown when each task completes
+- **quiet**: Summary only at the end
+
+Example:
+```bash
+rr test-all --stream    # See all output in real-time
+rr test-all --dry-run   # Preview what would run
+rr test-all --local     # Run locally without remote hosts
+```
+
+#### Work-Stealing Distribution
+
+Tasks are distributed across hosts using a work-stealing queue. Fast hosts automatically grab more work, providing natural load balancing without pre-assignment.
+
+#### Log Storage
+
+Task output is saved to `~/.rr/logs/<task>-<timestamp>/`:
+- One file per subtask
+- Summary file with timing and results
+
+Use `rr logs` to view recent logs or `rr logs clean` to remove old ones.
+
 #### Multi-Step Task Progress
 
 Multi-step tasks show progress as each step runs:

@@ -15,6 +15,7 @@ type GlobalConfig struct {
 	Version  int             `yaml:"version" mapstructure:"version"`
 	Hosts    map[string]Host `yaml:"hosts" mapstructure:"hosts"`
 	Defaults GlobalDefaults  `yaml:"defaults" mapstructure:"defaults"`
+	Logs     LogsConfig      `yaml:"logs" mapstructure:"logs"`
 }
 
 // GlobalDefaults contains default settings for host selection and connection.
@@ -129,6 +130,26 @@ type TaskConfig struct {
 
 	// Env contains environment variables for this task.
 	Env map[string]string `yaml:"env" mapstructure:"env"`
+
+	// Parallel is a list of task names to run concurrently.
+	// When set, this task becomes a parallel orchestrator and Run/Steps are ignored.
+	Parallel []string `yaml:"parallel" mapstructure:"parallel"`
+
+	// FailFast stops parallel execution on first failure when true.
+	// Only applies when Parallel is set.
+	FailFast bool `yaml:"fail_fast" mapstructure:"fail_fast"`
+
+	// MaxParallel limits concurrent task execution. 0 means unlimited.
+	// Only applies when Parallel is set.
+	MaxParallel int `yaml:"max_parallel" mapstructure:"max_parallel"`
+
+	// Timeout is the maximum duration for this task (e.g., "10m", "1h").
+	// Applies to individual tasks and parallel orchestrators.
+	Timeout string `yaml:"timeout" mapstructure:"timeout"`
+
+	// Output controls how task output is displayed: "progress", "stream", "verbose", "quiet".
+	// Overrides the global output settings for this task.
+	Output string `yaml:"output" mapstructure:"output"`
 }
 
 // TaskStep is a single step in a multi-step task.
@@ -187,6 +208,25 @@ type ThresholdValues struct {
 	Critical int `yaml:"critical" mapstructure:"critical"`
 }
 
+// LogsConfig controls log file retention for parallel task execution.
+type LogsConfig struct {
+	// Dir is the directory where log files are stored.
+	// Default: ~/.rr/logs
+	Dir string `yaml:"dir" mapstructure:"dir"`
+
+	// KeepRuns is the number of recent runs to keep logs for.
+	// Default: 10. Set to 0 to disable run-based cleanup.
+	KeepRuns int `yaml:"keep_runs" mapstructure:"keep_runs"`
+
+	// KeepDays is the number of days to keep logs.
+	// Default: 0 (disabled). When set, logs older than this are deleted.
+	KeepDays int `yaml:"keep_days" mapstructure:"keep_days"`
+
+	// MaxSizeMB is the maximum total size of logs in megabytes.
+	// Default: 0 (disabled). When set, oldest logs are deleted to stay under limit.
+	MaxSizeMB int `yaml:"max_size_mb" mapstructure:"max_size_mb"`
+}
+
 // DefaultGlobalConfig returns a GlobalConfig with sensible defaults.
 func DefaultGlobalConfig() *GlobalConfig {
 	return &GlobalConfig{
@@ -195,6 +235,10 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Defaults: GlobalDefaults{
 			ProbeTimeout:  2 * time.Second,
 			LocalFallback: false,
+		},
+		Logs: LogsConfig{
+			Dir:      "~/.rr/logs",
+			KeepRuns: 10,
 		},
 	}
 }
@@ -249,4 +293,9 @@ func DefaultConfig() *Config {
 			Exclude: []string{},
 		},
 	}
+}
+
+// IsParallelTask returns true if the task is configured to run subtasks in parallel.
+func IsParallelTask(task *TaskConfig) bool {
+	return len(task.Parallel) > 0
 }
