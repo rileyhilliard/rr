@@ -32,6 +32,9 @@ type OutputManager struct {
 	taskOutput    map[string]*bytes.Buffer
 	taskTruncated map[string]bool
 
+	// Animated progress display (for progress mode with TTY)
+	progress *ui.ParallelProgress
+
 	// Styles
 	successStyle lipgloss.Style
 	errorStyle   lipgloss.Style
@@ -58,7 +61,7 @@ func NewOutputManager(mode OutputMode, isTTY bool) *OutputManager {
 		effectiveMode = OutputQuiet
 	}
 
-	return &OutputManager{
+	m := &OutputManager{
 		mode:          effectiveMode,
 		isTTY:         isTTY,
 		w:             os.Stdout,
@@ -72,6 +75,14 @@ func NewOutputManager(mode OutputMode, isTTY bool) *OutputManager {
 		mutedStyle:   lipgloss.NewStyle().Foreground(ui.ColorMuted),
 		hostStyle:    lipgloss.NewStyle().Foreground(ui.ColorSecondary),
 	}
+
+	// Create animated progress display for TTY progress mode
+	if effectiveMode == OutputProgress && isTTY {
+		m.progress = ui.NewParallelProgress(isTTY)
+		m.progress.Start()
+	}
+
+	return m
 }
 
 // SetWriter sets the output writer for testing.
@@ -79,31 +90,88 @@ func (m *OutputManager) SetWriter(w io.Writer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.w = w
+	// Also update the parallel progress writer if it exists
+	if m.progress != nil {
+		m.progress.SetWriter(w)
+	}
 }
 
-// TaskStarted is called when a task begins execution.
-func (m *OutputManager) TaskStarted(taskName, host string) {
+// InitTasks initializes all tasks as pending. Call this before starting workers
+// to show all tasks upfront in the UI.
+func (m *OutputManager) InitTasks(taskNames []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.taskStatus[taskName] = TaskRunning
+	for _, name := range taskNames {
+		m.taskStatus[name] = TaskPending
+		m.taskOutput[name] = &bytes.Buffer{}
+	}
+
+	if m.progress != nil {
+		m.progress.InitTasks(taskNames)
+	}
+}
+
+// TaskSyncing is called when a worker picks up a task and begins syncing.
+// The task is assigned to a host but not yet executing (connecting, syncing, waiting for lock).
+func (m *OutputManager) TaskSyncing(taskName, host string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.taskStatus[taskName] = TaskSyncing
 	m.taskHosts[taskName] = host
 	m.taskOutput[taskName] = &bytes.Buffer{}
 
 	switch m.mode {
 	case OutputProgress:
-		m.renderProgressLine(taskName, TaskRunning, host)
+		if m.progress != nil {
+			m.progress.TaskSyncing(taskName, host)
+		}
 	case OutputStream:
 		prefix := m.formatPrefix(host, taskName)
-		fmt.Fprintf(m.w, "%s started\n", prefix)
+		fmt.Fprintf(m.w, "%s syncing\n", prefix)
 	case OutputVerbose:
-		fmt.Fprintf(m.w, "%s Starting %s on %s...\n",
+		fmt.Fprintf(m.w, "%s Syncing %s to %s...\n",
+			m.mutedStyle.Render(ui.SymbolSyncing),
+			taskName,
+			host)
+	case OutputQuiet:
+		// No output for quiet mode
+	}
+}
+
+// TaskExecuting is called when a task's command actually starts running.
+func (m *OutputManager) TaskExecuting(taskName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.taskStatus[taskName] = TaskRunning
+
+	switch m.mode {
+	case OutputProgress:
+		if m.progress != nil {
+			m.progress.TaskExecuting(taskName)
+		}
+	case OutputStream:
+		host := m.taskHosts[taskName]
+		prefix := m.formatPrefix(host, taskName)
+		fmt.Fprintf(m.w, "%s running\n", prefix)
+	case OutputVerbose:
+		host := m.taskHosts[taskName]
+		fmt.Fprintf(m.w, "%s Running %s on %s...\n",
 			m.mutedStyle.Render(ui.SymbolProgress),
 			taskName,
 			host)
 	case OutputQuiet:
 		// No output for quiet mode
 	}
+}
+
+// TaskStarted is called when a task begins execution.
+//
+// Deprecated: Use TaskSyncing followed by TaskExecuting for clearer state tracking.
+func (m *OutputManager) TaskStarted(taskName, host string) {
+	m.TaskSyncing(taskName, host)
 }
 
 // TaskOutput is called when a task produces output.
@@ -145,7 +213,10 @@ func (m *OutputManager) TaskCompleted(taskName string, result TaskResult) {
 
 	switch m.mode {
 	case OutputProgress:
-		m.renderProgressLine(taskName, status, result.Host)
+		// Use animated progress display
+		if m.progress != nil {
+			m.progress.TaskCompleted(taskName, result.Success())
+		}
 	case OutputStream:
 		prefix := m.formatPrefix(result.Host, taskName)
 		symbol := ui.SymbolSuccess
@@ -178,32 +249,14 @@ func (m *OutputManager) RenderProgress() {
 
 // Close finalizes the output manager and performs any cleanup.
 func (m *OutputManager) Close() {
-	// Nothing to clean up for now, but this method exists for
-	// future cleanup needs (e.g., flushing buffers, closing log files).
-}
+	m.mu.Lock()
+	progress := m.progress
+	m.mu.Unlock()
 
-// renderProgressLine renders a single task's progress line.
-func (m *OutputManager) renderProgressLine(taskName string, status TaskStatus, host string) {
-	var symbol string
-	var style lipgloss.Style
-
-	switch status {
-	case TaskPending:
-		symbol = ui.SymbolPending
-		style = m.mutedStyle
-	case TaskRunning:
-		symbol = ui.SymbolProgress
-		style = m.hostStyle
-	case TaskPassed:
-		symbol = ui.SymbolSuccess
-		style = m.successStyle
-	case TaskFailed:
-		symbol = ui.SymbolFail
-		style = m.errorStyle
+	// Stop the animated progress display
+	if progress != nil {
+		progress.Stop()
 	}
-
-	hostStr := m.mutedStyle.Render(fmt.Sprintf("[%s]", host))
-	fmt.Fprintf(m.w, "%s %s %s\n", style.Render(symbol), taskName, hostStr)
 }
 
 // renderVerboseCompletion renders verbose output for a completed task.

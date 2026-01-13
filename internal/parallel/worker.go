@@ -37,9 +37,9 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		StartTime: time.Now(),
 	}
 
-	// Notify output manager
+	// Notify output manager: task is syncing (connecting, syncing files, waiting for lock)
 	if w.orchestrator.outputMgr != nil {
-		w.orchestrator.outputMgr.TaskStarted(task.Name, w.hostName)
+		w.orchestrator.outputMgr.TaskSyncing(task.Name, w.hostName)
 	}
 
 	// Ensure we have a connection
@@ -60,6 +60,11 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		result.Duration = result.EndTime.Sub(result.StartTime)
 		w.notifyComplete(task.Name, result)
 		return result
+	}
+
+	// Notify output manager: task is now actually executing
+	if w.orchestrator.outputMgr != nil {
+		w.orchestrator.outputMgr.TaskExecuting(task.Name)
 	}
 
 	// Execute the task with timeout if configured
@@ -294,9 +299,10 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 		StartTime: time.Now(),
 	}
 
-	// Notify output manager
+	// Notify output manager: local tasks go straight to executing (no sync needed)
 	if w.orchestrator.outputMgr != nil {
-		w.orchestrator.outputMgr.TaskStarted(task.Name, "local")
+		w.orchestrator.outputMgr.TaskSyncing(task.Name, "local")
+		w.orchestrator.outputMgr.TaskExecuting(task.Name)
 	}
 
 	// Execute with timeout if configured

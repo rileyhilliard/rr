@@ -85,6 +85,13 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
 	defer o.outputMgr.Close()
 
+	// Show all tasks as pending upfront
+	taskNames := make([]string, len(o.tasks))
+	for i, t := range o.tasks {
+		taskNames[i] = t.Name
+	}
+	o.outputMgr.InitTasks(taskNames)
+
 	startTime := time.Now()
 
 	// Create task queue (channel-based work stealing).
@@ -160,6 +167,7 @@ func (o *Orchestrator) hostWorker(
 		failed:       failed,
 		failedMu:     failedMu,
 	}
+	defer worker.Close()
 
 	for task := range taskQueue {
 		// Check for cancellation
@@ -249,6 +257,13 @@ func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
 	// Initialize output manager
 	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
 	defer o.outputMgr.Close()
+
+	// Show all tasks as pending upfront
+	taskNames := make([]string, len(o.tasks))
+	for i, t := range o.tasks {
+		taskNames[i] = t.Name
+	}
+	o.outputMgr.InitTasks(taskNames)
 
 	startTime := time.Now()
 

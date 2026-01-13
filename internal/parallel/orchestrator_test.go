@@ -296,6 +296,7 @@ func TestTaskStatus_String(t *testing.T) {
 		want   string
 	}{
 		{TaskPending, "pending"},
+		{TaskSyncing, "syncing"},
 		{TaskRunning, "running"},
 		{TaskPassed, "passed"},
 		{TaskFailed, "failed"},

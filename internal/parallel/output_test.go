@@ -85,10 +85,10 @@ func TestOutputManager_StreamMode_PrefixesLines(t *testing.T) {
 	mgr := NewOutputManager(OutputStream, true)
 	mgr.SetWriter(&buf)
 
-	// Start a task
-	mgr.TaskStarted("test-task", "dev-host")
+	// Start a task (syncing phase)
+	mgr.TaskSyncing("test-task", "dev-host")
 	assert.Contains(t, buf.String(), "[dev-host:test-task]")
-	assert.Contains(t, buf.String(), "started")
+	assert.Contains(t, buf.String(), "syncing")
 
 	buf.Reset()
 
@@ -125,8 +125,12 @@ func TestOutputManager_TaskStatus(t *testing.T) {
 	// Initially no status
 	assert.Equal(t, TaskStatus(0), mgr.GetTaskStatus("unknown"))
 
-	// Start task
-	mgr.TaskStarted("test", "host1")
+	// Task syncing (assigned to host, waiting for lock/sync)
+	mgr.TaskSyncing("test", "host1")
+	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("test"))
+
+	// Task executing (command running)
+	mgr.TaskExecuting("test")
 	assert.Equal(t, TaskRunning, mgr.GetTaskStatus("test"))
 
 	// Complete successfully
@@ -138,7 +142,8 @@ func TestOutputManager_TaskStatus(t *testing.T) {
 	assert.Equal(t, TaskPassed, mgr.GetTaskStatus("test"))
 
 	// Start and fail another task
-	mgr.TaskStarted("failing", "host2")
+	mgr.TaskSyncing("failing", "host2")
+	mgr.TaskExecuting("failing")
 	mgr.TaskCompleted("failing", TaskResult{
 		TaskName: "failing",
 		Host:     "host2",
@@ -184,8 +189,8 @@ func TestOutputManager_VerboseMode(t *testing.T) {
 	mgr := NewOutputManager(OutputVerbose, true)
 	mgr.SetWriter(&buf)
 
-	mgr.TaskStarted("test", "dev")
-	assert.Contains(t, buf.String(), "Starting")
+	mgr.TaskSyncing("test", "dev")
+	assert.Contains(t, buf.String(), "Syncing")
 	assert.Contains(t, buf.String(), "test")
 	assert.Contains(t, buf.String(), "dev")
 

@@ -406,10 +406,58 @@ tasks:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `description` | string | no | Shown in `rr --help`. |
-| `run` | string | if no steps | Command to execute (simple tasks). |
-| `steps` | list | if no run | Steps for multi-step tasks. |
+| `run` | string | if no steps/parallel | Command to execute (simple tasks). |
+| `steps` | list | if no run/parallel | Steps for multi-step tasks. |
+| `parallel` | list | if no run/steps | Subtask names to run concurrently across hosts. |
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. |
+| `fail_fast` | bool | no | Stop all tasks on first failure (parallel tasks only). |
+| `max_parallel` | int | no | Limit concurrent tasks (parallel tasks only). |
+| `timeout` | duration | no | Per-subtask timeout (parallel tasks only). |
+
+### Parallel task
+
+Run multiple subtasks simultaneously across your host pool:
+
+```yaml
+tasks:
+  test-backend:
+    run: cd backend && pytest
+  test-frontend:
+    run: cd frontend && npm test
+  test-opendata:
+    run: cd opendata && python -m pytest
+
+  # Runs all three subtasks in parallel across hosts
+  test:
+    description: Run all test suites
+    parallel: [test-backend, test-frontend, test-opendata]
+    fail_fast: false    # Continue even if one fails
+    max_parallel: 3     # Limit concurrency (optional)
+    timeout: 10m        # Per-subtask timeout (optional)
+```
+
+Run with: `rr test`
+
+**How it works:**
+
+1. Each subtask is assigned to an available host from your pool
+2. Tasks run simultaneously with animated progress indicators
+3. Output is captured and shown in a summary when complete
+4. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
+
+**CLI flags for parallel tasks:**
+
+| Flag | Description |
+|------|-------------|
+| `--stream` | Real-time interleaved output with `[host:task]` prefixes |
+| `--verbose` | Full output shown when each task completes |
+| `--quiet` | Summary only, no per-task output |
+| `--fail-fast` | Stop all tasks on first failure (overrides config) |
+| `--max-parallel N` | Limit concurrent tasks (overrides config) |
+| `--dry-run` | Show execution plan without running |
+| `--local` | Force local execution (ignore remote hosts) |
+| `--no-logs` | Don't save output to log files |
 
 ### Step fields
 
