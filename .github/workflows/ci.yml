@@ -40,7 +40,13 @@ jobs:
 
       - name: Test with coverage
         run: |
-          go test -race -coverprofile=coverage.out -covermode=atomic -json ./... 2>&1 | tee test-results.json
+          # Run tests with JSON output to file only (quiet on success)
+          if ! go test -race -coverprofile=coverage.out -covermode=atomic -json ./... > test-results.json 2>&1; then
+            echo "Tests failed. Output:"
+            jq -rs '[.[] | select(.Action=="output")] | map(.Output) | join("")' test-results.json
+            exit 1
+          fi
+          echo "All tests passed"
 
       - name: Generate test summary
         if: always()
