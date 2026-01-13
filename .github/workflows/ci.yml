@@ -71,23 +71,12 @@ jobs:
             echo "**Coverage:** $COVERAGE" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Check coverage threshold
-        run: |
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-          echo "Total coverage: $COVERAGE%"
-          # Threshold set to 50% as most code requires SSH connections
-          # which are tested in the integration tests job
-          if (( $(echo "$COVERAGE < 50" | bc -l) )); then
-            echo "::error::Coverage $COVERAGE% is below 50% minimum"
-            exit 1
-          fi
-
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v6
         with:
-          name: coverage
+          name: coverage-unit
           path: coverage.out
-          retention-days: 30
+          retention-days: 7
 
   security:
     name: Security scan
@@ -184,7 +173,14 @@ jobs:
           RR_TEST_SSH_KEY: /tmp/rr-ci-ssh-keys/id_ed25519
           RR_TEST_SSH_USER: testuser
         run: |
-          go test -v -race ./tests/integration/... ./pkg/sshutil/...
+          go test -v -race -coverprofile=coverage-integration.out -covermode=atomic ./tests/integration/... ./pkg/sshutil/...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-integration
+          path: coverage-integration.out
+          retention-days: 7
 
       - name: Stop SSH server
         if: always()
@@ -192,10 +188,60 @@ jobs:
           docker stop rr-ci-ssh || true
           docker rm rr-ci-ssh || true
 
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: [test, integration]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download unit test coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+
+      - name: Download integration test coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+
+      - name: Merge coverage reports
+        run: |
+          go install github.com/wadey/gocovmerge@latest
+          gocovmerge coverage.out coverage-integration.out > coverage-merged.out
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage-merged.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage: $COVERAGE%"
+          if (( $(echo "$COVERAGE < 60" | bc -l) )); then
+            echo "::error::Coverage $COVERAGE% is below 60% minimum"
+            exit 1
+          fi
+
+      - name: Generate coverage summary
+        run: |
+          COVERAGE=$(go tool cover -func=coverage-merged.out | grep total | awk '{print $3}')
+          echo "## Combined Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Coverage:** $COVERAGE" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload merged coverage
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage-merged
+          path: coverage-merged.out
+          retention-days: 30
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, security]
+    needs: [test, security, coverage]
     steps:
       - uses: actions/checkout@v6
 
