@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -126,7 +127,10 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// Parse task timeout if specified
 	if task.Timeout != "" && opts.Timeout == 0 {
-		if d, err := time.ParseDuration(task.Timeout); err == nil {
+		d, err := time.ParseDuration(task.Timeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: invalid timeout '%s', ignoring: %v\n", task.Timeout, err)
+		} else {
 			parallelCfg.Timeout = d
 		}
 	}
@@ -226,15 +230,13 @@ func buildStepsCommand(steps []config.TaskStep) string {
 		return steps[0].Run
 	}
 
-	// Join steps with && (stop on first failure by default)
-	cmd := ""
+	// Wrap each step in a subshell to isolate failures and prevent
+	// shell metacharacters from breaking the command chain
+	parts := make([]string, len(steps))
 	for i, step := range steps {
-		if i > 0 {
-			cmd += " && "
-		}
-		cmd += step.Run
+		parts[i] = fmt.Sprintf("(%s)", step.Run)
 	}
-	return cmd
+	return strings.Join(parts, " && ")
 }
 
 // filterHostsByTag filters hosts to only those with the specified tag.

@@ -3,8 +3,10 @@ package parallel
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -195,7 +197,7 @@ func (w *hostWorker) execCommand(
 
 	// Execute via SSH
 	if w.conn == nil || w.conn.Client == nil {
-		return 1, nil
+		return 1, fmt.Errorf("no SSH connection available for host %s", w.hostName)
 	}
 
 	return w.conn.Client.ExecStream(fullCmd, stdout, stderr)
@@ -235,9 +237,11 @@ func buildFullCommand(cmd string, env map[string]string, workDir string, setupCo
 }
 
 // shellQuote quotes a string for safe shell use.
+// Uses single quotes with proper escaping to prevent command injection.
 func shellQuote(s string) string {
-	// Simple quoting for env values
-	return "\"" + s + "\""
+	// Use single quotes and escape any embedded single quotes
+	// This is safe for POSIX shells: 'foo'\''bar' -> foo'bar
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 // notifyComplete notifies the output manager that a task completed.

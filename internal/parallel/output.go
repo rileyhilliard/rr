@@ -14,6 +14,9 @@ import (
 	"golang.org/x/term"
 )
 
+// maxOutputBufferSize limits memory usage for buffered task output (1MB per task)
+const maxOutputBufferSize = 1 << 20
+
 // OutputManager handles output display for parallel task execution.
 // It supports different output modes: progress, stream, verbose, and quiet.
 type OutputManager struct {
@@ -24,9 +27,10 @@ type OutputManager struct {
 	mu sync.Mutex
 
 	// Task state tracking
-	taskStatus map[string]TaskStatus
-	taskHosts  map[string]string
-	taskOutput map[string]*bytes.Buffer
+	taskStatus    map[string]TaskStatus
+	taskHosts     map[string]string
+	taskOutput    map[string]*bytes.Buffer
+	taskTruncated map[string]bool
 
 	// Styles
 	successStyle lipgloss.Style
@@ -55,12 +59,13 @@ func NewOutputManager(mode OutputMode, isTTY bool) *OutputManager {
 	}
 
 	return &OutputManager{
-		mode:       effectiveMode,
-		isTTY:      isTTY,
-		w:          os.Stdout,
-		taskStatus: make(map[string]TaskStatus),
-		taskHosts:  make(map[string]string),
-		taskOutput: make(map[string]*bytes.Buffer),
+		mode:          effectiveMode,
+		isTTY:         isTTY,
+		w:             os.Stdout,
+		taskStatus:    make(map[string]TaskStatus),
+		taskHosts:     make(map[string]string),
+		taskOutput:    make(map[string]*bytes.Buffer),
+		taskTruncated: make(map[string]bool),
 
 		successStyle: lipgloss.NewStyle().Foreground(ui.ColorSuccess),
 		errorStyle:   lipgloss.NewStyle().Foreground(ui.ColorError),
@@ -106,10 +111,15 @@ func (m *OutputManager) TaskOutput(taskName string, line []byte, isStderr bool) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Buffer output for later display
+	// Buffer output for later display (with size limit to prevent unbounded growth)
 	if buf, ok := m.taskOutput[taskName]; ok {
-		buf.Write(line)
-		buf.WriteByte('\n')
+		if buf.Len() < maxOutputBufferSize {
+			buf.Write(line)
+			buf.WriteByte('\n')
+		} else if !m.taskTruncated[taskName] {
+			m.taskTruncated[taskName] = true
+			buf.WriteString("\n... output truncated (exceeded 1MB) ...\n")
+		}
 	}
 
 	switch m.mode {

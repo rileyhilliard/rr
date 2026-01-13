@@ -109,10 +109,23 @@ func (w *LogWriter) WriteSummary(result *parallel.Result, taskName string) error
 		return nil
 	}
 
+	// Calculate actual start time from earliest task
+	var startTime time.Time
+	if len(result.TaskResults) > 0 {
+		startTime = result.TaskResults[0].StartTime
+		for i := range result.TaskResults {
+			if result.TaskResults[i].StartTime.Before(startTime) {
+				startTime = result.TaskResults[i].StartTime
+			}
+		}
+	} else {
+		startTime = time.Now().Add(-result.Duration)
+	}
+
 	// Build summary structure
 	summary := SummaryJSON{
 		TaskName:    taskName,
-		StartTime:   time.Now().Add(-result.Duration),
+		StartTime:   startTime,
 		EndTime:     time.Now(),
 		Duration:    result.Duration.String(),
 		Passed:      result.Passed,

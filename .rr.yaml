@@ -117,7 +117,7 @@ tasks:
     timeout: 10m
 
   quick-check:
-    description: Fast parallel verification (vet + fmt check)
+    description: Fast parallel verification (vet + lint)
     parallel:
       - vet
       - lint

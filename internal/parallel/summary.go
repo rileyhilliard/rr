@@ -138,12 +138,14 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 		mutedStyle.Render(fmt.Sprintf("(%s)", formatDuration(result.Duration))),
 	)
 
-	// Hosts used
+	// Hosts used (copy to avoid mutating the original slice)
 	if len(result.HostsUsed) > 0 {
-		sort.Strings(result.HostsUsed)
+		hosts := make([]string, len(result.HostsUsed))
+		copy(hosts, result.HostsUsed)
+		sort.Strings(hosts)
 		fmt.Fprintf(w, "  %s %s\n",
 			mutedStyle.Render("Hosts:"),
-			mutedStyle.Render(strings.Join(result.HostsUsed, ", ")),
+			mutedStyle.Render(strings.Join(hosts, ", ")),
 		)
 	}
 
