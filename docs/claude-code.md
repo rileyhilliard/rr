@@ -1,4 +1,4 @@
-# Claude Code plugin
+# Claude Code Plugin
 
 The rr plugin teaches [Claude Code](https://claude.ai/code) how to use the rr CLI, including commands, configuration, and troubleshooting.
 
@@ -9,7 +9,7 @@ The rr plugin teaches [Claude Code](https://claude.ai/code) how to use the rr CL
 /plugin install rr@rr
 ```
 
-## What it does
+## What It Does
 
 Once installed, Claude understands:
 
@@ -20,38 +20,67 @@ Once installed, Claude understands:
 
 ## Usage
 
-The plugin activates automatically when you ask about remote development, running commands on remote machines, or mention rr specifically.
+### Guided Setup
+
+Run from your project root to set up rr:
+
+```
+/rr:setup
+```
+
+This walks through:
+1. Creating/verifying global config with hosts
+2. Creating project config with appropriate sync exclusions and tasks
+3. Verifying SSH connectivity
+4. Testing remote execution
+5. Checking dependencies on the remote host
+
+### General Help
+
+The rr skill activates automatically when you ask about remote development, running commands on remote machines, or mention rr.
 
 **Examples:**
 
 ```
-How do I set up rr for this project?
 Run the tests on my remote machine
 Why is rr failing to connect?
 Add a new host to my rr config
 ```
 
-You can also invoke it directly:
+## Plugin Structure
 
 ```
-/rr
+.claude-plugin/
+├── commands/
+│   └── setup.md    # /rr:setup - guided setup workflow
+├── skills/
+│   └── rr.md       # rr knowledge - auto-invoked when relevant
+├── marketplace.json
+└── plugin.json
 ```
 
-## Alternative installation
+- **Commands** (`/rr:setup`): User-invoked actions
+- **Skills** (`rr`): Context Claude uses automatically when working with rr
 
-### Personal skill (without plugin)
+## Alternative Installation
 
-Copy the skill to your personal Claude skills directory:
+### Personal installation (without plugin)
+
+Copy to your Claude config directory:
 
 ```bash
-cp -r /path/to/rr/skills/rr ~/.claude/skills/
+# Skills
+cp /path/to/rr/.claude-plugin/skills/*.md ~/.claude/skills/
+
+# Commands
+cp /path/to/rr/.claude-plugin/commands/*.md ~/.claude/commands/
 ```
 
 ### Project-level
 
-When working in the rr repository, the skill is automatically available.
+When working in the rr repository, skills and commands are automatically available.
 
-## What Claude learns
+## What Claude Learns
 
 | Topic | Coverage |
 |-------|----------|
@@ -65,8 +94,6 @@ When working in the rr repository, the skill is automatically available.
 | Troubleshooting | Common issues and fixes |
 
 ## Updating
-
-To get the latest version of the plugin:
 
 ```bash
 /plugin update rr@rr
