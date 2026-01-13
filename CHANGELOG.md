@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-01-13
+
+### Added
+
+- **Parallel task execution** across multiple hosts with work-stealing queue for natural load balancing
+  - Define parallel tasks in `.rr.yaml` with `parallel:` field listing subtasks to run concurrently
+  - Tasks distributed across available hosts automatically
+  - Supports `fail_fast`, `max_parallel`, and `timeout` configuration
+- Multiple output modes for parallel execution:
+  - `progress` (default): Live status indicators with spinners
+  - `stream`: Real-time interleaved output with `[host:task]` prefixes
+  - `verbose`: Full output shown when each task completes
+  - `quiet`: Summary only
+- CLI flags for parallel tasks: `--stream`, `--verbose`, `--quiet`, `--fail-fast`, `--max-parallel`, `--dry-run`, `--local`
+- Log storage for parallel task output in `~/.rr/logs/<task>-<timestamp>/`
+- Local execution fallback when no remote hosts are configured
+- Distributed locking during parallel execution to prevent conflicts
+
+### Fixed
+
+- Shell quoting now uses single quotes with proper escaping to prevent command injection
+- Buffer cap (1MB per task) to prevent unbounded memory growth during verbose output
+- Accurate start time calculation from earliest task result
+- HostsUsed slice is copied before sorting to avoid mutation
+
+### Changed
+
+- Multi-step commands now wrapped in subshells `(cmd)` for isolation
+- Invalid timeout values now emit warnings instead of being silently ignored
+- SSH connection errors now return descriptive messages instead of silent failures
+
 ## [0.10.1] - 2026-01-12
 
 ### Fixed
