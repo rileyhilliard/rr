@@ -100,6 +100,36 @@ func TestIsNewerVersion(t *testing.T) {
 			latest:  "1.0.0",
 			want:    false,
 		},
+		{
+			name:    "minor version 9 to 10",
+			current: "0.9.1",
+			latest:  "0.10.0",
+			want:    true,
+		},
+		{
+			name:    "minor version 10 is not older than 9",
+			current: "0.10.0",
+			latest:  "0.9.1",
+			want:    false,
+		},
+		{
+			name:    "major version 9 to 10",
+			current: "9.0.0",
+			latest:  "10.0.0",
+			want:    true,
+		},
+		{
+			name:    "patch version 9 to 10",
+			current: "1.0.9",
+			latest:  "1.0.10",
+			want:    true,
+		},
+		{
+			name:    "complex version comparison",
+			current: "0.9.99",
+			latest:  "0.10.0",
+			want:    true,
+		},
 	}
 
 	for _, tt := range tests {

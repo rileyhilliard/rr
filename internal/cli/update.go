@@ -145,8 +145,30 @@ func normalizeVersion(v string) string {
 	return strings.TrimPrefix(v, "v")
 }
 
+// parseVersion parses a semver string into major, minor, patch integers.
+// Returns (0, 0, 0) if parsing fails.
+func parseVersion(v string) (major, minor, patch int) {
+	v = normalizeVersion(v)
+	parts := strings.Split(v, ".")
+	if len(parts) >= 1 {
+		_, _ = fmt.Sscanf(parts[0], "%d", &major)
+	}
+	if len(parts) >= 2 {
+		_, _ = fmt.Sscanf(parts[1], "%d", &minor)
+	}
+	if len(parts) >= 3 {
+		// Handle versions like "1.0.0-beta" by taking only the numeric prefix
+		patchStr := parts[2]
+		if idx := strings.IndexAny(patchStr, "-+"); idx > 0 {
+			patchStr = patchStr[:idx]
+		}
+		_, _ = fmt.Sscanf(patchStr, "%d", &patch)
+	}
+	return
+}
+
 // isNewerVersion returns true if latest is newer than current
-// Uses simple string comparison which works for semver (v1.0.0 < v1.1.0)
+// Properly compares semver versions numerically
 func isNewerVersion(current, latest string) bool {
 	// Normalize both versions
 	current = normalizeVersion(current)
@@ -157,8 +179,17 @@ func isNewerVersion(current, latest string) bool {
 		return false
 	}
 
-	// Simple comparison works for semver strings
-	return latest > current
+	// Parse and compare numerically
+	curMajor, curMinor, curPatch := parseVersion(current)
+	latMajor, latMinor, latPatch := parseVersion(latest)
+
+	if latMajor != curMajor {
+		return latMajor > curMajor
+	}
+	if latMinor != curMinor {
+		return latMinor > curMinor
+	}
+	return latPatch > curPatch
 }
 
 // checkForUpdate checks if a newer version is available
