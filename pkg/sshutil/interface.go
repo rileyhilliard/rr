@@ -1,6 +1,9 @@
 package sshutil
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // SSHClient defines the interface for SSH command execution.
 // Both the real Client and mock implementations satisfy this interface.
@@ -17,6 +20,11 @@ type SSHClient interface {
 	// ExecStream runs a command and streams output to the provided writers.
 	// Returns the exit code and any error.
 	ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int, err error)
+
+	// ExecStreamContext runs a command with context cancellation support.
+	// When the context is cancelled, SIGINT is sent to the remote process.
+	// Returns the exit code and any error.
+	ExecStreamContext(ctx context.Context, cmd string, stdout, stderr io.Writer) (exitCode int, err error)
 
 	// Close closes the SSH connection.
 	Close() error

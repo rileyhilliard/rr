@@ -6,9 +6,9 @@ version: 1
 
 # Hosts this project can use for load balancing (from ~/.rr/config.yaml)
 hosts:
+  - m4-mini
   - m1-linux
   - m1-mini
-  - m4-mini
 
 # Run locally when all remote hosts fail or are unreachable
 local_fallback: true
@@ -107,14 +107,23 @@ tasks:
     description: Run go vet
     run: go vet ./...
 
-  # Parallel task examples - run multiple tasks concurrently across hosts
+  # Parallel tasks - run multiple tasks concurrently across hosts
   test-all:
-    description: Run all tests in parallel across hosts
+    description: Run unit and integration tests in parallel
     parallel:
       - test
-      - lint
+      - test-integration
     fail_fast: false
     timeout: 10m
+
+  verify-all:
+    description: Full verification in parallel (lint + unit + integration tests)
+    parallel:
+      - lint
+      - test
+      - test-integration
+    fail_fast: false
+    timeout: 15m
 
   quick-check:
     description: Fast parallel verification (vet + lint)

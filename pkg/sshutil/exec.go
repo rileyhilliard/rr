@@ -2,6 +2,7 @@ package sshutil
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 
@@ -45,6 +46,14 @@ func (c *Client) Exec(cmd string) (stdout, stderr []byte, exitCode int, err erro
 // Returns the exit code and any error.
 // Exit code is -1 if the command couldn't be executed at all.
 func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
+	return c.ExecStreamContext(context.Background(), cmd, stdout, stderr)
+}
+
+// ExecStreamContext runs a command with context cancellation support.
+// When the context is cancelled, SIGINT is sent to the remote process.
+// Returns the exit code and any error.
+// Exit code is -1 if the command couldn't be executed at all.
+func (c *Client) ExecStreamContext(ctx context.Context, cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
 	session, err := c.newSSHSession()
 	if err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrSSH,
@@ -56,19 +65,46 @@ func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int,
 	session.Stdout = stdout
 	session.Stderr = stderr
 
-	exitCode = 0
-	runErr := session.Run(cmd)
-	if runErr != nil {
-		if exitErr, ok := runErr.(*ssh.ExitError); ok {
-			exitCode = exitErr.ExitStatus()
-		} else {
-			return -1, errors.WrapWithCode(runErr, errors.ErrExec,
-				fmt.Sprintf("Couldn't run: %s", cmd),
-				"Make sure the command exists on the remote.")
-		}
+	// Start the command (non-blocking)
+	if err := session.Start(cmd); err != nil {
+		return -1, errors.WrapWithCode(err, errors.ErrExec,
+			fmt.Sprintf("Couldn't start: %s", cmd),
+			"Make sure the command exists on the remote.")
 	}
 
-	return exitCode, nil
+	// Wait for either command completion or context cancellation
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Context cancelled - send SIGINT to the remote process
+		_ = session.Signal(ssh.SIGINT)
+		// Give it a moment to terminate gracefully, then force close
+		select {
+		case runErr := <-done:
+			return exitCodeFromError(runErr), ctx.Err()
+		default:
+			// Force close the session if it doesn't respond to SIGINT
+			session.Close()
+			return 130, ctx.Err()
+		}
+	case runErr := <-done:
+		return exitCodeFromError(runErr), nil
+	}
+}
+
+// exitCodeFromError extracts the exit code from an error.
+func exitCodeFromError(err error) int {
+	if err == nil {
+		return 0
+	}
+	if exitErr, ok := err.(*ssh.ExitError); ok {
+		return exitErr.ExitStatus()
+	}
+	return -1
 }
 
 // ExecPTY runs a command with a pseudo-terminal allocated.
