@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-01-12
+
+### Changed
+
+- **BREAKING**: Removed `defaults.host` configuration option
+  - Host prioritization is now determined by the order of hosts in the project's `.rr.yaml` hosts list
+  - First listed host = highest priority, last listed = lowest priority
+  - Simplifies configuration and makes host priority explicit in project config
+- Simplified host selector logic to use list order directly
+- Updated unlock command to use host picker when multiple hosts exist
+
+### Removed
+
+- `defaults.host` field from global config (`~/.rr/config.yaml`)
+- `Default` field from host info and selector types
+- Default host reordering logic in load balancer
+
 ## [0.9.1] - 2026-01-12
 
 ### Security
