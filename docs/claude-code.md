@@ -53,11 +53,12 @@ Add a new host to my rr config
 .claude-plugin/
 ├── marketplace.json
 └── plugin.json
-plugin/
+plugins/rr/
 ├── commands/
-│   └── setup.md    # /rr:setup - guided setup workflow
+│   └── setup.md        # /rr:setup - guided setup workflow
 └── skills/
-    └── rr.md       # rr knowledge - auto-invoked when relevant
+    └── rr/
+        └── SKILL.md    # rr knowledge - auto-invoked when relevant
 ```
 
 - **Commands** (`/rr:setup`): User-invoked actions
@@ -71,10 +72,10 @@ Copy to your Claude config directory:
 
 ```bash
 # Skills
-cp /path/to/rr/plugin/skills/*.md ~/.claude/skills/
+cp -r /path/to/rr/plugins/rr/skills/* ~/.claude/skills/
 
 # Commands
-cp /path/to/rr/plugin/commands/*.md ~/.claude/commands/
+cp /path/to/rr/plugins/rr/commands/*.md ~/.claude/commands/
 ```
 
 ### Project-level
