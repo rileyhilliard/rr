@@ -47,26 +47,60 @@ func TestOrchestrator_EmptyTasks(t *testing.T) {
 	assert.Equal(t, 0, result.Failed)
 }
 
-func TestOrchestrator_NoHosts(t *testing.T) {
-	tasks := []TaskInfo{{Name: "test", Command: "go test"}}
+func TestOrchestrator_NoHosts_RunsLocally(t *testing.T) {
+	tasks := []TaskInfo{{Name: "test", Command: "echo hello"}}
 	orch := NewOrchestrator(tasks, nil, nil, Config{})
 
 	result, err := orch.Run(context.Background())
 
-	require.Error(t, err)
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "No hosts available")
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 1, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.Contains(t, result.HostsUsed, "local")
 }
 
-func TestOrchestrator_EmptyHostMap(t *testing.T) {
-	tasks := []TaskInfo{{Name: "test", Command: "go test"}}
+func TestOrchestrator_EmptyHostMap_RunsLocally(t *testing.T) {
+	tasks := []TaskInfo{{Name: "test", Command: "echo hello"}}
 	orch := NewOrchestrator(tasks, map[string]config.Host{}, nil, Config{})
 
 	result, err := orch.Run(context.Background())
 
-	require.Error(t, err)
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "No hosts available")
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 1, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.Contains(t, result.HostsUsed, "local")
+}
+
+func TestOrchestrator_LocalExecution_FailedTask(t *testing.T) {
+	tasks := []TaskInfo{{Name: "fail", Command: "exit 1"}}
+	orch := NewOrchestrator(tasks, nil, nil, Config{})
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 0, result.Passed)
+	assert.Equal(t, 1, result.Failed)
+	assert.False(t, result.Success())
+}
+
+func TestOrchestrator_LocalExecution_FailFast(t *testing.T) {
+	tasks := []TaskInfo{
+		{Name: "fail", Command: "exit 1"},
+		{Name: "skip", Command: "echo should not run"},
+	}
+	orch := NewOrchestrator(tasks, nil, nil, Config{FailFast: true})
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	// Only one task should have run due to fail-fast
+	assert.Equal(t, 1, len(result.TaskResults))
+	assert.Equal(t, 0, result.Passed)
+	assert.Equal(t, 1, result.Failed)
 }
 
 func TestOrchestrator_MaxParallelLimiting(t *testing.T) {

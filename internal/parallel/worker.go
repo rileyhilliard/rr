@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/lock"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 )
 
@@ -19,6 +21,7 @@ type hostWorker struct {
 	host         config.Host
 	conn         *host.Connection
 	connMu       sync.Mutex
+	hostLock     *lock.Lock
 	resultChan   chan<- TaskResult
 	failed       *bool
 	failedMu     *sync.Mutex
@@ -127,9 +130,11 @@ func (w *hostWorker) ensureConnection(_ context.Context) error {
 	return nil
 }
 
-// ensureSync syncs files to the host if not already synced.
+// ensureSync syncs files to the host and acquires a lock if not already done.
+// The lock is held for the lifetime of the worker to prevent conflicts with
+// other rr processes while parallel tasks are running on this host.
 func (w *hostWorker) ensureSync(_ context.Context) error {
-	// Check if already synced
+	// Check if already synced (and locked)
 	if w.orchestrator.markHostSynced(w.hostName) {
 		return nil
 	}
@@ -143,6 +148,21 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	workDir, err := os.Getwd()
 	if err != nil {
 		return err
+	}
+
+	// Acquire lock before syncing
+	lockCfg := config.DefaultConfig().Lock
+	if w.orchestrator.resolved != nil && w.orchestrator.resolved.Project != nil {
+		lockCfg = w.orchestrator.resolved.Project.Lock
+	}
+
+	if lockCfg.Enabled && w.conn != nil {
+		projectHash := hashWorkDir(workDir)
+		hostLock, err := lock.Acquire(w.conn, lockCfg, projectHash)
+		if err != nil {
+			return err
+		}
+		w.hostLock = hostLock
 	}
 
 	// Get sync config
@@ -227,10 +247,16 @@ func (w *hostWorker) notifyComplete(taskName string, result TaskResult) {
 	}
 }
 
-// Close closes the worker's connection.
+// Close releases the lock and closes the worker's connection.
 func (w *hostWorker) Close() error {
 	w.connMu.Lock()
 	defer w.connMu.Unlock()
+
+	// Release the lock first
+	if w.hostLock != nil {
+		_ = w.hostLock.Release()
+		w.hostLock = nil
+	}
 
 	if w.conn != nil {
 		err := w.conn.Close()
@@ -238,4 +264,87 @@ func (w *hostWorker) Close() error {
 		return err
 	}
 	return nil
+}
+
+// hashWorkDir creates a hash of the working directory for lock naming.
+func hashWorkDir(workDir string) string {
+	// Use a simple hash for the project identifier
+	// This matches how the CLI does it in workflow.go
+	h := uint32(0)
+	for _, c := range workDir {
+		h = h*31 + uint32(c)
+	}
+	return string(rune('a'+h%26)) + string(rune('a'+(h>>5)%26)) + string(rune('a'+(h>>10)%26)) + string(rune('a'+(h>>15)%26))
+}
+
+// localWorker executes tasks locally without SSH.
+type localWorker struct {
+	orchestrator *Orchestrator
+}
+
+// executeTask runs a single task locally.
+func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult {
+	result := TaskResult{
+		TaskName:  task.Name,
+		Host:      "local",
+		StartTime: time.Now(),
+	}
+
+	// Notify output manager
+	if w.orchestrator.outputMgr != nil {
+		w.orchestrator.outputMgr.TaskStarted(task.Name, "local")
+	}
+
+	// Execute with timeout if configured
+	execCtx := ctx
+	var cancel context.CancelFunc
+	if w.orchestrator.config.Timeout > 0 {
+		execCtx, cancel = context.WithTimeout(ctx, w.orchestrator.config.Timeout)
+		defer cancel()
+	}
+
+	// Capture output
+	var outputBuf bytes.Buffer
+
+	// Run the command locally
+	cmd := exec.CommandContext(execCtx, "sh", "-c", task.Command)
+	cmd.Stdout = &outputBuf
+	cmd.Stderr = &outputBuf
+
+	// Set working directory if specified
+	if task.WorkDir != "" {
+		cmd.Dir = task.WorkDir
+	}
+
+	// Set environment
+	cmd.Env = os.Environ()
+	for k, v := range task.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+
+	err := cmd.Run()
+	result.Output = outputBuf.Bytes()
+	result.EndTime = time.Now()
+	result.Duration = result.EndTime.Sub(result.StartTime)
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.ExitCode = 1
+			result.Error = err
+		}
+	}
+
+	// Stream output if in stream mode
+	if w.orchestrator.outputMgr != nil {
+		for _, line := range bytes.Split(outputBuf.Bytes(), []byte("\n")) {
+			if len(line) > 0 {
+				w.orchestrator.outputMgr.TaskOutput(task.Name, line, false)
+			}
+		}
+		w.orchestrator.outputMgr.TaskCompleted(task.Name, result)
+	}
+
+	return result
 }

@@ -281,14 +281,6 @@ func renderDryRunPlan(taskName string, tasks []parallel.TaskInfo, hosts map[stri
 	fmt.Println("No changes made (dry run).")
 }
 
-// AddParallelFlags adds parallel task-specific flags to a command.
-// This is called from task.go when setting up task commands.
-func AddParallelFlags(opts *ParallelTaskOptions) func(*bool, *bool, *bool, *bool, *int, *bool, *bool) {
-	return func(stream, verbose, quiet *bool, failFast *bool, maxParallel *int, noLogs, dryRun *bool) {
-		// These will be set by cobra
-	}
-}
-
 // GetParallelFlagValues returns a function that can be used to get parallel flag values.
 func GetParallelFlagValues(stream, verbose, quiet, failFast bool, maxParallel int, noLogs, dryRun bool) ParallelTaskOptions {
 	return ParallelTaskOptions{

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
-	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 // Orchestrator coordinates parallel task execution across multiple hosts.
@@ -62,15 +61,16 @@ func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, resolved *c
 //
 // The channel-based approach avoids explicit locking on the queue itself since
 // Go channels are already synchronized.
+//
+// If no remote hosts are configured, tasks run locally (sequentially).
 func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	if len(o.tasks) == 0 {
 		return &Result{}, nil
 	}
 
+	// If no hosts configured, run locally
 	if len(o.hosts) == 0 {
-		return nil, errors.New(errors.ErrConfig,
-			"No hosts available for parallel execution",
-			"Configure hosts in ~/.rr/config.yaml or use 'rr host add'.")
+		return o.runLocal(ctx)
 	}
 
 	// Create cancellable context
@@ -239,4 +239,41 @@ func (o *Orchestrator) markHostSynced(hostName string) bool {
 // GetOutputManager returns the output manager for external access.
 func (o *Orchestrator) GetOutputManager() *OutputManager {
 	return o.outputMgr
+}
+
+// runLocal executes tasks locally (sequentially) when no remote hosts are configured.
+func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
+	// Determine TTY status for output manager
+	isTTY := isTerminal()
+
+	// Initialize output manager
+	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
+	defer o.outputMgr.Close()
+
+	startTime := time.Now()
+
+	// Create a local worker
+	worker := &localWorker{
+		orchestrator: o,
+	}
+
+	// Execute tasks sequentially
+	for _, task := range o.tasks {
+		// Check for cancellation
+		if ctx.Err() != nil {
+			break
+		}
+
+		result := worker.executeTask(ctx, task)
+		o.results = append(o.results, result)
+
+		// Check fail-fast
+		if !result.Success() && o.config.FailFast {
+			break
+		}
+	}
+
+	// Build final result
+	duration := time.Since(startTime)
+	return o.buildResult(duration, map[string]bool{"local": true}), nil
 }
