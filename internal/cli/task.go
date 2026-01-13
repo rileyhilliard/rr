@@ -269,13 +269,14 @@ func RegisterTaskCommands(cfg *config.Config) {
 		return
 	}
 
-	for name, task := range cfg.Tasks {
+	for name := range cfg.Tasks {
 		// Skip reserved names (validation should have caught these already)
 		if config.IsReservedTaskName(name) {
 			continue
 		}
 
 		// Create a command for this task
+		task := cfg.Tasks[name]
 		taskCmd := createTaskCommand(name, task)
 		rootCmd.AddCommand(taskCmd)
 	}
