@@ -94,9 +94,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Cache govulncheck
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/govulncheck
+          key: govulncheck-${{ runner.os }}-latest
+
       - name: Run govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          [ -f ~/go/bin/govulncheck ] || go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
   integration:
@@ -109,6 +115,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Cache Docker image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: docker-openssh-server-${{ runner.os }}
+
+      - name: Load or pull Docker image
+        run: |
+          if [ -f /tmp/docker-cache/openssh-server.tar ]; then
+            docker load < /tmp/docker-cache/openssh-server.tar
+          else
+            docker pull linuxserver/openssh-server
+            mkdir -p /tmp/docker-cache
+            docker save linuxserver/openssh-server > /tmp/docker-cache/openssh-server.tar
+          fi
 
       - name: Start SSH test server
         run: |
