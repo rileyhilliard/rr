@@ -83,6 +83,7 @@ func (c *Connection) Close() error {
 // Selector manages host selection and connection caching.
 type Selector struct {
 	hosts         map[string]config.Host
+	hostOrder     []string // Ordered list of host names (priority order)
 	timeout       time.Duration
 	eventHandler  EventHandler
 	localFallback bool // Whether to fall back to local execution when all hosts fail
@@ -115,6 +116,13 @@ func (s *Selector) SetEventHandler(handler EventHandler) {
 // When enabled, if all remote hosts fail, Select returns a local Connection.
 func (s *Selector) SetLocalFallback(enabled bool) {
 	s.localFallback = enabled
+}
+
+// SetHostOrder sets the priority order for host selection.
+// When no preferred host is specified, hosts are tried in this order.
+// If not set, hosts are tried in alphabetical order for determinism.
+func (s *Selector) SetHostOrder(order []string) {
+	s.hostOrder = order
 }
 
 // emit sends an event to the handler if one is configured.
@@ -190,7 +198,16 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 		return preferred, host, nil
 	}
 
-	// Use the first host alphabetically for deterministic selection
+	// Use hostOrder if set (respects config priority)
+	if len(s.hostOrder) > 0 {
+		for _, name := range s.hostOrder {
+			if host, ok := s.hosts[name]; ok {
+				return name, host, nil
+			}
+		}
+	}
+
+	// Fallback: use the first host alphabetically for deterministic selection
 	names := make([]string, 0, len(s.hosts))
 	for name := range s.hosts {
 		names = append(names, name)
