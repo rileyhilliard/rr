@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.9] - 2026-01-14
+
+### Fixed
+
+- **Duplicate task name handling** - Running the same task multiple times in parallel (e.g., for flaky test detection) now works correctly. Previously tasks were keyed by name alone, causing only the first task's state to update and log files to overwrite each other. Tasks are now tracked by unique index (`task#0`, `task#1`, etc.) and log files include the index (`task_0.log`, `task_1.log`).
+
 ## [0.11.8] - 2026-01-14
 
 ### Fixed
