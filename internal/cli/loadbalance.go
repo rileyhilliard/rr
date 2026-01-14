@@ -43,7 +43,6 @@ type findAvailableHostResult struct {
 //   - result with conn, lock, and state information on success
 //   - error if no host is available (after timeout if waiting)
 func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailableHostResult, error) {
-	projectHash := hashProject(ctx.WorkDir)
 	// Host order is determined by project config (hosts list order) or alphabetical for global hosts
 	hostNames := ctx.selector.GetHostNames()
 
@@ -96,7 +95,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Try non-blocking lock acquisition
-		lck, err := lock.TryAcquire(conn, lockCfg, projectHash)
+		lck, err := lock.TryAcquire(conn, lockCfg)
 		if err == nil {
 			// Got the lock
 			return &findAvailableHostResult{
@@ -108,7 +107,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 		if errors.Is(err, lock.ErrLocked) {
 			// Host is locked, record who holds it and try next
-			attempt.lockHolder = lock.GetLockHolder(conn, lockCfg, projectHash)
+			attempt.lockHolder = lock.GetLockHolder(conn, lockCfg)
 			lockedHosts = append(lockedHosts, attempt)
 			attempts = append(attempts, attempt)
 			// Keep connection open for potential round-robin
@@ -144,7 +143,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Otherwise, round-robin wait for a host to become available
-		return roundRobinWait(ctx, lockedHosts, lockCfg, projectHash, attempts)
+		return roundRobinWait(ctx, lockedHosts, lockCfg, attempts)
 	}
 
 	// No hosts could be connected to at all
@@ -152,7 +151,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 }
 
 // roundRobinWait cycles through locked hosts until one becomes available or timeout.
-func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, projectHash string, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
+func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
 	waitTimeout := lockCfg.WaitTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 1 * time.Minute // Default
@@ -183,7 +182,7 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 			}
 
 			// Try to acquire lock
-			lck, err := lock.TryAcquire(attempt.conn, lockCfg, projectHash)
+			lck, err := lock.TryAcquire(attempt.conn, lockCfg)
 			if err == nil {
 				spinner.Success()
 				// Close other connections

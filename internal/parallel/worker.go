@@ -165,8 +165,7 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	}
 
 	if lockCfg.Enabled && w.conn != nil {
-		projectHash := hashWorkDir(workDir)
-		hostLock, err := lock.Acquire(w.conn, lockCfg, projectHash)
+		hostLock, err := lock.Acquire(w.conn, lockCfg)
 		if err != nil {
 			return err
 		}
@@ -274,17 +273,6 @@ func (w *hostWorker) Close() error {
 		return err
 	}
 	return nil
-}
-
-// hashWorkDir creates a hash of the working directory for lock naming.
-func hashWorkDir(workDir string) string {
-	// Use a simple hash for the project identifier
-	// This matches how the CLI does it in workflow.go
-	h := uint32(0)
-	for _, c := range workDir {
-		h = h*31 + uint32(c)
-	}
-	return string(rune('a'+h%26)) + string(rune('a'+(h>>5)%26)) + string(rune('a'+(h>>10)%26)) + string(rune('a'+(h>>15)%26))
 }
 
 // localWorker executes tasks locally without SSH.

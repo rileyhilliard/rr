@@ -21,10 +21,9 @@ func TestLockAcquireAndRelease(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// Acquire lock
-	lck, err := lock.Acquire(conn, cfg, projectHash)
+	lck, err := lock.Acquire(conn, cfg)
 	require.NoError(t, err, "Lock acquisition should succeed")
 	require.NotNil(t, lck)
 
@@ -51,10 +50,9 @@ func TestLockTryAcquire(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// TryAcquire should succeed on first attempt
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err, "TryAcquire should succeed")
 	require.NotNil(t, lck)
 	defer lck.Release()
@@ -72,16 +70,15 @@ func TestLockTryAcquireFailsWhenHeld(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// First, acquire the lock
-	lck1, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck1, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, lck1)
 	defer lck1.Release()
 
 	// Second TryAcquire should fail with ErrLocked
-	lck2, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck2, err := lock.TryAcquire(conn, cfg)
 	assert.ErrorIs(t, err, lock.ErrLocked, "Second TryAcquire should return ErrLocked")
 	assert.Nil(t, lck2)
 }
@@ -95,25 +92,24 @@ func TestLockIsLocked(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// Initially should not be locked
-	assert.False(t, lock.IsLocked(conn, cfg, projectHash))
+	assert.False(t, lock.IsLocked(conn, cfg))
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, lck)
 
 	// Now should be locked
-	assert.True(t, lock.IsLocked(conn, cfg, projectHash))
+	assert.True(t, lock.IsLocked(conn, cfg))
 
 	// Release
 	err = lck.Release()
 	require.NoError(t, err)
 
 	// Should no longer be locked
-	assert.False(t, lock.IsLocked(conn, cfg, projectHash))
+	assert.False(t, lock.IsLocked(conn, cfg))
 }
 
 // TestLockGetLockHolder tests getting lock holder information.
@@ -125,19 +121,18 @@ func TestLockGetLockHolder(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// No holder when not locked
-	holder := lock.GetLockHolder(conn, cfg, projectHash)
+	holder := lock.GetLockHolder(conn, cfg)
 	assert.Empty(t, holder)
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	defer lck.Release()
 
 	// Should have holder info
-	holder = lock.GetLockHolder(conn, cfg, projectHash)
+	holder = lock.GetLockHolder(conn, cfg)
 	assert.NotEmpty(t, holder)
 	// Holder string should contain user info
 	assert.Contains(t, holder, "@")
@@ -152,10 +147,9 @@ func TestLockForceRelease(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	lockDir := lck.Dir
 
@@ -167,7 +161,7 @@ func TestLockForceRelease(t *testing.T) {
 	assert.False(t, RemoteDirExists(t, conn, lockDir))
 
 	// IsLocked should return false
-	assert.False(t, lock.IsLocked(conn, cfg, projectHash))
+	assert.False(t, lock.IsLocked(conn, cfg))
 }
 
 // TestLockStaleDetectionSSH tests that stale locks are automatically removed via SSH.
@@ -180,10 +174,9 @@ func TestLockStaleDetectionSSH(t *testing.T) {
 		Timeout: 10 * time.Second,
 		Stale:   1 * time.Second, // Very short for testing
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// Acquire lock
-	lck1, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck1, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	lockDir := lck1.Dir
 
@@ -193,7 +186,7 @@ func TestLockStaleDetectionSSH(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Now try to acquire - should succeed because old lock is stale
-	lck2, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck2, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err, "Should acquire lock after stale detection")
 	require.NotNil(t, lck2)
 	defer lck2.Release()
@@ -211,10 +204,9 @@ func TestLockInfoContent(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -240,10 +232,9 @@ func TestLockCustomDir(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := "test-custom"
 
 	// Acquire lock - should create the custom directory
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -261,7 +252,6 @@ func TestLockConcurrentAcquisition(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-concurrent-%d", time.Now().UnixNano())
 
 	// Track results
 	var mu sync.Mutex
@@ -274,7 +264,7 @@ func TestLockConcurrentAcquisition(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			lck, err := lock.TryAcquire(conn, cfg, projectHash)
+			lck, err := lock.TryAcquire(conn, cfg)
 			mu.Lock()
 			defer mu.Unlock()
 			if err == nil {
@@ -305,10 +295,9 @@ func TestLockHolder(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-%d", time.Now().UnixNano())
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -329,16 +318,15 @@ func TestLockAcquireWithTimeout(t *testing.T) {
 		Timeout: 2 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("test-timeout-%d", time.Now().UnixNano())
 
 	// First, acquire the lock
-	lck1, err := lock.TryAcquire(conn, cfg, projectHash)
+	lck1, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	defer lck1.Release()
 
 	// Try to acquire again with blocking - should timeout
 	start := time.Now()
-	lck2, err := lock.Acquire(conn, cfg, projectHash)
+	lck2, err := lock.Acquire(conn, cfg)
 	elapsed := time.Since(start)
 
 	assert.Error(t, err, "Acquire should fail due to timeout")

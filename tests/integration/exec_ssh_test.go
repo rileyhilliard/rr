@@ -182,8 +182,7 @@ func TestFullWorkflowSyncLockExec(t *testing.T) {
 		Timeout: 5 * time.Second,
 		Stale:   1 * time.Hour,
 	}
-	projectHash := fmt.Sprintf("workflow-%d", time.Now().UnixNano())
-	lck, err := lock.TryAcquire(conn, lockCfg, projectHash)
+	lck, err := lock.TryAcquire(conn, lockCfg)
 	require.NoError(t, err, "Lock acquisition should succeed")
 	defer lck.Release()
 

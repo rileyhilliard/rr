@@ -49,31 +49,13 @@ type Lock struct {
 // If the lock is held, it will wait and retry until timeout.
 // Stale locks (older than config.Stale) are automatically removed.
 //
+// The lock is per-host, not per-project. Only one rr task can run on a host
+// at a time, regardless of which project initiated it. This prevents resource
+// contention since rr tasks typically consume significant CPU/memory.
+//
 // Options can be passed to configure behavior:
 //   - WithLogger(l): Use a custom logger instead of the default
-//
-// Security considerations for the lock directory path:
-//
-// The lock directory name is deterministic: rr-<projectHash>.lock
-// This is intentional - all processes syncing the same project must agree on the
-// lock path to achieve mutual exclusion. Adding randomness would break lock detection.
-//
-// The project hash is derived from the absolute path of the project directory,
-// making it unique per-project but consistent across processes. The /tmp base
-// directory has standard permissions (typically 1777 with sticky bit), preventing
-// users from removing each other's lock directories.
-//
-// Potential concerns and mitigations:
-//   - Predictable paths: An attacker knowing the project path could pre-create the
-//     lock directory. Mitigated by: the stale lock detection removes old locks,
-//     and legitimate users would investigate stuck locks anyway.
-//   - Symlink attacks: mkdir on a symlink would follow it. Mitigated by: we use
-//     the directory itself as the lock (not a file inside), and /tmp sticky bit
-//     prevents other users from manipulating our directories.
-//   - Info file tampering: Another user could write misleading info.json content.
-//     Mitigated by: info is purely informational for debugging, not used for
-//     security decisions.
-func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string, opts ...AcquireOption) (*Lock, error) {
+func Acquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOption) (*Lock, error) {
 	// Apply options
 	options := &acquireOptions{
 		logger: defaultLogger,
@@ -87,12 +69,13 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string, o
 		return nil, err
 	}
 
-	// Build lock directory path: <dir>/rr-<projectHash>.lock/
+	// Build lock directory path: /tmp/rr.lock/
+	// Single lock per host - only one rr task can run at a time
 	baseDir := cfg.Dir
 	if baseDir == "" {
 		baseDir = "/tmp"
 	}
-	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	lockDir := filepath.Join(baseDir, "rr.lock")
 	infoFile := filepath.Join(lockDir, "info.json")
 
 	log.Debug("attempting to acquire lock: dir=%s, timeout=%s, stale=%s", lockDir, cfg.Timeout, cfg.Stale)
@@ -212,7 +195,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, projectHash string, o
 //
 // This is useful for load-balancing across multiple hosts - if one host is locked,
 // the caller can immediately try the next host instead of waiting.
-func TryAcquire(conn *host.Connection, cfg config.LockConfig, projectHash string, opts ...AcquireOption) (*Lock, error) {
+func TryAcquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOption) (*Lock, error) {
 	// Apply options
 	options := &acquireOptions{
 		logger: defaultLogger,
@@ -226,12 +209,13 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, projectHash string
 		return nil, err
 	}
 
-	// Build lock directory path: <dir>/rr-<projectHash>.lock/
+	// Build lock directory path: /tmp/rr.lock/
+	// Single lock per host - only one rr task can run at a time
 	baseDir := cfg.Dir
 	if baseDir == "" {
 		baseDir = "/tmp"
 	}
-	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	lockDir := filepath.Join(baseDir, "rr.lock")
 	infoFile := filepath.Join(lockDir, "info.json")
 
 	log.Debug("TryAcquire: attempting lock: dir=%s", lockDir)
@@ -323,7 +307,7 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, projectHash string
 
 // IsLocked checks if a lock is currently held without trying to acquire it.
 // Returns true if the lock exists (and is not stale), false otherwise.
-func IsLocked(conn *host.Connection, cfg config.LockConfig, projectHash string) bool {
+func IsLocked(conn *host.Connection, cfg config.LockConfig) bool {
 	if err := host.ValidateConnectionForLock(conn); err != nil {
 		return false
 	}
@@ -333,7 +317,7 @@ func IsLocked(conn *host.Connection, cfg config.LockConfig, projectHash string) 
 	if baseDir == "" {
 		baseDir = "/tmp"
 	}
-	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	lockDir := filepath.Join(baseDir, "rr.lock")
 	infoFile := filepath.Join(lockDir, "info.json")
 
 	// Check if lock directory exists
@@ -353,8 +337,8 @@ func IsLocked(conn *host.Connection, cfg config.LockConfig, projectHash string) 
 
 // GetLockHolder returns information about the current lock holder, if any.
 // Returns empty string if no lock is held.
-func GetLockHolder(conn *host.Connection, cfg config.LockConfig, projectHash string) string {
-	if !IsLocked(conn, cfg, projectHash) {
+func GetLockHolder(conn *host.Connection, cfg config.LockConfig) string {
+	if !IsLocked(conn, cfg) {
 		return ""
 	}
 
@@ -362,7 +346,7 @@ func GetLockHolder(conn *host.Connection, cfg config.LockConfig, projectHash str
 	if baseDir == "" {
 		baseDir = "/tmp"
 	}
-	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	lockDir := filepath.Join(baseDir, "rr.lock")
 	infoFile := filepath.Join(lockDir, "info.json")
 
 	return readLockHolder(conn.Client, infoFile)
@@ -394,6 +378,16 @@ func Holder(conn *host.Connection, lockDir string) string {
 	}
 	infoFile := filepath.Join(lockDir, "info.json")
 	return readLockHolder(conn.Client, infoFile)
+}
+
+// LockDir returns the lock directory path for a given config.
+// This is useful for unlock commands and monitoring.
+func LockDir(cfg config.LockConfig) string {
+	baseDir := cfg.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	return filepath.Join(baseDir, "rr.lock")
 }
 
 // isLockStale checks if the lock's info file is older than the stale threshold.

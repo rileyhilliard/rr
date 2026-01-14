@@ -253,7 +253,7 @@ func TestLockAcquireRequiresConnection(t *testing.T) {
 	}
 
 	// Acquire should fail without a connection
-	_, err := lock.Acquire(nil, cfg, "test-project-hash")
+	_, err := lock.Acquire(nil, cfg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Can't grab the lock")
 }

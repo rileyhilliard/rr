@@ -313,9 +313,8 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	lockSpinner := ui.NewSpinner("Acquiring lock")
 	lockSpinner.Start()
 
-	projectHash := hashProject(ctx.WorkDir)
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, projectHash)
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg)
 	if err != nil {
 		lockSpinner.Fail()
 		return err

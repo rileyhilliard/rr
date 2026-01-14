@@ -53,8 +53,8 @@ lock:
 func TestLoadBalancing_TryAcquire_ReturnsImmediately(t *testing.T) {
 	conn, mock := newMockConnectionLB("testhost")
 
-	// Pre-create a lock
-	mock.GetFS().Mkdir("/tmp/rr-abc123.lock")
+	// Pre-create a lock (now per-host, not per-project)
+	mock.GetFS().Mkdir("/tmp/rr.lock")
 	info := &lock.LockInfo{
 		User:     "other",
 		Hostname: "otherhost",
@@ -62,7 +62,7 @@ func TestLoadBalancing_TryAcquire_ReturnsImmediately(t *testing.T) {
 		PID:      9999,
 	}
 	infoJSON, _ := info.Marshal()
-	mock.GetFS().WriteFile("/tmp/rr-abc123.lock/info.json", infoJSON)
+	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
 
 	cfg := config.LockConfig{
 		Enabled: true,
@@ -73,7 +73,7 @@ func TestLoadBalancing_TryAcquire_ReturnsImmediately(t *testing.T) {
 
 	// TryAcquire should return immediately, not wait for timeout
 	start := time.Now()
-	_, err := lock.TryAcquire(conn, cfg, "abc123")
+	_, err := lock.TryAcquire(conn, cfg)
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -91,12 +91,12 @@ func TestLoadBalancing_TryAcquire_SucceedsWhenFree(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	lck, err := lock.TryAcquire(conn, cfg, "newlock")
+	lck, err := lock.TryAcquire(conn, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, lck)
 
-	// Verify lock was created
-	assert.True(t, mock.GetFS().IsDir("/tmp/rr-newlock.lock"))
+	// Verify lock was created (per-host lock)
+	assert.True(t, mock.GetFS().IsDir("/tmp/rr.lock"))
 
 	// Cleanup
 	lck.Release()
@@ -182,8 +182,8 @@ func TestLoadBalancing_IsLocked(t *testing.T) {
 	t.Run("returns true when lock exists", func(t *testing.T) {
 		conn, mock := newMockConnectionLB("testhost")
 
-		// Create a lock
-		mock.GetFS().Mkdir("/tmp/rr-test.lock")
+		// Create a lock (per-host lock)
+		mock.GetFS().Mkdir("/tmp/rr.lock")
 		info := &lock.LockInfo{
 			User:     "holder",
 			Hostname: "holderhost",
@@ -191,7 +191,7 @@ func TestLoadBalancing_IsLocked(t *testing.T) {
 			PID:      1234,
 		}
 		infoJSON, _ := info.Marshal()
-		mock.GetFS().WriteFile("/tmp/rr-test.lock/info.json", infoJSON)
+		mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
 
 		cfg := config.LockConfig{
 			Enabled: true,
@@ -199,7 +199,7 @@ func TestLoadBalancing_IsLocked(t *testing.T) {
 			Dir:     "/tmp",
 		}
 
-		assert.True(t, lock.IsLocked(conn, cfg, "test"))
+		assert.True(t, lock.IsLocked(conn, cfg))
 	})
 
 	t.Run("returns false when no lock", func(t *testing.T) {
@@ -211,14 +211,14 @@ func TestLoadBalancing_IsLocked(t *testing.T) {
 			Dir:     "/tmp",
 		}
 
-		assert.False(t, lock.IsLocked(conn, cfg, "nonexistent"))
+		assert.False(t, lock.IsLocked(conn, cfg))
 	})
 
 	t.Run("returns false for stale lock", func(t *testing.T) {
 		conn, mock := newMockConnectionLB("testhost")
 
-		// Create an old lock
-		mock.GetFS().Mkdir("/tmp/rr-stale.lock")
+		// Create an old lock (per-host lock)
+		mock.GetFS().Mkdir("/tmp/rr.lock")
 		info := &lock.LockInfo{
 			User:     "old",
 			Hostname: "oldhost",
@@ -226,7 +226,7 @@ func TestLoadBalancing_IsLocked(t *testing.T) {
 			PID:      1234,
 		}
 		infoJSON, _ := info.Marshal()
-		mock.GetFS().WriteFile("/tmp/rr-stale.lock/info.json", infoJSON)
+		mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
 
 		cfg := config.LockConfig{
 			Enabled: true,
@@ -234,7 +234,7 @@ func TestLoadBalancing_IsLocked(t *testing.T) {
 			Dir:     "/tmp",
 		}
 
-		assert.False(t, lock.IsLocked(conn, cfg, "stale"))
+		assert.False(t, lock.IsLocked(conn, cfg))
 	})
 }
 
@@ -246,7 +246,8 @@ func TestLoadBalancing_GetLockHolder(t *testing.T) {
 	t.Run("returns holder info when locked", func(t *testing.T) {
 		conn, mock := newMockConnectionLB("testhost")
 
-		mock.GetFS().Mkdir("/tmp/rr-held.lock")
+		// Per-host lock
+		mock.GetFS().Mkdir("/tmp/rr.lock")
 		info := &lock.LockInfo{
 			User:     "alice",
 			Hostname: "workstation",
@@ -254,7 +255,7 @@ func TestLoadBalancing_GetLockHolder(t *testing.T) {
 			PID:      12345,
 		}
 		infoJSON, _ := info.Marshal()
-		mock.GetFS().WriteFile("/tmp/rr-held.lock/info.json", infoJSON)
+		mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
 
 		cfg := config.LockConfig{
 			Enabled: true,
@@ -262,7 +263,7 @@ func TestLoadBalancing_GetLockHolder(t *testing.T) {
 			Dir:     "/tmp",
 		}
 
-		holder := lock.GetLockHolder(conn, cfg, "held")
+		holder := lock.GetLockHolder(conn, cfg)
 		assert.Contains(t, holder, "alice")
 		assert.Contains(t, holder, "workstation")
 	})
@@ -276,7 +277,7 @@ func TestLoadBalancing_GetLockHolder(t *testing.T) {
 			Dir:     "/tmp",
 		}
 
-		holder := lock.GetLockHolder(conn, cfg, "notlocked")
+		holder := lock.GetLockHolder(conn, cfg)
 		assert.Empty(t, holder)
 	})
 }
@@ -287,10 +288,11 @@ func TestLoadBalancing_GetLockHolder(t *testing.T) {
 
 func TestLoadBalancing_SequentialLockAttempts(t *testing.T) {
 	// Simulate the scenario: task1 holds lock on host1, task2 should try host2
+	// With per-host locking, each host has one lock that blocks all tasks
 
-	// Host 1: has a lock
+	// Host 1: has a lock (per-host, not per-project)
 	conn1, mock1 := newMockConnectionLB("host1")
-	mock1.GetFS().Mkdir("/tmp/rr-project.lock")
+	mock1.GetFS().Mkdir("/tmp/rr.lock")
 	info1 := &lock.LockInfo{
 		User:     "task1",
 		Hostname: "host1",
@@ -298,7 +300,7 @@ func TestLoadBalancing_SequentialLockAttempts(t *testing.T) {
 		PID:      1111,
 	}
 	infoJSON1, _ := info1.Marshal()
-	mock1.GetFS().WriteFile("/tmp/rr-project.lock/info.json", infoJSON1)
+	mock1.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON1)
 
 	// Host 2: no lock
 	conn2, _ := newMockConnectionLB("host2")
@@ -311,12 +313,12 @@ func TestLoadBalancing_SequentialLockAttempts(t *testing.T) {
 	}
 
 	// Try host1 - should return ErrLocked immediately
-	_, err := lock.TryAcquire(conn1, cfg, "project")
+	_, err := lock.TryAcquire(conn1, cfg)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, lock.ErrLocked))
 
-	// Try host2 - should succeed
-	lck2, err := lock.TryAcquire(conn2, cfg, "project")
+	// Try host2 - should succeed (each host has independent lock)
+	lck2, err := lock.TryAcquire(conn2, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, lck2)
 
