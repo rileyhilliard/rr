@@ -18,6 +18,7 @@ var (
 	quiet                bool
 	noColor              bool
 	noStrictHostKeyCheck bool
+	// machineMode is defined in json.go
 )
 
 // tasksRegistered tracks whether tasks have been registered to avoid double registration.
@@ -145,6 +146,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
 	rootCmd.PersistentFlags().BoolVar(&noStrictHostKeyCheck, "no-strict-host-key-checking", false,
 		"disable SSH host key verification (insecure, for CI/automation only)")
+	rootCmd.PersistentFlags().BoolVarP(&machineMode, "machine", "m", false,
+		"machine-readable JSON output (for LLM/CI integration)")
 
 	// Set up styled warning handler for sshutil package
 	sshutil.WarningHandler = ui.PrintWarning
@@ -152,8 +155,8 @@ func init() {
 	// Set up a pre-run hook to apply global flags
 	originalPreRun := rootCmd.PersistentPreRun
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		// Apply color setting
-		if noColor {
+		// Apply color setting - also disable in machine mode to suppress spinners
+		if noColor || machineMode {
 			ui.DisableColors()
 		}
 		// Apply SSH host key checking setting

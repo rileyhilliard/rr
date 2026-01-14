@@ -420,9 +420,20 @@ func init() {
 
 	// host command flags
 	hostAddCmd.Flags().BoolVar(&hostAddSkipProbe, "skip-probe", false, "skip SSH connection testing")
+	hostAddCmd.Flags().StringVar(&hostAddName, "name", "", "friendly name for the host (for non-interactive mode)")
+	hostAddCmd.Flags().StringVar(&hostAddSSH, "ssh", "", "SSH hostname/alias, comma-separated for multiple (for non-interactive mode)")
+	hostAddCmd.Flags().StringVar(&hostAddDir, "dir", "", "remote directory path (default: ~/rr/${PROJECT})")
+	hostAddCmd.Flags().StringSliceVar(&hostAddTags, "tag", nil, "host tags (can be repeated)")
+	hostAddCmd.Flags().StringSliceVar(&hostAddEnv, "env", nil, "environment variables as KEY=VALUE (can be repeated)")
+
+	// host list flags
+	hostListCmd.Flags().BoolVar(&hostListJSON, "json", false, "output in JSON format")
 
 	// unlock command flags
 	unlockCmd.Flags().BoolVarP(&unlockAllFlag, "all", "a", false, "unlock all configured hosts")
+
+	// tasks command flags
+	tasksCmd.Flags().BoolVar(&tasksJSON, "json", false, "output in JSON format")
 
 	// Register host subcommands
 	hostCmd.AddCommand(hostAddCmd)

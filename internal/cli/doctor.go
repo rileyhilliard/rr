@@ -85,7 +85,8 @@ func doctorCommand() error {
 		results = attemptFixes(checks, results)
 	}
 
-	if doctorJSON {
+	// Machine mode implies JSON output
+	if doctorJSON || machineMode {
 		return outputDoctorJSON(checks, results)
 	}
 
@@ -156,6 +157,7 @@ func attemptFixes(checks []doctor.Check, results []doctor.CheckResult) []doctor.
 }
 
 // outputDoctorJSON outputs results in JSON format.
+// When machineMode is enabled, wraps output in the standard JSON envelope.
 func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error {
 	// Group by category
 	grouped := make(map[string][]doctor.CheckResult)
@@ -191,6 +193,12 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 		AllClear: !doctor.HasIssues(results),
 	}
 
+	// Use envelope wrapper in machine mode
+	if machineMode {
+		return WriteJSONSuccess(os.Stdout, output)
+	}
+
+	// Legacy --json behavior (no envelope)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)

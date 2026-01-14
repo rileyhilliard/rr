@@ -382,6 +382,126 @@ rr unlock <hostname>   # Specific host
 rr unlock --all        # All hosts
 ```
 
+## Machine Interface (LLM/CI Mode)
+
+When running rr from an LLM or CI context, use `--machine` (or `-m`) for structured JSON output with a consistent envelope format.
+
+### Global Flag
+
+```bash
+rr --machine <command>   # JSON output with success/error envelope
+rr -m doctor             # Short form
+```
+
+### Read Commands with JSON Output
+
+| Command | Purpose |
+|---------|---------|
+| `rr doctor --machine` | Full diagnostic with structured results |
+| `rr status --machine` | Host connectivity check |
+| `rr tasks --machine` | List available tasks |
+| `rr host list --machine` | List configured hosts |
+
+### JSON Envelope Format
+
+All `--machine` output follows this structure:
+
+```json
+{
+  "success": true,
+  "data": { /* command-specific output */ },
+  "error": null
+}
+```
+
+On failure:
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "SSH_AUTH_FAILED",
+    "message": "Authentication failed for host m1-mini",
+    "suggestion": "Run: ssh-copy-id m1-mini"
+  }
+}
+```
+
+### Error Codes
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| `CONFIG_NOT_FOUND` | No .rr.yaml | Run `rr init` |
+| `CONFIG_INVALID` | Schema error | Fix config syntax |
+| `HOST_NOT_FOUND` | Unknown host name | Check `rr host list` |
+| `SSH_TIMEOUT` | Connection timed out | Check network/VPN |
+| `SSH_AUTH_FAILED` | Key rejected | Run `rr setup <host>` |
+| `SSH_HOST_KEY` | Host key mismatch | Verify fingerprint |
+| `SSH_CONNECTION_FAILED` | SSH connection error | Check host reachability |
+| `RSYNC_FAILED` | File sync failed | Check disk space/permissions |
+| `LOCK_HELD` | Another process has lock | Run `rr unlock` |
+| `COMMAND_FAILED` | Remote command failed | Check command output |
+| `DEPENDENCY_MISSING` | Required tool not found | Install missing dependency |
+
+### Non-Interactive Commands
+
+For CI/automation, use flag-based commands instead of interactive prompts:
+
+```bash
+# Add host without prompts
+rr host add --name dev-box \
+  --ssh "dev.local,dev-tailscale" \
+  --dir '~/projects/${PROJECT}' \
+  --tag fast \
+  --env "DEBUG=1" --env "PATH=/custom/bin:$PATH" \
+  --skip-probe
+
+# Initialize project without prompts
+rr init --non-interactive --host dev-box
+```
+
+### Troubleshooting Decision Tree (LLM)
+
+```
+1. Run: rr doctor --machine
+2. Parse: response.success
+   - true  -> Setup OK
+   - false -> Check response.error.code
+
+3. Based on error.code:
+
+   CONFIG_NOT_FOUND:
+     -> Run: rr init --non-interactive --host <host>
+
+   SSH_TIMEOUT:
+     -> Check network: ping <hostname>
+     -> Try alternate SSH alias
+
+   SSH_AUTH_FAILED:
+     -> Run: rr setup <hostname>
+     -> Or: ssh-copy-id <hostname>
+
+   SSH_HOST_KEY:
+     -> Inform user about host key verification
+     -> Run: ssh -o StrictHostKeyChecking=accept-new <hostname> exit
+
+   LOCK_HELD:
+     -> Run: rr unlock
+     -> Retry original command
+```
+
+### When to Use rr vs Local Execution
+
+```
+IF .rr.yaml exists AND rr status --machine shows healthy hosts:
+  -> Use rr for tests, builds, remote commands
+
+IF no .rr.yaml OR all hosts unhealthy:
+  -> Check if local_fallback is enabled in config
+  -> If yes: rr will run locally automatically
+  -> If no: run commands locally with Bash tool
+```
+
 ## When to Use Each Command
 
 | Situation | Command |

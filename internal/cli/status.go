@@ -68,7 +68,8 @@ func statusCommand() error {
 	// Determine which host would be selected (first healthy host)
 	selected := findSelectedHost(results)
 
-	if statusJSON {
+	// Machine mode implies JSON output
+	if statusJSON || machineMode {
 		return outputStatusJSON(results, selected)
 	}
 
@@ -123,6 +124,7 @@ func findSelectedHost(results map[string]probeResult) *Selected {
 }
 
 // outputStatusJSON outputs status in JSON format.
+// When machineMode is enabled, wraps output in the standard JSON envelope.
 func outputStatusJSON(results map[string]probeResult, selected *Selected) error {
 	output := StatusOutput{
 		Hosts:    make([]HostStatus, 0, len(results)),
@@ -156,6 +158,12 @@ func outputStatusJSON(results map[string]probeResult, selected *Selected) error 
 		output.Hosts = append(output.Hosts, hostStatus)
 	}
 
+	// Use envelope wrapper in machine mode
+	if machineMode {
+		return WriteJSONSuccess(os.Stdout, output)
+	}
+
+	// Legacy --json behavior (no envelope)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
