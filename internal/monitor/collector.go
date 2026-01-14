@@ -104,28 +104,26 @@ func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 	return c.collectOneWithContext(ctx, alias)
 }
 
-// checkLockStatus checks if any rr lock is held on the specified host.
+// checkLockStatus checks if the rr lock is held on the specified host.
 // Returns lock info if locked, nil otherwise.
-// This checks for ANY rr lock (pattern /tmp/rr-*.lock/), not just the current project's lock,
-// so the monitor can detect tasks running from any directory.
+// With per-host locking, there's a single lock at /tmp/rr.lock per host.
 func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 	client, err := c.pool.Get(alias)
 	if err != nil {
 		return nil
 	}
 
-	// Find any rr lock directory and get its info.json
-	// The pattern /tmp/rr-*.lock/ matches locks from any project
+	// Check for the per-host lock at /tmp/rr.lock
 	baseDir := "/tmp"
 	if c.lockConfig != nil && c.lockConfig.Dir != "" {
 		baseDir = c.lockConfig.Dir
 	}
+	lockDir := baseDir + "/rr.lock"
 
-	// Find the first lock directory and read its info
-	// Using ls -t to get most recent first (in case multiple locks somehow exist)
+	// Check if lock directory exists and read its info
 	findCmd := fmt.Sprintf(
-		`for d in %s/rr-*.lock; do if [ -d "$d" ] && [ -f "$d/info.json" ]; then cat "$d/info.json"; exit 0; fi; done; exit 1`,
-		baseDir,
+		`if [ -d %q ] && [ -f %q/info.json ]; then cat %q/info.json; else exit 1; fi`,
+		lockDir, lockDir, lockDir,
 	)
 
 	// Use embedded ssh.Client's NewSession directly
