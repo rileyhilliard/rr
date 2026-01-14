@@ -562,8 +562,42 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 	return lines
 }
 
+// renderMinimalCPUSection renders CPU with a single-row braille graph for minimal mode.
+func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth int) []string {
+	var lines []string
+
+	label := LabelStyle.Render("CPU:")
+	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%3.0f%%", cpu.Percent))
+
+	// Right-aligned percentage
+	rightWidth := lipgloss.Width(pctText)
+	padding := ""
+	if lineWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + pctText
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Single-row braille graph
+	graphWidth := lineWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
+	if len(cpuHistory) > 0 {
+		graph := RenderBrailleSparkline(cpuHistory, graphWidth, 1, ColorGraph)
+		lines = append(lines, renderCardLine(graph, lineWidth))
+	} else {
+		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
+}
+
 // renderMinimalCard renders a minimal card for terminals < 80 columns.
-// Shows only essential metrics as text, no progress bars.
+// Shows CPU sparkline graph and text metrics for RAM.
 func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
@@ -595,7 +629,14 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardLine(LabelStyle.Render(placeholder), innerWidth))
 	} else {
 		lines = append(lines, renderCardDivider(innerWidth))
-		// Single line with CPU and RAM percentages
+
+		// CPU with single-row sparkline
+		cpuLines := m.renderMinimalCPUSection(host, metrics.CPU, innerWidth)
+		lines = append(lines, cpuLines...)
+
+		lines = append(lines, renderCardDivider(innerWidth))
+
+		// RAM as text only (keep it minimal)
 		metricsLine := m.renderMinimalMetricsLine(metrics, innerWidth)
 		lines = append(lines, renderCardLine(metricsLine, innerWidth))
 	}
