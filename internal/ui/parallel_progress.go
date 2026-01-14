@@ -36,9 +36,17 @@ type ParallelProgress struct {
 
 type taskEntry struct {
 	Name      string
+	Index     int // Position in task list (for duplicate name handling)
 	Host      string
 	Status    TaskStatus
 	StartTime time.Time
+}
+
+// TaskInit holds initialization info for a task.
+// Used to pass task info from parallel package without circular imports.
+type TaskInit struct {
+	Name  string
+	Index int
 }
 
 // TaskStatus values for parallel progress (matches parallel.TaskStatus)
@@ -105,31 +113,46 @@ func (p *ParallelProgress) Stop() {
 }
 
 // InitTasks initializes all tasks as pending. Call this before starting workers
-// to show all tasks upfront in the UI.
-func (p *ParallelProgress) InitTasks(taskNames []string) {
+// to show all tasks upfront in the UI. Accepts any type with Name and Index fields.
+func (p *ParallelProgress) InitTasks(tasks interface{}) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for _, name := range taskNames {
-		p.tasks = append(p.tasks, taskEntry{
-			Name:   name,
-			Host:   "",
-			Status: TaskStatusPending,
-		})
+	// Handle different input types to avoid circular imports
+	switch t := tasks.(type) {
+	case []TaskInit:
+		for _, task := range t {
+			p.tasks = append(p.tasks, taskEntry{
+				Name:   task.Name,
+				Index:  task.Index,
+				Host:   "",
+				Status: TaskStatusPending,
+			})
+		}
+	case []string:
+		// Legacy support for string slice
+		for i, name := range t {
+			p.tasks = append(p.tasks, taskEntry{
+				Name:   name,
+				Index:  i,
+				Host:   "",
+				Status: TaskStatusPending,
+			})
+		}
 	}
 
 	// Render initial state
 	p.renderLocked()
 }
 
-// TaskSyncing adds a new task in syncing state (connecting/syncing/waiting for lock).
-func (p *ParallelProgress) TaskSyncing(name, host string) {
+// TaskSyncing updates a task to syncing state (connecting/syncing/waiting for lock).
+func (p *ParallelProgress) TaskSyncing(name string, index int, host string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Check if task already exists (shouldn't happen, but be safe)
+	// Find task by index (unique identifier for duplicate names)
 	for i := range p.tasks {
-		if p.tasks[i].Name == name {
+		if p.tasks[i].Index == index {
 			p.tasks[i].Status = TaskStatusSyncing
 			p.tasks[i].Host = host
 			p.tasks[i].StartTime = time.Now()
@@ -138,8 +161,10 @@ func (p *ParallelProgress) TaskSyncing(name, host string) {
 		}
 	}
 
+	// Task not found in InitTasks, add it (shouldn't normally happen)
 	p.tasks = append(p.tasks, taskEntry{
 		Name:      name,
+		Index:     index,
 		Host:      host,
 		Status:    TaskStatusSyncing,
 		StartTime: time.Now(),
@@ -150,12 +175,12 @@ func (p *ParallelProgress) TaskSyncing(name, host string) {
 }
 
 // TaskExecuting transitions a task from syncing to running (command execution started).
-func (p *ParallelProgress) TaskExecuting(name string) {
+func (p *ParallelProgress) TaskExecuting(name string, index int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	for i := range p.tasks {
-		if p.tasks[i].Name == name {
+		if p.tasks[i].Index == index {
 			p.tasks[i].Status = TaskStatusRunning
 			p.renderLocked()
 			return
@@ -166,17 +191,17 @@ func (p *ParallelProgress) TaskExecuting(name string) {
 // TaskStarted adds a new task in syncing state.
 //
 // Deprecated: Use TaskSyncing followed by TaskExecuting for clearer state tracking.
-func (p *ParallelProgress) TaskStarted(name, host string) {
-	p.TaskSyncing(name, host)
+func (p *ParallelProgress) TaskStarted(name string, index int, host string) {
+	p.TaskSyncing(name, index, host)
 }
 
 // TaskCompleted updates a task's status to passed or failed.
-func (p *ParallelProgress) TaskCompleted(name string, success bool) {
+func (p *ParallelProgress) TaskCompleted(name string, index int, success bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	for i := range p.tasks {
-		if p.tasks[i].Name == name {
+		if p.tasks[i].Index == index {
 			if success {
 				p.tasks[i].Status = TaskStatusPassed
 			} else {

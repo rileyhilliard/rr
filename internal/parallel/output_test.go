@@ -86,15 +86,15 @@ func TestOutputManager_StreamMode_PrefixesLines(t *testing.T) {
 	mgr.SetWriter(&buf)
 
 	// Start a task (syncing phase)
-	mgr.TaskSyncing("test-task", "dev-host")
+	mgr.TaskSyncing("test-task", 0, "dev-host")
 	assert.Contains(t, buf.String(), "[dev-host:test-task]")
 	assert.Contains(t, buf.String(), "syncing")
 
 	buf.Reset()
 
 	// Output some lines
-	mgr.TaskOutput("test-task", []byte("line 1"), false)
-	mgr.TaskOutput("test-task", []byte("line 2"), true) // stderr
+	mgr.TaskOutput("test-task", 0, []byte("line 1"), false)
+	mgr.TaskOutput("test-task", 0, []byte("line 2"), true) // stderr
 
 	output := buf.String()
 	assert.Contains(t, output, "[dev-host:test-task]")
@@ -107,13 +107,14 @@ func TestOutputManager_QuietMode_NoOutput(t *testing.T) {
 	mgr := NewOutputManager(OutputQuiet, true)
 	mgr.SetWriter(&buf)
 
-	mgr.TaskStarted("test", "host1")
-	mgr.TaskOutput("test", []byte("some output"), false)
-	mgr.TaskCompleted("test", TaskResult{
-		TaskName: "test",
-		Host:     "host1",
-		ExitCode: 0,
-		Duration: 1 * time.Second,
+	mgr.TaskStarted("test", 0, "host1")
+	mgr.TaskOutput("test", 0, []byte("some output"), false)
+	mgr.TaskCompleted(TaskResult{
+		TaskName:  "test",
+		TaskIndex: 0,
+		Host:      "host1",
+		ExitCode:  0,
+		Duration:  1 * time.Second,
 	})
 
 	assert.Empty(t, buf.String())
@@ -123,60 +124,62 @@ func TestOutputManager_TaskStatus(t *testing.T) {
 	mgr := NewOutputManager(OutputQuiet, true)
 
 	// Initially no status
-	assert.Equal(t, TaskStatus(0), mgr.GetTaskStatus("unknown"))
+	assert.Equal(t, TaskStatus(0), mgr.GetTaskStatus("unknown", 0))
 
 	// Task syncing (assigned to host, waiting for lock/sync)
-	mgr.TaskSyncing("test", "host1")
-	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("test"))
+	mgr.TaskSyncing("test", 0, "host1")
+	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("test", 0))
 
 	// Task executing (command running)
-	mgr.TaskExecuting("test")
-	assert.Equal(t, TaskRunning, mgr.GetTaskStatus("test"))
+	mgr.TaskExecuting("test", 0)
+	assert.Equal(t, TaskRunning, mgr.GetTaskStatus("test", 0))
 
 	// Complete successfully
-	mgr.TaskCompleted("test", TaskResult{
-		TaskName: "test",
-		Host:     "host1",
-		ExitCode: 0,
+	mgr.TaskCompleted(TaskResult{
+		TaskName:  "test",
+		TaskIndex: 0,
+		Host:      "host1",
+		ExitCode:  0,
 	})
-	assert.Equal(t, TaskPassed, mgr.GetTaskStatus("test"))
+	assert.Equal(t, TaskPassed, mgr.GetTaskStatus("test", 0))
 
 	// Start and fail another task
-	mgr.TaskSyncing("failing", "host2")
-	mgr.TaskExecuting("failing")
-	mgr.TaskCompleted("failing", TaskResult{
-		TaskName: "failing",
-		Host:     "host2",
-		ExitCode: 1,
+	mgr.TaskSyncing("failing", 1, "host2")
+	mgr.TaskExecuting("failing", 1)
+	mgr.TaskCompleted(TaskResult{
+		TaskName:  "failing",
+		TaskIndex: 1,
+		Host:      "host2",
+		ExitCode:  1,
 	})
-	assert.Equal(t, TaskFailed, mgr.GetTaskStatus("failing"))
+	assert.Equal(t, TaskFailed, mgr.GetTaskStatus("failing", 1))
 }
 
 func TestOutputManager_GetAllStatuses(t *testing.T) {
 	mgr := NewOutputManager(OutputQuiet, true)
 
-	mgr.TaskStarted("task1", "host1")
-	mgr.TaskStarted("task2", "host2")
-	mgr.TaskCompleted("task1", TaskResult{ExitCode: 0})
-	mgr.TaskCompleted("task2", TaskResult{ExitCode: 1})
+	mgr.TaskStarted("task1", 0, "host1")
+	mgr.TaskStarted("task2", 1, "host2")
+	mgr.TaskCompleted(TaskResult{TaskName: "task1", TaskIndex: 0, ExitCode: 0})
+	mgr.TaskCompleted(TaskResult{TaskName: "task2", TaskIndex: 1, ExitCode: 1})
 
 	statuses := mgr.GetAllStatuses()
 
 	assert.Len(t, statuses, 2)
-	assert.Equal(t, TaskPassed, statuses["task1"])
-	assert.Equal(t, TaskFailed, statuses["task2"])
+	assert.Equal(t, TaskPassed, statuses["task1#0"])
+	assert.Equal(t, TaskFailed, statuses["task2#1"])
 }
 
 func TestOutputManager_BuffersOutput(t *testing.T) {
 	mgr := NewOutputManager(OutputProgress, true)
 
-	mgr.TaskStarted("test", "host1")
-	mgr.TaskOutput("test", []byte("first line"), false)
-	mgr.TaskOutput("test", []byte("second line"), false)
+	mgr.TaskStarted("test", 0, "host1")
+	mgr.TaskOutput("test", 0, []byte("first line"), false)
+	mgr.TaskOutput("test", 0, []byte("second line"), false)
 
 	// Verify output is buffered
 	mgr.mu.Lock()
-	buf, ok := mgr.taskOutput["test"]
+	buf, ok := mgr.taskOutput["test#0"]
 	mgr.mu.Unlock()
 
 	require.True(t, ok)
@@ -189,7 +192,7 @@ func TestOutputManager_VerboseMode(t *testing.T) {
 	mgr := NewOutputManager(OutputVerbose, true)
 	mgr.SetWriter(&buf)
 
-	mgr.TaskSyncing("test", "dev")
+	mgr.TaskSyncing("test", 0, "dev")
 	assert.Contains(t, buf.String(), "Syncing")
 	assert.Contains(t, buf.String(), "test")
 	assert.Contains(t, buf.String(), "dev")
@@ -197,14 +200,15 @@ func TestOutputManager_VerboseMode(t *testing.T) {
 	buf.Reset()
 
 	// Add some output
-	mgr.TaskOutput("test", []byte("test output"), false)
+	mgr.TaskOutput("test", 0, []byte("test output"), false)
 
 	// Complete the task
-	mgr.TaskCompleted("test", TaskResult{
-		TaskName: "test",
-		Host:     "dev",
-		ExitCode: 0,
-		Duration: 2500 * time.Millisecond,
+	mgr.TaskCompleted(TaskResult{
+		TaskName:  "test",
+		TaskIndex: 0,
+		Host:      "dev",
+		ExitCode:  0,
+		Duration:  2500 * time.Millisecond,
 	})
 
 	output := buf.String()
@@ -218,7 +222,7 @@ func TestOutputManager_ProgressMode(t *testing.T) {
 	mgr := NewOutputManager(OutputProgress, true)
 	mgr.SetWriter(&buf)
 
-	mgr.TaskStarted("test", "dev")
+	mgr.TaskStarted("test", 0, "dev")
 
 	output := buf.String()
 	assert.Contains(t, output, "test")
@@ -226,10 +230,11 @@ func TestOutputManager_ProgressMode(t *testing.T) {
 
 	buf.Reset()
 
-	mgr.TaskCompleted("test", TaskResult{
-		TaskName: "test",
-		Host:     "dev",
-		ExitCode: 0,
+	mgr.TaskCompleted(TaskResult{
+		TaskName:  "test",
+		TaskIndex: 0,
+		Host:      "dev",
+		ExitCode:  0,
 	})
 
 	output = buf.String()
@@ -292,11 +297,54 @@ func TestOutputManager_RenderProgress_NonTTY(t *testing.T) {
 func TestOutputManager_TaskHostTracking(t *testing.T) {
 	mgr := NewOutputManager(OutputQuiet, true)
 
-	mgr.TaskStarted("task1", "host-a")
-	mgr.TaskStarted("task2", "host-b")
+	mgr.TaskStarted("task1", 0, "host-a")
+	mgr.TaskStarted("task2", 1, "host-b")
 
 	mgr.mu.Lock()
-	assert.Equal(t, "host-a", mgr.taskHosts["task1"])
-	assert.Equal(t, "host-b", mgr.taskHosts["task2"])
+	assert.Equal(t, "host-a", mgr.taskHosts["task1#0"])
+	assert.Equal(t, "host-b", mgr.taskHosts["task2#1"])
 	mgr.mu.Unlock()
+}
+
+// TestOutputManager_DuplicateTaskNames verifies that tasks with the same name
+// but different indices are tracked separately (regression test for the bug
+// where running the same task multiple times in parallel caused state confusion).
+func TestOutputManager_DuplicateTaskNames(t *testing.T) {
+	mgr := NewOutputManager(OutputQuiet, true)
+
+	// Start three tasks with the same name but different indices
+	mgr.TaskSyncing("test-opendata", 0, "host1")
+	mgr.TaskSyncing("test-opendata", 1, "host2")
+	mgr.TaskSyncing("test-opendata", 2, "host3")
+
+	// Verify each is tracked separately
+	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("test-opendata", 0))
+	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("test-opendata", 1))
+	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("test-opendata", 2))
+
+	// Transition to executing
+	mgr.TaskExecuting("test-opendata", 0)
+	mgr.TaskExecuting("test-opendata", 1)
+	mgr.TaskExecuting("test-opendata", 2)
+
+	assert.Equal(t, TaskRunning, mgr.GetTaskStatus("test-opendata", 0))
+	assert.Equal(t, TaskRunning, mgr.GetTaskStatus("test-opendata", 1))
+	assert.Equal(t, TaskRunning, mgr.GetTaskStatus("test-opendata", 2))
+
+	// Complete in different order with different results
+	mgr.TaskCompleted(TaskResult{TaskName: "test-opendata", TaskIndex: 1, ExitCode: 0})
+	mgr.TaskCompleted(TaskResult{TaskName: "test-opendata", TaskIndex: 2, ExitCode: 1})
+	mgr.TaskCompleted(TaskResult{TaskName: "test-opendata", TaskIndex: 0, ExitCode: 0})
+
+	// Verify each has correct final status
+	assert.Equal(t, TaskPassed, mgr.GetTaskStatus("test-opendata", 0))
+	assert.Equal(t, TaskPassed, mgr.GetTaskStatus("test-opendata", 1))
+	assert.Equal(t, TaskFailed, mgr.GetTaskStatus("test-opendata", 2))
+
+	// Verify all three are in the status map
+	statuses := mgr.GetAllStatuses()
+	assert.Len(t, statuses, 3)
+	assert.Equal(t, TaskPassed, statuses["test-opendata#0"])
+	assert.Equal(t, TaskPassed, statuses["test-opendata#1"])
+	assert.Equal(t, TaskFailed, statuses["test-opendata#2"])
 }

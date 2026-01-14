@@ -1,6 +1,9 @@
 package parallel
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // OutputMode controls how parallel task output is displayed.
 type OutputMode string
@@ -55,6 +58,7 @@ func (r *Result) Success() bool {
 // TaskResult holds the result of a single task execution.
 type TaskResult struct {
 	TaskName  string
+	TaskIndex int    // Position in task list (for duplicate name handling)
 	Command   string // Original command (for formatter detection)
 	Host      string
 	ExitCode  int
@@ -63,6 +67,11 @@ type TaskResult struct {
 	Output    []byte // Captured stdout+stderr for summary
 	StartTime time.Time
 	EndTime   time.Time
+}
+
+// ID returns a unique identifier for this task result.
+func (r *TaskResult) ID() string {
+	return taskID(r.TaskName, r.TaskIndex)
 }
 
 // Success returns true if the task passed (exit code 0).
@@ -102,7 +111,18 @@ func (s TaskStatus) String() string {
 // TaskInfo represents a task to be executed with its resolved configuration.
 type TaskInfo struct {
 	Name    string            // Task name from config
+	Index   int               // Position in task list (for duplicate name handling)
 	Command string            // Command to execute
 	Env     map[string]string // Environment variables
 	WorkDir string            // Working directory on remote
+}
+
+// ID returns a unique identifier for this task.
+func (t TaskInfo) ID() string {
+	return taskID(t.Name, t.Index)
+}
+
+// taskID creates a unique task identifier from name and index.
+func taskID(name string, index int) string {
+	return fmt.Sprintf("%s#%d", name, index)
 }

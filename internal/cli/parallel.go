@@ -58,7 +58,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// Build TaskInfo for each subtask
 	tasks := make([]parallel.TaskInfo, 0, len(task.Parallel))
-	for _, subtaskName := range task.Parallel {
+	for i, subtaskName := range task.Parallel {
 		subtask, err := config.GetTask(resolved.Project, subtaskName)
 		if err != nil {
 			return 1, err
@@ -73,6 +73,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 		tasks = append(tasks, parallel.TaskInfo{
 			Name:    subtaskName,
+			Index:   i, // Unique index for duplicate name handling
 			Command: cmd,
 			Env:     subtask.Env,
 		})
@@ -184,7 +185,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// Write task outputs to logs
 	if logWriter != nil {
 		for i := range result.TaskResults {
-			_ = logWriter.WriteTask(result.TaskResults[i].TaskName, result.TaskResults[i].Output)
+			tr := &result.TaskResults[i]
+			_ = logWriter.WriteTask(tr.TaskName, tr.TaskIndex, tr.Output)
 		}
 		_ = logWriter.WriteSummary(result, opts.TaskName)
 		_ = logWriter.Close()

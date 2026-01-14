@@ -91,12 +91,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
 	defer o.outputMgr.Close()
 
-	// Show all tasks as pending upfront
-	taskNames := make([]string, len(o.tasks))
-	for i, t := range o.tasks {
-		taskNames[i] = t.Name
-	}
-	o.outputMgr.InitTasks(taskNames)
+	// Show all tasks as pending upfront (pass full TaskInfo for Index tracking)
+	o.outputMgr.InitTasks(o.tasks)
 
 	startTime := time.Now()
 
@@ -264,12 +260,8 @@ func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
 	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
 	defer o.outputMgr.Close()
 
-	// Show all tasks as pending upfront
-	taskNames := make([]string, len(o.tasks))
-	for i, t := range o.tasks {
-		taskNames[i] = t.Name
-	}
-	o.outputMgr.InitTasks(taskNames)
+	// Show all tasks as pending upfront (pass full TaskInfo for Index tracking)
+	o.outputMgr.InitTasks(o.tasks)
 
 	startTime := time.Now()
 
