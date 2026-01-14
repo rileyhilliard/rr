@@ -47,8 +47,14 @@ func Sync(opts SyncOptions) error {
 		}
 	}
 
-	// Create host selector from global hosts
-	selector := host.NewSelector(resolved.Global.Hosts)
+	// Create host selector with proper priority order
+	hostOrder, projectHosts, err := config.ResolveHosts(resolved, opts.Host)
+	if err != nil {
+		// Fall back to all global hosts if resolution fails
+		projectHosts = resolved.Global.Hosts
+	}
+	selector := host.NewSelector(projectHosts)
+	selector.SetHostOrder(hostOrder)
 	defer selector.Close()
 
 	// Set probe timeout (CLI flag overrides config)

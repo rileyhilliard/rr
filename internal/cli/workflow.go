@@ -125,12 +125,13 @@ func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 	// Get the hosts this project is allowed to use
 	// (respects project.Hosts list if specified, otherwise uses all global hosts)
 	// Empty hosts with nil error indicates local-only mode
-	_, projectHosts, err := config.ResolveHosts(ctx.Resolved, opts.Host)
+	hostOrder, projectHosts, err := config.ResolveHosts(ctx.Resolved, opts.Host)
 	if err != nil {
 		// Fall back to all global hosts if resolution fails
 		ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
 	} else {
 		ctx.selector = host.NewSelector(projectHosts)
+		ctx.selector.SetHostOrder(hostOrder)
 	}
 	ctx.selector.SetLocalFallback(localFallback)
 

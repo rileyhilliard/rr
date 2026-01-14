@@ -176,6 +176,84 @@ func TestSelector_SetTimeout(t *testing.T) {
 	}
 }
 
+func TestSelector_SetHostOrder(t *testing.T) {
+	selector := NewSelector(nil)
+	order := []string{"host-c", "host-a", "host-b"}
+
+	selector.SetHostOrder(order)
+
+	if len(selector.hostOrder) != 3 {
+		t.Errorf("hostOrder length = %d, want 3", len(selector.hostOrder))
+	}
+	if selector.hostOrder[0] != "host-c" {
+		t.Errorf("hostOrder[0] = %s, want host-c", selector.hostOrder[0])
+	}
+}
+
+func TestSelector_ResolveHost_UsesHostOrder(t *testing.T) {
+	// Create hosts with names that would sort differently alphabetically
+	hosts := map[string]config.Host{
+		"z-last":   {SSH: []string{"z-last.local"}},
+		"a-first":  {SSH: []string{"a-first.local"}},
+		"m-middle": {SSH: []string{"m-middle.local"}},
+	}
+
+	t.Run("without host order uses alphabetical", func(t *testing.T) {
+		selector := NewSelector(hosts)
+		// Without hostOrder, should pick "a-first" (first alphabetically)
+		name, _, err := selector.resolveHost("")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+		if name != "a-first" {
+			t.Errorf("name = %s, want a-first (alphabetical)", name)
+		}
+	})
+
+	t.Run("with host order uses priority", func(t *testing.T) {
+		selector := NewSelector(hosts)
+		// Set hostOrder with z-last first (non-alphabetical priority)
+		selector.SetHostOrder([]string{"z-last", "m-middle", "a-first"})
+
+		name, _, err := selector.resolveHost("")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+		if name != "z-last" {
+			t.Errorf("name = %s, want z-last (first in hostOrder)", name)
+		}
+	})
+
+	t.Run("preferred host overrides host order", func(t *testing.T) {
+		selector := NewSelector(hosts)
+		selector.SetHostOrder([]string{"z-last", "m-middle", "a-first"})
+
+		// Explicit preferred should override hostOrder
+		name, _, err := selector.resolveHost("a-first")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+		if name != "a-first" {
+			t.Errorf("name = %s, want a-first (explicitly preferred)", name)
+		}
+	})
+
+	t.Run("host order with missing hosts skips to next", func(t *testing.T) {
+		selector := NewSelector(hosts)
+		// Set hostOrder with a non-existent host first
+		selector.SetHostOrder([]string{"nonexistent", "z-last", "m-middle"})
+
+		name, _, err := selector.resolveHost("")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+		// Should skip nonexistent and use z-last
+		if name != "z-last" {
+			t.Errorf("name = %s, want z-last (first valid in hostOrder)", name)
+		}
+	})
+}
+
 func TestSelector_Select_NoHosts(t *testing.T) {
 	selector := NewSelector(map[string]config.Host{})
 
