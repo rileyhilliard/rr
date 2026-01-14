@@ -198,21 +198,8 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 		return preferred, host, nil
 	}
 
-	// Use hostOrder if set (respects config priority)
-	if len(s.hostOrder) > 0 {
-		for _, name := range s.hostOrder {
-			if host, ok := s.hosts[name]; ok {
-				return name, host, nil
-			}
-		}
-	}
-
-	// Fallback: use the first host alphabetically for deterministic selection
-	names := make([]string, 0, len(s.hosts))
-	for name := range s.hosts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	// Use priority order (hostOrder if set, otherwise alphabetical)
+	names := s.orderedHostNames()
 	firstName := names[0]
 	return firstName, s.hosts[firstName], nil
 }
@@ -266,13 +253,33 @@ func (s *Selector) isConnectionAlive(conn *Connection) bool {
 	return err == nil
 }
 
-// hostNames returns a comma-separated list of configured host names.
-func (s *Selector) hostNames() string {
+// orderedHostNames returns host names in priority order.
+// Uses hostOrder if set, otherwise alphabetical order for determinism.
+// Only includes hosts that exist in the hosts map.
+// NOTE: Caller must hold the mutex if needed.
+func (s *Selector) orderedHostNames() []string {
+	if len(s.hostOrder) > 0 {
+		names := make([]string, 0, len(s.hostOrder))
+		for _, name := range s.hostOrder {
+			if _, ok := s.hosts[name]; ok {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+
+	// Fallback: alphabetical order
 	names := make([]string, 0, len(s.hosts))
 	for name := range s.hosts {
 		names = append(names, name)
 	}
-	return util.JoinOrNone(names)
+	sort.Strings(names)
+	return names
+}
+
+// hostNames returns a comma-separated list of configured host names.
+func (s *Selector) hostNames() string {
+	return util.JoinOrNone(s.orderedHostNames())
 }
 
 // formatFailedAliases returns a comma-separated list of failed aliases.
@@ -547,26 +554,7 @@ func (s *Selector) HostCount() int {
 func (s *Selector) GetHostNames() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// Use hostOrder if set (respects config priority)
-	if len(s.hostOrder) > 0 {
-		// Return only hosts that exist in the hosts map
-		names := make([]string, 0, len(s.hostOrder))
-		for _, name := range s.hostOrder {
-			if _, ok := s.hosts[name]; ok {
-				names = append(names, name)
-			}
-		}
-		return names
-	}
-
-	// Fallback: alphabetical order
-	names := make([]string, 0, len(s.hosts))
-	for name := range s.hosts {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return s.orderedHostNames()
 }
 
 // SelectHost connects to a specific host by name.

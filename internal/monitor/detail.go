@@ -33,17 +33,24 @@ const (
 func (m Model) renderDetailHeader(host string, status HostStatus) string {
 	var indicator string
 	var indicatorStyle lipgloss.Style
+	var statusLabel string
 
 	switch status {
-	case StatusConnectedState:
-		indicator = StatusConnected + " Connected"
-		indicatorStyle = StatusConnectedStyle
+	case StatusIdleState:
+		indicator = StatusIdle
+		indicatorStyle = StatusIdleStyle
+		statusLabel = " Idle"
+	case StatusRunningState:
+		indicator, indicatorStyle = m.RunningSpinner()
+		statusLabel = " Running"
 	case StatusSlowState:
-		indicator = StatusConnected + " Slow"
+		indicator = StatusIdle
 		indicatorStyle = StatusSlowStyle
+		statusLabel = " Slow"
 	case StatusUnreachableState:
-		indicator = StatusUnreachable + " Unreachable"
+		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle
+		statusLabel = " Offline"
 	}
 
 	hostTitle := lipgloss.NewStyle().
@@ -51,7 +58,7 @@ func (m Model) renderDetailHeader(host string, status HostStatus) string {
 		Bold(true).
 		Render(host)
 
-	statusText := indicatorStyle.Render(indicator)
+	statusText := indicatorStyle.Render(indicator + statusLabel)
 
 	return fmt.Sprintf("%s  %s", hostTitle, statusText)
 }

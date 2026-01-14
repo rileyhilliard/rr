@@ -44,9 +44,10 @@ func TestHostStatus_String(t *testing.T) {
 		expect string
 	}{
 		{StatusConnectingState, "connecting"},
-		{StatusConnectedState, "connected"},
+		{StatusIdleState, "idle"},
+		{StatusRunningState, "running"},
 		{StatusSlowState, "slow"},
-		{StatusUnreachableState, "unreachable"},
+		{StatusUnreachableState, "offline"},
 		{HostStatus(99), "unknown"},
 	}
 
@@ -71,11 +72,11 @@ func TestModel_OnlineCount(t *testing.T) {
 	assert.Equal(t, 0, m.OnlineCount())
 
 	// Mark one as connected
-	m.status["server1"] = StatusConnectedState
+	m.status["server1"] = StatusIdleState
 	assert.Equal(t, 1, m.OnlineCount())
 
 	// Mark another as connected
-	m.status["server2"] = StatusConnectedState
+	m.status["server2"] = StatusIdleState
 	assert.Equal(t, 2, m.OnlineCount())
 
 	// Mark one as slow (not counted as online)
@@ -141,10 +142,10 @@ func TestModel_updateMetrics(t *testing.T) {
 		"server2": "connection refused",
 	}
 
-	m.updateMetrics(metrics, errors)
+	m.updateMetrics(metrics, errors, nil)
 
 	// Server1 should be connected
-	assert.Equal(t, StatusConnectedState, m.status["server1"])
+	assert.Equal(t, StatusIdleState, m.status["server1"])
 	assert.NotNil(t, m.metrics["server1"])
 	_, hasError := m.errors["server1"]
 	assert.False(t, hasError)
