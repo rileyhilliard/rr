@@ -440,14 +440,18 @@ func extractFromTarGz(archivePath, destPath string) error {
 		}
 	}
 
-	return fmt.Errorf("rr binary not found in archive")
+	return errors.New(errors.ErrExec,
+		"rr binary not found in archive",
+		"The downloaded release archive doesn't contain the rr binary. This might be a corrupted download or an issue with the release.")
 }
 
 // extractFromZip extracts rr binary from a zip archive
 func extractFromZip(archivePath, destPath string) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
-		return err
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Couldn't open the downloaded archive",
+			"The archive may be corrupted. Try running 'rr update' again.")
 	}
 	defer reader.Close()
 
@@ -459,14 +463,18 @@ func extractFromZip(archivePath, destPath string) error {
 		}
 	}
 
-	return fmt.Errorf("rr binary not found in archive")
+	return errors.New(errors.ErrExec,
+		"rr binary not found in archive",
+		"The downloaded release archive doesn't contain the rr binary. This might be a corrupted download or an issue with the release.")
 }
 
 // extractZipEntry extracts a single zip entry to the destination path
 func extractZipEntry(file *zip.File, destPath string) error {
 	rc, err := file.Open()
 	if err != nil {
-		return err
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Couldn't read file from archive",
+			"The archive may be corrupted. Try running 'rr update' again.")
 	}
 	defer rc.Close()
 	return writeExecutable(rc, destPath)
@@ -480,24 +488,32 @@ func writeExecutable(reader io.Reader, destPath string) error {
 	// #nosec G302 - executable needs 0755 permissions
 	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
-		return err
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Couldn't create temporary file for update",
+			"Check that you have write permissions in the rr install directory.")
 	}
 
 	if _, err := io.Copy(out, reader); err != nil {
 		out.Close()
 		os.Remove(tmpPath)
-		return err
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Failed to write the new binary",
+			"Check available disk space and try again.")
 	}
 
 	if err := out.Close(); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Failed to save the new binary",
+			"Check available disk space and try again.")
 	}
 
 	// Atomic rename
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Couldn't replace the old binary with the new one",
+			"Make sure rr isn't currently running and you have write permissions.")
 	}
 
 	return nil
