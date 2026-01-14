@@ -184,12 +184,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// Write task outputs to logs
 	if logWriter != nil {
-		for i := range result.TaskResults {
-			tr := &result.TaskResults[i]
-			_ = logWriter.WriteTask(tr.TaskName, tr.TaskIndex, tr.Output)
-		}
-		_ = logWriter.WriteSummary(result, opts.TaskName)
-		_ = logWriter.Close()
+		writeTaskLogs(logWriter, result, opts.TaskName)
 	}
 
 	// Render summary
@@ -204,6 +199,28 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 1, nil
 	}
 	return 0, nil
+}
+
+// writeTaskLogs writes task outputs to log files, warning on errors.
+// Errors are non-fatal since tasks already completed successfully.
+func writeTaskLogs(logWriter *logs.LogWriter, result *parallel.Result, taskName string) {
+	var logErrors []error
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		if err := logWriter.WriteTask(tr.TaskName, tr.TaskIndex, tr.Output); err != nil {
+			logErrors = append(logErrors, err)
+		}
+	}
+	if err := logWriter.WriteSummary(result, taskName); err != nil {
+		logErrors = append(logErrors, err)
+	}
+	if err := logWriter.Close(); err != nil {
+		logErrors = append(logErrors, err)
+	}
+	// Warn if log writing failed
+	if len(logErrors) > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: couldn't save some log files (%d errors)\n", len(logErrors))
+	}
 }
 
 // determineOutputMode determines the output mode based on options and task config.

@@ -39,6 +39,11 @@ rr deps                 # Download/tidy dependencies
 # Run single test
 rr run "go test ./internal/lock/... -run TestLockAcquisition -v"
 
+# E2E CLI validation (manual testing)
+./scripts/e2e-test.sh           # Full test suite (requires working hosts)
+./scripts/e2e-test.sh --quick   # Fast mode (skips sync/exec/run tests)
+./scripts/e2e-test.sh --verbose # Show command output for debugging
+
 # Make targets (auto-use rr with local fallback)
 make test               # Uses rr test (falls back to local if rr unavailable)
 make test-all           # Uses rr test-all (parallel unit + integration)
@@ -102,6 +107,7 @@ return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if ho
 - Table-driven tests preferred
 - Integration tests use env vars: `RR_TEST_SSH_HOST`, `RR_TEST_SSH_KEY`, `RR_TEST_SSH_USER`
 - Use `./scripts/ci-ssh-server.sh` for Docker-based SSH testing
+- Run `./scripts/e2e-test.sh` before PRs that touch CLI commands, flags, or output formatting
 
 ## Config Files
 
