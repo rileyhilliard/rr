@@ -275,8 +275,7 @@ test_run_command() {
     fi
 
     run_test "run echo test" 0 "$RR_BIN" run "echo test"
-    run_test "run --skip-sync" 0 "$RR_BIN" run --skip-sync "echo test"
-    run_test "run --skip-lock" 0 "$RR_BIN" run --skip-lock "echo test"
+    run_test "run --local" 0 "$RR_BIN" run --local "echo test"
     run_test "run --quiet" 0 "$RR_BIN" run --quiet "echo test"
 }
 
