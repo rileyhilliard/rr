@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.7] - 2026-01-14
+
+### Changed
+
+- **Per-host locking** - Lock system changed from project-specific locks (`/tmp/rr-<hash>.lock`) to a single per-host lock (`/tmp/rr.lock`). This ensures only one rr task runs on a host at a time regardless of which project initiated it. Better reflects that remote execution is resource-intensive and should be exclusive per host.
+
+### Fixed
+
+- **Monitor lock detection** - `rr monitor` now correctly shows "running" status when any rr task is active on a host, not just tasks from the current project.
+
 ## [0.11.6] - 2026-01-14
 
 ### Added
