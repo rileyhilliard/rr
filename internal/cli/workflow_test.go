@@ -1228,7 +1228,7 @@ func TestSetupHostSelector_FullConfiguration(t *testing.T) {
 	assert.Equal(t, 2, ctx.selector.HostCount())
 
 	// Verify host info can be retrieved
-	hostInfos := ctx.selector.HostInfo("primary")
+	hostInfos := ctx.selector.HostInfo()
 	assert.Len(t, hostInfos, 2)
 
 	// Find primary and verify tags

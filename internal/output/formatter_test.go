@@ -3,6 +3,7 @@ package output
 import (
 	"testing"
 
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -107,7 +108,7 @@ func TestPassthroughFormatterSummary(t *testing.T) {
 	assert.Empty(t, f.Summary(1))
 }
 
-func TestItoa(t *testing.T) {
+func TestUtilItoa(t *testing.T) {
 	tests := []struct {
 		input int
 		want  string
@@ -122,7 +123,7 @@ func TestItoa(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			assert.Equal(t, tt.want, itoa(tt.input))
+			assert.Equal(t, tt.want, util.Itoa(tt.input))
 		})
 	}
 }

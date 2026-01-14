@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/rileyhilliard/rr/internal/output"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // Detector interface for formatters that can detect their format.
@@ -34,38 +35,31 @@ func ExtractFailures(command string, rawOutput []byte) []output.TestFailure {
 	return nil
 }
 
+// detectorFormatter is a formatter that also implements detection.
+type detectorFormatter interface {
+	output.Formatter
+	Detector
+}
+
 // detectFormatter returns the best matching formatter for the command/output.
 // Returns nil if no specific formatter matches well.
 func detectFormatter(command string, rawOutput []byte) output.Formatter {
-	// List of formatter factories with their detectors
-	type formatterFactory struct {
-		create func() output.Formatter
-		detect func(string, []byte) int
-	}
-
-	factories := []formatterFactory{
-		{
-			create: func() output.Formatter { return NewPytestFormatter() },
-			detect: func(cmd string, out []byte) int { return NewPytestFormatter().Detect(cmd, out) },
-		},
-		{
-			create: func() output.Formatter { return NewGoTestFormatter() },
-			detect: func(cmd string, out []byte) int { return NewGoTestFormatter().Detect(cmd, out) },
-		},
-		{
-			create: func() output.Formatter { return NewJestFormatter() },
-			detect: func(cmd string, out []byte) int { return NewJestFormatter().Detect(cmd, out) },
-		},
+	// Create each formatter once and use it for both detection and processing.
+	// This avoids the overhead of creating formatters twice.
+	formatters := []detectorFormatter{
+		NewPytestFormatter(),
+		NewGoTestFormatter(),
+		NewJestFormatter(),
 	}
 
 	var bestFormatter output.Formatter
 	bestScore := 0
 
-	for _, f := range factories {
-		score := f.detect(command, rawOutput)
+	for _, f := range formatters {
+		score := f.Detect(command, rawOutput)
 		if score > bestScore {
 			bestScore = score
-			bestFormatter = f.create()
+			bestFormatter = f
 		}
 	}
 
@@ -104,7 +98,7 @@ func FormatFailureSummary(command string, rawOutput []byte, maxFailures int) str
 			sb.WriteString(f.File)
 			if f.Line > 0 {
 				sb.WriteString(":")
-				sb.WriteString(itoa(f.Line))
+				sb.WriteString(util.Itoa(f.Line))
 			}
 			sb.WriteString(")")
 		}
@@ -121,32 +115,9 @@ func FormatFailureSummary(command string, rawOutput []byte, maxFailures int) str
 
 	if len(failures) > showCount {
 		sb.WriteString("  ... and ")
-		sb.WriteString(itoa(len(failures) - showCount))
+		sb.WriteString(util.Itoa(len(failures) - showCount))
 		sb.WriteString(" more failures\n")
 	}
 
 	return sb.String()
-}
-
-// itoa converts int to string without importing strconv
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

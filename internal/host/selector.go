@@ -107,7 +107,7 @@ func (s *Selector) SetTimeout(timeout time.Duration) {
 }
 
 // SetEventHandler sets a callback for connection events.
-// Events are emitted during Select/SelectWithFallback to report progress.
+// Events are emitted during Select to report progress.
 func (s *Selector) SetEventHandler(handler EventHandler) {
 	s.eventHandler = handler
 }
@@ -150,13 +150,6 @@ func (s *Selector) Select(preferred string) (*Connection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.selectUnlocked(preferred)
-}
-
-// SelectWithFallback is an alias for Select, which now includes fallback behavior.
-//
-// Deprecated: Use Select instead. This method exists for backward compatibility.
-func (s *Selector) SelectWithFallback(preferred string) (*Connection, error) {
-	return s.Select(preferred)
 }
 
 // Close closes any cached connection.
@@ -220,6 +213,54 @@ func (s *Selector) connect(hostName, sshAlias string, host config.Host) (*Connec
 		Host:    host,
 		Latency: latency,
 	}, nil
+}
+
+// trySSHAliases attempts to connect using each SSH alias in order.
+// Returns the first successful connection, or an error if all fail.
+// This implements the fallback chain pattern: try each alias until one works.
+func (s *Selector) trySSHAliases(hostName string, host config.Host) (*Connection, error) {
+	var lastErr error
+	var failedAliases []string
+
+	for i, sshAlias := range host.SSH {
+		s.emit(ConnectionEvent{
+			Type:    EventTrying,
+			Alias:   sshAlias,
+			Message: fmt.Sprintf("trying alias %s", sshAlias),
+		})
+
+		conn, err := s.connect(hostName, sshAlias, host)
+		if err == nil {
+			msg := fmt.Sprintf("connected via %s", sshAlias)
+			if i > 0 {
+				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
+			}
+			s.emit(ConnectionEvent{
+				Type:    EventConnected,
+				Alias:   sshAlias,
+				Message: msg,
+				Latency: conn.Latency,
+			})
+			return conn, nil
+		}
+
+		errMsg := "connection failed"
+		if probeErr, ok := err.(*ProbeError); ok {
+			errMsg = probeErr.Reason.String()
+		}
+		s.emit(ConnectionEvent{
+			Type:    EventFailed,
+			Alias:   sshAlias,
+			Message: errMsg,
+			Error:   err,
+		})
+		failedAliases = append(failedAliases, sshAlias)
+		lastErr = err
+	}
+
+	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
+		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(failedAliases)),
+		"The remote might be offline, or there could be a network/firewall issue.")
 }
 
 // isConnectionAlive checks if the cached connection is still usable.
@@ -413,45 +454,10 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 	}
 
 	// Try each SSH alias in order (fallback chain)
-	var lastErr error
-	var failedAliases []string
-	for i, sshAlias := range host.SSH {
-		s.emit(ConnectionEvent{
-			Type:    EventTrying,
-			Alias:   sshAlias,
-			Message: fmt.Sprintf("trying alias %s", sshAlias),
-		})
-
-		conn, err := s.connect(hostName, sshAlias, host)
-		if err == nil {
-			// Emit success event, noting if this was a fallback
-			msg := fmt.Sprintf("connected via %s", sshAlias)
-			if i > 0 {
-				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
-			}
-			s.emit(ConnectionEvent{
-				Type:    EventConnected,
-				Alias:   sshAlias,
-				Message: msg,
-				Latency: conn.Latency,
-			})
-			s.cached = conn
-			return conn, nil
-		}
-
-		// Emit failure event
-		errMsg := "connection failed"
-		if probeErr, ok := err.(*ProbeError); ok {
-			errMsg = probeErr.Reason.String()
-		}
-		s.emit(ConnectionEvent{
-			Type:    EventFailed,
-			Alias:   sshAlias,
-			Message: errMsg,
-			Error:   err,
-		})
-		failedAliases = append(failedAliases, sshAlias)
-		lastErr = err
+	conn, err := s.trySSHAliases(hostName, host)
+	if err == nil {
+		s.cached = conn
+		return conn, nil
 	}
 
 	// All remote hosts failed - check if local fallback is enabled
@@ -472,10 +478,12 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 		return localConn, nil
 	}
 
-	// Build detailed error message listing all failed aliases
-	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
-		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(failedAliases)),
-		"The remote might be offline, or there could be a network/firewall issue. You can also set 'local_fallback: true' in .rr.yaml to run locally when remotes are down.")
+	// Add suggestion about local_fallback to the error from trySSHAliases
+	if rrErr, ok := err.(*errors.Error); ok {
+		rrErr.Suggestion += " You can also set 'local_fallback: true' in .rr.yaml to run locally when remotes are down."
+		return nil, rrErr
+	}
+	return nil, err
 }
 
 // hasTag checks if the tags slice contains the specified tag.
@@ -511,7 +519,7 @@ func formatTags(tags []string) string {
 
 // HostInfo returns information about all configured hosts.
 // This is useful for interactive host selection UIs.
-func (s *Selector) HostInfo(_ string) []HostInfoItem {
+func (s *Selector) HostInfo() []HostInfoItem {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -580,48 +588,7 @@ func (s *Selector) SelectHost(hostName string) (*Connection, error) {
 			"Add something like 'user@hostname' under the 'ssh:' section for this host.")
 	}
 
-	// Try each SSH alias in order (fallback chain)
-	var lastErr error
-	var failedAliases []string
-	for i, sshAlias := range host.SSH {
-		s.emit(ConnectionEvent{
-			Type:    EventTrying,
-			Alias:   sshAlias,
-			Message: fmt.Sprintf("trying alias %s", sshAlias),
-		})
-
-		conn, err := s.connect(hostName, sshAlias, host)
-		if err == nil {
-			msg := fmt.Sprintf("connected via %s", sshAlias)
-			if i > 0 {
-				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
-			}
-			s.emit(ConnectionEvent{
-				Type:    EventConnected,
-				Alias:   sshAlias,
-				Message: msg,
-				Latency: conn.Latency,
-			})
-			return conn, nil
-		}
-
-		errMsg := "connection failed"
-		if probeErr, ok := err.(*ProbeError); ok {
-			errMsg = probeErr.Reason.String()
-		}
-		s.emit(ConnectionEvent{
-			Type:    EventFailed,
-			Alias:   sshAlias,
-			Message: errMsg,
-			Error:   err,
-		})
-		failedAliases = append(failedAliases, sshAlias)
-		lastErr = err
-	}
-
-	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
-		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(failedAliases)),
-		"The remote might be offline, or there could be a network/firewall issue.")
+	return s.trySSHAliases(hostName, host)
 }
 
 // SelectNextHost returns the next available host after skipping the specified hosts.

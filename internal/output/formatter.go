@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // Formatter processes command output lines for display.
@@ -72,7 +73,7 @@ func (f *GenericFormatter) Summary(exitCode int) string {
 	}
 
 	style := lipgloss.NewStyle().Foreground(ui.ColorError)
-	return style.Render("Command failed with exit code " + itoa(exitCode))
+	return style.Render("Command failed with exit code " + util.Itoa(exitCode))
 }
 
 // isErrorLine checks if a line appears to be an error message.
@@ -132,34 +133,6 @@ func (f *PassthroughFormatter) ProcessLine(line string) string {
 // Summary returns an empty string.
 func (f *PassthroughFormatter) Summary(_ int) string {
 	return ""
-}
-
-// itoa converts an int to string without importing strconv.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-
-	var buf [20]byte
-	i := len(buf)
-
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-
-	return string(buf[i:])
 }
 
 // FormatterRegistry holds available formatters by name.
