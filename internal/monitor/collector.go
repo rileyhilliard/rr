@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,8 +28,7 @@ type Collector struct {
 	mu          sync.Mutex            // Protects prevJiffies
 
 	// Lock checking configuration (optional)
-	lockConfig  *config.LockConfig
-	projectHash string
+	lockConfig *config.LockConfig
 }
 
 // NewCollector creates a new metrics collector for the specified hosts.
@@ -45,9 +43,8 @@ func NewCollector(hosts map[string]config.Host) *Collector {
 
 // SetLockConfig configures lock checking for the collector.
 // If set, the collector will check lock status for each host during collection.
-func (c *Collector) SetLockConfig(lockCfg config.LockConfig, projectHash string) {
+func (c *Collector) SetLockConfig(lockCfg config.LockConfig) {
 	c.lockConfig = &lockCfg
-	c.projectHash = projectHash
 }
 
 // SetTimeout sets the per-host collection timeout.
@@ -84,8 +81,9 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[s
 			}
 			results[alias] = metrics
 
-			// Check lock status if configured and we have a connection
-			if c.lockConfig != nil && c.projectHash != "" && metrics != nil {
+			// Check lock status if we have a connection
+			// Always check for locks so monitor shows when hosts are busy
+			if metrics != nil {
 				info := c.checkLockStatus(alias)
 				if info != nil {
 					lockInfo[alias] = info
@@ -106,28 +104,29 @@ func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 	return c.collectOneWithContext(ctx, alias)
 }
 
-// checkLockStatus checks if a lock is held on the specified host.
+// checkLockStatus checks if any rr lock is held on the specified host.
 // Returns lock info if locked, nil otherwise.
+// This checks for ANY rr lock (pattern /tmp/rr-*.lock/), not just the current project's lock,
+// so the monitor can detect tasks running from any directory.
 func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
-	if c.lockConfig == nil || c.projectHash == "" {
-		return nil
-	}
-
 	client, err := c.pool.Get(alias)
 	if err != nil {
 		return nil
 	}
 
-	// Build lock directory path
-	baseDir := c.lockConfig.Dir
-	if baseDir == "" {
-		baseDir = "/tmp"
+	// Find any rr lock directory and get its info.json
+	// The pattern /tmp/rr-*.lock/ matches locks from any project
+	baseDir := "/tmp"
+	if c.lockConfig != nil && c.lockConfig.Dir != "" {
+		baseDir = c.lockConfig.Dir
 	}
-	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", c.projectHash))
-	infoFile := filepath.Join(lockDir, "info.json")
 
-	// Check if lock directory exists
-	testCmd := fmt.Sprintf("test -d %q && cat %q 2>/dev/null", lockDir, infoFile)
+	// Find the first lock directory and read its info
+	// Using ls -t to get most recent first (in case multiple locks somehow exist)
+	findCmd := fmt.Sprintf(
+		`for d in %s/rr-*.lock; do if [ -d "$d" ] && [ -f "$d/info.json" ]; then cat "$d/info.json"; exit 0; fi; done; exit 1`,
+		baseDir,
+	)
 
 	// Use embedded ssh.Client's NewSession directly
 	session, err := client.Client.NewSession()
@@ -136,9 +135,9 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 	}
 	defer session.Close()
 
-	output, err := session.Output(testCmd)
+	output, err := session.Output(findCmd)
 	if err != nil {
-		// Lock doesn't exist or error reading
+		// No locks found or error reading
 		return nil
 	}
 
@@ -148,8 +147,12 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 		return nil
 	}
 
-	// Check if lock is stale
-	if c.lockConfig.Stale > 0 && info.Age() > c.lockConfig.Stale {
+	// Check if lock is stale (default to 30 minutes if no config)
+	staleThreshold := 30 * time.Minute
+	if c.lockConfig != nil && c.lockConfig.Stale > 0 {
+		staleThreshold = c.lockConfig.Stale
+	}
+	if info.Age() > staleThreshold {
 		return nil // Stale locks don't count
 	}
 

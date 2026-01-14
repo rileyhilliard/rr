@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -48,15 +46,6 @@ func unlockCommand(opts UnlockOptions) error {
 	} else {
 		lockCfg = config.DefaultConfig().Lock
 	}
-
-	// Get current working directory for project hash
-	workDir, err := os.Getwd()
-	if err != nil {
-		return errors.WrapWithCode(err, errors.ErrExec,
-			"Can't determine current directory",
-			"Check your directory permissions.")
-	}
-	projectHash := hashProject(workDir)
 
 	// Determine which hosts to unlock
 	var hostsToUnlock []string
@@ -106,7 +95,7 @@ func unlockCommand(opts UnlockOptions) error {
 
 	for _, hostName := range hostsToUnlock {
 		hostCfg := globalCfg.Hosts[hostName]
-		result := unlockHost(hostName, hostCfg, lockCfg, projectHash)
+		result := unlockHost(hostName, hostCfg, lockCfg)
 
 		switch result {
 		case unlockResultSuccess:
@@ -150,18 +139,14 @@ const (
 )
 
 // unlockHost attempts to release the lock on a single host.
-func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig, projectHash string) unlockResult {
+func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig) unlockResult {
 	if len(hostCfg.SSH) == 0 {
 		fmt.Printf("%s %s: no SSH connections configured\n", ui.SymbolFail, hostName)
 		return unlockResultFailed
 	}
 
-	// Build lock directory path
-	baseDir := lockCfg.Dir
-	if baseDir == "" {
-		baseDir = "/tmp"
-	}
-	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", projectHash))
+	// Get lock directory path
+	lockDir := lock.LockDir(lockCfg)
 
 	// Try to connect using the first available SSH alias
 	spinner := ui.NewSpinner(fmt.Sprintf("Connecting to %s", hostName))
@@ -193,13 +178,13 @@ func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig,
 	spinner.Success()
 
 	// Check if lock exists
-	if !lock.IsLocked(conn, lockCfg, projectHash) {
+	if !lock.IsLocked(conn, lockCfg) {
 		fmt.Printf("%s %s: no lock held\n", ui.SymbolPending, hostName)
 		return unlockResultNotLocked
 	}
 
 	// Get lock holder info before releasing
-	holder := lock.GetLockHolder(conn, lockCfg, projectHash)
+	holder := lock.GetLockHolder(conn, lockCfg)
 
 	// Release the lock
 	err := lock.ForceRelease(conn, lockDir)

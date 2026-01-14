@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -61,11 +60,7 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 
 	// Configure lock checking if we have a project config with locking enabled
 	if resolved.Project != nil && resolved.Project.Lock.Enabled {
-		workDir, err := os.Getwd()
-		if err == nil {
-			projectHash := hashProject(workDir)
-			collector.SetLockConfig(resolved.Project.Lock, projectHash)
-		}
+		collector.SetLockConfig(resolved.Project.Lock)
 	}
 
 	// Create Bubble Tea model with host order for default sorting
