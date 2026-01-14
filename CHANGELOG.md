@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.10] - 2026-01-14
+
+### Changed
+
+- **Code quality improvements** - Refactored codebase with DRY patterns: extracted common functions, consolidated duplicate code, improved naming consistency.
+
+### Added
+
+- **Test infrastructure** - Added test doubles (FakeSelector, FakeSyncer, FakeLockManager) for easier testing without real SSH connections.
+- **Benchmarks** - Added performance benchmarks for lock operations (JSON serialization, expiry checks, file operations).
+- **E2E test script** - Added `scripts/e2e-test.sh` for comprehensive CLI validation before releases.
+
 ## [0.11.9] - 2026-01-14
 
 ### Fixed
