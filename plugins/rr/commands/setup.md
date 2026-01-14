@@ -137,3 +137,91 @@ rr run "make test"  # or appropriate command for the project
 | Sync slow           | Add large dirs to `sync.exclude`                            |
 | Lock stuck          | `rr unlock`                                                 |
 | Wrong directory     | Check `dir` in global config                                |
+
+## LLM Workflow (Machine Interface)
+
+When setting up rr programmatically, use `--machine` for structured JSON output that's easier to parse.
+
+### Step 1: Check Global Config
+
+```bash
+cat ~/.rr/config.yaml 2>/dev/null
+```
+
+**IF missing or empty:**
+- Ask user for SSH hostname/alias and remote directory
+- Create config with non-interactive command:
+
+```bash
+rr host add --name <name> --ssh "<alias>" --dir "~/projects/\${PROJECT}" --skip-probe
+```
+
+### Step 2: Check Project Config
+
+```bash
+rr doctor --machine 2>&1
+```
+
+**Parse response:**
+- `success: true` with config checks passing -> Project config OK
+- `error.code == "CONFIG_NOT_FOUND"` -> Run `rr init --non-interactive --host <host>`
+
+### Step 3: Verify Connectivity
+
+```bash
+rr status --machine
+```
+
+**Parse `data.hosts[]` array:**
+
+```
+FOR each host in data.hosts:
+  IF host.healthy == true:
+    -> Host OK
+  ELSE:
+    -> FOR each alias in host.aliases:
+      -> Parse alias.error for diagnosis:
+         "timeout" -> Network/VPN issue
+         "auth" -> Key not deployed
+         "host key" -> First connection
+```
+
+**Fix connectivity issues:**
+- Timeout: Check `ping <hostname>`, verify network/VPN
+- Auth: Run `ssh-copy-id <alias>` or `rr setup <host>`
+- Host key: `ssh -o StrictHostKeyChecking=accept-new <alias> exit`
+
+### Step 4: Test Execution
+
+```bash
+rr exec "echo rr-test-ok" 2>&1
+echo "Exit code: $?"
+```
+
+**Expected:** Output contains "rr-test-ok", exit code 0
+
+**If fails:** Parse error and check:
+- Lock issues: `rr unlock` then retry
+- Directory issues: Verify `dir` in `~/.rr/config.yaml`
+
+### Step 5: Verify Dependencies
+
+Based on project type, check tools on each host:
+
+```bash
+# Check tool availability
+rr exec --host <hostname> "command -v go" && echo "GO_OK" || echo "GO_MISSING"
+rr exec --host <hostname> "command -v node" && echo "NODE_OK" || echo "NODE_MISSING"
+rr exec --host <hostname> "command -v uv" && echo "UV_OK" || echo "UV_MISSING"
+```
+
+**IF tool missing:** Install via SSH directly (see installation commands above)
+
+### Step 6: Final Verification
+
+```bash
+rr test 2>&1
+echo "Exit code: $?"
+```
+
+Exit code 0 = Setup complete

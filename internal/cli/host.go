@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +18,32 @@ import (
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
+// Host command flags
+var (
+	hostListJSON bool
+	// Non-interactive host add flags
+	hostAddName string
+	hostAddSSH  string
+	hostAddDir  string
+	hostAddTags []string
+)
+
+// HostListOutput represents the JSON output for host list command.
+type HostListOutput struct {
+	Hosts       []HostConfigInfo `json:"hosts"`
+	DefaultHost string           `json:"default_host,omitempty"`
+}
+
+// HostConfigInfo represents a single host in JSON output.
+type HostConfigInfo struct {
+	Name       string            `json:"name"`
+	SSHAliases []string          `json:"ssh_aliases"`
+	Dir        string            `json:"dir"`
+	Tags       []string          `json:"tags,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	IsDefault  bool              `json:"is_default"`
+}
+
 // HostAddOptions holds options for the host add command.
 type HostAddOptions struct {
 	Host      string // Pre-specified SSH host/alias
@@ -29,6 +57,11 @@ func hostAdd(opts HostAddOptions) error {
 	cfg, _, err := loadGlobalConfig()
 	if err != nil {
 		return err
+	}
+
+	// Check if non-interactive mode is requested via flags
+	if hostAddName != "" && hostAddSSH != "" {
+		return hostAddNonInteractive(cfg, opts)
 	}
 
 	// Get list of existing SSH hosts to exclude from picker
@@ -93,6 +126,87 @@ func hostAdd(opts HostAddOptions) error {
 	}
 
 	fmt.Printf("%s Added host '%s'\n", ui.SymbolSuccess, machine.name)
+	return nil
+}
+
+// hostAddNonInteractive adds a host using command-line flags (for CI/LLM usage).
+func hostAddNonInteractive(cfg *config.GlobalConfig, opts HostAddOptions) error {
+	// Parse SSH aliases from comma-separated string
+	sshAliases := strings.Split(hostAddSSH, ",")
+	for i := range sshAliases {
+		sshAliases[i] = strings.TrimSpace(sshAliases[i])
+	}
+
+	// Validate inputs
+	if hostAddName == "" {
+		return errors.New(errors.ErrConfig,
+			"Host name is required",
+			"Use --name to specify a friendly name for the host")
+	}
+	if len(sshAliases) == 0 || sshAliases[0] == "" {
+		return errors.New(errors.ErrConfig,
+			"SSH connection is required",
+			"Use --ssh to specify SSH hostname or alias (comma-separated for multiple)")
+	}
+
+	// Check for name conflict
+	if _, exists := cfg.Hosts[hostAddName]; exists {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host '%s' already exists", hostAddName),
+			"Choose a different name, or use 'rr host remove' first.")
+	}
+
+	// Determine remote directory
+	remoteDir := hostAddDir
+	if remoteDir == "" {
+		// Use same dir as existing hosts, or default
+		for _, h := range cfg.Hosts {
+			if h.Dir != "" {
+				remoteDir = h.Dir
+				break
+			}
+		}
+		if remoteDir == "" {
+			remoteDir = "~/rr/${PROJECT}"
+		}
+	}
+
+	// Test connection (unless --skip-probe)
+	if !opts.SkipProbe {
+		_, err := host.Probe(sshAliases[0], 10*time.Second)
+		if err != nil {
+			return errors.WrapWithCode(err, errors.ErrSSH,
+				fmt.Sprintf("Can't reach %s", sshAliases[0]),
+				"Make sure the host is up and SSH is working: ssh "+sshAliases[0])
+		}
+	}
+
+	// Build host config
+	hostConfig := config.Host{
+		SSH:  sshAliases,
+		Dir:  remoteDir,
+		Tags: hostAddTags,
+	}
+
+	// Add to config
+	cfg.Hosts[hostAddName] = hostConfig
+
+	// Save config
+	if err := saveGlobalConfig(cfg); err != nil {
+		return err
+	}
+
+	// Output result
+	if machineMode {
+		return WriteJSONSuccess(os.Stdout, map[string]interface{}{
+			"name":        hostAddName,
+			"ssh_aliases": sshAliases,
+			"dir":         remoteDir,
+			"tags":        hostAddTags,
+		})
+	}
+
+	fmt.Printf("%s Added host '%s'\n", ui.SymbolSuccess, hostAddName)
 	return nil
 }
 
@@ -197,9 +311,65 @@ func hostRemove(name string) error {
 func hostList() error {
 	cfg, globalPath, err := loadGlobalConfig()
 	if err != nil {
+		if hostListJSON || machineMode {
+			return WriteJSONFromError(os.Stdout, err)
+		}
 		return err
 	}
 
+	// JSON/machine mode output
+	if hostListJSON || machineMode {
+		return outputHostListJSON(cfg)
+	}
+
+	// Human-readable output
+	return outputHostListText(cfg, globalPath)
+}
+
+// outputHostListJSON outputs hosts in JSON format with envelope.
+func outputHostListJSON(cfg *config.GlobalConfig) error {
+	output := HostListOutput{
+		Hosts: make([]HostConfigInfo, 0, len(cfg.Hosts)),
+	}
+
+	// Sort host names for consistent output
+	var names []string
+	for name := range cfg.Hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// First host is default (if any exist)
+	if len(names) > 0 {
+		output.DefaultHost = names[0]
+	}
+
+	for _, name := range names {
+		h := cfg.Hosts[name]
+		info := HostConfigInfo{
+			Name:       name,
+			SSHAliases: h.SSH,
+			Dir:        h.Dir,
+			Tags:       h.Tags,
+			Env:        h.Env,
+			IsDefault:  name == output.DefaultHost,
+		}
+		output.Hosts = append(output.Hosts, info)
+	}
+
+	// Use envelope wrapper in machine mode, plain JSON for --json
+	if machineMode {
+		return WriteJSONSuccess(os.Stdout, output)
+	}
+
+	// Legacy --json behavior (no envelope)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
+}
+
+// outputHostListText outputs hosts in human-readable format.
+func outputHostListText(cfg *config.GlobalConfig, globalPath string) error {
 	if len(cfg.Hosts) == 0 {
 		fmt.Println("No hosts configured.")
 		fmt.Println("\nAdd one with: rr host add")

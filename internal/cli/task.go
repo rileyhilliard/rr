@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -15,6 +16,25 @@ import (
 	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/spf13/cobra"
 )
+
+// tasksJSON flag for JSON output
+var tasksJSON bool
+
+// TasksOutput represents the JSON output for tasks command.
+type TasksOutput struct {
+	Tasks []TaskInfo `json:"tasks"`
+}
+
+// TaskInfo represents a single task in JSON output.
+type TaskInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Type        string   `json:"type"` // "single", "multi-step", "parallel"
+	Command     string   `json:"command,omitempty"`
+	Steps       []string `json:"steps,omitempty"`
+	Subtasks    []string `json:"subtasks,omitempty"`
+	Hosts       []string `json:"hosts,omitempty"`
+}
 
 // TaskOptions holds options for task execution.
 type TaskOptions struct {
@@ -197,6 +217,11 @@ func ListTasks() error {
 	// Find and load config
 	cfgPath, err := config.Find("")
 	if err != nil {
+		if tasksJSON || machineMode {
+			return WriteJSONFromError(os.Stdout, errors.WrapWithCode(err, errors.ErrConfig,
+				"Couldn't find a config file",
+				"Run 'rr init' to create one."))
+		}
 		return errors.WrapWithCode(err, errors.ErrConfig,
 			"Couldn't find a config file",
 			"Run 'rr init' to create one.")
@@ -204,9 +229,73 @@ func ListTasks() error {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
+		if tasksJSON || machineMode {
+			return WriteJSONFromError(os.Stdout, err)
+		}
 		return err
 	}
 
+	// JSON/machine mode output
+	if tasksJSON || machineMode {
+		return outputTasksJSON(cfg)
+	}
+
+	// Human-readable output
+	return outputTasksText(cfg)
+}
+
+// outputTasksJSON outputs tasks in JSON format with envelope.
+func outputTasksJSON(cfg *config.Config) error {
+	output := TasksOutput{
+		Tasks: make([]TaskInfo, 0, len(cfg.Tasks)),
+	}
+
+	// Sort task names for consistent output
+	var names []string
+	for name := range cfg.Tasks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		task := cfg.Tasks[name]
+		info := TaskInfo{
+			Name:        name,
+			Description: task.Description,
+			Hosts:       task.Hosts,
+		}
+
+		if config.IsParallelTask(&task) {
+			info.Type = "parallel"
+			info.Subtasks = task.Parallel
+		} else if len(task.Steps) > 0 {
+			info.Type = "multi-step"
+			steps := make([]string, len(task.Steps))
+			for i, step := range task.Steps {
+				steps[i] = step.Run
+			}
+			info.Steps = steps
+		} else {
+			info.Type = "single"
+			info.Command = task.Run
+		}
+
+		output.Tasks = append(output.Tasks, info)
+	}
+
+	// Use envelope wrapper in machine mode, plain JSON for --json
+	if machineMode {
+		return WriteJSONSuccess(os.Stdout, output)
+	}
+
+	// Legacy --json behavior (no envelope)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(output)
+}
+
+// outputTasksText outputs tasks in human-readable format.
+func outputTasksText(cfg *config.Config) error {
 	if len(cfg.Tasks) == 0 {
 		fmt.Println("No tasks defined.")
 		fmt.Println()
