@@ -1180,6 +1180,54 @@ func TestSelector_GetHostNames_Sorted(t *testing.T) {
 	}
 }
 
+func TestSelector_GetHostNames_UsesHostOrder(t *testing.T) {
+	hosts := map[string]config.Host{
+		"zebra": {SSH: []string{"localhost"}},
+		"apple": {SSH: []string{"localhost"}},
+		"mango": {SSH: []string{"localhost"}},
+	}
+
+	selector := NewSelector(hosts)
+	// Set custom order (non-alphabetical)
+	selector.SetHostOrder([]string{"mango", "zebra", "apple"})
+	names := selector.GetHostNames()
+
+	expected := []string{"mango", "zebra", "apple"}
+	if len(names) != len(expected) {
+		t.Fatalf("GetHostNames() returned %d names, want %d", len(names), len(expected))
+	}
+
+	for i, name := range names {
+		if name != expected[i] {
+			t.Errorf("GetHostNames()[%d] = %q, want %q", i, name, expected[i])
+		}
+	}
+}
+
+func TestSelector_GetHostNames_HostOrderFiltersNonExistent(t *testing.T) {
+	hosts := map[string]config.Host{
+		"zebra": {SSH: []string{"localhost"}},
+		"apple": {SSH: []string{"localhost"}},
+	}
+
+	selector := NewSelector(hosts)
+	// Set order with a non-existent host
+	selector.SetHostOrder([]string{"mango", "zebra", "nonexistent", "apple"})
+	names := selector.GetHostNames()
+
+	// Should only return hosts that exist
+	expected := []string{"zebra", "apple"}
+	if len(names) != len(expected) {
+		t.Fatalf("GetHostNames() returned %d names, want %d", len(names), len(expected))
+	}
+
+	for i, name := range names {
+		if name != expected[i] {
+			t.Errorf("GetHostNames()[%d] = %q, want %q", i, name, expected[i])
+		}
+	}
+}
+
 // ============================================================================
 // SelectHost tests
 // ============================================================================

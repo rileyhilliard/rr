@@ -541,12 +541,26 @@ func (s *Selector) HostCount() int {
 	return len(s.hosts)
 }
 
-// GetHostNames returns all configured host names in alphabetical order.
-// This is useful for iterating through hosts for load balancing.
+// GetHostNames returns all configured host names.
+// If hostOrder is set, returns hosts in that order (config priority).
+// Otherwise returns hosts in alphabetical order for determinism.
 func (s *Selector) GetHostNames() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Use hostOrder if set (respects config priority)
+	if len(s.hostOrder) > 0 {
+		// Return only hosts that exist in the hosts map
+		names := make([]string, 0, len(s.hostOrder))
+		for _, name := range s.hostOrder {
+			if _, ok := s.hosts[name]; ok {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+
+	// Fallback: alphabetical order
 	names := make([]string, 0, len(s.hosts))
 	for name := range s.hosts {
 		names = append(names, name)
