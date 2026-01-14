@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.5] - 2026-01-14
+
+### Fixed
+
+- **Host priority for load-balanced workflows** - Multi-host scenarios now respect the host order from `.rr.yaml`. Previously `GetHostNames()` returned hosts alphabetically, causing the wrong host to be tried first.
+
 ## [0.11.4] - 2026-01-13
 
 ### Fixed
