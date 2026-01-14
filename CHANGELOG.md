@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.6] - 2026-01-14
+
+### Added
+
+- **Visual status indicators for `rr monitor`** - Host cards now show expressive state indicators:
+  - **Idle** (green ◉) - Host is online and ready for tasks, shows "- idle"
+  - **Running** (amber animated) - Host is actively running a task (locked), shows "- running 2m30s" with duration
+  - **Offline** (red ◌) - Host is unreachable, shows "- offline"
+  - Running state uses animated braille spinner (⣾⣽⣻⢿⡿⣟⣯⣷) with gen-z style color cycling
+
+### Changed
+
+- Refactored host selector to use `orderedHostNames()` helper, reducing code duplication
+- CI test output now shows only failing tests for cleaner feedback
+
 ## [0.11.5] - 2026-01-14
 
 ### Fixed
