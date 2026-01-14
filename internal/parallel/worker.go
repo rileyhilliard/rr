@@ -33,6 +33,7 @@ type hostWorker struct {
 func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult {
 	result := TaskResult{
 		TaskName:  task.Name,
+		Command:   task.Command,
 		Host:      w.hostName,
 		StartTime: time.Now(),
 	}
@@ -295,6 +296,7 @@ type localWorker struct {
 func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult {
 	result := TaskResult{
 		TaskName:  task.Name,
+		Command:   task.Command,
 		Host:      "local",
 		StartTime: time.Now(),
 	}

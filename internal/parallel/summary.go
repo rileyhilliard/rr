@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/output"
+	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -96,25 +98,7 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 		// Show error details for failed tasks
 		if !tr.Success() {
 			fmt.Fprintf(w, "    %s\n", mutedStyle.Render(statusText))
-
-			// Show output snippet for failures
-			if len(tr.Output) > 0 && cfg.MaxOutputLines > 0 {
-				outputStr := string(tr.Output)
-				lines := strings.Split(strings.TrimSpace(outputStr), "\n")
-
-				// Take last N lines (most relevant for errors)
-				start := 0
-				if len(lines) > cfg.MaxOutputLines {
-					start = len(lines) - cfg.MaxOutputLines
-					fmt.Fprintf(w, "    %s\n", mutedStyle.Render(fmt.Sprintf("... (%d lines omitted)", start)))
-				}
-
-				for _, line := range lines[start:] {
-					if line != "" {
-						fmt.Fprintf(w, "    %s\n", mutedStyle.Render(line))
-					}
-				}
-			}
+			renderTaskFailures(w, tr, cfg.MaxOutputLines, errorStyle, mutedStyle)
 		}
 	}
 
@@ -149,11 +133,25 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 		)
 	}
 
-	// Log directory
+	// Log directory - point to specific file if there's only one failure
 	if cfg.ShowLogs && cfg.LogDir != "" {
+		logPath := cfg.LogDir
+
+		// If there's exactly one failed task, point directly to its log file
+		if result.Failed == 1 {
+			for i := range sortedResults {
+				if !sortedResults[i].Success() {
+					// Sanitize the task name the same way logs/writer.go does
+					taskLogName := sanitizeTaskName(sortedResults[i].TaskName) + ".log"
+					logPath = cfg.LogDir + "/" + taskLogName
+					break
+				}
+			}
+		}
+
 		fmt.Fprintf(w, "  %s %s\n",
 			mutedStyle.Render("Logs:"),
-			mutedStyle.Render(cfg.LogDir),
+			mutedStyle.Render(logPath),
 		)
 	}
 
@@ -192,4 +190,100 @@ func FormatBriefSummary(result *Result) string {
 
 	return fmt.Sprintf("%d passed, %d failed of %d tasks (%s)",
 		result.Passed, result.Failed, total, formatDuration(result.Duration))
+}
+
+// sanitizeTaskName converts a task name to a safe filename.
+// Replaces characters that are invalid in filenames with dashes.
+func sanitizeTaskName(name string) string {
+	result := make([]byte, len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' {
+			result[i] = '-'
+		} else {
+			result[i] = c
+		}
+	}
+	return string(result)
+}
+
+// renderTaskFailures displays failure details for a failed task.
+func renderTaskFailures(w io.Writer, tr *TaskResult, maxLines int, errorStyle, mutedStyle lipgloss.Style) {
+	if len(tr.Output) == 0 {
+		return
+	}
+
+	failures := formatters.ExtractFailures(tr.Command, tr.Output)
+	if len(failures) > 0 {
+		renderStructuredFailures(w, failures, maxLines, errorStyle, mutedStyle)
+		return
+	}
+
+	// Fallback: show last N lines if no structured failures found
+	if maxLines > 0 {
+		renderFallbackOutput(w, tr.Output, maxLines, mutedStyle)
+	}
+}
+
+// renderStructuredFailures displays parsed test failures.
+func renderStructuredFailures(w io.Writer, failures []output.TestFailure, maxLines int, errorStyle, mutedStyle lipgloss.Style) {
+	maxFailures := maxLines
+	if maxFailures <= 0 {
+		maxFailures = 5
+	}
+	showCount := len(failures)
+	if showCount > maxFailures {
+		showCount = maxFailures
+	}
+
+	for i := 0; i < showCount; i++ {
+		f := failures[i]
+		location := formatLocation(f.File, f.Line)
+
+		if location != "" {
+			fmt.Fprintf(w, "    %s %s\n", errorStyle.Render(f.TestName), mutedStyle.Render("("+location+")"))
+		} else {
+			fmt.Fprintf(w, "    %s\n", errorStyle.Render(f.TestName))
+		}
+
+		if f.Message != "" {
+			msg := strings.Split(f.Message, "\n")[0]
+			if len(msg) > 80 {
+				msg = msg[:77] + "..."
+			}
+			fmt.Fprintf(w, "      %s\n", mutedStyle.Render(msg))
+		}
+	}
+
+	if len(failures) > showCount {
+		fmt.Fprintf(w, "    %s\n", mutedStyle.Render(fmt.Sprintf("... and %d more failures", len(failures)-showCount)))
+	}
+}
+
+// formatLocation formats file:line location string.
+func formatLocation(file string, line int) string {
+	if file == "" {
+		return ""
+	}
+	if line > 0 {
+		return fmt.Sprintf("%s:%d", file, line)
+	}
+	return file
+}
+
+// renderFallbackOutput shows last N lines of raw output.
+func renderFallbackOutput(w io.Writer, rawOutput []byte, maxLines int, mutedStyle lipgloss.Style) {
+	lines := strings.Split(strings.TrimSpace(string(rawOutput)), "\n")
+
+	start := 0
+	if len(lines) > maxLines {
+		start = len(lines) - maxLines
+		fmt.Fprintf(w, "    %s\n", mutedStyle.Render(fmt.Sprintf("... (%d lines omitted)", start)))
+	}
+
+	for _, line := range lines[start:] {
+		if line != "" {
+			fmt.Fprintf(w, "    %s\n", mutedStyle.Render(line))
+		}
+	}
 }

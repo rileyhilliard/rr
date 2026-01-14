@@ -33,10 +33,16 @@ type Orchestrator struct {
 }
 
 // NewOrchestrator creates a new orchestrator for parallel task execution.
-func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, resolved *config.ResolvedConfig, cfg Config) *Orchestrator {
-	hostList := make([]string, 0, len(hosts))
-	for name := range hosts {
-		hostList = append(hostList, name)
+// The hostOrder parameter specifies the priority order for host selection - hosts earlier
+// in the list are preferred. If hostOrder is nil, an arbitrary order is used.
+func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, hostOrder []string, resolved *config.ResolvedConfig, cfg Config) *Orchestrator {
+	// Use provided order if available, otherwise fall back to map iteration (arbitrary order)
+	hostList := hostOrder
+	if len(hostList) == 0 && len(hosts) > 0 {
+		hostList = make([]string, 0, len(hosts))
+		for name := range hosts {
+			hostList = append(hostList, name)
+		}
 	}
 
 	return &Orchestrator{
