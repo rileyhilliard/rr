@@ -264,7 +264,8 @@ func TestThresholdConstants(t *testing.T) {
 }
 
 func TestStatusIndicatorConstants(t *testing.T) {
-	assert.Equal(t, "◉", StatusConnected)   // Cyber glyph
+	assert.Equal(t, "◉", StatusIdle)        // Filled target - ready for work
+	assert.Equal(t, "⣿", StatusRunning)     // Braille full - active
 	assert.Equal(t, "◌", StatusUnreachable) // Cyber glyph
 	assert.Equal(t, "◔", StatusSlow)        // Cyber glyph
 }
@@ -283,4 +284,46 @@ func TestColorConstants(t *testing.T) {
 	assert.NotEmpty(t, string(ColorAccent))
 	assert.NotEmpty(t, string(ColorAccentDim))
 	assert.NotEmpty(t, string(ColorGraph))
+}
+
+func TestRunningSpinnerFrames(t *testing.T) {
+	// Verify running spinner frames are defined
+	assert.Len(t, RunningSpinnerFrames, 8)
+	// Verify they're braille characters
+	for _, frame := range RunningSpinnerFrames {
+		assert.NotEmpty(t, frame)
+	}
+}
+
+func TestSpinnerColorFrames(t *testing.T) {
+	// Verify spinner color frames are defined
+	assert.Len(t, SpinnerColorFrames, 8)
+	for _, color := range SpinnerColorFrames {
+		assert.NotEmpty(t, string(color))
+	}
+}
+
+func TestGetSpinnerColor(t *testing.T) {
+	// Verify color cycling works
+	for i := 0; i < 16; i++ {
+		color := GetSpinnerColor(i)
+		assert.NotEmpty(t, string(color))
+	}
+	// Verify it wraps around
+	assert.Equal(t, GetSpinnerColor(0), GetSpinnerColor(8))
+	assert.Equal(t, GetSpinnerColor(1), GetSpinnerColor(9))
+}
+
+func TestGetRunningSpinner(t *testing.T) {
+	// Test each frame
+	for i := 0; i < 8; i++ {
+		char, style := GetRunningSpinner(i)
+		assert.Equal(t, RunningSpinnerFrames[i], char)
+		assert.NotNil(t, style)
+	}
+
+	// Test wrapping
+	char0, _ := GetRunningSpinner(0)
+	char8, _ := GetRunningSpinner(8)
+	assert.Equal(t, char0, char8)
 }

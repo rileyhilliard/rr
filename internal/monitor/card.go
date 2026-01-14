@@ -229,27 +229,35 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	return style.Render(content)
 }
 
-// renderHostLine renders the host name with status indicator.
+// renderHostLine renders the host name with status indicator and status text.
 func (m Model) renderHostLine(host string, status HostStatus) string {
 	var indicator string
 	var indicatorStyle lipgloss.Style
+	var statusText string
 
 	switch status {
 	case StatusConnectingState:
 		indicator = m.ConnectingSpinner() // Animated spinner
 		indicatorStyle = StatusConnectingStyle
-	case StatusConnectedState:
-		indicator = StatusConnected
-		indicatorStyle = StatusConnectedStyle
+		// No status text for connecting - card content shows the message
+	case StatusIdleState:
+		indicator = StatusIdle
+		indicatorStyle = StatusIdleStyle
+		statusText = StatusTextStyle.Render(" - idle")
+	case StatusRunningState:
+		indicator, indicatorStyle = m.RunningSpinner() // Animated braille spinner with color cycling
+		statusText = m.renderRunningStatusText(host)
 	case StatusSlowState:
-		indicator = StatusConnected
+		indicator = StatusIdle
 		indicatorStyle = StatusSlowStyle
+		statusText = StatusTextStyle.Render(" - slow")
 	case StatusUnreachableState:
 		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle
+		statusText = StatusTextStyle.Render(" - offline")
 	}
 
-	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(host)
+	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(host) + statusText
 }
 
 // renderCardCPUSection renders CPU with a braille sparkline graph.
@@ -646,6 +654,7 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 }
 
 // renderMinimalHostLine renders the hostname, truncating if necessary.
+// Minimal mode doesn't show status text to save space.
 func (m Model) renderMinimalHostLine(host string, status HostStatus, maxWidth int) string {
 	var indicator string
 	var indicatorStyle lipgloss.Style
@@ -654,11 +663,13 @@ func (m Model) renderMinimalHostLine(host string, status HostStatus, maxWidth in
 	case StatusConnectingState:
 		indicator = m.ConnectingSpinner() // Animated spinner
 		indicatorStyle = StatusConnectingStyle
-	case StatusConnectedState:
-		indicator = StatusConnected
-		indicatorStyle = StatusConnectedStyle
+	case StatusIdleState:
+		indicator = StatusIdle
+		indicatorStyle = StatusIdleStyle
+	case StatusRunningState:
+		indicator, indicatorStyle = m.RunningSpinner() // Animated braille spinner
 	case StatusSlowState:
-		indicator = StatusConnected
+		indicator = StatusIdle
 		indicatorStyle = StatusSlowStyle
 	case StatusUnreachableState:
 		indicator = StatusUnreachable

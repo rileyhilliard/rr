@@ -206,3 +206,123 @@ func TestHostMetrics_EmptyProcesses(t *testing.T) {
 	assert.Nil(t, metrics.Processes)
 	assert.Len(t, metrics.Processes, 0)
 }
+
+func TestHostLockInfo_Duration(t *testing.T) {
+	tests := []struct {
+		name    string
+		started time.Time
+		minDur  time.Duration
+		maxDur  time.Duration
+	}{
+		{
+			name:    "zero time returns zero duration",
+			started: time.Time{},
+			minDur:  0,
+			maxDur:  time.Millisecond,
+		},
+		{
+			name:    "recent start time",
+			started: time.Now().Add(-5 * time.Second),
+			minDur:  4 * time.Second,
+			maxDur:  6 * time.Second,
+		},
+		{
+			name:    "older start time",
+			started: time.Now().Add(-2 * time.Minute),
+			minDur:  119 * time.Second,
+			maxDur:  121 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := HostLockInfo{
+				IsLocked: true,
+				Holder:   "user@host",
+				Started:  tt.started,
+			}
+			dur := info.Duration()
+			assert.GreaterOrEqual(t, dur, tt.minDur)
+			assert.LessOrEqual(t, dur, tt.maxDur)
+		})
+	}
+}
+
+func TestHostLockInfo_FormatDuration(t *testing.T) {
+	tests := []struct {
+		name    string
+		started time.Time
+		expect  string
+	}{
+		{
+			name:    "zero time",
+			started: time.Time{},
+			expect:  "0s",
+		},
+		{
+			name:    "30 seconds ago",
+			started: time.Now().Add(-30 * time.Second),
+			expect:  "30s",
+		},
+		{
+			name:    "2 minutes ago",
+			started: time.Now().Add(-2 * time.Minute),
+			expect:  "2m",
+		},
+		{
+			name:    "2 minutes 30 seconds ago",
+			started: time.Now().Add(-2*time.Minute - 30*time.Second),
+			expect:  "2m30s",
+		},
+		{
+			name:    "10 minutes ago",
+			started: time.Now().Add(-10 * time.Minute),
+			expect:  "10m",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := HostLockInfo{
+				IsLocked: true,
+				Holder:   "user@host",
+				Started:  tt.started,
+			}
+			result := info.FormatDuration()
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+func TestHostLockInfo_Struct(t *testing.T) {
+	now := time.Now()
+	info := HostLockInfo{
+		IsLocked: true,
+		Holder:   "alice@workstation",
+		Started:  now,
+	}
+
+	assert.True(t, info.IsLocked)
+	assert.Equal(t, "alice@workstation", info.Holder)
+	assert.Equal(t, now, info.Started)
+}
+
+func TestFormatInt(t *testing.T) {
+	tests := []struct {
+		input  int
+		expect string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{10, "10"},
+		{123, "123"},
+		{9999, "9999"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expect, func(t *testing.T) {
+			result := formatInt(tt.input)
+			assert.Equal(t, tt.expect, result)
+		})
+	}
+}

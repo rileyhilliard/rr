@@ -42,8 +42,15 @@ jobs:
         run: |
           # Run tests with JSON output to file only (quiet on success)
           if ! go test -race -coverprofile=coverage.out -covermode=atomic -json ./... > test-results.json 2>&1; then
-            echo "Tests failed. Output:"
-            jq -rs '[.[] | select(.Action=="output")] | map(.Output) | join("")' test-results.json
+            echo "Tests failed. Showing failures only:"
+            echo ""
+            # Get list of failed tests and their output
+            FAILED_TESTS=$(jq -r 'select(.Action=="fail" and .Test != null) | .Test' test-results.json | sort -u)
+            for test in $FAILED_TESTS; do
+              echo "=== FAIL: $test ==="
+              jq -rs --arg t "$test" '[.[] | select(.Test==$t and .Action=="output")] | map(.Output) | join("")' test-results.json
+              echo ""
+            done
             exit 1
           fi
           echo "All tests passed"
@@ -173,7 +180,18 @@ jobs:
           RR_TEST_SSH_KEY: /tmp/rr-ci-ssh-keys/id_ed25519
           RR_TEST_SSH_USER: testuser
         run: |
-          go test -v -race -coverprofile=coverage-integration.out -covermode=atomic ./tests/integration/... ./pkg/sshutil/...
+          if ! go test -race -coverprofile=coverage-integration.out -covermode=atomic -json ./tests/integration/... ./pkg/sshutil/... > integration-results.json 2>&1; then
+            echo "Integration tests failed. Showing failures only:"
+            echo ""
+            FAILED_TESTS=$(jq -r 'select(.Action=="fail" and .Test != null) | .Test' integration-results.json | sort -u)
+            for test in $FAILED_TESTS; do
+              echo "=== FAIL: $test ==="
+              jq -rs --arg t "$test" '[.[] | select(.Test==$t and .Action=="output")] | map(.Output) | join("")' integration-results.json
+              echo ""
+            done
+            exit 1
+          fi
+          echo "All integration tests passed"
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v6

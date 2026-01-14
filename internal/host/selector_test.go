@@ -1409,3 +1409,108 @@ func TestSelector_SelectNextHost_SkipsUnreachable(t *testing.T) {
 
 	conn.Close()
 }
+
+// ============================================================================
+// Regression test: resolveHost and GetHostNames must use same ordering
+// ============================================================================
+
+// TestSelector_ResolveHostAndGetHostNames_SameOrdering ensures that resolveHost()
+// and GetHostNames() use the same host ordering logic. This is a regression test
+// for a bug where these two methods had duplicate ordering code that drifted out
+// of sync - GetHostNames was sorting alphabetically while resolveHost respected
+// hostOrder, causing load-balanced workflows to select the wrong host.
+func TestSelector_ResolveHostAndGetHostNames_SameOrdering(t *testing.T) {
+	// Create hosts with names that would sort differently alphabetically
+	hosts := map[string]config.Host{
+		"z-last":   {SSH: []string{"z-last.local"}},
+		"a-first":  {SSH: []string{"a-first.local"}},
+		"m-middle": {SSH: []string{"m-middle.local"}},
+	}
+
+	t.Run("without host order both use alphabetical", func(t *testing.T) {
+		selector := NewSelector(hosts)
+
+		// Get the host that resolveHost would pick
+		resolvedName, _, err := selector.resolveHost("")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+
+		// Get the first host from GetHostNames
+		hostNames := selector.GetHostNames()
+		if len(hostNames) == 0 {
+			t.Fatal("GetHostNames returned empty list")
+		}
+
+		// Both should return the same first host (alphabetically: "a-first")
+		if resolvedName != hostNames[0] {
+			t.Errorf("resolveHost returned %q but GetHostNames[0] is %q - these must be consistent",
+				resolvedName, hostNames[0])
+		}
+		if resolvedName != "a-first" {
+			t.Errorf("expected alphabetically first host 'a-first', got %q", resolvedName)
+		}
+	})
+
+	t.Run("with host order both use priority order", func(t *testing.T) {
+		selector := NewSelector(hosts)
+		// Set a non-alphabetical priority order
+		selector.SetHostOrder([]string{"z-last", "m-middle", "a-first"})
+
+		// Get the host that resolveHost would pick
+		resolvedName, _, err := selector.resolveHost("")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+
+		// Get the first host from GetHostNames
+		hostNames := selector.GetHostNames()
+		if len(hostNames) == 0 {
+			t.Fatal("GetHostNames returned empty list")
+		}
+
+		// Both should return the same first host (priority order: "z-last")
+		if resolvedName != hostNames[0] {
+			t.Errorf("REGRESSION: resolveHost returned %q but GetHostNames[0] is %q - these must be consistent",
+				resolvedName, hostNames[0])
+		}
+		if resolvedName != "z-last" {
+			t.Errorf("expected priority-first host 'z-last', got %q", resolvedName)
+		}
+
+		// Verify full list order matches expected priority order
+		expected := []string{"z-last", "m-middle", "a-first"}
+		for i, name := range hostNames {
+			if name != expected[i] {
+				t.Errorf("GetHostNames()[%d] = %q, want %q", i, name, expected[i])
+			}
+		}
+	})
+
+	t.Run("with partial host order both skip missing hosts", func(t *testing.T) {
+		selector := NewSelector(hosts)
+		// Set order with a non-existent host first
+		selector.SetHostOrder([]string{"nonexistent", "m-middle", "z-last"})
+
+		// Get the host that resolveHost would pick (should skip nonexistent)
+		resolvedName, _, err := selector.resolveHost("")
+		if err != nil {
+			t.Fatalf("resolveHost failed: %v", err)
+		}
+
+		// Get the first host from GetHostNames (should also skip nonexistent)
+		hostNames := selector.GetHostNames()
+		if len(hostNames) == 0 {
+			t.Fatal("GetHostNames returned empty list")
+		}
+
+		// Both should skip the nonexistent host and return m-middle
+		if resolvedName != hostNames[0] {
+			t.Errorf("REGRESSION: resolveHost returned %q but GetHostNames[0] is %q - these must be consistent",
+				resolvedName, hostNames[0])
+		}
+		if resolvedName != "m-middle" {
+			t.Errorf("expected 'm-middle' (first valid in order), got %q", resolvedName)
+		}
+	})
+}

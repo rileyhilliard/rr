@@ -66,7 +66,7 @@ func TestModel_renderDetailHeader(t *testing.T) {
 		host   string
 		status HostStatus
 	}{
-		{"connected", "server1", StatusConnectedState},
+		{"idle", "server1", StatusIdleState},
 		{"slow", "server1", StatusSlowState},
 		{"unreachable", "server1", StatusUnreachableState},
 	}
@@ -363,7 +363,7 @@ func TestModel_renderDetailViewWithViewport(t *testing.T) {
 					}
 				}
 				m.metrics["server1"] = metrics
-				m.status["server1"] = StatusConnectedState
+				m.status["server1"] = StatusIdleState
 			}
 
 			if tt.wideLayout {

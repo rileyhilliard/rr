@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // HostStatus represents the connection state of a host.
@@ -13,7 +14,8 @@ type HostStatus int
 
 const (
 	StatusConnectingState HostStatus = iota
-	StatusConnectedState
+	StatusIdleState                  // Online, not running any task
+	StatusRunningState               // Online, actively running a task (locked)
 	StatusSlowState
 	StatusUnreachableState
 )
@@ -50,12 +52,14 @@ func (s HostStatus) String() string {
 	switch s {
 	case StatusConnectingState:
 		return "connecting"
-	case StatusConnectedState:
-		return "connected"
+	case StatusIdleState:
+		return "idle"
+	case StatusRunningState:
+		return "running"
 	case StatusSlowState:
 		return "slow"
 	case StatusUnreachableState:
-		return "unreachable"
+		return "offline"
 	default:
 		return "unknown"
 	}
@@ -67,7 +71,8 @@ type Model struct {
 	hostOrder  []string // Original config order for default sorting (priority order)
 	metrics    map[string]*HostMetrics
 	status     map[string]HostStatus
-	errors     map[string]string // Last error message per host for diagnostics
+	errors     map[string]string        // Last error message per host for diagnostics
+	lockInfo   map[string]*HostLockInfo // Lock status per host
 	selected   int
 	collector  *Collector
 	history    *History
@@ -96,9 +101,10 @@ type spinnerTickMsg time.Time
 
 // metricsMsg carries new metrics from the collector.
 type metricsMsg struct {
-	metrics map[string]*HostMetrics
-	errors  map[string]string // Connection errors per host
-	time    time.Time
+	metrics  map[string]*HostMetrics
+	errors   map[string]string        // Connection errors per host
+	lockInfo map[string]*HostLockInfo // Lock status per host
+	time     time.Time
 }
 
 // spinnerInterval is the animation frame rate for the connecting spinner
@@ -134,6 +140,7 @@ func NewModel(collector *Collector, interval time.Duration, hostOrder []string) 
 		metrics:   make(map[string]*HostMetrics),
 		status:    status,
 		errors:    make(map[string]string),
+		lockInfo:  make(map[string]*HostLockInfo),
 		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
@@ -202,7 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case metricsMsg:
 		m.lastUpdate = msg.time
-		m.updateMetrics(msg.metrics, msg.errors)
+		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
 	}
 
 	return m, nil
@@ -233,17 +240,18 @@ func (m Model) spinnerTickCmd() tea.Cmd {
 // collectCmd returns a command that collects metrics from all hosts.
 func (m Model) collectCmd() tea.Cmd {
 	return func() tea.Msg {
-		metrics, errors := m.collector.Collect()
+		metrics, errors, lockInfo := m.collector.Collect()
 		return metricsMsg{
-			metrics: metrics,
-			errors:  errors,
-			time:    time.Now(),
+			metrics:  metrics,
+			errors:   errors,
+			lockInfo: lockInfo,
+			time:     time.Now(),
 		}
 	}
 }
 
 // updateMetrics updates the model with new metrics and determines host status.
-func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[string]string) {
+func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[string]string, newLockInfo map[string]*HostLockInfo) {
 	for alias, metrics := range newMetrics {
 		if metrics == nil {
 			m.status[alias] = StatusUnreachableState
@@ -251,25 +259,38 @@ func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[
 			if errMsg, ok := newErrors[alias]; ok {
 				m.errors[alias] = errMsg
 			}
+			// Clear lock info for unreachable hosts
+			delete(m.lockInfo, alias)
 			continue
 		}
 
 		m.metrics[alias] = metrics
 		m.history.Push(alias, metrics)
 
-		// Determine status based on collection latency
-		// If metrics are fresh, host is connected
-		m.status[alias] = StatusConnectedState
+		// Update lock info
+		if lockInfo, ok := newLockInfo[alias]; ok && lockInfo != nil {
+			m.lockInfo[alias] = lockInfo
+		} else {
+			delete(m.lockInfo, alias)
+		}
+
+		// Determine status based on lock state and collection latency
+		if lockInfo, ok := m.lockInfo[alias]; ok && lockInfo.IsLocked {
+			m.status[alias] = StatusRunningState
+		} else {
+			m.status[alias] = StatusIdleState
+		}
+
 		// Clear any previous error
 		delete(m.errors, alias)
 	}
 }
 
-// OnlineCount returns the number of hosts with connected status.
+// OnlineCount returns the number of hosts that are online (idle or running).
 func (m Model) OnlineCount() int {
 	count := 0
 	for _, status := range m.status {
-		if status == StatusConnectedState {
+		if status == StatusIdleState || status == StatusRunningState {
 			count++
 		}
 	}
@@ -307,6 +328,30 @@ func (m Model) ConnectingSubtext() string {
 	// Cycle through subtexts more slowly (every 2 spinner frames)
 	idx := (m.spinnerFrame / 2) % len(ConnectingSubtextFrames)
 	return ConnectingSubtextFrames[idx]
+}
+
+// RunningSpinner returns the current spinner character and style for the running animation.
+// Uses braille dots with gen-z color cycling for a vibrant "working" effect.
+func (m Model) RunningSpinner() (string, lipgloss.Style) {
+	return GetRunningSpinner(m.spinnerFrame)
+}
+
+// renderRunningStatusText returns the status text for a running host.
+// Shows "- running" with the task duration if lock info is available.
+func (m Model) renderRunningStatusText(host string) string {
+	// Check if we have lock info with duration
+	if lockInfo, ok := m.lockInfo[host]; ok && lockInfo != nil && lockInfo.IsLocked {
+		duration := lockInfo.FormatDuration()
+		return StatusRunningTextStyle.Render(" - running " + duration)
+	}
+
+	// Fallback: show "- running" with animated dots
+	dots := m.spinnerFrame % 4
+	suffix := ""
+	for i := 0; i < dots; i++ {
+		suffix += "."
+	}
+	return StatusRunningTextStyle.Render(" - running" + suffix)
 }
 
 // LayoutMode returns the current layout mode based on terminal width.
@@ -449,9 +494,9 @@ func (m *Model) sortByDefault() {
 		hostI := m.hosts[i]
 		hostJ := m.hosts[j]
 
-		// Online hosts come first
-		onlineI := m.status[hostI] == StatusConnectedState
-		onlineJ := m.status[hostJ] == StatusConnectedState
+		// Online hosts come first (both idle and running count as online)
+		onlineI := m.status[hostI] == StatusIdleState || m.status[hostI] == StatusRunningState
+		onlineJ := m.status[hostJ] == StatusIdleState || m.status[hostJ] == StatusRunningState
 		if onlineI != onlineJ {
 			return onlineI
 		}

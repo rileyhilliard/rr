@@ -188,7 +188,7 @@ func TestModel_renderHostLine(t *testing.T) {
 		host   string
 		status HostStatus
 	}{
-		{"connected", "server1", StatusConnectedState},
+		{"idle", "server1", StatusIdleState},
 		{"slow", "server1", StatusSlowState},
 		{"unreachable", "server1", StatusUnreachableState},
 	}
@@ -234,7 +234,7 @@ func TestModel_renderCard(t *testing.T) {
 						{PID: 1234, User: "root", CPU: 25.0, Memory: 10.0, Command: "/usr/bin/process"},
 					},
 				}
-				m.status[tt.host] = StatusConnectedState
+				m.status[tt.host] = StatusIdleState
 			}
 
 			result := m.renderCard(tt.host, tt.width, tt.selected)
@@ -269,7 +269,7 @@ func TestModel_renderCompactCard(t *testing.T) {
 					CPU: CPUMetrics{Percent: 50.0},
 					RAM: RAMMetrics{UsedBytes: 4000000000, TotalBytes: 8000000000},
 				}
-				m.status["server1"] = StatusConnectedState
+				m.status["server1"] = StatusIdleState
 			}
 
 			result := m.renderCompactCard("server1", 80, tt.selected)
@@ -302,7 +302,7 @@ func TestModel_renderMinimalCard(t *testing.T) {
 					CPU: CPUMetrics{Percent: 50.0},
 					RAM: RAMMetrics{UsedBytes: 4000000000, TotalBytes: 8000000000},
 				}
-				m.status["server1"] = StatusConnectedState
+				m.status["server1"] = StatusIdleState
 			}
 
 			result := m.renderMinimalCard("server1", 50, false)
@@ -330,7 +330,7 @@ func TestModel_renderMinimalHostLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := m.renderMinimalHostLine(tt.host, StatusConnectedState, tt.maxWidth)
+			result := m.renderMinimalHostLine(tt.host, StatusIdleState, tt.maxWidth)
 			assert.NotEmpty(t, result)
 		})
 	}

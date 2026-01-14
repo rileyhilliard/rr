@@ -363,7 +363,7 @@ func TestModel_renderHeader(t *testing.T) {
 	m.height = 40
 
 	// Mark one host as connected
-	m.status["server1"] = StatusConnectedState
+	m.status["server1"] = StatusIdleState
 
 	result := m.renderHeader()
 	assert.NotEmpty(t, result)

@@ -79,20 +79,31 @@ var (
 	StatusConnectingStyle = lipgloss.NewStyle().
 				Foreground(ColorTextSecondary)
 
-	StatusConnectedStyle = lipgloss.NewStyle().
-				Foreground(ColorHealthy)
+	StatusIdleStyle = lipgloss.NewStyle().
+			Foreground(ColorHealthy)
+
+	StatusRunningStyle = lipgloss.NewStyle().
+				Foreground(ColorWarning)
 
 	StatusSlowStyle = lipgloss.NewStyle().
 			Foreground(ColorWarning)
 
 	StatusUnreachableStyle = lipgloss.NewStyle().
 				Foreground(ColorCritical)
+
+	// Status text styles (for the "- idle", "- running" suffix)
+	StatusTextStyle = lipgloss.NewStyle().
+			Foreground(ColorTextMuted)
+
+	StatusRunningTextStyle = lipgloss.NewStyle().
+				Foreground(ColorWarning)
 )
 
 // Status indicator characters - cyber glyphs
 const (
 	StatusConnecting  = "◐" // Half-filled (used as fallback when animation not available)
-	StatusConnected   = "◉" // Filled target
+	StatusIdle        = "◉" // Filled target - ready for work
+	StatusRunning     = "⣿" // Braille full (used as fallback when animation not available)
 	StatusUnreachable = "◌" // Dashed circle
 	StatusSlow        = "◔" // Partially filled
 )
@@ -100,6 +111,23 @@ const (
 // ConnectingSpinnerFrames are the animation frames for the connecting state
 // Rotates through half-circle positions for a smooth spin effect
 var ConnectingSpinnerFrames = []string{"◐", "◓", "◑", "◒"}
+
+// RunningSpinnerFrames are the animation frames for the running/locked state
+// Uses braille dots for a subtle "working" animation
+var RunningSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+
+// SpinnerColorFrames defines the gen-z color cycling for animated spinners
+// Cycles through neon colors for a vibrant effect
+var SpinnerColorFrames = []lipgloss.Color{
+	lipgloss.Color("#FFAA00"), // Electric amber
+	lipgloss.Color("#FF8800"), // Orange
+	lipgloss.Color("#FFCC00"), // Gold
+	lipgloss.Color("#FFAA00"), // Electric amber
+	lipgloss.Color("#FF9900"), // Amber-orange
+	lipgloss.Color("#FFBB00"), // Yellow-amber
+	lipgloss.Color("#FFAA00"), // Electric amber
+	lipgloss.Color("#FF7700"), // Deep amber
+}
 
 // ConnectingTextFrames are the animated text frames for the connecting message
 var ConnectingTextFrames = []string{
@@ -115,6 +143,20 @@ var ConnectingSubtextFrames = []string{
 	"establishing connection",
 	"waiting for response",
 	"almost there",
+}
+
+// GetSpinnerColor returns the color for the current spinner frame index.
+// Used for gen-z style color cycling on animated spinners.
+func GetSpinnerColor(frameIndex int) lipgloss.Color {
+	return SpinnerColorFrames[frameIndex%len(SpinnerColorFrames)]
+}
+
+// GetRunningSpinner returns the spinner character and style for the running state.
+func GetRunningSpinner(frameIndex int) (string, lipgloss.Style) {
+	char := RunningSpinnerFrames[frameIndex%len(RunningSpinnerFrames)]
+	color := GetSpinnerColor(frameIndex)
+	style := lipgloss.NewStyle().Foreground(color)
+	return char, style
 }
 
 // MetricColor returns the appropriate color for a percentage-based metric.

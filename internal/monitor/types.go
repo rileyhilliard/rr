@@ -64,3 +64,51 @@ type SystemInfo struct {
 	Kernel   string
 	Uptime   time.Duration
 }
+
+// HostLockInfo contains lock status for a host.
+type HostLockInfo struct {
+	IsLocked bool      // True if a lock is held on this host
+	Holder   string    // Description of who holds the lock (user@host)
+	Started  time.Time // When the lock was acquired
+}
+
+// Duration returns how long the lock has been held.
+func (l HostLockInfo) Duration() time.Duration {
+	if l.Started.IsZero() {
+		return 0
+	}
+	return time.Since(l.Started)
+}
+
+// FormatDuration returns a human-readable duration string (e.g., "2m30s").
+func (l HostLockInfo) FormatDuration() string {
+	d := l.Duration()
+	if d < time.Second {
+		return "0s"
+	}
+	// Format as Xm or XmYs
+	minutes := int(d.Minutes())
+	seconds := int(d.Seconds()) % 60
+	if minutes > 0 {
+		if seconds > 0 {
+			return formatInt(minutes) + "m" + formatInt(seconds) + "s"
+		}
+		return formatInt(minutes) + "m"
+	}
+	return formatInt(seconds) + "s"
+}
+
+// formatInt converts an integer to a string without importing strconv.
+func formatInt(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}

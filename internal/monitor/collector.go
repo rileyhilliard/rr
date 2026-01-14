@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/lock"
 )
 
 // cpuJiffies stores CPU jiffies for delta calculation.
@@ -25,6 +27,10 @@ type Collector struct {
 	timeout     time.Duration
 	prevJiffies map[string]cpuJiffies // Previous CPU jiffies per host for delta calculation
 	mu          sync.Mutex            // Protects prevJiffies
+
+	// Lock checking configuration (optional)
+	lockConfig  *config.LockConfig
+	projectHash string
 }
 
 // NewCollector creates a new metrics collector for the specified hosts.
@@ -37,17 +43,26 @@ func NewCollector(hosts map[string]config.Host) *Collector {
 	}
 }
 
+// SetLockConfig configures lock checking for the collector.
+// If set, the collector will check lock status for each host during collection.
+func (c *Collector) SetLockConfig(lockCfg config.LockConfig, projectHash string) {
+	c.lockConfig = &lockCfg
+	c.projectHash = projectHash
+}
+
 // SetTimeout sets the per-host collection timeout.
 func (c *Collector) SetTimeout(timeout time.Duration) {
 	c.timeout = timeout
 }
 
 // Collect gathers metrics from all configured hosts in parallel.
-// Returns a map of alias -> metrics and a map of alias -> error message.
+// Returns a map of alias -> metrics, a map of alias -> error message,
+// and a map of alias -> lock info.
 // Hosts that fail to connect will have nil metrics and an error message.
-func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string) {
+func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[string]*HostLockInfo) {
 	results := make(map[string]*HostMetrics)
 	errors := make(map[string]string)
+	lockInfo := make(map[string]*HostLockInfo)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -68,12 +83,20 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string) {
 				metrics = nil
 			}
 			results[alias] = metrics
+
+			// Check lock status if configured and we have a connection
+			if c.lockConfig != nil && c.projectHash != "" && metrics != nil {
+				info := c.checkLockStatus(alias)
+				if info != nil {
+					lockInfo[alias] = info
+				}
+			}
 			mu.Unlock()
 		}(alias)
 	}
 
 	wg.Wait()
-	return results, errors
+	return results, errors, lockInfo
 }
 
 // CollectOne gathers metrics from a single host.
@@ -81,6 +104,60 @@ func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 	return c.collectOneWithContext(ctx, alias)
+}
+
+// checkLockStatus checks if a lock is held on the specified host.
+// Returns lock info if locked, nil otherwise.
+func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
+	if c.lockConfig == nil || c.projectHash == "" {
+		return nil
+	}
+
+	client, err := c.pool.Get(alias)
+	if err != nil {
+		return nil
+	}
+
+	// Build lock directory path
+	baseDir := c.lockConfig.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	lockDir := filepath.Join(baseDir, fmt.Sprintf("rr-%s.lock", c.projectHash))
+	infoFile := filepath.Join(lockDir, "info.json")
+
+	// Check if lock directory exists
+	testCmd := fmt.Sprintf("test -d %q && cat %q 2>/dev/null", lockDir, infoFile)
+
+	// Use embedded ssh.Client's NewSession directly
+	session, err := client.Client.NewSession()
+	if err != nil {
+		return nil
+	}
+	defer session.Close()
+
+	output, err := session.Output(testCmd)
+	if err != nil {
+		// Lock doesn't exist or error reading
+		return nil
+	}
+
+	// Parse the lock info
+	info, err := lock.ParseLockInfo(output)
+	if err != nil {
+		return nil
+	}
+
+	// Check if lock is stale
+	if c.lockConfig.Stale > 0 && info.Age() > c.lockConfig.Stale {
+		return nil // Stale locks don't count
+	}
+
+	return &HostLockInfo{
+		IsLocked: true,
+		Holder:   info.String(),
+		Started:  info.Started,
+	}
 }
 
 // collectOneWithContext gathers metrics from a single host with context for timeout.
