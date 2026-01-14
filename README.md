@@ -159,7 +159,7 @@ rr tasks                   # List all available tasks
 
 ## Parallel execution
 
-![](https://i.ibb.co/qPpKmnq/rr-parallel480.gif)
+![parallel](https://github.com/user-attachments/assets/95d48195-f179-45b4-8fd3-739b88041049)
 
 Run multiple tasks across multiple hosts simultaneously. Define a parallel task that references other tasks, and `rr` distributes them across your machine pool with animated progress:
 
