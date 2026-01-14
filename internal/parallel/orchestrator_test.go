@@ -21,7 +21,7 @@ func TestNewOrchestrator(t *testing.T) {
 	}
 	cfg := Config{MaxParallel: 2, FailFast: true}
 
-	orch := NewOrchestrator(tasks, hosts, nil, cfg)
+	orch := NewOrchestrator(tasks, hosts, nil, nil, cfg)
 
 	assert.NotNil(t, orch)
 	assert.Len(t, orch.tasks, 2)
@@ -33,10 +33,63 @@ func TestNewOrchestrator(t *testing.T) {
 	assert.NotNil(t, orch.results)
 }
 
+func TestOrchestrator_HostPriorityOrder(t *testing.T) {
+	tasks := []TaskInfo{
+		{Name: "test", Command: "echo test"},
+	}
+	hosts := map[string]config.Host{
+		"host-a": {SSH: []string{"a"}, Dir: "~/projects"},
+		"host-b": {SSH: []string{"b"}, Dir: "~/projects"},
+		"host-c": {SSH: []string{"c"}, Dir: "~/projects"},
+	}
+
+	t.Run("hostOrder is preserved when provided", func(t *testing.T) {
+		// Provide explicit order: c, a, b
+		hostOrder := []string{"host-c", "host-a", "host-b"}
+		orch := NewOrchestrator(tasks, hosts, hostOrder, nil, Config{})
+
+		assert.Equal(t, []string{"host-c", "host-a", "host-b"}, orch.hostList)
+	})
+
+	t.Run("hostOrder nil falls back to map iteration", func(t *testing.T) {
+		orch := NewOrchestrator(tasks, hosts, nil, nil, Config{})
+
+		// Should have all 3 hosts (order may vary since map iteration is undefined)
+		assert.Len(t, orch.hostList, 3)
+		assert.Contains(t, orch.hostList, "host-a")
+		assert.Contains(t, orch.hostList, "host-b")
+		assert.Contains(t, orch.hostList, "host-c")
+	})
+
+	t.Run("empty hostOrder falls back to map iteration", func(t *testing.T) {
+		orch := NewOrchestrator(tasks, hosts, []string{}, nil, Config{})
+
+		// Should have all 3 hosts
+		assert.Len(t, orch.hostList, 3)
+	})
+
+	t.Run("first host in order is used first for workers", func(t *testing.T) {
+		// When we have 3 hosts in order: preferred, secondary, tertiary
+		// The first worker should use 'preferred'
+		hostOrder := []string{"preferred", "secondary", "tertiary"}
+		hostsMap := map[string]config.Host{
+			"preferred": {SSH: []string{"p"}, Dir: "~"},
+			"secondary": {SSH: []string{"s"}, Dir: "~"},
+			"tertiary":  {SSH: []string{"t"}, Dir: "~"},
+		}
+		orch := NewOrchestrator(tasks, hostsMap, hostOrder, nil, Config{})
+
+		// Verify order is preserved
+		assert.Equal(t, "preferred", orch.hostList[0])
+		assert.Equal(t, "secondary", orch.hostList[1])
+		assert.Equal(t, "tertiary", orch.hostList[2])
+	})
+}
+
 func TestOrchestrator_EmptyTasks(t *testing.T) {
 	orch := NewOrchestrator(nil, map[string]config.Host{
 		"dev": {SSH: []string{"dev"}, Dir: "~/projects"},
-	}, nil, Config{})
+	}, nil, nil, Config{})
 
 	result, err := orch.Run(context.Background())
 
@@ -49,7 +102,7 @@ func TestOrchestrator_EmptyTasks(t *testing.T) {
 
 func TestOrchestrator_NoHosts_RunsLocally(t *testing.T) {
 	tasks := []TaskInfo{{Name: "test", Command: "echo hello"}}
-	orch := NewOrchestrator(tasks, nil, nil, Config{})
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{})
 
 	result, err := orch.Run(context.Background())
 
@@ -62,7 +115,7 @@ func TestOrchestrator_NoHosts_RunsLocally(t *testing.T) {
 
 func TestOrchestrator_EmptyHostMap_RunsLocally(t *testing.T) {
 	tasks := []TaskInfo{{Name: "test", Command: "echo hello"}}
-	orch := NewOrchestrator(tasks, map[string]config.Host{}, nil, Config{})
+	orch := NewOrchestrator(tasks, map[string]config.Host{}, nil, nil, Config{})
 
 	result, err := orch.Run(context.Background())
 
@@ -75,7 +128,7 @@ func TestOrchestrator_EmptyHostMap_RunsLocally(t *testing.T) {
 
 func TestOrchestrator_LocalExecution_FailedTask(t *testing.T) {
 	tasks := []TaskInfo{{Name: "fail", Command: "exit 1"}}
-	orch := NewOrchestrator(tasks, nil, nil, Config{})
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{})
 
 	result, err := orch.Run(context.Background())
 
@@ -91,7 +144,7 @@ func TestOrchestrator_LocalExecution_FailFast(t *testing.T) {
 		{Name: "fail", Command: "exit 1"},
 		{Name: "skip", Command: "echo should not run"},
 	}
-	orch := NewOrchestrator(tasks, nil, nil, Config{FailFast: true})
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{FailFast: true})
 
 	result, err := orch.Run(context.Background())
 
@@ -156,7 +209,7 @@ func TestOrchestrator_MaxParallelLimiting(t *testing.T) {
 			}
 
 			cfg := Config{MaxParallel: tt.maxParallel}
-			orch := NewOrchestrator(tasks, hosts, nil, cfg)
+			orch := NewOrchestrator(tasks, hosts, nil, nil, cfg)
 
 			// Calculate expected workers using same logic as Run
 			numWorkers := len(orch.hostList)
@@ -178,7 +231,7 @@ func TestOrchestrator_ContextCancellation(t *testing.T) {
 		"dev": {SSH: []string{"dev"}, Dir: "~/projects"},
 	}
 
-	orch := NewOrchestrator(tasks, hosts, nil, Config{})
+	orch := NewOrchestrator(tasks, hosts, nil, nil, Config{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately

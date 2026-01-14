@@ -55,6 +55,7 @@ func (r *Result) Success() bool {
 // TaskResult holds the result of a single task execution.
 type TaskResult struct {
 	TaskName  string
+	Command   string // Original command (for formatter detection)
 	Host      string
 	ExitCode  int
 	Duration  time.Duration

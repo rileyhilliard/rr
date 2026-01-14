@@ -78,8 +78,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		})
 	}
 
-	// Resolve hosts
-	_, hosts, err := config.ResolveHosts(resolved, opts.Host)
+	// Resolve hosts - hostOrder preserves priority from config
+	hostOrder, hosts, err := config.ResolveHosts(resolved, opts.Host)
 	if err != nil {
 		return 1, err
 	}
@@ -87,11 +87,12 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// Handle --local flag
 	if opts.Local {
 		hosts = make(map[string]config.Host)
+		hostOrder = nil
 	}
 
 	// Filter by tag if specified
 	if opts.Tag != "" {
-		hosts = filterHostsByTag(hosts, opts.Tag)
+		hosts, hostOrder = filterHostsByTag(hosts, hostOrder, opts.Tag)
 		if len(hosts) == 0 {
 			return 1, errors.New(errors.ErrConfig,
 				fmt.Sprintf("No hosts found with tag '%s'", opts.Tag),
@@ -159,8 +160,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		_ = logs.Cleanup(resolved.Global.Logs)
 	}
 
-	// Create orchestrator
-	orchestrator := parallel.NewOrchestrator(tasks, hosts, resolved, parallelCfg)
+	// Create orchestrator with host priority order preserved
+	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
 
 	// Create context with signal handling for graceful cancellation
 	ctx, cancel := context.WithCancel(context.Background())
@@ -253,17 +254,25 @@ func buildStepsCommand(steps []config.TaskStep) string {
 }
 
 // filterHostsByTag filters hosts to only those with the specified tag.
-func filterHostsByTag(hosts map[string]config.Host, tag string) map[string]config.Host {
+// Preserves the priority order from hostOrder.
+func filterHostsByTag(hosts map[string]config.Host, hostOrder []string, tag string) (map[string]config.Host, []string) {
 	filtered := make(map[string]config.Host)
-	for name, host := range hosts {
+	filteredOrder := make([]string, 0, len(hostOrder))
+
+	for _, name := range hostOrder {
+		host, ok := hosts[name]
+		if !ok {
+			continue
+		}
 		for _, t := range host.Tags {
 			if t == tag {
 				filtered[name] = host
+				filteredOrder = append(filteredOrder, name)
 				break
 			}
 		}
 	}
-	return filtered
+	return filtered, filteredOrder
 }
 
 // renderDryRunPlan shows what would be executed without actually running.
