@@ -9,7 +9,9 @@
 #   ./scripts/e2e-test.sh --help   # Show help
 #
 
-set -euo pipefail
+# Note: We intentionally don't use 'set -e' because test functions return 1 on
+# failure, and we want to continue running all tests to get a complete summary.
+set -uo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -92,15 +94,24 @@ run_test() {
 }
 
 # Run a test and check output contains expected string
+# Also verifies the command exits with expected code (default 0)
 run_test_contains() {
     local name="$1"
     local expected="$2"
-    shift 2
+    local expected_exit="${3:-0}"
+    shift 3
     local cmd=("$@")
 
     local output
     local exit_code=0
     output=$("${cmd[@]}" 2>&1) || exit_code=$?
+
+    # Check both exit code and output content
+    if [[ "$exit_code" -ne "$expected_exit" ]]; then
+        log_fail "$name (expected exit $expected_exit, got $exit_code)"
+        echo "$output" | head -5 | sed 's/^/  /'
+        return 1
+    fi
 
     if echo "$output" | grep -q "$expected"; then
         log_pass "$name"
@@ -134,7 +145,7 @@ test_basic_commands() {
     run_test "version" 0 "$RR_BIN" version
     run_test "help" 0 "$RR_BIN" --help
     run_test "help (short)" 0 "$RR_BIN" -h
-    run_test_contains "version output" "rr" "$RR_BIN" version
+    run_test_contains "version output" "rr" 0 "$RR_BIN" version
 }
 
 # Test global flags
@@ -161,8 +172,8 @@ test_tasks_command() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     run_test "tasks" 0 "$RR_BIN" tasks
-    run_test_contains "tasks lists test" "test" "$RR_BIN" tasks
-    run_test_contains "tasks lists build" "build" "$RR_BIN" tasks
+    run_test_contains "tasks lists test" "test" 0 "$RR_BIN" tasks
+    run_test_contains "tasks lists build" "build" 0 "$RR_BIN" tasks
     run_test "tasks --machine" 0 "$RR_BIN" tasks --machine
 }
 
@@ -175,9 +186,9 @@ test_doctor_command() {
 
     run_test "doctor" 0 "$RR_BIN" doctor
     run_test "doctor --machine" 0 "$RR_BIN" doctor --machine
-    run_test_contains "doctor shows CONFIG" "CONFIG" "$RR_BIN" doctor
-    run_test_contains "doctor shows SSH" "SSH" "$RR_BIN" doctor
-    run_test_contains "doctor shows HOSTS" "HOSTS" "$RR_BIN" doctor
+    run_test_contains "doctor shows CONFIG" "CONFIG" 0 "$RR_BIN" doctor
+    run_test_contains "doctor shows SSH" "SSH" 0 "$RR_BIN" doctor
+    run_test_contains "doctor shows HOSTS" "HOSTS" 0 "$RR_BIN" doctor
 }
 
 # Test status command
@@ -189,7 +200,7 @@ test_status_command() {
 
     run_test "status" 0 "$RR_BIN" status
     run_test "status --machine" 0 "$RR_BIN" status --machine
-    run_test_contains "status shows HOST" "HOST" "$RR_BIN" status
+    run_test_contains "status shows HOST" "HOST" 0 "$RR_BIN" status
 }
 
 # Test host command
@@ -201,7 +212,7 @@ test_host_command() {
 
     run_test "host list" 0 "$RR_BIN" host list
     run_test "host list --machine" 0 "$RR_BIN" host list --machine
-    run_test_contains "host list shows config path" "Config:" "$RR_BIN" host list
+    run_test_contains "host list shows config path" "Config:" 0 "$RR_BIN" host list
 }
 
 # Test logs command
@@ -258,7 +269,7 @@ test_exec_command() {
     fi
 
     run_test "exec echo test" 0 "$RR_BIN" exec "echo test"
-    run_test_contains "exec output" "test" "$RR_BIN" exec "echo test"
+    run_test_contains "exec output" "test" 0 "$RR_BIN" exec "echo test"
     run_test "exec --quiet" 0 "$RR_BIN" exec --quiet "echo test"
 }
 
@@ -394,7 +405,7 @@ main() {
     fi
 
     # Change to project root
-    cd "$(dirname "$0")/.."
+    cd "$(dirname "$0")/.." || exit 1
 
     # Build and run tests
     build_binary
