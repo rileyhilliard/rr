@@ -151,7 +151,7 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 	}
 
 	// Get host info for picker (no default host - list order determines priority)
-	hostInfos := ctx.selector.HostInfo("")
+	hostInfos := ctx.selector.HostInfo()
 	uiHosts := make([]ui.HostInfo, len(hostInfos))
 	for i, h := range hostInfos {
 		uiHosts[i] = ui.HostInfo{

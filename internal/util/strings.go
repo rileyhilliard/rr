@@ -1,7 +1,10 @@
 // Package util provides common utility functions used across the codebase.
 package util
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // JoinOrNone joins strings with ", " or returns "(none)" for empty slices.
 // This is useful for displaying lists of hosts, tags, or other items where
@@ -24,4 +27,10 @@ func Pluralize(count int, singular, plural string) string {
 		return singular
 	}
 	return plural
+}
+
+// Itoa converts an integer to its string representation.
+// This is a thin wrapper around strconv.Itoa for convenience.
+func Itoa(n int) string {
+	return strconv.Itoa(n)
 }

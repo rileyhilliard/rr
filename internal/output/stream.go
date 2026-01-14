@@ -6,6 +6,48 @@ import (
 	"sync"
 )
 
+// LineBuffer provides line-buffering for streaming data.
+// It accumulates bytes until a newline is encountered, then returns complete lines.
+type LineBuffer struct {
+	buf []byte
+}
+
+// ProcessBytes adds data to the buffer and returns any complete lines.
+// Incomplete lines remain buffered until more data arrives.
+func (lb *LineBuffer) ProcessBytes(p []byte) []string {
+	lb.buf = append(lb.buf, p...)
+	var lines []string
+
+	for {
+		idx := -1
+		for i, b := range lb.buf {
+			if b == '\n' {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			break
+		}
+
+		lines = append(lines, string(lb.buf[:idx]))
+		lb.buf = lb.buf[idx+1:]
+	}
+
+	return lines
+}
+
+// Flush returns any remaining buffered content as a final line.
+// Returns empty string if buffer is empty.
+func (lb *LineBuffer) Flush() string {
+	if len(lb.buf) == 0 {
+		return ""
+	}
+	line := string(lb.buf)
+	lb.buf = nil
+	return line
+}
+
 // StreamHandler multiplexes stdout and stderr from a remote command,
 // with line buffering and ANSI passthrough.
 type StreamHandler struct {
@@ -131,9 +173,9 @@ func (h *StreamHandler) GetStderrCapture() string {
 
 // streamWriter wraps the handler to implement io.Writer.
 type streamWriter struct {
-	handler  *StreamHandler
-	isStderr bool
-	buf      []byte
+	handler    *StreamHandler
+	isStderr   bool
+	lineBuffer LineBuffer
 }
 
 // Write implements io.Writer with line buffering.
@@ -141,25 +183,8 @@ type streamWriter struct {
 func (w *streamWriter) Write(p []byte) (n int, err error) {
 	n = len(p)
 
-	// Append to buffer
-	w.buf = append(w.buf, p...)
-
-	// Process complete lines
-	for {
-		idx := -1
-		for i, b := range w.buf {
-			if b == '\n' {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			break
-		}
-
-		line := string(w.buf[:idx])
-		w.buf = w.buf[idx+1:]
-
+	lines := w.lineBuffer.ProcessBytes(p)
+	for _, line := range lines {
 		if w.isStderr {
 			if err := w.handler.WriteStderr(line); err != nil {
 				return n, err
@@ -176,10 +201,7 @@ func (w *streamWriter) Write(p []byte) (n int, err error) {
 
 // Flush writes any remaining buffered content.
 func (w *streamWriter) Flush() error {
-	if len(w.buf) > 0 {
-		line := string(w.buf)
-		w.buf = nil
-
+	if line := w.lineBuffer.Flush(); line != "" {
 		if w.isStderr {
 			return w.handler.WriteStderr(line)
 		}
@@ -190,8 +212,8 @@ func (w *streamWriter) Flush() error {
 
 // LineWriter wraps an io.Writer to write complete lines.
 type LineWriter struct {
-	w   io.Writer
-	buf []byte
+	w          io.Writer
+	lineBuffer LineBuffer
 }
 
 // NewLineWriter creates a line-buffered writer.
@@ -202,24 +224,13 @@ func NewLineWriter(w io.Writer) *LineWriter {
 // Write buffers data and writes complete lines.
 func (lw *LineWriter) Write(p []byte) (n int, err error) {
 	n = len(p)
-	lw.buf = append(lw.buf, p...)
 
-	for {
-		idx := -1
-		for i, b := range lw.buf {
-			if b == '\n' {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			break
-		}
-
-		if _, err := lw.w.Write(lw.buf[:idx+1]); err != nil {
+	lines := lw.lineBuffer.ProcessBytes(p)
+	for _, line := range lines {
+		// Write line with newline since ProcessBytes strips it
+		if _, err := lw.w.Write([]byte(line + "\n")); err != nil {
 			return n, err
 		}
-		lw.buf = lw.buf[idx+1:]
 	}
 
 	return n, nil
@@ -227,9 +238,8 @@ func (lw *LineWriter) Write(p []byte) (n int, err error) {
 
 // Flush writes any remaining buffered content.
 func (lw *LineWriter) Flush() error {
-	if len(lw.buf) > 0 {
-		_, err := lw.w.Write(lw.buf)
-		lw.buf = nil
+	if line := lw.lineBuffer.Flush(); line != "" {
+		_, err := lw.w.Write([]byte(line))
 		return err
 	}
 	return nil
