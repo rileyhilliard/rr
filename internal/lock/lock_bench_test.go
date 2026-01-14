@@ -14,7 +14,10 @@ func BenchmarkNewLockInfo(b *testing.B) {
 
 // BenchmarkLockInfo_JSON measures JSON serialization of lock info.
 func BenchmarkLockInfo_JSON(b *testing.B) {
-	info, _ := NewLockInfo()
+	info, err := NewLockInfo()
+	if err != nil {
+		b.Fatalf("setup failed: NewLockInfo returned error: %v", err)
+	}
 
 	b.Run("marshal", func(b *testing.B) {
 		b.ResetTimer()

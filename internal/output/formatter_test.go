@@ -2,6 +2,7 @@ package output
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/util"
@@ -120,8 +121,8 @@ func TestUtilItoa(t *testing.T) {
 		{123, "123"},
 		{-1, "-1"},
 		{-123, "-123"},
-		{math.MaxInt, "9223372036854775807"},
-		{math.MinInt, "-9223372036854775808"},
+		{math.MaxInt, strconv.Itoa(math.MaxInt)},
+		{math.MinInt, strconv.Itoa(math.MinInt)},
 	}
 
 	for _, tt := range tests {

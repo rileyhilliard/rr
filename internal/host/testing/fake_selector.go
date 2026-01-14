@@ -2,6 +2,7 @@
 package testing
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -129,7 +130,14 @@ func (s *FakeSelector) Select(preferred string) (*host.Connection, error) {
 			return s.cached, nil
 		}
 		// Different host, close cached
-		s.cached.Close()
+		if err := s.cached.Close(); err != nil {
+			s.emit(host.ConnectionEvent{
+				Type:    host.EventFailed,
+				Alias:   s.cached.Alias,
+				Message: "failed to close cached connection",
+				Error:   err,
+			})
+		}
 		s.cached = nil
 	}
 
@@ -379,11 +387,12 @@ func (s *FakeSelector) orderedHostNames() []string {
 		return names
 	}
 
-	// Alphabetical order
+	// Alphabetical order for deterministic iteration
 	names := make([]string, 0, len(s.hosts))
 	for name := range s.hosts {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -415,7 +424,7 @@ func (s *FakeSelector) Reset() {
 	s.SelectHostCalls = nil
 	s.ConnectionAttempts = 0
 	if s.cached != nil {
-		s.cached.Close()
+		_ = s.cached.Close() // Ignore error during reset
 		s.cached = nil
 	}
 }
