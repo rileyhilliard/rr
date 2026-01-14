@@ -76,17 +76,17 @@ func NewLogWriter(baseDir, taskName string) (*LogWriter, error) {
 	}, nil
 }
 
-// WriteTask writes a task's output to <taskname>.log.
-func (w *LogWriter) WriteTask(taskName string, output []byte) error {
+// WriteTask writes a task's output to <taskname>_<index>.log.
+// The index ensures unique filenames when the same task runs multiple times.
+func (w *LogWriter) WriteTask(taskName string, taskIndex int, output []byte) error {
 	if w.closed {
 		return errors.New(errors.ErrExec,
 			"Log writer is closed",
 			"This is unexpected - create a new LogWriter.")
 	}
 
-	// Sanitize task name for filename (replace / with -)
-	safeTaskName := sanitizeFilename(taskName)
-	logPath := filepath.Join(w.taskDir, safeTaskName+".log")
+	// Include index in filename to handle duplicate task names
+	logPath := filepath.Join(w.taskDir, taskLogFilename(taskName, taskIndex))
 
 	if err := os.WriteFile(logPath, output, 0644); err != nil {
 		return errors.WrapWithCode(err, errors.ErrExec,
@@ -95,6 +95,11 @@ func (w *LogWriter) WriteTask(taskName string, output []byte) error {
 	}
 
 	return nil
+}
+
+// taskLogFilename returns the log filename for a task with its index.
+func taskLogFilename(taskName string, taskIndex int) string {
+	return fmt.Sprintf("%s_%d.log", sanitizeFilename(taskName), taskIndex)
 }
 
 // WriteSummary writes summary.json with all results.
@@ -149,7 +154,7 @@ func (w *LogWriter) WriteSummary(result *parallel.Result, taskName string) error
 			Duration:  tr.Duration.String(),
 			StartTime: tr.StartTime,
 			EndTime:   tr.EndTime,
-			LogFile:   sanitizeFilename(tr.TaskName) + ".log",
+			LogFile:   taskLogFilename(tr.TaskName, tr.TaskIndex),
 			Error:     errStr,
 		}
 	}

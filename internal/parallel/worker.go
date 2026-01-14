@@ -33,6 +33,7 @@ type hostWorker struct {
 func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult {
 	result := TaskResult{
 		TaskName:  task.Name,
+		TaskIndex: task.Index,
 		Command:   task.Command,
 		Host:      w.hostName,
 		StartTime: time.Now(),
@@ -40,7 +41,7 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 
 	// Notify output manager: task is syncing (connecting, syncing files, waiting for lock)
 	if w.orchestrator.outputMgr != nil {
-		w.orchestrator.outputMgr.TaskSyncing(task.Name, w.hostName)
+		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, w.hostName)
 	}
 
 	// Ensure we have a connection
@@ -49,7 +50,7 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		result.ExitCode = 1
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime)
-		w.notifyComplete(task.Name, result)
+		w.notifyComplete(result)
 		return result
 	}
 
@@ -59,13 +60,13 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		result.ExitCode = 1
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime)
-		w.notifyComplete(task.Name, result)
+		w.notifyComplete(result)
 		return result
 	}
 
 	// Notify output manager: task is now actually executing
 	if w.orchestrator.outputMgr != nil {
-		w.orchestrator.outputMgr.TaskExecuting(task.Name)
+		w.orchestrator.outputMgr.TaskExecuting(task.Name, task.Index)
 	}
 
 	// Execute the task with timeout if configured
@@ -101,17 +102,17 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		// Output line by line for stream mode
 		for _, line := range bytes.Split(outputBuf.Bytes(), []byte("\n")) {
 			if len(line) > 0 {
-				w.orchestrator.outputMgr.TaskOutput(task.Name, line, false)
+				w.orchestrator.outputMgr.TaskOutput(task.Name, task.Index, line, false)
 			}
 		}
 		for _, line := range bytes.Split(stderrBuf.Bytes(), []byte("\n")) {
 			if len(line) > 0 {
-				w.orchestrator.outputMgr.TaskOutput(task.Name, line, true)
+				w.orchestrator.outputMgr.TaskOutput(task.Name, task.Index, line, true)
 			}
 		}
 	}
 
-	w.notifyComplete(task.Name, result)
+	w.notifyComplete(result)
 	return result
 }
 
@@ -250,9 +251,9 @@ func shellQuote(s string) string {
 }
 
 // notifyComplete notifies the output manager that a task completed.
-func (w *hostWorker) notifyComplete(taskName string, result TaskResult) {
+func (w *hostWorker) notifyComplete(result TaskResult) {
 	if w.orchestrator.outputMgr != nil {
-		w.orchestrator.outputMgr.TaskCompleted(taskName, result)
+		w.orchestrator.outputMgr.TaskCompleted(result)
 	}
 }
 
@@ -284,6 +285,7 @@ type localWorker struct {
 func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult {
 	result := TaskResult{
 		TaskName:  task.Name,
+		TaskIndex: task.Index,
 		Command:   task.Command,
 		Host:      "local",
 		StartTime: time.Now(),
@@ -291,8 +293,8 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 
 	// Notify output manager: local tasks go straight to executing (no sync needed)
 	if w.orchestrator.outputMgr != nil {
-		w.orchestrator.outputMgr.TaskSyncing(task.Name, "local")
-		w.orchestrator.outputMgr.TaskExecuting(task.Name)
+		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, "local")
+		w.orchestrator.outputMgr.TaskExecuting(task.Name, task.Index)
 	}
 
 	// Execute with timeout if configured
@@ -340,10 +342,10 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 	if w.orchestrator.outputMgr != nil {
 		for _, line := range bytes.Split(outputBuf.Bytes(), []byte("\n")) {
 			if len(line) > 0 {
-				w.orchestrator.outputMgr.TaskOutput(task.Name, line, false)
+				w.orchestrator.outputMgr.TaskOutput(task.Name, task.Index, line, false)
 			}
 		}
-		w.orchestrator.outputMgr.TaskCompleted(task.Name, result)
+		w.orchestrator.outputMgr.TaskCompleted(result)
 	}
 
 	return result

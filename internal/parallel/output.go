@@ -98,34 +98,41 @@ func (m *OutputManager) SetWriter(w io.Writer) {
 
 // InitTasks initializes all tasks as pending. Call this before starting workers
 // to show all tasks upfront in the UI.
-func (m *OutputManager) InitTasks(taskNames []string) {
+func (m *OutputManager) InitTasks(tasks []TaskInfo) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, name := range taskNames {
-		m.taskStatus[name] = TaskPending
-		m.taskOutput[name] = &bytes.Buffer{}
+	for _, task := range tasks {
+		tid := task.ID()
+		m.taskStatus[tid] = TaskPending
+		m.taskOutput[tid] = &bytes.Buffer{}
 	}
 
 	if m.progress != nil {
-		m.progress.InitTasks(taskNames)
+		// Convert to ui.TaskInit to avoid circular imports
+		taskInits := make([]ui.TaskInit, len(tasks))
+		for i, t := range tasks {
+			taskInits[i] = ui.TaskInit{Name: t.Name, Index: t.Index}
+		}
+		m.progress.InitTasks(taskInits)
 	}
 }
 
 // TaskSyncing is called when a worker picks up a task and begins syncing.
 // The task is assigned to a host but not yet executing (connecting, syncing, waiting for lock).
-func (m *OutputManager) TaskSyncing(taskName, host string) {
+func (m *OutputManager) TaskSyncing(taskName string, taskIndex int, host string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.taskStatus[taskName] = TaskSyncing
-	m.taskHosts[taskName] = host
-	m.taskOutput[taskName] = &bytes.Buffer{}
+	tid := taskID(taskName, taskIndex)
+	m.taskStatus[tid] = TaskSyncing
+	m.taskHosts[tid] = host
+	m.taskOutput[tid] = &bytes.Buffer{}
 
 	switch m.mode {
 	case OutputProgress:
 		if m.progress != nil {
-			m.progress.TaskSyncing(taskName, host)
+			m.progress.TaskSyncing(taskName, taskIndex, host)
 		}
 	case OutputStream:
 		prefix := m.formatPrefix(host, taskName)
@@ -141,23 +148,24 @@ func (m *OutputManager) TaskSyncing(taskName, host string) {
 }
 
 // TaskExecuting is called when a task's command actually starts running.
-func (m *OutputManager) TaskExecuting(taskName string) {
+func (m *OutputManager) TaskExecuting(taskName string, taskIndex int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.taskStatus[taskName] = TaskRunning
+	tid := taskID(taskName, taskIndex)
+	m.taskStatus[tid] = TaskRunning
 
 	switch m.mode {
 	case OutputProgress:
 		if m.progress != nil {
-			m.progress.TaskExecuting(taskName)
+			m.progress.TaskExecuting(taskName, taskIndex)
 		}
 	case OutputStream:
-		host := m.taskHosts[taskName]
+		host := m.taskHosts[tid]
 		prefix := m.formatPrefix(host, taskName)
 		fmt.Fprintf(m.w, "%s running\n", prefix)
 	case OutputVerbose:
-		host := m.taskHosts[taskName]
+		host := m.taskHosts[tid]
 		fmt.Fprintf(m.w, "%s Running %s on %s...\n",
 			m.mutedStyle.Render(ui.SymbolProgress),
 			taskName,
@@ -170,29 +178,31 @@ func (m *OutputManager) TaskExecuting(taskName string) {
 // TaskStarted is called when a task begins execution.
 //
 // Deprecated: Use TaskSyncing followed by TaskExecuting for clearer state tracking.
-func (m *OutputManager) TaskStarted(taskName, host string) {
-	m.TaskSyncing(taskName, host)
+func (m *OutputManager) TaskStarted(taskName string, taskIndex int, host string) {
+	m.TaskSyncing(taskName, taskIndex, host)
 }
 
 // TaskOutput is called when a task produces output.
-func (m *OutputManager) TaskOutput(taskName string, line []byte, isStderr bool) {
+func (m *OutputManager) TaskOutput(taskName string, taskIndex int, line []byte, isStderr bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	tid := taskID(taskName, taskIndex)
+
 	// Buffer output for later display (with size limit to prevent unbounded growth)
-	if buf, ok := m.taskOutput[taskName]; ok {
+	if buf, ok := m.taskOutput[tid]; ok {
 		if buf.Len() < maxOutputBufferSize {
 			buf.Write(line)
 			buf.WriteByte('\n')
-		} else if !m.taskTruncated[taskName] {
-			m.taskTruncated[taskName] = true
+		} else if !m.taskTruncated[tid] {
+			m.taskTruncated[tid] = true
 			buf.WriteString("\n... output truncated (exceeded 1MB) ...\n")
 		}
 	}
 
 	switch m.mode {
 	case OutputStream:
-		host := m.taskHosts[taskName]
+		host := m.taskHosts[tid]
 		prefix := m.formatPrefix(host, taskName)
 		fmt.Fprintf(m.w, "%s %s\n", prefix, string(line))
 	case OutputProgress, OutputVerbose, OutputQuiet:
@@ -201,24 +211,25 @@ func (m *OutputManager) TaskOutput(taskName string, line []byte, isStderr bool) 
 }
 
 // TaskCompleted is called when a task finishes execution.
-func (m *OutputManager) TaskCompleted(taskName string, result TaskResult) {
+func (m *OutputManager) TaskCompleted(result TaskResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	tid := result.ID()
 	status := TaskPassed
 	if !result.Success() {
 		status = TaskFailed
 	}
-	m.taskStatus[taskName] = status
+	m.taskStatus[tid] = status
 
 	switch m.mode {
 	case OutputProgress:
 		// Use animated progress display
 		if m.progress != nil {
-			m.progress.TaskCompleted(taskName, result.Success())
+			m.progress.TaskCompleted(result.TaskName, result.TaskIndex, result.Success())
 		}
 	case OutputStream:
-		prefix := m.formatPrefix(result.Host, taskName)
+		prefix := m.formatPrefix(result.Host, result.TaskName)
 		symbol := ui.SymbolSuccess
 		style := m.successStyle
 		if status == TaskFailed {
@@ -227,7 +238,7 @@ func (m *OutputManager) TaskCompleted(taskName string, result TaskResult) {
 		}
 		fmt.Fprintf(m.w, "%s %s %s\n", prefix, style.Render(symbol), formatDuration(result.Duration))
 	case OutputVerbose:
-		m.renderVerboseCompletion(taskName, result, status)
+		m.renderVerboseCompletion(result, status)
 	case OutputQuiet:
 		// No output for quiet mode
 	}
@@ -260,7 +271,7 @@ func (m *OutputManager) Close() {
 }
 
 // renderVerboseCompletion renders verbose output for a completed task.
-func (m *OutputManager) renderVerboseCompletion(taskName string, result TaskResult, status TaskStatus) {
+func (m *OutputManager) renderVerboseCompletion(result TaskResult, status TaskStatus) {
 	symbol := ui.SymbolSuccess
 	style := m.successStyle
 	if status == TaskFailed {
@@ -271,12 +282,13 @@ func (m *OutputManager) renderVerboseCompletion(taskName string, result TaskResu
 	// Header line
 	fmt.Fprintf(m.w, "\n%s %s on %s %s\n",
 		style.Render(symbol),
-		taskName,
+		result.TaskName,
 		result.Host,
 		m.mutedStyle.Render(formatDuration(result.Duration)))
 
 	// Output
-	if buf, ok := m.taskOutput[taskName]; ok && buf.Len() > 0 {
+	tid := result.ID()
+	if buf, ok := m.taskOutput[tid]; ok && buf.Len() > 0 {
 		fmt.Fprintf(m.w, "%s\n", m.mutedStyle.Render(strings.Repeat("-", 40)))
 		fmt.Fprintf(m.w, "%s\n", buf.String())
 	}
@@ -307,10 +319,10 @@ func isTerminal() bool {
 }
 
 // GetTaskStatus returns the current status of a task.
-func (m *OutputManager) GetTaskStatus(taskName string) TaskStatus {
+func (m *OutputManager) GetTaskStatus(taskName string, taskIndex int) TaskStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.taskStatus[taskName]
+	return m.taskStatus[taskID(taskName, taskIndex)]
 }
 
 // GetAllStatuses returns a copy of all task statuses.
