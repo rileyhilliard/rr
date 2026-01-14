@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"io"
 	"strings"
 
@@ -91,13 +92,15 @@ func writeJSONEnvelope(w io.Writer, env JSONEnvelope) error {
 }
 
 // ErrorToJSON converts a Go error to a JSONError with appropriate code mapping.
+// Uses errors.As() to properly handle wrapped errors.
 func ErrorToJSON(err error) *JSONError {
 	if err == nil {
 		return nil
 	}
 
-	// Check if it's our structured error type
-	if rrErr, ok := err.(*errors.Error); ok {
+	// Check if it's our structured error type (handles wrapped errors)
+	var rrErr *errors.Error
+	if stderrors.As(err, &rrErr) {
 		return &JSONError{
 			Code:       mapErrorCode(rrErr.Code, rrErr.Message),
 			Message:    rrErr.Message,
@@ -105,8 +108,9 @@ func ErrorToJSON(err error) *JSONError {
 		}
 	}
 
-	// Check if it's a probe error (SSH-related)
-	if probeErr, ok := err.(*host.ProbeError); ok {
+	// Check if it's a probe error (SSH-related, handles wrapped errors)
+	var probeErr *host.ProbeError
+	if stderrors.As(err, &probeErr) {
 		return probeErrorToJSON(probeErr)
 	}
 

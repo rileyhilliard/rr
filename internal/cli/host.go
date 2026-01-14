@@ -61,7 +61,7 @@ func hostAdd(opts HostAddOptions) error {
 
 	// Check if non-interactive mode is requested via flags
 	if hostAddName != "" && hostAddSSH != "" {
-		return hostAddNonInteractive(cfg, opts)
+		return hostAddNonInteractive(cfg, opts.SkipProbe)
 	}
 
 	// Get list of existing SSH hosts to exclude from picker
@@ -130,7 +130,8 @@ func hostAdd(opts HostAddOptions) error {
 }
 
 // hostAddNonInteractive adds a host using command-line flags (for CI/LLM usage).
-func hostAddNonInteractive(cfg *config.GlobalConfig, opts HostAddOptions) error {
+// Uses package-level flag variables (hostAddName, hostAddSSH, etc.) for input.
+func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 	// Parse SSH aliases from comma-separated string
 	sshAliases := strings.Split(hostAddSSH, ",")
 	for i := range sshAliases {
@@ -172,7 +173,7 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, opts HostAddOptions) error 
 	}
 
 	// Test connection (unless --skip-probe)
-	if !opts.SkipProbe {
+	if !skipProbe {
 		_, err := host.Probe(sshAliases[0], 10*time.Second)
 		if err != nil {
 			return errors.WrapWithCode(err, errors.ErrSSH,

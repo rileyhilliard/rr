@@ -155,8 +155,8 @@ func init() {
 	// Set up a pre-run hook to apply global flags
 	originalPreRun := rootCmd.PersistentPreRun
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		// Apply color setting
-		if noColor {
+		// Apply color setting - also disable in machine mode to suppress spinners
+		if noColor || machineMode {
 			ui.DisableColors()
 		}
 		// Apply SSH host key checking setting
