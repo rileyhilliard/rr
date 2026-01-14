@@ -437,8 +437,11 @@ On failure:
 | `SSH_TIMEOUT` | Connection timed out | Check network/VPN |
 | `SSH_AUTH_FAILED` | Key rejected | Run `rr setup <host>` |
 | `SSH_HOST_KEY` | Host key mismatch | Verify fingerprint |
+| `SSH_CONNECTION_FAILED` | SSH connection error | Check host reachability |
+| `RSYNC_FAILED` | File sync failed | Check disk space/permissions |
 | `LOCK_HELD` | Another process has lock | Run `rr unlock` |
 | `COMMAND_FAILED` | Remote command failed | Check command output |
+| `DEPENDENCY_MISSING` | Required tool not found | Install missing dependency |
 
 ### Non-Interactive Commands
 
@@ -449,7 +452,9 @@ For CI/automation, use flag-based commands instead of interactive prompts:
 rr host add --name dev-box \
   --ssh "dev.local,dev-tailscale" \
   --dir '~/projects/${PROJECT}' \
-  --tag fast --skip-probe
+  --tag fast \
+  --env "DEBUG=1" --env "PATH=/custom/bin:$PATH" \
+  --skip-probe
 
 # Initialize project without prompts
 rr init --non-interactive --host dev-box

@@ -26,6 +26,7 @@ var (
 	hostAddSSH  string
 	hostAddDir  string
 	hostAddTags []string
+	hostAddEnv  []string // KEY=VALUE pairs
 )
 
 // HostListOutput represents the JSON output for host list command.
@@ -182,11 +183,24 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 		}
 	}
 
+	// Parse environment variables from KEY=VALUE pairs
+	var envMap map[string]string
+	if len(hostAddEnv) > 0 {
+		envMap = make(map[string]string)
+		for _, pair := range hostAddEnv {
+			parts := strings.SplitN(pair, "=", 2)
+			if len(parts) == 2 {
+				envMap[parts[0]] = parts[1]
+			}
+		}
+	}
+
 	// Build host config
 	hostConfig := config.Host{
 		SSH:  sshAliases,
 		Dir:  remoteDir,
 		Tags: hostAddTags,
+		Env:  envMap,
 	}
 
 	// Add to config
@@ -204,6 +218,7 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 			"ssh_aliases": sshAliases,
 			"dir":         remoteDir,
 			"tags":        hostAddTags,
+			"env":         envMap,
 		})
 	}
 
@@ -318,9 +333,22 @@ func hostList() error {
 		return err
 	}
 
+	// Try to load project config to get host order for determining default
+	var hostOrder []string
+	if projectPath, findErr := config.Find(""); findErr == nil && projectPath != "" {
+		if projectCfg, loadErr := config.Load(projectPath); loadErr == nil {
+			// Use project's host order: Hosts (plural) takes precedence over Host (singular)
+			if len(projectCfg.Hosts) > 0 {
+				hostOrder = projectCfg.Hosts
+			} else if projectCfg.Host != "" {
+				hostOrder = []string{projectCfg.Host}
+			}
+		}
+	}
+
 	// JSON/machine mode output
 	if hostListJSON || machineMode {
-		return outputHostListJSON(cfg)
+		return outputHostListJSON(cfg, hostOrder)
 	}
 
 	// Human-readable output
@@ -328,7 +356,9 @@ func hostList() error {
 }
 
 // outputHostListJSON outputs hosts in JSON format with envelope.
-func outputHostListJSON(cfg *config.GlobalConfig) error {
+// hostOrder specifies the priority order from project config (if available).
+// The default host is the first valid host from hostOrder, falling back to alphabetical.
+func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string) error {
 	output := HostListOutput{
 		Hosts: make([]HostConfigInfo, 0, len(cfg.Hosts)),
 	}
@@ -340,8 +370,18 @@ func outputHostListJSON(cfg *config.GlobalConfig) error {
 	}
 	sort.Strings(names)
 
-	// First host is default (if any exist)
-	if len(names) > 0 {
+	// Determine default host: first valid host from hostOrder, else first alphabetically
+	if len(hostOrder) > 0 {
+		// Find first host from order that exists in global config
+		for _, h := range hostOrder {
+			if _, exists := cfg.Hosts[h]; exists {
+				output.DefaultHost = h
+				break
+			}
+		}
+	}
+	// Fall back to alphabetical if no host order or no match found
+	if output.DefaultHost == "" && len(names) > 0 {
 		output.DefaultHost = names[0]
 	}
 
