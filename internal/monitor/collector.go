@@ -71,7 +71,7 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[s
 			ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 			defer cancel()
 
-			metrics, err := c.collectOneWithContext(ctx, alias)
+			metrics, _, err := c.collectOneWithContext(ctx, alias)
 
 			mu.Lock()
 			if err != nil {
@@ -101,7 +101,8 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[s
 func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
-	return c.collectOneWithContext(ctx, alias)
+	metrics, _, err := c.collectOneWithContext(ctx, alias)
+	return metrics, err
 }
 
 // CollectStreaming gathers metrics from all hosts, streaming results as each completes.
@@ -109,10 +110,30 @@ func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 // The channel is closed when all hosts have been processed.
 // This allows the UI to update independently per host instead of waiting for all hosts.
 func (c *Collector) CollectStreaming(ctx context.Context) <-chan HostResult {
-	results := make(chan HostResult, len(c.hosts))
+	// Collect from all hosts
+	hostList := make([]string, 0, len(c.hosts))
+	for alias := range c.hosts {
+		hostList = append(hostList, alias)
+	}
+	return c.CollectStreamingHosts(ctx, hostList)
+}
+
+// CollectStreamingHosts collects metrics from only the specified hosts.
+// This is useful for implementing backoff - skip hosts that are in backoff period.
+func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string) <-chan HostResult {
+	results := make(chan HostResult, len(hostList))
+
+	if len(hostList) == 0 {
+		close(results)
+		return results
+	}
 
 	var wg sync.WaitGroup
-	for alias := range c.hosts {
+	for _, alias := range hostList {
+		// Skip hosts not in our config
+		if _, ok := c.hosts[alias]; !ok {
+			continue
+		}
 		wg.Add(1)
 		go func(alias string) {
 			defer wg.Done()
@@ -121,11 +142,12 @@ func (c *Collector) CollectStreaming(ctx context.Context) <-chan HostResult {
 			hostCtx, cancel := context.WithTimeout(ctx, c.timeout)
 			defer cancel()
 
-			metrics, err := c.collectOneWithContext(hostCtx, alias)
+			metrics, latency, err := c.collectOneWithContext(hostCtx, alias)
 
 			result := HostResult{
 				Alias:   alias,
 				Metrics: metrics,
+				Latency: latency,
 			}
 
 			if err != nil {
@@ -209,18 +231,19 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 }
 
 // collectOneWithContext gathers metrics from a single host with context for timeout.
-func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, error) {
+// Returns the metrics, the round-trip latency, and any error.
+func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, time.Duration, error) {
 	// Check for context cancellation early
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	default:
 	}
 
 	// Get connection with platform detection
 	client, platform, err := c.pool.GetWithPlatform(alias)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Build and execute the batched metrics command
@@ -230,31 +253,35 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	session, err := client.Client.NewSession()
 	if err != nil {
 		c.pool.CloseOne(alias)
-		return nil, err
+		return nil, 0, err
 	}
 	defer session.Close()
 
-	// Run command with timeout
+	// Run command with timeout, measuring latency
 	type result struct {
-		output []byte
-		err    error
+		output  []byte
+		err     error
+		latency time.Duration
 	}
 	resultCh := make(chan result, 1)
 
 	go func() {
+		start := time.Now()
 		out, err := session.CombinedOutput(cmd)
-		resultCh <- result{out, err}
+		latency := time.Since(start)
+		resultCh <- result{out, err, latency}
 	}()
 
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	case r := <-resultCh:
 		if r.err != nil {
-			return nil, r.err
+			return nil, r.latency, r.err
 		}
-		return c.parseOutput(alias, platform, string(r.output))
+		metrics, err := c.parseOutput(alias, platform, string(r.output))
+		return metrics, r.latency, err
 	}
 }
 

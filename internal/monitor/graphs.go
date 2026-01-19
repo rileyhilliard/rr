@@ -80,6 +80,10 @@ var brailleDots = [4][2]uint8{
 	{6, 7}, // Row 3: dots 7 and 8
 }
 
+// ColorFunc is a function that returns a color based on a data value.
+// Used for custom coloring in sparklines (e.g., latency thresholds).
+type ColorFunc func(value float64) lipgloss.Color
+
 // RenderBrailleSparkline renders a sparkline graph using braille characters.
 // Each character represents 2 horizontal data points with 4 vertical levels.
 // This gives much higher resolution than standard block characters.
@@ -91,11 +95,30 @@ var brailleDots = [4][2]uint8{
 //   - height: number of rows (each row represents 4 vertical levels)
 //   - baseColor: fallback color (used for non-percentage data)
 func RenderBrailleSparkline(data []float64, width, height int, baseColor lipgloss.Color) string {
+	return RenderBrailleSparklineWithColorFunc(data, width, height, baseColor, nil)
+}
+
+// RenderBrailleSparklineWithColorFunc renders a sparkline with custom per-column coloring.
+// If colorFunc is provided, it's called with each column's max value to determine color.
+// If colorFunc is nil, falls back to default behavior (MetricColor for percentages, baseColor otherwise).
+func RenderBrailleSparklineWithColorFunc(data []float64, width, height int, baseColor lipgloss.Color, colorFunc ColorFunc) string {
+	return RenderBrailleSparklineWithOptions(data, width, height, baseColor, colorFunc, false)
+}
+
+// RenderBrailleSparklineWithOptions renders a sparkline with full control over coloring and scaling.
+// forceZeroMin: when true, forces the Y-axis to start at 0 instead of the data's minimum.
+// This is important for metrics like latency where 0 is a meaningful baseline.
+func RenderBrailleSparklineWithOptions(data []float64, width, height int, baseColor lipgloss.Color, colorFunc ColorFunc, forceZeroMin bool) string {
 	if len(data) == 0 || width <= 0 || height <= 0 {
 		return ""
 	}
 
 	minVal, maxVal, isPercentage := findMinMax(data)
+
+	// Force zero baseline for metrics where 0 is meaningful (like latency)
+	if forceZeroMin && !isPercentage {
+		minVal = 0
+	}
 	totalDots := height * 4
 	targetPoints := width * 2
 
@@ -162,9 +185,14 @@ func RenderBrailleSparkline(data []float64, width, height int, baseColor lipglos
 		for colIdx, char := range row {
 			// Determine color based on max value at this column
 			var color lipgloss.Color
-			if isPercentage {
+			if colorFunc != nil {
+				// Custom color function provided
+				color = colorFunc(colMaxValues[colIdx])
+			} else if isPercentage {
+				// Default: use metric gradient for percentage data
 				color = MetricColor(colMaxValues[colIdx])
 			} else {
+				// Default: use base color for non-percentage data
 				color = baseColor
 			}
 
@@ -340,10 +368,135 @@ func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
 	return result.String()
 }
 
+// RenderBrailleSparklineWithScale renders a sparkline and returns the max value used for scaling.
+// This is useful for non-percentage data where the scale isn't obvious.
+func RenderBrailleSparklineWithScale(data []float64, width, height int, baseColor lipgloss.Color) (string, float64) {
+	if len(data) == 0 || width <= 0 || height <= 0 {
+		return "", 0
+	}
+
+	_, maxVal, _ := findMinMax(data)
+	graph := RenderBrailleSparkline(data, width, height, baseColor)
+	return graph, maxVal
+}
+
+// RenderGraphWithYAxis renders a braille sparkline with y-axis labels on the left.
+// Returns the complete graph with scale markers showing max at top and 0 at bottom.
+// The formatValue function converts values to display strings (e.g., "1856ms", "5.2 MB/s").
+// The minLabelWidth parameter ensures consistent width across different graphs.
+// The colorFunc parameter allows custom per-column coloring (nil uses default behavior).
+// forceZeroMin forces the Y-axis to start at 0 (important for latency where 0 is meaningful).
+func RenderGraphWithYAxis(data []float64, graphWidth, height int, baseColor lipgloss.Color, formatValue func(float64) string, minLabelWidth int, colorFunc ColorFunc, forceZeroMin bool) string {
+	if len(data) == 0 || graphWidth <= 0 || height <= 0 {
+		return ""
+	}
+
+	_, maxVal, _ := findMinMax(data)
+
+	// Format the axis labels
+	maxLabel := formatValue(maxVal)
+	minLabel := formatValue(0)
+
+	// Find the widest label for consistent padding
+	labelWidth := len(maxLabel)
+	if len(minLabel) > labelWidth {
+		labelWidth = len(minLabel)
+	}
+	// Ensure minimum width for consistent layout
+	if labelWidth < minLabelWidth {
+		labelWidth = minLabelWidth
+	}
+
+	// Render the sparkline with optional custom coloring and zero baseline
+	graph := RenderBrailleSparklineWithOptions(data, graphWidth, height, baseColor, colorFunc, forceZeroMin)
+	graphLines := strings.Split(graph, "\n")
+
+	// Build output with y-axis labels
+	var lines []string
+	labelStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
+
+	for i, graphLine := range graphLines {
+		var label string
+		if i == 0 {
+			// Top row: show max value
+			label = padLeft(maxLabel, labelWidth)
+		} else if i == len(graphLines)-1 {
+			// Bottom row: show min value (0)
+			label = padLeft(minLabel, labelWidth)
+		} else {
+			// Middle rows: empty space
+			label = strings.Repeat(" ", labelWidth)
+		}
+
+		lines = append(lines, labelStyle.Render(label)+" "+graphLine)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// padLeft pads a string with spaces on the left to reach the target width.
+func padLeft(s string, width int) string {
+	if len(s) >= width {
+		return s
+	}
+	return strings.Repeat(" ", width-len(s)) + s
+}
+
+// ResampleMode controls how data is combined when downsampling.
+type ResampleMode int
+
+const (
+	// ResampleMax preserves peaks by taking the max value in each bucket.
+	// Good for CPU/RAM where spikes are important to see.
+	ResampleMax ResampleMode = iota
+	// ResampleAvg smooths data by averaging values in each bucket.
+	// Good for latency where you want to see the trend, not individual spikes.
+	ResampleAvg
+)
+
+// SmoothWithMovingAverage applies a rolling average to smooth data while preserving shape.
+// Each point becomes the average of itself and its neighbors within the window.
+// Window size of 5 is typical - smooths noise while keeping trends visible.
+func SmoothWithMovingAverage(data []float64, windowSize int) []float64 {
+	if len(data) == 0 || windowSize <= 1 {
+		return data
+	}
+
+	result := make([]float64, len(data))
+	halfWindow := windowSize / 2
+
+	for i := range data {
+		// Calculate window bounds
+		start := i - halfWindow
+		if start < 0 {
+			start = 0
+		}
+		end := i + halfWindow + 1
+		if end > len(data) {
+			end = len(data)
+		}
+
+		// Average values in window
+		sum := 0.0
+		for j := start; j < end; j++ {
+			sum += data[j]
+		}
+		result[i] = sum / float64(end-start)
+	}
+
+	return result
+}
+
 // resampleData resamples data to the target size.
 // When downsampling (compressing), uses max-based sampling to preserve peaks/spikes.
 // When upsampling (expanding), uses linear interpolation.
 func resampleData(data []float64, targetSize int) []float64 {
+	return ResampleDataWithMode(data, targetSize, ResampleMax)
+}
+
+// ResampleDataWithMode resamples data using the specified mode for downsampling.
+// Exported so callers can pre-smooth data (e.g., latency) before rendering.
+func ResampleDataWithMode(data []float64, targetSize int, mode ResampleMode) []float64 {
 	if len(data) == 0 || targetSize <= 0 {
 		return nil
 	}
@@ -362,7 +515,7 @@ func resampleData(data []float64, targetSize int) []float64 {
 		return result
 	}
 
-	// Downsampling: use max within each bucket to preserve peaks
+	// Downsampling: combine values within each bucket
 	if len(data) > targetSize {
 		bucketSize := float64(len(data)) / float64(targetSize)
 		for i := 0; i < targetSize; i++ {
@@ -378,14 +531,24 @@ func resampleData(data []float64, targetSize int) []float64 {
 				start = 0
 			}
 
-			// Find max in this bucket
-			maxVal := data[start]
-			for j := start + 1; j < end; j++ {
-				if data[j] > maxVal {
-					maxVal = data[j]
+			switch mode {
+			case ResampleAvg:
+				// Average values in this bucket for smoother trend visualization
+				sum := 0.0
+				for j := start; j < end; j++ {
+					sum += data[j]
 				}
+				result[i] = sum / float64(end-start)
+			default: // ResampleMax
+				// Find max in this bucket to preserve peaks/spikes
+				maxVal := data[start]
+				for j := start + 1; j < end; j++ {
+					if data[j] > maxVal {
+						maxVal = data[j]
+					}
+				}
+				result[i] = maxVal
 			}
-			result[i] = maxVal
 		}
 		return result
 	}

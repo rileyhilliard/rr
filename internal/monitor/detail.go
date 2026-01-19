@@ -100,7 +100,7 @@ func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) st
 	}
 
 	// Load average and cores on same line
-	loadText := fmt.Sprintf("Load: %.2f / %.2f / %.2f", cpu.LoadAvg[0], cpu.LoadAvg[1], cpu.LoadAvg[2])
+	loadText := fmt.Sprintf("Load: %.2f (1m) · %.2f (5m) · %.2f (15m)", cpu.LoadAvg[0], cpu.LoadAvg[1], cpu.LoadAvg[2])
 	if cpu.Cores > 0 {
 		loadText += fmt.Sprintf("  ·  Cores: %d", cpu.Cores)
 	}
@@ -129,6 +129,103 @@ func padToWidth(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-visibleWidth)
+}
+
+// renderDetailLatencySection renders the latency section with a sparkline graph.
+func (m Model) renderDetailLatencySection(host string, width int) string {
+	var lines []string
+
+	// Get current latency
+	latencyDur, ok := m.latency[host]
+	latencyMs := float64(0)
+	if ok && latencyDur > 0 {
+		latencyMs = float64(latencyDur.Milliseconds())
+	}
+
+	// Section header with right-aligned latency value and quality
+	var headerValue string
+	if latencyMs > 0 {
+		headerValue = fmt.Sprintf("%s %s",
+			LatencyStyle(latencyMs).Render(fmt.Sprintf("%.0fms", latencyMs)),
+			LabelStyle.Render(LatencyQualityText(latencyMs)))
+	} else {
+		headerValue = LabelStyle.Render("--")
+	}
+	lines = append(lines, SectionHeader("Latency", headerValue, width))
+
+	// Content area (width - 4 for borders and padding)
+	contentWidth := width - 4
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+
+	// Braille graph with y-axis - 8 rows to match CPU section height
+	history := m.history.GetLatencyHistory(host, DefaultHistorySize)
+	if len(history) > 0 {
+		// Reserve space for y-axis labels (7 chars for label + 1 space = 8 total)
+		// Labels like "1234ms" (6 chars) or "12.5s" (5 chars)
+		axisLabelWidth := 7
+		graphWidth := contentWidth - axisLabelWidth - 1 // -1 for space between label and graph
+		if graphWidth < 10 {
+			graphWidth = 10
+		}
+
+		// Apply moving average to smooth latency data while preserving shape.
+		// This makes the graph more readable - trends are visible without wild spikes.
+		// Window of 5 samples smooths noise while keeping increases/decreases visible.
+		smoothedHistory := SmoothWithMovingAverage(history, 5)
+
+		// Render graph with y-axis labels
+		formatLatency := func(v float64) string {
+			if v >= 1000 {
+				return fmt.Sprintf("%.1fs", v/1000)
+			}
+			return fmt.Sprintf("%.0fms", v)
+		}
+		// Use LatencyColor for per-column coloring based on latency thresholds
+		// Green = fast (<50ms), Yellow = normal (<200ms), Orange = slow (<500ms), Red = degraded
+		// forceZeroMin=true so 950ms shows partway up the graph, not at the bottom
+		graph := RenderGraphWithYAxis(smoothedHistory, graphWidth, 8, ColorGraph, formatLatency, axisLabelWidth, LatencyColor, true)
+		for _, line := range strings.Split(graph, "\n") {
+			lines = append(lines, SectionContentLine(line, width))
+		}
+	} else {
+		// Show empty graph placeholder while collecting
+		emptyLine := strings.Repeat(" ", contentWidth)
+		for i := 0; i < 8; i++ {
+			if i == 4 {
+				lines = append(lines, SectionContentLine(LabelStyle.Render(centerText("Collecting data...", contentWidth)), width))
+			} else {
+				lines = append(lines, SectionContentLine(emptyLine, width))
+			}
+		}
+	}
+
+	// Latency stats line
+	var statsText string
+	if len(history) > 0 {
+		// Calculate min/max/avg from recent history
+		minVal, maxVal, sum := history[0], history[0], float64(0)
+		for _, v := range history {
+			if v < minVal {
+				minVal = v
+			}
+			if v > maxVal {
+				maxVal = v
+			}
+			sum += v
+		}
+		avg := sum / float64(len(history))
+		statsText = fmt.Sprintf("Min: %.0fms  ·  Avg: %.0fms  ·  Max: %.0fms", minVal, avg, maxVal)
+	} else {
+		statsText = "Waiting for data..."
+	}
+	lines = append(lines, SectionContentLine(LabelStyle.Render(statsText), width))
+
+	// Section footer
+	lines = append(lines, SectionFooter(width))
+
+	return strings.Join(lines, "\n")
 }
 
 // renderDetailRAMSection renders the RAM section with a visual bar graph.
@@ -248,16 +345,47 @@ func (m Model) renderDetailNetworkSection(host string, width int) string {
 	lines = append(lines, SectionHeader("Network", rateText, width))
 
 	// Content area (width - 4 for borders and padding)
-	barWidth := width - 4
-	if barWidth < 10 {
-		barWidth = 10
+	contentWidth := width - 4
+	if contentWidth < 10 {
+		contentWidth = 10
 	}
 
 	// Get network rate history for visualization (~10 min window)
-	netHistory := m.history.GetNetworkRateHistory(host, DefaultHistorySize, m.interval.Seconds())
+	// Use linear rates (actual bytes/sec) so the graph height reflects actual throughput
+	netHistory := m.history.GetNetworkRateHistoryLinear(host, DefaultHistorySize, m.interval.Seconds())
 	if len(netHistory) > 0 {
-		// Show activity graph (6 rows for better visibility)
-		graph := RenderBrailleSparkline(netHistory, barWidth, 6, ColorGraph)
+		// Reserve space for y-axis labels (10 chars for label + 1 space = 11 total)
+		// Labels like "100 MB/s" (8 chars) or "1.5 GB/s" (8 chars)
+		axisLabelWidth := 10
+		graphWidth := contentWidth - axisLabelWidth - 1 // -1 for space between label and graph
+		if graphWidth < 10 {
+			graphWidth = 10
+		}
+
+		// Get the peak rate from history for stable y-axis scaling
+		peakRate := m.history.GetPeakNetworkRate(host, DefaultHistorySize, m.interval.Seconds())
+		if peakRate < 1024 {
+			peakRate = 1024 // minimum 1 KB/s for display
+		}
+
+		// Normalize the linear rates to 0-100 percentage based on peak
+		// This way the graph fills the full height when at peak rate
+		normalizedHistory := make([]float64, len(netHistory))
+		for i, rate := range netHistory {
+			if peakRate > 0 {
+				normalizedHistory[i] = (rate / peakRate) * 100
+			}
+		}
+
+		// Format function shows actual rates on y-axis
+		formatNetRate := func(v float64) string {
+			// v is 0-100 percentage, convert back to actual rate for display
+			actualRate := (v / 100) * peakRate
+			return FormatRate(actualRate)
+		}
+		// Use constant accent color - network activity isn't inherently "bad" at high values
+		constantColor := func(_ float64) lipgloss.Color { return ColorAccent }
+		graph := RenderGraphWithYAxis(normalizedHistory, graphWidth, 6, ColorGraph, formatNetRate, axisLabelWidth, constantColor, false)
 		for _, line := range strings.Split(graph, "\n") {
 			lines = append(lines, SectionContentLine(line, width))
 		}
@@ -281,7 +409,7 @@ func (m Model) renderDetailNetworkSection(host string, width int) string {
 			activityPercent = 5
 		}
 
-		bar := RenderGradientBar(barWidth, activityPercent, ColorGraph)
+		bar := RenderGradientBar(contentWidth, activityPercent, ColorGraph)
 		lines = append(lines, SectionContentLine(bar, width))
 	}
 
@@ -394,10 +522,46 @@ func (m Model) generateDetailContent() string {
 		return content.String()
 	}
 
-	// 1. CPU Section
-	cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
-	content.WriteString(cpuSection)
-	content.WriteString("\n")
+	// 1. CPU and Latency side by side (or stacked on narrow terminals)
+	halfWidth := (contentWidth - 1) / 2 // -1 for the space between sections
+	if contentWidth >= 80 {
+		cpuSection := m.renderDetailCPUSection(host, metrics.CPU, halfWidth)
+		latSection := m.renderDetailLatencySection(host, halfWidth)
+
+		// Join side by side
+		cpuLines := strings.Split(cpuSection, "\n")
+		latLines := strings.Split(latSection, "\n")
+
+		// Pad to same height
+		maxLines := len(cpuLines)
+		if len(latLines) > maxLines {
+			maxLines = len(latLines)
+		}
+		for len(cpuLines) < maxLines {
+			cpuLines = append(cpuLines, "")
+		}
+		for len(latLines) < maxLines {
+			latLines = append(latLines, "")
+		}
+
+		for i := 0; i < maxLines; i++ {
+			cpuLine := padToWidth(cpuLines[i], halfWidth)
+			latLine := padToWidth(latLines[i], halfWidth)
+			content.WriteString(cpuLine)
+			content.WriteString(" ")
+			content.WriteString(latLine)
+			content.WriteString("\n")
+		}
+	} else {
+		// Single column for narrow terminals
+		cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
+		content.WriteString(cpuSection)
+		content.WriteString("\n")
+
+		latSection := m.renderDetailLatencySection(host, contentWidth)
+		content.WriteString(latSection)
+		content.WriteString("\n")
+	}
 
 	// 2. Process Table
 	if len(metrics.Processes) > 0 {
@@ -407,7 +571,6 @@ func (m Model) generateDetailContent() string {
 	}
 
 	// 3. Memory and Network side by side (or stacked on narrow terminals)
-	halfWidth := (contentWidth - 1) / 2 // -1 for the space between sections
 	if contentWidth >= 80 {
 		ramSection := m.renderDetailRAMSection(host, metrics.RAM, halfWidth)
 		netSection := m.renderDetailNetworkSection(host, halfWidth)

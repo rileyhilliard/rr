@@ -37,6 +37,13 @@ const (
 	CriticalThreshold = 90.0
 )
 
+// Latency thresholds in milliseconds
+const (
+	LatencyFast     = 50.0  // < 50ms is excellent (LAN/nearby)
+	LatencyNormal   = 200.0 // < 200ms is normal (VPN/regional)
+	LatencyDegraded = 500.0 // >= 500ms is degraded (slow/intercontinental)
+)
+
 // Base styles for the dashboard
 var (
 	// Container styles
@@ -184,6 +191,40 @@ func MetricStyle(percent float64) lipgloss.Style {
 // using custom warning and critical thresholds.
 func MetricStyleWithThresholds(percent float64, warning, critical int) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical))
+}
+
+// LatencyColor returns the appropriate color for a latency value in milliseconds.
+// Green < 50ms, Yellow 50-200ms, Orange 200-500ms, Red >= 500ms.
+func LatencyColor(ms float64) lipgloss.Color {
+	switch {
+	case ms >= LatencyDegraded:
+		return ColorCritical
+	case ms >= LatencyNormal:
+		return ColorWarning
+	case ms >= LatencyFast:
+		return lipgloss.Color("#FFCC00") // Amber/yellow for normal
+	default:
+		return ColorHealthy
+	}
+}
+
+// LatencyQualityText returns a human-readable quality label for the latency.
+func LatencyQualityText(ms float64) string {
+	switch {
+	case ms >= LatencyDegraded:
+		return "degraded"
+	case ms >= LatencyNormal:
+		return "slow"
+	case ms >= LatencyFast:
+		return "normal"
+	default:
+		return "fast"
+	}
+}
+
+// LatencyStyle returns a style with the appropriate foreground color for latency.
+func LatencyStyle(ms float64) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(LatencyColor(ms))
 }
 
 // ProgressBar renders a progress bar with the given width and percentage.
