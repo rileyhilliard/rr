@@ -77,20 +77,94 @@ func doctorCommand() error {
 		}
 	}
 
-	// Run checks
-	results := doctor.RunAll(checks)
+	// Machine mode implies JSON output - run checks without progress display
+	if doctorJSON || machineMode {
+		results := doctor.RunAll(checks)
+		if doctorFix {
+			results = attemptFixes(checks, results)
+		}
+		return outputDoctorJSON(checks, results)
+	}
+
+	// Run checks with progressive output (shows spinner per category)
+	results := runChecksWithProgress(checks)
 
 	// Try to fix issues if requested
 	if doctorFix {
 		results = attemptFixes(checks, results)
 	}
 
-	// Machine mode implies JSON output
-	if doctorJSON || machineMode {
-		return outputDoctorJSON(checks, results)
+	return outputDoctorTextResults(checks, results)
+}
+
+// runChecksWithProgress runs checks with spinner feedback, showing progress by category.
+func runChecksWithProgress(checks []doctor.Check) []doctor.CheckResult {
+	results := make([]doctor.CheckResult, len(checks))
+
+	// Group checks by category while preserving order
+	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "PATH", "REMOTE"}
+	grouped := make(map[string][]int) // category -> indices
+
+	for i, check := range checks {
+		cat := check.Category()
+		grouped[cat] = append(grouped[cat], i)
 	}
 
-	return outputDoctorText(checks, results)
+	fmt.Println()
+	headerStyle := lipgloss.NewStyle().Bold(true)
+	fmt.Println(headerStyle.Render("Road Runner Diagnostic Report"))
+	fmt.Println()
+
+	// Run each category with a spinner
+	for _, category := range categoryOrder {
+		indices, ok := grouped[category]
+		if !ok || len(indices) == 0 {
+			continue
+		}
+
+		// Create spinner for this category
+		spinner := ui.NewSpinner(fmt.Sprintf("Checking %s", strings.ToLower(category)))
+		spinner.Start()
+
+		// Run all checks in this category
+		for _, idx := range indices {
+			results[idx] = checks[idx].Run()
+		}
+
+		spinner.Stop()
+		// Clear spinner line
+		fmt.Print("\r\033[K")
+
+		// Render the category results immediately
+		renderCategoryResults(category, checks, results, indices)
+	}
+
+	return results
+}
+
+// renderCategoryResults renders results for a single category.
+func renderCategoryResults(category string, checks []doctor.Check, results []doctor.CheckResult, indices []int) {
+	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
+	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
+	warnStyle := lipgloss.NewStyle().Foreground(ui.ColorWarning)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	headerStyle := lipgloss.NewStyle().Bold(true)
+
+	fmt.Println(headerStyle.Render(category))
+
+	switch category {
+	case "HOSTS":
+		renderHostsCategory(checks, results, indices)
+	case "DEPENDENCIES":
+		renderDepsCategory(checks, results, indices)
+	default:
+		for _, idx := range indices {
+			result := results[idx]
+			renderCheckResult(result, successStyle, errorStyle, warnStyle, mutedStyle)
+		}
+	}
+
+	fmt.Println()
 }
 
 // establishPathConnections connects to hosts for PATH checking.
@@ -204,7 +278,43 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 	return enc.Encode(output)
 }
 
-// outputDoctorText outputs results in human-readable format.
+// outputDoctorTextResults outputs just the summary after progressive category rendering.
+//
+//nolint:unparam // error return reserved for future use
+func outputDoctorTextResults(_ []doctor.Check, results []doctor.CheckResult) error {
+	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
+	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	// Render summary divider
+	fmt.Println(strings.Repeat("\u2501", 60))
+	fmt.Println()
+
+	// Summary
+	counts := doctor.CountByStatus(results)
+	if !doctor.HasIssues(results) {
+		fmt.Printf("%s %s\n", successStyle.Render(ui.SymbolSuccess), "Everything looks good")
+	} else {
+		total := counts[doctor.StatusFail] + counts[doctor.StatusWarn]
+		fmt.Printf("%s %d issue%s found\n",
+			errorStyle.Render(ui.SymbolFail),
+			total,
+			pluralSuffix(total),
+		)
+
+		fixable := doctor.FixableCount(results)
+		if fixable > 0 && !doctorFix {
+			fmt.Println()
+			fmt.Printf("  Run with %s to attempt automatic fixes where possible.\n",
+				mutedStyle.Render("--fix"))
+		}
+	}
+
+	fmt.Println()
+	return nil
+}
+
+// outputDoctorText outputs results in human-readable format (non-progressive, used by tests).
 //
 //nolint:unparam // error return reserved for future use
 func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error {
