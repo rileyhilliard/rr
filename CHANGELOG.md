@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-01-19
+
+### Added
+
+- **Latency tracking** - SSH connection latency is now measured and displayed in `rr monitor` with braille sparkline graphs showing historical trends.
+- **Parallel SSH probing** - When multiple SSH addresses are configured for a host, all are tried concurrently. LAN addresses are preferred if they connect within 500ms of faster alternatives.
+- **Latency graph coloring** - Latency graphs use threshold-based coloring: green (<50ms), yellow (<200ms), orange (<500ms), red (>=500ms degraded).
+- **LAT section in detail view** - Host detail pages now show latency graph alongside CPU (50/50 split, collapses on narrow terminals).
+- **Y-axis labels for graphs** - Latency and Network graphs now show y-axis scale labels for better readability.
+
+### Changed
+
+- **Load average labels** - Changed from cryptic `1.28 / 1.12 / 1.03` to descriptive `1.28 (1m) · 1.12 (5m) · 1.03 (15m)`.
+- **Network graph coloring** - Network graphs now use a consistent accent color instead of the red/green gradient (high throughput isn't "bad").
+- **Latency smoothing** - Latency graphs use moving average (window=5) to show trends instead of erratic spikes.
+- **Latency graph scaling** - Latency graphs now use zero baseline so high latency (e.g., 950ms) appears high on the graph, not at the bottom.
+
+### Fixed
+
+- **Backoff for unreachable hosts** - Hosts that fail 3 consecutive times now enter a 30-second backoff period instead of being continuously retried every second. UI shows "Offline · retry in Xs" countdown.
+
 ## [0.12.0] - 2026-01-19
 
 ### Added
