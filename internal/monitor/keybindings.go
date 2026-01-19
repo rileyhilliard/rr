@@ -59,6 +59,11 @@ type keyMap struct {
 	Expand      key.Binding
 	Collapse    key.Binding
 	ToggleHelp  key.Binding
+	// Detail view scrolling
+	ScrollUp   key.Binding
+	ScrollDown key.Binding
+	PageUp     key.Binding
+	PageDown   key.Binding
 }
 
 // ShortHelp returns the short help view.
@@ -117,6 +122,23 @@ var keys = keyMap{
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
 	),
+	// Detail view scrolling
+	ScrollUp: key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "scroll up"),
+	),
+	ScrollDown: key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "scroll down"),
+	),
+	PageUp: key.NewBinding(
+		key.WithKeys("pgup", "ctrl+u"),
+		key.WithHelp("pgup", "page up"),
+	),
+	PageDown: key.NewBinding(
+		key.WithKeys("pgdown", "ctrl+d"),
+		key.WithHelp("pgdn", "page down"),
+	),
 }
 
 // HandleKeyMsg processes keyboard input and returns updated model state and command.
@@ -142,11 +164,16 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 
-	// In detail view, j/k and arrow keys scroll the viewport
+	// In detail view, scroll keys control the viewport (intercept before list navigation)
 	if m.viewMode == ViewDetail && m.viewportReady {
-		var cmd tea.Cmd
-		m.detailViewport, cmd = m.detailViewport.Update(msg)
-		if cmd != nil {
+		isScrollKey := key.Matches(msg, keys.ScrollUp) ||
+			key.Matches(msg, keys.ScrollDown) ||
+			key.Matches(msg, keys.PageUp) ||
+			key.Matches(msg, keys.PageDown)
+
+		if isScrollKey {
+			var cmd tea.Cmd
+			m.detailViewport, cmd = m.detailViewport.Update(msg)
 			return true, cmd
 		}
 	}
@@ -193,6 +220,8 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 			m.viewMode = ViewDetail
 			// Reset viewport position when entering detail view
 			m.detailViewport.GotoTop()
+			// Update viewport content so scrolling works
+			m.updateDetailViewportContent()
 		}
 		return true, nil
 

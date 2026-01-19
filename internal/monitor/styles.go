@@ -13,10 +13,10 @@ const (
 	ColorSurfaceBg = lipgloss.Color("#12121A") // Dark surface
 	ColorBorder    = lipgloss.Color("#2A2A4A") // Glass border (purple tint)
 
-	// Semantic colors for metrics - neon style
-	ColorHealthy  = lipgloss.Color("#39FF14") // Neon green
-	ColorWarning  = lipgloss.Color("#FFAA00") // Electric amber
-	ColorCritical = lipgloss.Color("#FF0055") // Hot red-pink
+	// Semantic colors for metrics - gen-z synthwave gradient
+	ColorHealthy  = lipgloss.Color("#00FFFF") // Neon cyan - chill vibes
+	ColorWarning  = lipgloss.Color("#BF40FF") // Neon purple - getting spicy
+	ColorCritical = lipgloss.Color("#FF2E97") // Hot pink - main character energy
 
 	// Text colors
 	ColorTextPrimary   = lipgloss.Color("#FFFFFF") // Pure white
@@ -54,10 +54,10 @@ var (
 			Padding(0, 1)
 
 	// Card styles - no background set here, each line handles its own
+	// Note: No horizontal padding here - renderCardLine handles symmetric padding
 	CardStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorBorder).
-			Padding(0, 1).
 			MarginRight(1).
 			MarginBottom(1)
 

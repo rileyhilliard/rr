@@ -371,6 +371,94 @@ func (m Model) renderDetailFooter() string {
 	return FooterStyle.Render(strings.Join(hints, "  "))
 }
 
+// generateDetailContent builds the scrollable content for the detail view.
+// This is separated so it can be called from Update to set viewport content.
+func (m Model) generateDetailContent() string {
+	host := m.SelectedHost()
+	if host == "" {
+		return ""
+	}
+
+	metrics := m.metrics[host]
+	contentWidth := m.width - 4 // Account for container padding (2 left, 2 right)
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	var content strings.Builder
+
+	// If no metrics, show waiting message
+	if metrics == nil {
+		content.WriteString(detailSectionStyle.Width(contentWidth).Render(
+			LabelStyle.Render("Waiting for metrics data...")))
+		return content.String()
+	}
+
+	// 1. CPU Section
+	cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
+	content.WriteString(cpuSection)
+	content.WriteString("\n")
+
+	// 2. Process Table
+	if len(metrics.Processes) > 0 {
+		procSection := m.renderDetailProcessSection(metrics.Processes, contentWidth)
+		content.WriteString(procSection)
+		content.WriteString("\n")
+	}
+
+	// 3. Memory and Network side by side (or stacked on narrow terminals)
+	halfWidth := (contentWidth - 1) / 2 // -1 for the space between sections
+	if contentWidth >= 80 {
+		ramSection := m.renderDetailRAMSection(host, metrics.RAM, halfWidth)
+		netSection := m.renderDetailNetworkSection(host, halfWidth)
+
+		// Join side by side
+		ramLines := strings.Split(ramSection, "\n")
+		netLines := strings.Split(netSection, "\n")
+
+		// Pad to same height
+		maxLines := len(ramLines)
+		if len(netLines) > maxLines {
+			maxLines = len(netLines)
+		}
+
+		// Pad lines to correct width and height
+		for len(ramLines) < maxLines {
+			ramLines = append(ramLines, "")
+		}
+		for len(netLines) < maxLines {
+			netLines = append(netLines, "")
+		}
+
+		for i := 0; i < maxLines; i++ {
+			// Pad each line to halfWidth using visible character count
+			ramLine := padToWidth(ramLines[i], halfWidth)
+			netLine := padToWidth(netLines[i], halfWidth)
+			content.WriteString(ramLine)
+			content.WriteString(" ")
+			content.WriteString(netLine)
+			content.WriteString("\n")
+		}
+	} else {
+		// Single column for narrow terminals
+		ramSection := m.renderDetailRAMSection(host, metrics.RAM, contentWidth)
+		content.WriteString(ramSection)
+		content.WriteString("\n")
+
+		netSection := m.renderDetailNetworkSection(host, contentWidth)
+		content.WriteString(netSection)
+		content.WriteString("\n")
+	}
+
+	// 4. GPU Section (if present)
+	if metrics.GPU != nil {
+		gpuSection := m.renderDetailGPUSection(host, metrics.GPU, contentWidth)
+		content.WriteString(gpuSection)
+	}
+
+	return content.String()
+}
+
 // renderDetailViewWithViewport renders the detail view with viewport scrolling support.
 // The viewport allows scrolling when content exceeds the visible area.
 func (m Model) renderDetailViewWithViewport() string {
@@ -380,105 +468,34 @@ func (m Model) renderDetailViewWithViewport() string {
 	}
 
 	// Build the header (fixed at top)
-	metrics := m.metrics[host]
 	status := m.status[host]
 	header := m.renderDetailHeader(host, status)
-
-	// Build the scrollable content
-	var content strings.Builder
-	contentWidth := m.width - 6
-	if contentWidth < 40 {
-		contentWidth = 40
-	}
-
-	// If no metrics, show waiting message
-	if metrics == nil {
-		content.WriteString(detailSectionStyle.Width(contentWidth).Render(
-			LabelStyle.Render("Waiting for metrics data...")))
-	} else {
-		// 1. CPU Section
-		cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
-		content.WriteString(cpuSection)
-		content.WriteString("\n")
-
-		// 2. Process Table
-		if len(metrics.Processes) > 0 {
-			procSection := m.renderDetailProcessSection(metrics.Processes, contentWidth)
-			content.WriteString(procSection)
-			content.WriteString("\n")
-		}
-
-		// 3. Memory and Network side by side (or stacked on narrow terminals)
-		halfWidth := (contentWidth - 2) / 2
-		if contentWidth >= 80 {
-			ramSection := m.renderDetailRAMSection(host, metrics.RAM, halfWidth)
-			netSection := m.renderDetailNetworkSection(host, halfWidth)
-
-			// Join side by side
-			ramLines := strings.Split(ramSection, "\n")
-			netLines := strings.Split(netSection, "\n")
-
-			// Pad to same height
-			maxLines := len(ramLines)
-			if len(netLines) > maxLines {
-				maxLines = len(netLines)
-			}
-
-			// Pad lines to correct width and height
-			for len(ramLines) < maxLines {
-				ramLines = append(ramLines, "")
-			}
-			for len(netLines) < maxLines {
-				netLines = append(netLines, "")
-			}
-
-			for i := 0; i < maxLines; i++ {
-				// Pad each line to halfWidth using visible character count
-				ramLine := padToWidth(ramLines[i], halfWidth)
-				netLine := padToWidth(netLines[i], halfWidth)
-				content.WriteString(ramLine)
-				content.WriteString(" ")
-				content.WriteString(netLine)
-				content.WriteString("\n")
-			}
-		} else {
-			// Single column for narrow terminals
-			ramSection := m.renderDetailRAMSection(host, metrics.RAM, contentWidth)
-			content.WriteString(ramSection)
-			content.WriteString("\n")
-
-			netSection := m.renderDetailNetworkSection(host, contentWidth)
-			content.WriteString(netSection)
-			content.WriteString("\n")
-		}
-
-		// 4. GPU Section (if present)
-		if metrics.GPU != nil {
-			gpuSection := m.renderDetailGPUSection(host, metrics.GPU, contentWidth)
-			content.WriteString(gpuSection)
-		}
-	}
 
 	// Build the footer with scroll indicator
 	footer := m.renderDetailFooterWithScroll()
 
 	// If viewport is ready, use it for scrolling
 	if m.viewportReady {
-		// Set the content for the viewport
-		// We need a mutable copy to set content
-		vp := m.detailViewport
-		vp.SetContent(content.String())
-
-		// Build the full view: header + viewport + footer
+		// The content should already be set via updateDetailViewportContent
 		return fmt.Sprintf("%s\n\n%s\n%s",
 			detailContainerStyle.Render(header),
-			vp.View(),
+			m.detailViewport.View(),
 			footer,
 		)
 	}
 
 	// Fallback: render without viewport
-	return detailContainerStyle.Render(fmt.Sprintf("%s\n\n%s\n\n%s", header, content.String(), m.renderDetailFooter()))
+	content := m.generateDetailContent()
+	return detailContainerStyle.Render(fmt.Sprintf("%s\n\n%s\n\n%s", header, content, m.renderDetailFooter()))
+}
+
+// updateDetailViewportContent updates the viewport with the current detail content.
+// This must be called when entering detail view or when content changes.
+func (m *Model) updateDetailViewportContent() {
+	if m.viewportReady {
+		content := m.generateDetailContent()
+		m.detailViewport.SetContent(content)
+	}
 }
 
 // renderDetailFooterWithScroll renders the footer with scroll position indicator.

@@ -265,12 +265,12 @@ func TestModel_calculateCardWidth(t *testing.T) {
 		{
 			name:   "narrow terminal",
 			width:  60,
-			expect: 56, // width - 4 for minimal layout
+			expect: 57, // width - 3 for minimal layout (borders + margin)
 		},
 		{
 			name:   "compact terminal",
 			width:  100,
-			expect: 94, // width - 6 for compact layout
+			expect: 96, // width - 4 for compact layout (borders + margin + slight margin)
 		},
 	}
 

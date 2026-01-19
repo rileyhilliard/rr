@@ -246,6 +246,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailViewport.Height = viewportHeight
 		}
 
+		// Update viewport content if in detail view (dimensions changed)
+		if m.viewMode == ViewDetail {
+			m.updateDetailViewportContent()
+		}
+
 	case tickMsg:
 		return m, tea.Batch(m.tickCmd(), m.collectCmd())
 
@@ -257,11 +262,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case metricsMsg:
 		m.lastUpdate = msg.time
 		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
+		// Update viewport content if in detail view
+		if m.viewMode == ViewDetail {
+			m.updateDetailViewportContent()
+		}
 
 	case hostResultMsg:
 		// Update this specific host's state immediately
 		m.lastUpdate = msg.time
 		m.updateHostResult(msg)
+		// Update viewport content if in detail view
+		if m.viewMode == ViewDetail {
+			m.updateDetailViewportContent()
+		}
 
 		// Continue polling for more results if we have an active channel
 		if m.resultsChan != nil {
