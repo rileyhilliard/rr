@@ -76,6 +76,7 @@ type Model struct {
 	lockInfo   map[string]*HostLockInfo        // Lock status per host
 	connState  map[string]*HostConnectionState // Connection attempt tracking per host
 	sshAlias   map[string]string               // SSH alias used to connect (e.g., "m4-tailscale")
+	latency    map[string]time.Duration        // Latest round-trip latency per host
 	selected   int
 	collector  *Collector
 	history    *History
@@ -122,6 +123,7 @@ type hostResultMsg struct {
 	error        string        // error message if failed
 	lockInfo     *HostLockInfo // lock status
 	connectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
+	latency      time.Duration // round-trip time for metrics collection
 	time         time.Time
 }
 
@@ -133,11 +135,20 @@ type collectStartedMsg struct {
 
 // HostConnectionState tracks connection attempts and errors per host.
 type HostConnectionState struct {
-	Attempts    int       // number of connection attempts
+	Attempts    int       // number of consecutive failures
 	LastError   string    // most recent error message
 	Connected   bool      // has successfully connected at least once
 	LastAttempt time.Time // when last attempt started
+	NextRetry   time.Time // when to next attempt connection (for backoff)
 }
+
+// Backoff constants for unreachable hosts
+const (
+	// After this many consecutive failures, start backing off
+	backoffThreshold = 3
+	// How long to wait before retrying an unreachable host
+	unreachableBackoff = 30 * time.Second
+)
 
 // spinnerInterval is the animation frame rate for the connecting spinner
 const spinnerInterval = 150 * time.Millisecond
@@ -195,6 +206,7 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 		lockInfo:  make(map[string]*HostLockInfo),
 		connState: connState,
 		sshAlias:  make(map[string]string),
+		latency:   make(map[string]time.Duration),
 		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
@@ -280,10 +292,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resultsChan = msg.results
 		m.collecting = true
 
-		// Increment attempt count for all hosts at start of collection
+		// Mark collection start time for hosts that aren't yet connected
+		// (Attempts are incremented in updateHostResult only on actual failures)
 		for _, host := range m.hosts {
-			if state, ok := m.connState[host]; ok {
-				state.Attempts++
+			if state, ok := m.connState[host]; ok && !state.Connected {
 				state.LastAttempt = time.Now()
 			}
 		}
@@ -338,22 +350,52 @@ func (m Model) spinnerTickCmd() tea.Cmd {
 	})
 }
 
-// collectCmd returns a command that starts streaming collection from all hosts.
+// collectCmd returns a command that starts streaming collection from hosts.
+// Hosts that are in backoff (unreachable with NextRetry in future) are skipped.
 // Returns a collectStartedMsg so Update can set up state safely (no data races).
 func (m Model) collectCmd() tea.Cmd {
 	// Capture values locally to avoid reading Model fields in goroutine
 	timeout := m.timeout
-	numHosts := len(m.hosts)
 	collector := m.collector
 
-	return func() tea.Msg {
-		// Create a background context for the collection cycle
-		ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(numHosts+1))
-		// Context will timeout naturally; cancel stored but not used for early cleanup
-		_ = cancel
+	// Build list of hosts to collect from (skip those in backoff)
+	now := time.Now()
+	var hostsToCollect []string
+	for _, host := range m.hosts {
+		state := m.connState[host]
+		if state == nil {
+			// No state yet, collect from this host
+			hostsToCollect = append(hostsToCollect, host)
+			continue
+		}
 
-		// Start streaming collection
-		resultsChan := collector.CollectStreaming(ctx)
+		// Skip hosts that are in backoff (NextRetry is in the future)
+		if !state.NextRetry.IsZero() && now.Before(state.NextRetry) {
+			continue
+		}
+
+		hostsToCollect = append(hostsToCollect, host)
+	}
+
+	numHosts := len(hostsToCollect)
+	if numHosts == 0 {
+		// All hosts are in backoff, return nil command
+		return nil
+	}
+
+	return func() tea.Msg {
+		// Create a background context for the collection cycle.
+		// Note: We don't defer cancel() here because CollectStreamingHosts spawns
+		// goroutines that need the context to remain valid. The context will be
+		// garbage collected after the timeout expires. This is acceptable because:
+		// 1. The timeout is bounded (timeout * numHosts+1)
+		// 2. Collection typically completes well before the timeout
+		// 3. The timer overhead is minimal
+		ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(numHosts+1))
+		_ = cancel // Context cleanup happens via timeout; see comment above
+
+		// Start streaming collection for only the non-backoff hosts
+		resultsChan := collector.CollectStreamingHosts(ctx, hostsToCollect)
 
 		// Return the channel to Update for safe state setup
 		return collectStartedMsg{results: resultsChan}
@@ -386,6 +428,7 @@ func pollResultsCmd(results <-chan HostResult) tea.Cmd {
 			error:        errStr,
 			lockInfo:     result.LockInfo,
 			connectedVia: result.ConnectedVia,
+			latency:      result.Latency,
 			time:         time.Now(),
 		}
 	}
@@ -432,16 +475,23 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 	alias := msg.alias
 
 	// Update connection state based on result
-	// Note: Attempts are already incremented in collectStartedMsg handler
 	if state, ok := m.connState[alias]; ok {
 		if msg.error != "" {
-			// Error: store error (attempts already incremented at collection start)
+			// Actual failure: increment attempts and store error
+			state.Attempts++
 			state.LastError = msg.error
 			state.LastAttempt = time.Now()
+
+			// After threshold failures, enter backoff to avoid hammering unreachable hosts
+			if state.Attempts >= backoffThreshold {
+				state.NextRetry = time.Now().Add(unreachableBackoff)
+			}
 		} else {
-			// Success: mark as connected and clear error
+			// Success: mark as connected, reset all failure state
 			state.Connected = true
+			state.Attempts = 0
 			state.LastError = ""
+			state.NextRetry = time.Time{} // Clear backoff
 		}
 	}
 
@@ -465,6 +515,12 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 	// Successfully collected metrics
 	m.metrics[alias] = msg.metrics
 	m.history.Push(alias, msg.metrics)
+
+	// Store latency and push to history
+	if msg.latency > 0 {
+		m.latency[alias] = msg.latency
+		m.history.PushLatency(alias, float64(msg.latency.Milliseconds()))
+	}
 
 	// Store the SSH alias used to connect
 	if msg.connectedVia != "" {

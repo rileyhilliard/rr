@@ -3,6 +3,7 @@ package monitor
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -164,19 +165,29 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 			// Check for retry state (Attempts tracks actual failures)
 			connState := m.connState[host]
 			if connState != nil && connState.Attempts >= 1 {
-				// Show retry information: "Retrying · 2 failed"
-				failedText := fmt.Sprintf("Retrying · %d failed", connState.Attempts)
-				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
+				// Check if in backoff (not actively retrying)
+				if !connState.NextRetry.IsZero() && time.Now().Before(connState.NextRetry) {
+					// In backoff - show offline state with next retry time
+					secsUntil := int(time.Until(connState.NextRetry).Seconds())
+					if secsUntil < 1 {
+						secsUntil = 1
+					}
+					offlineText := fmt.Sprintf("Offline · retry in %ds", secsUntil)
+					lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  "+offlineText), innerWidth))
+				} else {
+					// Actively retrying (not in backoff yet)
+					failedText := fmt.Sprintf("Connecting · %d failed", connState.Attempts)
+					lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
+				}
 				lines = append(lines, renderCardLine("", innerWidth))
 				lines = append(lines, renderCardDivider(innerWidth))
 
-				// Show last error with gen-z spin if available, otherwise static retry message
+				// Show last error with gen-z spin if available
 				if connState.LastError != "" {
 					errText := genZErrorMessage(connState.LastError)
 					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
 				} else {
-					// Static text - no cycling, keeps UI calm
-					lines = append(lines, renderCardLine(LabelStyle.Render("  retrying connection"), innerWidth))
+					lines = append(lines, renderCardLine(LabelStyle.Render("  connection failed"), innerWidth))
 				}
 			} else {
 				// First attempt: show standard "Linking up"
@@ -254,6 +265,13 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		// RAM metrics with braille graph
 		ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
 		lines = append(lines, ramLines...)
+
+		// Latency metrics with braille graph (if available)
+		latencyLines := m.renderCardLatencySection(host, innerWidth)
+		if len(latencyLines) > 0 {
+			lines = append(lines, renderCardDivider(innerWidth))
+			lines = append(lines, latencyLines...)
+		}
 
 		// Network rates (with divider if present)
 		netLine := m.renderCardNetworkLine(host, innerWidth)
@@ -344,7 +362,7 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 	// Header line: "CPU" label + right-aligned percentage and load
 	label := LabelStyle.Render("CPU")
 	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
-	loadText := LabelStyle.Render(fmt.Sprintf("L:%.1f", cpu.LoadAvg[0]))
+	loadText := LabelStyle.Render(fmt.Sprintf("1m:%.1f", cpu.LoadAvg[0]))
 
 	// Right side content
 	rightContent := pctText + " " + loadText
@@ -427,6 +445,59 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 	return lines
 }
 
+// renderCardLatencySection renders latency with a braille sparkline graph.
+func (m Model) renderCardLatencySection(host string, lineWidth int) []string {
+	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
+
+	// Get current latency
+	latencyDur, ok := m.latency[host]
+	if !ok || latencyDur == 0 {
+		return nil // No latency data yet
+	}
+
+	latencyMs := float64(latencyDur.Milliseconds())
+
+	// Header line: "LAT" label + right-aligned latency value + quality text
+	label := LabelStyle.Render("LAT")
+	latencyText := LatencyStyle(latencyMs).Render(fmt.Sprintf("%3.0fms", latencyMs))
+	qualityText := LabelStyle.Render(LatencyQualityText(latencyMs))
+
+	// Right side content
+	rightContent := latencyText + " " + qualityText
+	rightWidth := lipgloss.Width(rightContent)
+
+	// Calculate padding for right alignment
+	padding := ""
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + rightContent
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Graph width (content area)
+	graphWidth := contentWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	// Braille graph for latency history
+	latencyHistory := m.history.GetLatencyHistory(host, DefaultHistorySize)
+	if len(latencyHistory) > 0 {
+		// Apply moving average to smooth noise while preserving trends
+		smoothedHistory := SmoothWithMovingAverage(latencyHistory, 5)
+		// Use per-column coloring based on latency thresholds (green=fast, red=degraded)
+		// forceZeroMin=true so high latency shows high on the graph, not at the bottom
+		graph := RenderBrailleSparklineWithOptions(smoothedHistory, graphWidth, cardGraphHeight, ColorGraph, LatencyColor, true)
+		graphLines := strings.Split(graph, "\n")
+		for _, gl := range graphLines {
+			lines = append(lines, renderCardLine(gl, lineWidth))
+		}
+	}
+
+	return lines
+}
+
 // renderCardNetworkLine renders network throughput rates in a single line.
 func (m Model) renderCardNetworkLine(host string, lineWidth int) string {
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
@@ -495,10 +566,10 @@ func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
 	return label + padding + rightContent
 }
 
-// RenderLoadAvg renders the system load average.
+// RenderLoadAvg renders the system load average with time period labels.
 func RenderLoadAvg(loadAvg [3]float64) string {
 	label := LabelStyle.Render("Load")
-	values := ValueStyle.Render(fmt.Sprintf("%.2f %.2f %.2f", loadAvg[0], loadAvg[1], loadAvg[2]))
+	values := ValueStyle.Render(fmt.Sprintf("%.2f (1m) · %.2f (5m) · %.2f (15m)", loadAvg[0], loadAvg[1], loadAvg[2]))
 	return fmt.Sprintf("%s %s", label, values)
 }
 
@@ -531,16 +602,24 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 			// Check for retry state (Attempts tracks actual failures)
 			connState := m.connState[host]
 			if connState != nil && connState.Attempts >= 1 {
-				// Show retry info (compact)
-				failedText := fmt.Sprintf("Retrying · %d failed", connState.Attempts)
-				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
+				// Check if in backoff
+				if !connState.NextRetry.IsZero() && time.Now().Before(connState.NextRetry) {
+					secsUntil := int(time.Until(connState.NextRetry).Seconds())
+					if secsUntil < 1 {
+						secsUntil = 1
+					}
+					offlineText := fmt.Sprintf("Offline · retry in %ds", secsUntil)
+					lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  "+offlineText), innerWidth))
+				} else {
+					failedText := fmt.Sprintf("Connecting · %d failed", connState.Attempts)
+					lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
+				}
 				lines = append(lines, renderCardDivider(innerWidth))
 				if connState.LastError != "" {
 					errText := genZErrorMessage(connState.LastError)
 					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
 				} else {
-					// Static text - no cycling
-					lines = append(lines, renderCardLine(LabelStyle.Render("  retrying connection"), innerWidth))
+					lines = append(lines, renderCardLine(LabelStyle.Render("  connection failed"), innerWidth))
 				}
 			} else {
 				// First attempt
@@ -588,6 +667,13 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		// RAM with single-row sparkline
 		ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
 		lines = append(lines, ramLines...)
+
+		// Latency with single-row sparkline (if available)
+		latencyLines := m.renderCompactLatencySection(host, innerWidth)
+		if len(latencyLines) > 0 {
+			lines = append(lines, renderCardDivider(innerWidth))
+			lines = append(lines, latencyLines...)
+		}
 	}
 
 	content := strings.Join(lines, "\n")
@@ -664,6 +750,50 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 	} else {
 		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
 		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
+}
+
+// renderCompactLatencySection renders latency with a single-row braille graph for compact mode.
+func (m Model) renderCompactLatencySection(host string, lineWidth int) []string {
+	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
+
+	// Get current latency
+	latencyDur, ok := m.latency[host]
+	if !ok || latencyDur == 0 {
+		return nil // No latency data yet
+	}
+
+	latencyMs := float64(latencyDur.Milliseconds())
+
+	label := LabelStyle.Render("LAT")
+	latencyText := LatencyStyle(latencyMs).Render(fmt.Sprintf("%3.0fms", latencyMs))
+
+	// Right-aligned latency value
+	rightWidth := lipgloss.Width(latencyText)
+	padding := ""
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + latencyText
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Single-row braille graph
+	graphWidth := contentWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	latencyHistory := m.history.GetLatencyHistory(host, DefaultHistorySize)
+	if len(latencyHistory) > 0 {
+		// Apply moving average to smooth noise while preserving trends
+		smoothedHistory := SmoothWithMovingAverage(latencyHistory, 5)
+		// Use per-column coloring based on latency thresholds
+		// forceZeroMin=true so high latency shows high on the graph
+		graph := RenderBrailleSparklineWithOptions(smoothedHistory, graphWidth, 1, ColorGraph, LatencyColor, true)
+		lines = append(lines, renderCardLine(graph, lineWidth))
 	}
 
 	return lines

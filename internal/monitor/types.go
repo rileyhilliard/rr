@@ -80,6 +80,7 @@ type HostResult struct {
 	Error        error         // Error if collection failed
 	LockInfo     *HostLockInfo // Lock status (nil if not checked or error)
 	ConnectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
+	Latency      time.Duration // Round-trip time for metrics collection
 }
 
 // Duration returns how long the lock has been held.

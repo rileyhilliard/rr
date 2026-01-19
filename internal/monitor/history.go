@@ -19,6 +19,7 @@ type hostHistory struct {
 	cpu     *ringBuffer
 	ram     *ringBuffer
 	gpu     *ringBuffer // nil if host has no GPU
+	latency *ringBuffer
 	network map[string]*networkHistory
 }
 
@@ -132,6 +133,28 @@ func (h *History) GetGPUHistory(alias string, count int) []float64 {
 	return hist.gpu.getLast(count)
 }
 
+// PushLatency adds a latency measurement for the specified host.
+func (h *History) PushLatency(alias string, latency float64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	hist := h.getOrCreateHost(alias)
+	hist.latency.push(latency)
+}
+
+// GetLatencyHistory returns the last count latency values (in milliseconds) for the specified host.
+func (h *History) GetLatencyHistory(alias string, count int) []float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	hist, ok := h.hosts[alias]
+	if !ok || hist.latency == nil {
+		return nil
+	}
+
+	return hist.latency.getLast(count)
+}
+
 // GetNetworkHistory returns the last count network bytes values for the specified interface.
 // Returns bytesIn and bytesOut slices.
 func (h *History) GetNetworkHistory(alias, iface string, count int) (bytesIn, bytesOut []float64) {
@@ -216,6 +239,118 @@ func (h *History) GetTotalNetworkRate(alias string, intervalSec float64) (bytesI
 		bytesOutPerSec += r.BytesOutPerSec
 	}
 	return
+}
+
+// GetNetworkRateHistoryLinear returns historical network rates as actual bytes/sec values.
+// Unlike GetNetworkRateHistory which uses log-scale percentages, this returns raw rates
+// for use with y-axis labels where linear scaling is needed.
+func (h *History) GetNetworkRateHistoryLinear(alias string, count int, intervalSec float64) []float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	hist, ok := h.hosts[alias]
+	if !ok || intervalSec <= 0 {
+		return nil
+	}
+
+	var totalRates []float64
+	first := true
+
+	for ifaceName, netHist := range hist.network {
+		// Skip loopback
+		if ifaceName == "lo" || ifaceName == "lo0" {
+			continue
+		}
+
+		inHist := netHist.bytesIn.getLast(count + 1)
+		outHist := netHist.bytesOut.getLast(count + 1)
+
+		if len(inHist) < 2 {
+			continue
+		}
+
+		if first {
+			totalRates = make([]float64, len(inHist)-1)
+			first = false
+		}
+
+		// Sum up rates from all interfaces
+		for i := 1; i < len(inHist) && i <= len(totalRates); i++ {
+			inDelta := inHist[i] - inHist[i-1]
+			outDelta := outHist[i] - outHist[i-1]
+			if inDelta < 0 {
+				inDelta = 0
+			}
+			if outDelta < 0 {
+				outDelta = 0
+			}
+			totalRates[i-1] += (inDelta + outDelta) / intervalSec
+		}
+	}
+
+	return totalRates
+}
+
+// GetPeakNetworkRate returns the peak combined network rate (in + out) from history.
+// This is useful for determining a stable y-axis scale for graphs.
+func (h *History) GetPeakNetworkRate(alias string, count int, intervalSec float64) float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	hist, ok := h.hosts[alias]
+	if !ok || intervalSec <= 0 {
+		return 0
+	}
+
+	var peakRate float64
+
+	// Compute rates from raw byte deltas and find peak
+	var totalInHist, totalOutHist []float64
+	first := true
+
+	for ifaceName, netHist := range hist.network {
+		// Skip loopback
+		if ifaceName == "lo" || ifaceName == "lo0" {
+			continue
+		}
+
+		inHist := netHist.bytesIn.getLast(count + 1)
+		outHist := netHist.bytesOut.getLast(count + 1)
+
+		if len(inHist) < 2 {
+			continue
+		}
+
+		if first {
+			totalInHist = make([]float64, len(inHist)-1)
+			totalOutHist = make([]float64, len(outHist)-1)
+			first = false
+		}
+
+		// Sum up deltas from all interfaces
+		for i := 1; i < len(inHist) && i <= len(totalInHist); i++ {
+			inDelta := inHist[i] - inHist[i-1]
+			outDelta := outHist[i] - outHist[i-1]
+			if inDelta < 0 {
+				inDelta = 0
+			}
+			if outDelta < 0 {
+				outDelta = 0
+			}
+			totalInHist[i-1] += inDelta / intervalSec
+			totalOutHist[i-1] += outDelta / intervalSec
+		}
+	}
+
+	// Find peak combined rate
+	for i := range totalInHist {
+		totalRate := totalInHist[i] + totalOutHist[i]
+		if totalRate > peakRate {
+			peakRate = totalRate
+		}
+	}
+
+	return peakRate
 }
 
 // GetNetworkRateHistory returns historical network rate values as percentages (0-100).
@@ -344,6 +479,7 @@ func (h *History) getOrCreateHost(alias string) *hostHistory {
 		hist = &hostHistory{
 			cpu:     newRingBuffer(h.size),
 			ram:     newRingBuffer(h.size),
+			latency: newRingBuffer(h.size),
 			network: make(map[string]*networkHistory),
 		}
 		h.hosts[alias] = hist
