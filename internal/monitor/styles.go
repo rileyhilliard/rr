@@ -129,13 +129,18 @@ var SpinnerColorFrames = []lipgloss.Color{
 	lipgloss.Color("#FF7700"), // Deep amber
 }
 
-// ConnectingTextFrames are the animated text frames for the connecting message
+// ConnectingTextFrames are the animated text frames for the connecting message.
+// Cycles through dot progression for a calm, non-frantic loading indicator.
 var ConnectingTextFrames = []string{
-	"Linking up ·",
-	"Linking up · ·",
-	"Linking up · · ·",
-	"Linking up · ·",
+	"Linking up",
+	"Linking up.",
+	"Linking up..",
+	"Linking up...",
 }
+
+// ConnectingTextSlowdown controls how many spinner frames pass before advancing
+// the connecting text animation. At 150ms spinner interval, 3 gives ~450ms per text frame.
+const ConnectingTextSlowdown = 3
 
 // GetSpinnerColor returns the color for the current spinner frame index.
 // Used for gen-z style color cycling on animated spinners.

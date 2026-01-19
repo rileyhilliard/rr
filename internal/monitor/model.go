@@ -505,7 +505,9 @@ func (m Model) ConnectingSpinner() string {
 
 // ConnectingText returns the current animated "Connecting" text.
 func (m Model) ConnectingText() string {
-	return ConnectingTextFrames[m.spinnerFrame%len(ConnectingTextFrames)]
+	// Use slower frame progression for calmer animation (~500ms per frame)
+	slowFrame := m.spinnerFrame / ConnectingTextSlowdown
+	return ConnectingTextFrames[slowFrame%len(ConnectingTextFrames)]
 }
 
 // ConnectingSubtext returns the current animated subtext for connecting state.
