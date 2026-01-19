@@ -147,8 +147,8 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 
 	var lines []string
 
-	// Host name with status indicator
-	hostLine := m.renderHostLine(host, status)
+	// Host name with status indicator and SSH alias on the right
+	hostLine := m.renderHostLineWithSSH(host, status, innerWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show status-appropriate placeholder with error details
@@ -156,24 +156,22 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		switch status {
 		case StatusConnectingState:
-			// Check for retry state
+			// Check for retry state (Attempts tracks actual failures)
 			connState := m.connState[host]
-			if connState != nil && connState.Attempts > 1 {
-				// Show retry information: "Attempt #3 · 2 failed"
-				attemptText := fmt.Sprintf("Attempt #%d", connState.Attempts)
-				failedText := fmt.Sprintf("%d failed", connState.Attempts-1)
-				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+attemptText+" · "+failedText), innerWidth))
+			if connState != nil && connState.Attempts >= 1 {
+				// Show retry information: "Retrying · 2 failed"
+				failedText := fmt.Sprintf("Retrying · %d failed", connState.Attempts)
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
 				lines = append(lines, renderCardLine("", innerWidth))
 				lines = append(lines, renderCardDivider(innerWidth))
 
-				// Show last error with gen-z spin if available
+				// Show last error with gen-z spin if available, otherwise static retry message
 				if connState.LastError != "" {
 					errText := genZErrorMessage(connState.LastError)
 					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
 				} else {
-					// Cycle through retry subtexts
-					idx := (m.spinnerFrame / 2) % len(RetrySubtextFrames)
-					lines = append(lines, renderCardLine(LabelStyle.Render("  "+RetrySubtextFrames[idx]), innerWidth))
+					// Static text - no cycling, keeps UI calm
+					lines = append(lines, renderCardLine(LabelStyle.Render("  retrying connection"), innerWidth))
 				}
 			} else {
 				// First attempt: show standard "Linking up"
@@ -300,6 +298,36 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	}
 
 	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(host) + statusText
+}
+
+// renderHostLineWithSSH renders the host name with SSH alias on the right side.
+// Format: "◉ m4-mini - idle                          ssh m4-tailscale"
+func (m Model) renderHostLineWithSSH(host string, status HostStatus, width int) string {
+	// Get left side (indicator + host + status)
+	leftPart := m.renderHostLine(host, status)
+	leftWidth := lipgloss.Width(leftPart)
+
+	// Get SSH alias if available (only show for online hosts)
+	sshAlias, hasSSH := m.sshAlias[host]
+	if !hasSSH || sshAlias == "" || status == StatusConnectingState || status == StatusUnreachableState {
+		// No SSH info to show, just return left part
+		return leftPart
+	}
+
+	// Format right side: "ssh <alias>"
+	sshCmd := "ssh " + sshAlias
+	sshStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
+	rightPart := sshStyle.Render(sshCmd)
+	rightWidth := lipgloss.Width(rightPart)
+
+	// Calculate padding between left and right
+	padding := width - leftWidth - rightWidth
+	if padding < 1 {
+		// Not enough space, skip SSH display
+		return leftPart
+	}
+
+	return leftPart + strings.Repeat(" ", padding) + rightPart
 }
 
 // renderCardCPUSection renders CPU with a braille sparkline graph.
@@ -480,8 +508,8 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	innerWidth := width - 4
 	var lines []string
 
-	// Host name with status indicator
-	hostLine := m.renderHostLine(host, status)
+	// Host name with status indicator and SSH alias on the right
+	hostLine := m.renderHostLineWithSSH(host, status, innerWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show status-appropriate placeholder with error details
@@ -489,19 +517,19 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		switch status {
 		case StatusConnectingState:
-			// Check for retry state
+			// Check for retry state (Attempts tracks actual failures)
 			connState := m.connState[host]
-			if connState != nil && connState.Attempts > 1 {
+			if connState != nil && connState.Attempts >= 1 {
 				// Show retry info (compact)
-				attemptText := fmt.Sprintf("Attempt #%d · %d failed", connState.Attempts, connState.Attempts-1)
-				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+attemptText), innerWidth))
+				failedText := fmt.Sprintf("Retrying · %d failed", connState.Attempts)
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
 				lines = append(lines, renderCardDivider(innerWidth))
 				if connState.LastError != "" {
 					errText := genZErrorMessage(connState.LastError)
 					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
 				} else {
-					idx := (m.spinnerFrame / 2) % len(RetrySubtextFrames)
-					lines = append(lines, renderCardLine(LabelStyle.Render("  "+RetrySubtextFrames[idx]), innerWidth))
+					// Static text - no cycling
+					lines = append(lines, renderCardLine(LabelStyle.Render("  retrying connection"), innerWidth))
 				}
 			} else {
 				// First attempt

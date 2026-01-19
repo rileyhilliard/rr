@@ -132,9 +132,10 @@ func (c *Collector) CollectStreaming(ctx context.Context) <-chan HostResult {
 				result.Error = err
 			}
 
-			// Check lock status if we got metrics
+			// Check lock status and get connection info if we got metrics
 			if metrics != nil {
 				result.LockInfo = c.checkLockStatus(alias)
+				result.ConnectedVia = c.pool.GetConnectedVia(alias)
 			}
 
 			results <- result

@@ -75,6 +75,7 @@ type Model struct {
 	errors     map[string]string               // Last error message per host for diagnostics
 	lockInfo   map[string]*HostLockInfo        // Lock status per host
 	connState  map[string]*HostConnectionState // Connection attempt tracking per host
+	sshAlias   map[string]string               // SSH alias used to connect (e.g., "m4-tailscale")
 	selected   int
 	collector  *Collector
 	history    *History
@@ -116,12 +117,13 @@ type metricsMsg struct {
 
 // hostResultMsg carries metrics from a single host (for streaming updates).
 type hostResultMsg struct {
-	alias    string
-	metrics  *HostMetrics  // nil on error
-	error    string        // error message if failed
-	lockInfo *HostLockInfo // lock status
-	attempt  int           // which attempt this was (1-based)
-	time     time.Time
+	alias        string
+	metrics      *HostMetrics  // nil on error
+	error        string        // error message if failed
+	lockInfo     *HostLockInfo // lock status
+	connectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
+	attempt      int           // which attempt this was (1-based)
+	time         time.Time
 }
 
 // HostConnectionState tracks connection attempts and errors per host.
@@ -184,6 +186,7 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 		errors:    make(map[string]string),
 		lockInfo:  make(map[string]*HostLockInfo),
 		connState: connState,
+		sshAlias:  make(map[string]string),
 		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
@@ -302,14 +305,6 @@ func (m *Model) collectCmd() tea.Cmd {
 		// Start streaming collection
 		resultsChan := m.collector.CollectStreaming(ctx)
 
-		// Increment attempt count for all hosts at start of collection
-		for _, host := range m.hosts {
-			if state, ok := m.connState[host]; ok {
-				state.Attempts++
-				state.LastAttempt = time.Now()
-			}
-		}
-
 		// Store channel for subsequent polling
 		m.resultsChan = resultsChan
 		m.collecting = true
@@ -332,12 +327,13 @@ func (m *Model) collectCmd() tea.Cmd {
 			errStr = result.Error.Error()
 		}
 		return hostResultMsg{
-			alias:    result.Alias,
-			metrics:  result.Metrics,
-			error:    errStr,
-			lockInfo: result.LockInfo,
-			attempt:  m.connState[result.Alias].Attempts,
-			time:     time.Now(),
+			alias:        result.Alias,
+			metrics:      result.Metrics,
+			error:        errStr,
+			lockInfo:     result.LockInfo,
+			connectedVia: result.ConnectedVia,
+			attempt:      m.connState[result.Alias].Attempts,
+			time:         time.Now(),
 		}
 	}
 }
@@ -369,12 +365,13 @@ func (m *Model) pollResultsCmd() tea.Cmd {
 		}
 
 		return hostResultMsg{
-			alias:    result.Alias,
-			metrics:  result.Metrics,
-			error:    errStr,
-			lockInfo: result.LockInfo,
-			attempt:  attempt,
-			time:     time.Now(),
+			alias:        result.Alias,
+			metrics:      result.Metrics,
+			error:        errStr,
+			lockInfo:     result.LockInfo,
+			connectedVia: result.ConnectedVia,
+			attempt:      attempt,
+			time:         time.Now(),
 		}
 	}
 }
@@ -419,11 +416,16 @@ func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[
 func (m *Model) updateHostResult(msg hostResultMsg) {
 	alias := msg.alias
 
-	// Update connection state
+	// Update connection state based on result
 	if state, ok := m.connState[alias]; ok {
 		if msg.error != "" {
+			// Error: increment attempt count and store error
+			state.Attempts++
 			state.LastError = msg.error
+			state.LastAttempt = time.Now()
 		} else {
+			// Success: reset attempt count
+			state.Attempts = 0
 			state.Connected = true
 			state.LastError = ""
 		}
@@ -442,6 +444,11 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 	// Successfully collected metrics
 	m.metrics[alias] = msg.metrics
 	m.history.Push(alias, msg.metrics)
+
+	// Store the SSH alias used to connect
+	if msg.connectedVia != "" {
+		m.sshAlias[alias] = msg.connectedVia
+	}
 
 	// Update lock info
 	if msg.lockInfo != nil {
@@ -503,9 +510,8 @@ func (m Model) ConnectingText() string {
 
 // ConnectingSubtext returns the current animated subtext for connecting state.
 func (m Model) ConnectingSubtext() string {
-	// Cycle through subtexts more slowly (every 2 spinner frames)
-	idx := (m.spinnerFrame / 2) % len(ConnectingSubtextFrames)
-	return ConnectingSubtextFrames[idx]
+	// Static subtext - text should be stable, only spinner animates
+	return "establishing connection"
 }
 
 // RunningSpinner returns the current spinner character and style for the running animation.

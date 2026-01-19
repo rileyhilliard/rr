@@ -9,13 +9,9 @@ GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.
 # Primary targets (use rr for remote execution)
 # =============================================================================
 
-# Build
+# Build (always local - no need to sync just to compile)
 build:
-	@if command -v rr >/dev/null 2>&1; then \
-		rr build; \
-	else \
-		go build -o rr ./cmd/rr; \
-	fi
+	go build -o rr ./cmd/rr
 
 # Testing via rr (syncs to remote, runs there)
 test:
