@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-01-19
+
+### Added
+
+- **Streaming monitor updates** - Host cards in `rr monitor` now transition to monitoring state independently as each host connects, rather than waiting for all hosts. Fast hosts show metrics immediately while slow hosts continue connecting.
+- **Connection retry feedback** - Cards now show "Attempt #N · X failed" during connection retries, with gen-z themed error messages ("host ghosted us", "left us on read", etc.).
+- **Configurable monitor timeout** - Added `monitor.timeout` config option (default 8s) for per-host collection timeout.
+- **SSH alias display** - Monitor cards show which SSH alias was used to connect (e.g., "via m4-tailscale").
+
+### Fixed
+
+- **Doctor command responsiveness** - `rr doctor` now shows loading state with progressive output as each check completes, instead of appearing frozen during slow checks.
+- **Data race fixes** - Fixed potential data races in monitor streaming collection by moving state mutations to the Bubble Tea Update handler.
+
 ## [0.11.10] - 2026-01-14
 
 ### Changed
