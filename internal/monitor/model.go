@@ -122,8 +122,13 @@ type hostResultMsg struct {
 	error        string        // error message if failed
 	lockInfo     *HostLockInfo // lock status
 	connectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
-	attempt      int           // which attempt this was (1-based)
 	time         time.Time
+}
+
+// collectStartedMsg signals that collection has started and provides the results channel.
+// This allows state mutations to happen in Update instead of inside the async goroutine.
+type collectStartedMsg struct {
+	results <-chan HostResult
 }
 
 // HostConnectionState tracks connection attempts and errors per host.
@@ -177,6 +182,9 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 	if timeout == 0 {
 		timeout = 8 * time.Second
 	}
+
+	// Wire timeout to collector so CollectStreaming uses it
+	collector.SetTimeout(timeout)
 
 	m := Model{
 		hosts:     hosts, // Will be sorted by sortHosts
@@ -267,7 +275,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateDetailViewportContent()
 		}
 
+	case collectStartedMsg:
+		// Collection started - set up state and begin polling
+		m.resultsChan = msg.results
+		m.collecting = true
+
+		// Increment attempt count for all hosts at start of collection
+		for _, host := range m.hosts {
+			if state, ok := m.connState[host]; ok {
+				state.Attempts++
+				state.LastAttempt = time.Now()
+			}
+		}
+
+		// Start polling for results
+		return m, pollResultsCmd(m.resultsChan)
+
 	case hostResultMsg:
+		// Check if this is a completion signal (empty alias means channel closed)
+		if msg.alias == "" {
+			m.collecting = false
+			m.resultsChan = nil
+			return m, nil
+		}
+
 		// Update this specific host's state immediately
 		m.lastUpdate = msg.time
 		m.updateHostResult(msg)
@@ -278,8 +309,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Continue polling for more results if we have an active channel
 		if m.resultsChan != nil {
-			cmd := m.pollResultsCmd()
-			return m, cmd
+			return m, pollResultsCmd(m.resultsChan)
 		}
 	}
 
@@ -309,72 +339,45 @@ func (m Model) spinnerTickCmd() tea.Cmd {
 }
 
 // collectCmd returns a command that starts streaming collection from all hosts.
-// Results are streamed individually via hostResultMsg as each host completes.
-func (m *Model) collectCmd() tea.Cmd {
+// Returns a collectStartedMsg so Update can set up state safely (no data races).
+func (m Model) collectCmd() tea.Cmd {
+	// Capture values locally to avoid reading Model fields in goroutine
+	timeout := m.timeout
+	numHosts := len(m.hosts)
+	collector := m.collector
+
 	return func() tea.Msg {
 		// Create a background context for the collection cycle
-		ctx, cancel := context.WithTimeout(context.Background(), m.timeout*time.Duration(len(m.hosts)+1))
-
-		// Start streaming collection
-		resultsChan := m.collector.CollectStreaming(ctx)
-
-		// Store channel for subsequent polling
-		m.resultsChan = resultsChan
-		m.collecting = true
-
-		// Try to get first result (simple receive, not select)
-		result, ok := <-resultsChan
-		if !ok {
-			// Channel closed immediately (no hosts?)
-			m.collecting = false
-			m.resultsChan = nil
-			cancel()
-			return nil
-		}
-		// Store cancel func - we'll need a different approach for cleanup
-		// For now, context will timeout naturally
+		ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(numHosts+1))
+		// Context will timeout naturally; cancel stored but not used for early cleanup
 		_ = cancel
 
-		errStr := ""
-		if result.Error != nil {
-			errStr = result.Error.Error()
-		}
-		return hostResultMsg{
-			alias:        result.Alias,
-			metrics:      result.Metrics,
-			error:        errStr,
-			lockInfo:     result.LockInfo,
-			connectedVia: result.ConnectedVia,
-			attempt:      m.connState[result.Alias].Attempts,
-			time:         time.Now(),
-		}
+		// Start streaming collection
+		resultsChan := collector.CollectStreaming(ctx)
+
+		// Return the channel to Update for safe state setup
+		return collectStartedMsg{results: resultsChan}
 	}
 }
 
 // pollResultsCmd returns a command that polls for the next streaming result.
-func (m *Model) pollResultsCmd() tea.Cmd {
-	return func() tea.Msg {
-		if m.resultsChan == nil {
-			return nil
-		}
+// Takes the channel as a parameter to avoid data races (no Model field access in goroutine).
+func pollResultsCmd(results <-chan HostResult) tea.Cmd {
+	if results == nil {
+		return nil
+	}
 
+	return func() tea.Msg {
 		// Simple channel receive (not select with single case)
-		result, ok := <-m.resultsChan
+		result, ok := <-results
 		if !ok {
-			// Channel closed, collection complete
-			m.collecting = false
-			m.resultsChan = nil
-			return nil
+			// Channel closed, collection complete - signal via nil result
+			return hostResultMsg{time: time.Now()} // Empty msg signals completion
 		}
 
 		errStr := ""
 		if result.Error != nil {
 			errStr = result.Error.Error()
-		}
-
-		attempt := 1
-		if state, ok := m.connState[result.Alias]; ok {
-			attempt = state.Attempts
 		}
 
 		return hostResultMsg{
@@ -383,7 +386,6 @@ func (m *Model) pollResultsCmd() tea.Cmd {
 			error:        errStr,
 			lockInfo:     result.LockInfo,
 			connectedVia: result.ConnectedVia,
-			attempt:      attempt,
 			time:         time.Now(),
 		}
 	}
@@ -430,15 +432,14 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 	alias := msg.alias
 
 	// Update connection state based on result
+	// Note: Attempts are already incremented in collectStartedMsg handler
 	if state, ok := m.connState[alias]; ok {
 		if msg.error != "" {
-			// Error: increment attempt count and store error
-			state.Attempts++
+			// Error: store error (attempts already incremented at collection start)
 			state.LastError = msg.error
 			state.LastAttempt = time.Now()
 		} else {
-			// Success: reset attempt count
-			state.Attempts = 0
+			// Success: mark as connected and clear error
 			state.Connected = true
 			state.LastError = ""
 		}
@@ -446,11 +447,18 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 
 	if msg.metrics == nil {
 		// Host unreachable or error
-		m.status[alias] = StatusUnreachableState
+		// Keep StatusConnectingState until first successful connection (shows retry UI)
+		// Only switch to StatusUnreachableState if we previously connected successfully
+		if state, ok := m.connState[alias]; ok && !state.Connected {
+			m.status[alias] = StatusConnectingState
+		} else {
+			m.status[alias] = StatusUnreachableState
+		}
 		if msg.error != "" {
 			m.errors[alias] = msg.error
 		}
 		delete(m.lockInfo, alias)
+		m.sortHosts()
 		return
 	}
 
