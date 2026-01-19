@@ -72,6 +72,16 @@ type HostLockInfo struct {
 	Started  time.Time // When the lock was acquired
 }
 
+// HostResult is the result of collecting metrics from a single host.
+// Used for streaming results from CollectStreaming.
+type HostResult struct {
+	Alias        string        // Host alias
+	Metrics      *HostMetrics  // Collected metrics (nil on error)
+	Error        error         // Error if collection failed
+	LockInfo     *HostLockInfo // Lock status (nil if not checked or error)
+	ConnectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
+}
+
 // Duration returns how long the lock has been held.
 func (l HostLockInfo) Duration() time.Duration {
 	if l.Started.IsZero() {

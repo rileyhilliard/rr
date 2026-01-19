@@ -13,15 +13,38 @@ const (
 	cardMinBarWidth = 10 // minimum graph width
 )
 
-// cardDividerStyle creates a subtle divider line with matching background
-var cardDividerStyle = lipgloss.NewStyle().
-	Foreground(ColorBorder).
-	Background(ColorSurfaceBg)
+// genZErrorMessage converts a technical error message to gen-z themed text.
+func genZErrorMessage(err string) string {
+	errLower := strings.ToLower(err)
+	switch {
+	case strings.Contains(errLower, "timeout") || strings.Contains(errLower, "timed out"):
+		return "host ghosted us (timeout)"
+	case strings.Contains(errLower, "refused") || strings.Contains(errLower, "connection refused"):
+		return "host left us on read (refused)"
+	case strings.Contains(errLower, "unreachable") || strings.Contains(errLower, "no route"):
+		return "host is MIA (unreachable)"
+	case strings.Contains(errLower, "handshake"):
+		return "couldn't vibe (handshake failed)"
+	case strings.Contains(errLower, "permission") || strings.Contains(errLower, "denied"):
+		return "got gatekept (permission denied)"
+	case strings.Contains(errLower, "host key"):
+		return "trust issues (host key problem)"
+	default:
+		return "connection didn't vibe"
+	}
+}
 
 // renderCardDivider creates a subtle thin divider line
 func renderCardDivider(width int) string {
-	divider := strings.Repeat("─", width)
-	return cardDividerStyle.Render(divider)
+	// Divider fills content area (width minus 2 for padding)
+	dividerWidth := width - 2
+	if dividerWidth < 1 {
+		dividerWidth = 1
+	}
+	divider := strings.Repeat("─", dividerWidth)
+	// Apply same padding as renderCardLine for alignment
+	dividerStyle := lipgloss.NewStyle().Foreground(ColorBorder).Background(ColorSurfaceBg)
+	return dividerStyle.Render(" " + divider + " ")
 }
 
 // parseErrorParts extracts the core error and suggestion from a structured error message.
@@ -97,17 +120,19 @@ func truncateErrorMsg(errMsg string, maxLen int) string {
 	return msg
 }
 
-// renderCardLine renders a text line with proper background fill.
-// Applies background to the entire line including content and padding.
+// renderCardLine renders a text line with symmetric padding and background fill.
+// Adds 1-space padding on each side for consistent card layout.
 func renderCardLine(content string, width int) string {
 	contentWidth := lipgloss.Width(content)
-	padding := ""
-	if width > contentWidth {
-		padding = strings.Repeat(" ", width-contentWidth)
+	// Content area is width minus 2 spaces for padding (1 left, 1 right)
+	contentArea := width - 2
+	rightPadding := ""
+	if contentArea > contentWidth {
+		rightPadding = strings.Repeat(" ", contentArea-contentWidth)
 	}
-	// Apply background to entire line (content + padding)
+	// Apply background to entire line: " " + content + rightPadding + " "
 	lineStyle := lipgloss.NewStyle().Background(ColorSurfaceBg)
-	return lineStyle.Render(content + padding)
+	return lineStyle.Render(" " + content + rightPadding + " ")
 }
 
 // renderCard renders a single host card with metrics.
@@ -121,13 +146,14 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		style = CardSelectedStyle.Width(width)
 	}
 
-	// Inner width for content (account for card padding)
-	innerWidth := width - 4
+	// width IS the content area (lipgloss Width sets content area, borders add to total)
+	innerWidth := width
+	contentWidth := innerWidth - 2 // Space for actual content (minus 1-space padding each side)
 
 	var lines []string
 
-	// Host name with status indicator
-	hostLine := m.renderHostLine(host, status)
+	// Host name with status indicator and SSH alias on the right
+	hostLine := m.renderHostLineWithSSH(host, status, contentWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show status-appropriate placeholder with error details
@@ -135,11 +161,30 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		switch status {
 		case StatusConnectingState:
-			// Show connecting state with animated content
-			lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
-			lines = append(lines, renderCardLine("", innerWidth))
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			// Check for retry state (Attempts tracks actual failures)
+			connState := m.connState[host]
+			if connState != nil && connState.Attempts >= 1 {
+				// Show retry information: "Retrying · 2 failed"
+				failedText := fmt.Sprintf("Retrying · %d failed", connState.Attempts)
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
+				lines = append(lines, renderCardLine("", innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+
+				// Show last error with gen-z spin if available, otherwise static retry message
+				if connState.LastError != "" {
+					errText := genZErrorMessage(connState.LastError)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
+				} else {
+					// Static text - no cycling, keeps UI calm
+					lines = append(lines, renderCardLine(LabelStyle.Render("  retrying connection"), innerWidth))
+				}
+			} else {
+				// First attempt: show standard "Linking up"
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
+				lines = append(lines, renderCardLine("", innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+				lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			}
 			// Add padding lines to roughly match online card height
 			lines = append(lines, renderCardLine("", innerWidth))
 			lines = append(lines, renderCardLine("", innerWidth))
@@ -260,10 +305,41 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(host) + statusText
 }
 
+// renderHostLineWithSSH renders the host name with SSH alias on the right side.
+// Format: "◉ m4-mini - idle                          ssh m4-tailscale"
+func (m Model) renderHostLineWithSSH(host string, status HostStatus, width int) string {
+	// Get left side (indicator + host + status)
+	leftPart := m.renderHostLine(host, status)
+	leftWidth := lipgloss.Width(leftPart)
+
+	// Get SSH alias if available (only show for online hosts)
+	sshAlias, hasSSH := m.sshAlias[host]
+	if !hasSSH || sshAlias == "" || status == StatusConnectingState || status == StatusUnreachableState {
+		// No SSH info to show, just return left part
+		return leftPart
+	}
+
+	// Format right side: "ssh <alias>"
+	sshCmd := "ssh " + sshAlias
+	sshStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
+	rightPart := sshStyle.Render(sshCmd)
+	rightWidth := lipgloss.Width(rightPart)
+
+	// Calculate padding between left and right
+	padding := width - leftWidth - rightWidth
+	if padding < 1 {
+		// Not enough space, skip SSH display
+		return leftPart
+	}
+
+	return leftPart + strings.Repeat(" ", padding) + rightPart
+}
+
 // renderCardCPUSection renders CPU with a braille sparkline graph.
 // Returns multiple lines: header line + graph rows.
 func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) []string {
 	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	// Header line: "CPU" label + right-aligned percentage and load
 	label := LabelStyle.Render("CPU")
@@ -276,14 +352,14 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 
 	// Calculate padding for right alignment
 	padding := ""
-	if lineWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 	headerLine := label + padding + rightContent
 	lines = append(lines, renderCardLine(headerLine, lineWidth))
 
-	// Graph width
-	graphWidth := lineWidth
+	// Graph width (content area)
+	graphWidth := contentWidth
 	if graphWidth < cardMinBarWidth {
 		graphWidth = cardMinBarWidth
 	}
@@ -308,6 +384,7 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 // renderCardRAMSection renders RAM with a braille sparkline graph.
 func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) []string {
 	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	var percent float64
 	if ram.TotalBytes > 0 {
@@ -321,14 +398,14 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 	// Calculate padding for right alignment
 	rightWidth := lipgloss.Width(pctText)
 	padding := ""
-	if lineWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 	headerLine := label + padding + pctText
 	lines = append(lines, renderCardLine(headerLine, lineWidth))
 
-	// Graph width
-	graphWidth := lineWidth
+	// Graph width (content area)
+	graphWidth := contentWidth
 	if graphWidth < cardMinBarWidth {
 		graphWidth = cardMinBarWidth
 	}
@@ -352,6 +429,7 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 
 // renderCardNetworkLine renders network throughput rates in a single line.
 func (m Model) renderCardNetworkLine(host string, lineWidth int) string {
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 	inRate, outRate := m.history.GetTotalNetworkRate(host, m.interval.Seconds())
 
 	// Skip if no rate data yet
@@ -370,8 +448,8 @@ func (m Model) renderCardNetworkLine(host string, lineWidth int) string {
 	rightContent := downArrow + inText + " " + upArrow + outText
 	rightWidth := lipgloss.Width(rightContent)
 	padding := ""
-	if lineWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 
 	return label + padding + rightContent
@@ -382,6 +460,7 @@ func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
 	if len(procs) == 0 {
 		return ""
 	}
+	contentWidth := maxWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("TOP")
 	proc := procs[0]
@@ -409,8 +488,8 @@ func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
 	rightContent := cmd + "(" + pctText + ")"
 	rightWidth := lipgloss.Width(rightContent)
 	padding := ""
-	if maxWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", maxWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 
 	return label + padding + rightContent
@@ -435,11 +514,13 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		style = CardSelectedStyle.Width(width)
 	}
 
-	innerWidth := width - 4
+	// width IS the content area (lipgloss Width sets content area, borders add to total)
+	innerWidth := width
+	contentWidth := innerWidth - 2 // Space for actual content (minus 1-space padding each side)
 	var lines []string
 
-	// Host name with status indicator
-	hostLine := m.renderHostLine(host, status)
+	// Host name with status indicator and SSH alias on the right
+	hostLine := m.renderHostLineWithSSH(host, status, contentWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show status-appropriate placeholder with error details
@@ -447,10 +528,26 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		switch status {
 		case StatusConnectingState:
-			// Show connecting state with animated content
-			lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			// Check for retry state (Attempts tracks actual failures)
+			connState := m.connState[host]
+			if connState != nil && connState.Attempts >= 1 {
+				// Show retry info (compact)
+				failedText := fmt.Sprintf("Retrying · %d failed", connState.Attempts)
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+failedText), innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+				if connState.LastError != "" {
+					errText := genZErrorMessage(connState.LastError)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
+				} else {
+					// Static text - no cycling
+					lines = append(lines, renderCardLine(LabelStyle.Render("  retrying connection"), innerWidth))
+				}
+			} else {
+				// First attempt
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+				lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			}
 		case StatusUnreachableState:
 			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
 
@@ -460,7 +557,7 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 
 				// Show core error
 				if core != "" {
-					errDisplay := truncateWithEllipsis(core, innerWidth-4)
+					errDisplay := truncateWithEllipsis(core, contentWidth-2)
 					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errDisplay), innerWidth))
 				}
 
@@ -469,7 +566,7 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 
 				// Show suggestion (compact: single line with truncation)
 				if suggestion != "" {
-					suggDisplay := truncateWithEllipsis(suggestion, innerWidth-4)
+					suggDisplay := truncateWithEllipsis(suggestion, contentWidth-2)
 					lines = append(lines, renderCardLine(LabelStyle.Render("  "+suggDisplay), innerWidth))
 				} else {
 					lines = append(lines, renderCardLine(LabelStyle.Render("  Host may be offline or unreachable"), innerWidth))
@@ -500,6 +597,7 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 // renderCompactCPUSection renders CPU with a single-row braille graph for compact mode.
 func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth int) []string {
 	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("CPU")
 	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
@@ -507,14 +605,14 @@ func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth in
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
 	padding := ""
-	if lineWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 	headerLine := label + padding + pctText
 	lines = append(lines, renderCardLine(headerLine, lineWidth))
 
 	// Single-row braille graph
-	graphWidth := lineWidth
+	graphWidth := contentWidth
 	if graphWidth < cardMinBarWidth {
 		graphWidth = cardMinBarWidth
 	}
@@ -534,6 +632,7 @@ func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth in
 // renderCompactRAMSection renders RAM with a single-row braille graph for compact mode.
 func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth int) []string {
 	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	var percent float64
 	if ram.TotalBytes > 0 {
@@ -546,14 +645,14 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
 	padding := ""
-	if lineWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 	headerLine := label + padding + pctText
 	lines = append(lines, renderCardLine(headerLine, lineWidth))
 
 	// Single-row braille graph
-	graphWidth := lineWidth
+	graphWidth := contentWidth
 	if graphWidth < cardMinBarWidth {
 		graphWidth = cardMinBarWidth
 	}
@@ -573,6 +672,7 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 // renderMinimalCPUSection renders CPU with a single-row braille graph for minimal mode.
 func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth int) []string {
 	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("CPU:")
 	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%3.0f%%", cpu.Percent))
@@ -580,14 +680,14 @@ func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth in
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
 	padding := ""
-	if lineWidth > lipgloss.Width(label)+rightWidth {
-		padding = strings.Repeat(" ", lineWidth-lipgloss.Width(label)-rightWidth)
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
 	}
 	headerLine := label + padding + pctText
 	lines = append(lines, renderCardLine(headerLine, lineWidth))
 
 	// Single-row braille graph
-	graphWidth := lineWidth
+	graphWidth := contentWidth
 	if graphWidth < cardMinBarWidth {
 		graphWidth = cardMinBarWidth
 	}
@@ -616,11 +716,13 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 		style = CardSelectedStyle.Width(width)
 	}
 
-	innerWidth := width - 4
+	// width IS the content area (lipgloss Width sets content area, borders add to total)
+	innerWidth := width
+	contentWidth := innerWidth - 2 // Space for actual content (minus 1-space padding each side)
 	var lines []string
 
 	// Host name with status indicator (abbreviated if necessary)
-	hostLine := m.renderMinimalHostLine(host, status, innerWidth)
+	hostLine := m.renderMinimalHostLine(host, status, contentWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
 
 	// If no metrics available, show status-appropriate placeholder
@@ -645,7 +747,7 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 
 		// RAM as text only (keep it minimal)
-		metricsLine := m.renderMinimalMetricsLine(metrics, innerWidth)
+		metricsLine := m.renderMinimalMetricsLine(metrics, contentWidth)
 		lines = append(lines, renderCardLine(metricsLine, innerWidth))
 	}
 

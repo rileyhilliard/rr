@@ -21,7 +21,7 @@ sync:
     - .DS_Store
     - "*.log"
     # Build artifacts
-    - rr
+    - /rr
     - dist/
     - coverage.out
     - coverage.html

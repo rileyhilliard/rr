@@ -308,10 +308,10 @@ func TestRenderBrailleSparkline_ColorBasedOnValue(t *testing.T) {
 	// not the row position in the graph. Previously there was a bug where
 	// all braille dots were red because of row-based gradient coloring.
 
-	// ANSI color codes for reference (Gen Z Electric Synthwave palette):
-	// ColorHealthy (#39FF14) appears as 38;2;56;255;20 (neon green - note: 0x39 = 57, but lipgloss renders as 56)
-	// ColorWarning (#FFAA00) appears as 38;2;255;170;0 (electric amber)
-	// ColorCritical (#FF0055) appears as 38;2;255;0;85 (hot red-pink)
+	// ANSI color codes for reference (Gen Z Synthwave palette):
+	// ColorHealthy (#00FFFF) appears as 38;2;0;255;255 (neon cyan)
+	// ColorWarning (#BF40FF) appears as 38;2;191;64;255 (neon purple)
+	// ColorCritical (#FF2E97) appears as 38;2;255;46;151 (hot pink)
 
 	tests := []struct {
 		name           string
@@ -321,25 +321,25 @@ func TestRenderBrailleSparkline_ColorBasedOnValue(t *testing.T) {
 		description    string
 	}{
 		{
-			name:           "low values should be green",
+			name:           "low values should be cyan",
 			data:           []float64{20, 25, 30, 20, 25, 30}, // all under 70%
-			shouldContain:  "38;2;56;255;20",                  // neon green RGB
-			shouldNotMatch: "38;2;255;0;85",                   // should NOT be red-pink
-			description:    "values under 70% should use healthy (green) color",
+			shouldContain:  "38;2;0;255;255",                  // neon cyan RGB
+			shouldNotMatch: "38;2;255;46;151",                 // should NOT be hot pink
+			description:    "values under 70% should use healthy (cyan) color",
 		},
 		{
-			name:           "medium values should be yellow",
+			name:           "medium values should be purple",
 			data:           []float64{75, 80, 85, 75, 80, 85}, // all 70-90%
-			shouldContain:  "38;2;255;170;0",                  // electric amber RGB
+			shouldContain:  "38;2;191;64;255",                 // neon purple RGB
 			shouldNotMatch: "",
-			description:    "values 70-90% should use warning (yellow) color",
+			description:    "values 70-90% should use warning (purple) color",
 		},
 		{
-			name:           "high values should be red",
+			name:           "high values should be pink",
 			data:           []float64{92, 95, 98, 92, 95, 98}, // all over 90%
-			shouldContain:  "38;2;255;0;85",                   // hot red-pink RGB
+			shouldContain:  "38;2;255;46;151",                 // hot pink RGB
 			shouldNotMatch: "",
-			description:    "values over 90% should use critical (red) color",
+			description:    "values over 90% should use critical (pink) color",
 		},
 	}
 
@@ -359,21 +359,21 @@ func TestRenderBrailleSparkline_ColorBasedOnValue(t *testing.T) {
 	}
 }
 
-func TestRenderBrailleSparkline_LowValuesNotRedInShortGraphs(t *testing.T) {
+func TestRenderBrailleSparkline_LowValuesNotPinkInShortGraphs(t *testing.T) {
 	// Regression test: with height=2 (card view), low values like 26% RAM
-	// were incorrectly showing as red due to row-based gradient logic.
+	// were incorrectly showing as critical color due to row-based gradient logic.
 	// The fix ensures coloring is purely value-based.
 
 	lowData := []float64{26, 27, 25, 26, 28, 25, 26, 27} // ~26% - well under warning threshold
-	redColorCode := "38;2;255;0;85"                      // ColorCritical RGB (hot red-pink)
+	pinkColorCode := "38;2;255;46;151"                   // ColorCritical RGB (hot pink)
 
 	// Test with various small heights that are used in card views
 	for _, height := range []int{1, 2, 3} {
 		t.Run(strings.ReplaceAll("height_"+string(rune('0'+height)), " ", "_"), func(t *testing.T) {
 			result := RenderBrailleSparkline(lowData, 10, height, ColorGraph)
 
-			assert.NotContains(t, result, redColorCode,
-				"height=%d: low values (26%%) should not be colored red", height)
+			assert.NotContains(t, result, pinkColorCode,
+				"height=%d: low values (26%%) should not be colored pink", height)
 		})
 	}
 }

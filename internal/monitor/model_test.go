@@ -16,7 +16,7 @@ func TestNewModel(t *testing.T) {
 	}
 	collector := NewCollector(hosts)
 
-	m := NewModel(collector, 5*time.Second, nil)
+	m := NewModel(collector, 5*time.Second, 0, nil)
 
 	// Should have hosts sorted alphabetically
 	assert.Equal(t, []string{"server1", "server2"}, m.hosts)
@@ -66,7 +66,7 @@ func TestModel_OnlineCount(t *testing.T) {
 		"server3": {SSH: []string{"server3"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Initially all unreachable
 	assert.Equal(t, 0, m.OnlineCount())
@@ -90,7 +90,7 @@ func TestModel_SelectedHost(t *testing.T) {
 		"beta":  {SSH: []string{"beta"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// First host selected by default
 	assert.Equal(t, "alpha", m.SelectedHost())
@@ -128,7 +128,7 @@ func TestModel_updateMetrics(t *testing.T) {
 		"server2": {SSH: []string{"server2"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Create some metrics
 	metrics := map[string]*HostMetrics{
@@ -162,7 +162,7 @@ func TestModel_sortHosts_ByName(t *testing.T) {
 		"middle": {SSH: []string{"middle"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	m.sortOrder = SortByName
 	m.sortHosts()
@@ -177,7 +177,7 @@ func TestModel_sortHosts_ByCPU(t *testing.T) {
 		"medium": {SSH: []string{"medium"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Add metrics
 	m.metrics["low"] = &HostMetrics{CPU: CPUMetrics{Percent: 10.0}}
@@ -199,7 +199,7 @@ func TestModel_sortHosts_ByRAM(t *testing.T) {
 		"high": {SSH: []string{"high"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Add metrics
 	m.metrics["low"] = &HostMetrics{
@@ -224,7 +224,7 @@ func TestModel_sortHosts_ByGPU(t *testing.T) {
 		"gpu_high": {SSH: []string{"gpu_high"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Add metrics
 	m.metrics["no_gpu"] = &HostMetrics{GPU: nil}
@@ -247,7 +247,7 @@ func TestModel_sortHosts_PreservesSelection(t *testing.T) {
 		"gamma": {SSH: []string{"gamma"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Select "beta"
 	m.selected = 1 // beta
@@ -282,7 +282,7 @@ func TestModel_sortHosts_NilMetrics(t *testing.T) {
 		"without_metrics": {SSH: []string{"without_metrics"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	// Only one host has metrics
 	m.metrics["with_metrics"] = &HostMetrics{CPU: CPUMetrics{Percent: 50.0}}
@@ -308,7 +308,7 @@ func TestModel_Init(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 
 	cmd := m.Init()
 

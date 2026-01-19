@@ -19,9 +19,10 @@ type Pool struct {
 
 // poolEntry holds a connection and its metadata.
 type poolEntry struct {
-	client   *sshutil.Client
-	platform Platform
-	lastUsed time.Time
+	client       *sshutil.Client
+	platform     Platform
+	lastUsed     time.Time
+	connectedVia string // SSH alias that successfully connected (e.g., "m4-tailscale")
 }
 
 // NewPool creates a new SSH connection pool with host configurations.
@@ -61,8 +62,9 @@ func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 		}
 		p.mu.Lock()
 		p.connections[alias] = &poolEntry{
-			client:   client,
-			lastUsed: time.Now(),
+			client:       client,
+			lastUsed:     time.Now(),
+			connectedVia: alias, // Used alias directly
 		}
 		p.mu.Unlock()
 		return client, nil
@@ -75,8 +77,9 @@ func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 		if err == nil {
 			p.mu.Lock()
 			p.connections[alias] = &poolEntry{
-				client:   client,
-				lastUsed: time.Now(),
+				client:       client,
+				lastUsed:     time.Now(),
+				connectedVia: sshAddr, // Track which SSH alias worked
 			}
 			p.mu.Unlock()
 			return client, nil
@@ -154,6 +157,17 @@ func (p *Pool) Size() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.connections)
+}
+
+// GetConnectedVia returns the SSH alias that was used to connect to the given host.
+// Returns empty string if no connection exists for this alias.
+func (p *Pool) GetConnectedVia(alias string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if entry, ok := p.connections[alias]; ok {
+		return entry.connectedVia
+	}
+	return ""
 }
 
 // remove closes and removes a connection from the pool.

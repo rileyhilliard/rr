@@ -144,35 +144,37 @@ func (m Model) calculateCardWidth() int {
 
 	layout := m.LayoutMode()
 
-	// Account for borders (2) and padding (2) and margin (1)
-	const cardOverhead = 5
+	// Card overhead per card: borders (2) + marginRight (1) = 3
+	// For N cards: N * (contentWidth + 3) = availableWidth
+	// So: contentWidth = availableWidth / N - 3
+	const perCardOverhead = 3
 
 	switch layout {
 	case LayoutMinimal:
-		// Single column, use most of the available width
-		return m.width - 4
+		// Single column, use full width minus overhead
+		return m.width - perCardOverhead
 
 	case LayoutCompact:
-		// Single column with some margin
-		return m.width - 6
+		// Single column with slight margin
+		return m.width - perCardOverhead - 1
 
 	case LayoutStandard:
 		// Try to fit 2 cards per row
-		cardWidth := (m.width - 4) / 2
+		cardWidth := m.width/2 - perCardOverhead
 		if cardWidth < 40 {
 			// Fall back to single column if cards would be too narrow
-			return m.width - 4
+			return m.width - perCardOverhead
 		}
-		return cardWidth - cardOverhead
+		return cardWidth
 
 	case LayoutWide:
-		// Fit 2 cards per row with generous spacing
-		cardWidth := (m.width - 8) / 2
+		// Fit 2 cards per row
+		cardWidth := m.width/2 - perCardOverhead
 		if cardWidth > 70 {
 			// Cap card width to prevent overly wide cards
 			cardWidth = 70
 		}
-		return cardWidth - cardOverhead
+		return cardWidth
 
 	default:
 		return 40
@@ -217,8 +219,8 @@ func (m Model) cardsPerRow(cardWidth int) int {
 		if m.width <= 0 {
 			return 1
 		}
-		// Account for card margins and borders
-		effectiveCardWidth := cardWidth + 5 // margin + border + padding
+		// Account for card borders (2) and marginRight (1)
+		effectiveCardWidth := cardWidth + 3
 		perRow := m.width / effectiveCardWidth
 		if perRow < 1 {
 			return 1

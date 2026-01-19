@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -71,8 +72,10 @@ type Model struct {
 	hostOrder  []string // Original config order for default sorting (priority order)
 	metrics    map[string]*HostMetrics
 	status     map[string]HostStatus
-	errors     map[string]string        // Last error message per host for diagnostics
-	lockInfo   map[string]*HostLockInfo // Lock status per host
+	errors     map[string]string               // Last error message per host for diagnostics
+	lockInfo   map[string]*HostLockInfo        // Lock status per host
+	connState  map[string]*HostConnectionState // Connection attempt tracking per host
+	sshAlias   map[string]string               // SSH alias used to connect (e.g., "m4-tailscale")
 	selected   int
 	collector  *Collector
 	history    *History
@@ -80,10 +83,15 @@ type Model struct {
 	height     int
 	lastUpdate time.Time
 	interval   time.Duration
+	timeout    time.Duration // Per-host collection timeout
 	quitting   bool
 	sortOrder  SortOrder
 	viewMode   ViewMode
 	showHelp   bool
+
+	// Streaming collection state
+	resultsChan <-chan HostResult // Channel for receiving streaming results
+	collecting  bool              // Whether a collection cycle is in progress
 
 	// Animation state
 	spinnerFrame int // Current frame for connecting spinner animation
@@ -99,12 +107,36 @@ type tickMsg time.Time
 // spinnerTickMsg signals a spinner animation frame update.
 type spinnerTickMsg time.Time
 
-// metricsMsg carries new metrics from the collector.
+// metricsMsg carries new metrics from the collector (batched, all hosts).
 type metricsMsg struct {
 	metrics  map[string]*HostMetrics
 	errors   map[string]string        // Connection errors per host
 	lockInfo map[string]*HostLockInfo // Lock status per host
 	time     time.Time
+}
+
+// hostResultMsg carries metrics from a single host (for streaming updates).
+type hostResultMsg struct {
+	alias        string
+	metrics      *HostMetrics  // nil on error
+	error        string        // error message if failed
+	lockInfo     *HostLockInfo // lock status
+	connectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
+	time         time.Time
+}
+
+// collectStartedMsg signals that collection has started and provides the results channel.
+// This allows state mutations to happen in Update instead of inside the async goroutine.
+type collectStartedMsg struct {
+	results <-chan HostResult
+}
+
+// HostConnectionState tracks connection attempts and errors per host.
+type HostConnectionState struct {
+	Attempts    int       // number of connection attempts
+	LastError   string    // most recent error message
+	Connected   bool      // has successfully connected at least once
+	LastAttempt time.Time // when last attempt started
 }
 
 // spinnerInterval is the animation frame rate for the connecting spinner
@@ -113,7 +145,8 @@ const spinnerInterval = 150 * time.Millisecond
 // NewModel creates a new dashboard model with the given collector.
 // hostOrder is the priority order from config (default host first, then fallbacks).
 // If nil, hosts are sorted alphabetically.
-func NewModel(collector *Collector, interval time.Duration, hostOrder []string) Model {
+// timeout is the per-host collection timeout (0 uses default of 8s).
+func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder []string) Model {
 	hosts := collector.Hosts()
 
 	// Store the original config order for default sorting
@@ -134,6 +167,25 @@ func NewModel(collector *Collector, interval time.Duration, hostOrder []string) 
 		status[h] = StatusConnectingState
 	}
 
+	// Initialize connection state for all hosts
+	connState := make(map[string]*HostConnectionState)
+	for _, h := range hosts {
+		connState[h] = &HostConnectionState{
+			Attempts:    0,
+			LastError:   "",
+			Connected:   false,
+			LastAttempt: time.Time{},
+		}
+	}
+
+	// Default timeout if not specified
+	if timeout == 0 {
+		timeout = 8 * time.Second
+	}
+
+	// Wire timeout to collector so CollectStreaming uses it
+	collector.SetTimeout(timeout)
+
 	m := Model{
 		hosts:     hosts, // Will be sorted by sortHosts
 		hostOrder: configOrder,
@@ -141,10 +193,13 @@ func NewModel(collector *Collector, interval time.Duration, hostOrder []string) 
 		status:    status,
 		errors:    make(map[string]string),
 		lockInfo:  make(map[string]*HostLockInfo),
+		connState: connState,
+		sshAlias:  make(map[string]string),
 		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
 		interval:  interval,
+		timeout:   timeout,
 		sortOrder: SortByDefault, // Start with default sort (online first, config order)
 	}
 
@@ -199,17 +254,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailViewport.Height = viewportHeight
 		}
 
+		// Update viewport content if in detail view (dimensions changed)
+		if m.viewMode == ViewDetail {
+			m.updateDetailViewportContent()
+		}
+
 	case tickMsg:
 		return m, tea.Batch(m.tickCmd(), m.collectCmd())
 
 	case spinnerTickMsg:
-		// Advance spinner animation frame
-		m.spinnerFrame = (m.spinnerFrame + 1) % len(ConnectingSpinnerFrames)
+		// Advance spinner animation frame (use large cycle to allow text animation to complete)
+		m.spinnerFrame = (m.spinnerFrame + 1) % 10000
 		return m, m.spinnerTickCmd()
 
 	case metricsMsg:
 		m.lastUpdate = msg.time
 		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
+		// Update viewport content if in detail view
+		if m.viewMode == ViewDetail {
+			m.updateDetailViewportContent()
+		}
+
+	case collectStartedMsg:
+		// Collection started - set up state and begin polling
+		m.resultsChan = msg.results
+		m.collecting = true
+
+		// Increment attempt count for all hosts at start of collection
+		for _, host := range m.hosts {
+			if state, ok := m.connState[host]; ok {
+				state.Attempts++
+				state.LastAttempt = time.Now()
+			}
+		}
+
+		// Start polling for results
+		return m, pollResultsCmd(m.resultsChan)
+
+	case hostResultMsg:
+		// Check if this is a completion signal (empty alias means channel closed)
+		if msg.alias == "" {
+			m.collecting = false
+			m.resultsChan = nil
+			return m, nil
+		}
+
+		// Update this specific host's state immediately
+		m.lastUpdate = msg.time
+		m.updateHostResult(msg)
+		// Update viewport content if in detail view
+		if m.viewMode == ViewDetail {
+			m.updateDetailViewportContent()
+		}
+
+		// Continue polling for more results if we have an active channel
+		if m.resultsChan != nil {
+			return m, pollResultsCmd(m.resultsChan)
+		}
 	}
 
 	return m, nil
@@ -237,15 +338,55 @@ func (m Model) spinnerTickCmd() tea.Cmd {
 	})
 }
 
-// collectCmd returns a command that collects metrics from all hosts.
+// collectCmd returns a command that starts streaming collection from all hosts.
+// Returns a collectStartedMsg so Update can set up state safely (no data races).
 func (m Model) collectCmd() tea.Cmd {
+	// Capture values locally to avoid reading Model fields in goroutine
+	timeout := m.timeout
+	numHosts := len(m.hosts)
+	collector := m.collector
+
 	return func() tea.Msg {
-		metrics, errors, lockInfo := m.collector.Collect()
-		return metricsMsg{
-			metrics:  metrics,
-			errors:   errors,
-			lockInfo: lockInfo,
-			time:     time.Now(),
+		// Create a background context for the collection cycle
+		ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(numHosts+1))
+		// Context will timeout naturally; cancel stored but not used for early cleanup
+		_ = cancel
+
+		// Start streaming collection
+		resultsChan := collector.CollectStreaming(ctx)
+
+		// Return the channel to Update for safe state setup
+		return collectStartedMsg{results: resultsChan}
+	}
+}
+
+// pollResultsCmd returns a command that polls for the next streaming result.
+// Takes the channel as a parameter to avoid data races (no Model field access in goroutine).
+func pollResultsCmd(results <-chan HostResult) tea.Cmd {
+	if results == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		// Simple channel receive (not select with single case)
+		result, ok := <-results
+		if !ok {
+			// Channel closed, collection complete - signal via nil result
+			return hostResultMsg{time: time.Now()} // Empty msg signals completion
+		}
+
+		errStr := ""
+		if result.Error != nil {
+			errStr = result.Error.Error()
+		}
+
+		return hostResultMsg{
+			alias:        result.Alias,
+			metrics:      result.Metrics,
+			error:        errStr,
+			lockInfo:     result.LockInfo,
+			connectedVia: result.ConnectedVia,
+			time:         time.Now(),
 		}
 	}
 }
@@ -286,6 +427,71 @@ func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[
 	}
 }
 
+// updateHostResult updates the model state for a single host result (streaming mode).
+func (m *Model) updateHostResult(msg hostResultMsg) {
+	alias := msg.alias
+
+	// Update connection state based on result
+	// Note: Attempts are already incremented in collectStartedMsg handler
+	if state, ok := m.connState[alias]; ok {
+		if msg.error != "" {
+			// Error: store error (attempts already incremented at collection start)
+			state.LastError = msg.error
+			state.LastAttempt = time.Now()
+		} else {
+			// Success: mark as connected and clear error
+			state.Connected = true
+			state.LastError = ""
+		}
+	}
+
+	if msg.metrics == nil {
+		// Host unreachable or error
+		// Keep StatusConnectingState until first successful connection (shows retry UI)
+		// Only switch to StatusUnreachableState if we previously connected successfully
+		if state, ok := m.connState[alias]; ok && !state.Connected {
+			m.status[alias] = StatusConnectingState
+		} else {
+			m.status[alias] = StatusUnreachableState
+		}
+		if msg.error != "" {
+			m.errors[alias] = msg.error
+		}
+		delete(m.lockInfo, alias)
+		m.sortHosts()
+		return
+	}
+
+	// Successfully collected metrics
+	m.metrics[alias] = msg.metrics
+	m.history.Push(alias, msg.metrics)
+
+	// Store the SSH alias used to connect
+	if msg.connectedVia != "" {
+		m.sshAlias[alias] = msg.connectedVia
+	}
+
+	// Update lock info
+	if msg.lockInfo != nil {
+		m.lockInfo[alias] = msg.lockInfo
+	} else {
+		delete(m.lockInfo, alias)
+	}
+
+	// Determine status based on lock state
+	if msg.lockInfo != nil && msg.lockInfo.IsLocked {
+		m.status[alias] = StatusRunningState
+	} else {
+		m.status[alias] = StatusIdleState
+	}
+
+	// Clear any previous error
+	delete(m.errors, alias)
+
+	// Re-sort hosts since status may have changed
+	m.sortHosts()
+}
+
 // OnlineCount returns the number of hosts that are online (idle or running).
 func (m Model) OnlineCount() int {
 	count := 0
@@ -315,19 +521,20 @@ func (m Model) SecondsSinceUpdate() int {
 
 // ConnectingSpinner returns the current spinner character for the connecting animation.
 func (m Model) ConnectingSpinner() string {
-	return ConnectingSpinnerFrames[m.spinnerFrame]
+	return ConnectingSpinnerFrames[m.spinnerFrame%len(ConnectingSpinnerFrames)]
 }
 
 // ConnectingText returns the current animated "Connecting" text.
 func (m Model) ConnectingText() string {
-	return ConnectingTextFrames[m.spinnerFrame%len(ConnectingTextFrames)]
+	// Use slower frame progression for calmer animation (~1s per frame)
+	slowFrame := m.spinnerFrame / ConnectingTextSlowdown
+	return ConnectingTextFrames[slowFrame%len(ConnectingTextFrames)]
 }
 
 // ConnectingSubtext returns the current animated subtext for connecting state.
 func (m Model) ConnectingSubtext() string {
-	// Cycle through subtexts more slowly (every 2 spinner frames)
-	idx := (m.spinnerFrame / 2) % len(ConnectingSubtextFrames)
-	return ConnectingSubtextFrames[idx]
+	// Static subtext - text should be stable, only spinner animates
+	return "establishing connection"
 }
 
 // RunningSpinner returns the current spinner character and style for the running animation.
