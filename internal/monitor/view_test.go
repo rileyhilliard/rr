@@ -358,7 +358,7 @@ func TestModel_renderHeader(t *testing.T) {
 		"server2": {SSH: []string{"server2"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 	m.width = 120
 	m.height = 40
 
@@ -388,7 +388,7 @@ func TestModel_renderHeader_LayoutModes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(collector, time.Second, nil)
+			m := NewModel(collector, time.Second, 0, nil)
 			m.width = tt.width
 			m.height = 40
 
@@ -416,7 +416,7 @@ func TestModel_renderFooter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(collector, time.Second, nil)
+			m := NewModel(collector, time.Second, 0, nil)
 			m.width = tt.width
 
 			result := m.renderFooter()
@@ -469,7 +469,7 @@ func TestModel_renderDashboard_Standard(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 	m.width = 120
 	m.height = 40
 
@@ -482,7 +482,7 @@ func TestModel_renderDashboard_DetailView(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 	m.width = 120
 	m.height = 40
 	m.viewMode = ViewDetail
@@ -496,7 +496,7 @@ func TestModel_renderDashboard_WithHelp(t *testing.T) {
 		"server1": {SSH: []string{"server1"}},
 	}
 	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, nil)
+	m := NewModel(collector, time.Second, 0, nil)
 	m.width = 120
 	m.height = 40
 	m.showHelp = true

@@ -185,6 +185,10 @@ type MonitorConfig struct {
 	// Interval between metric updates (e.g., "2s", "5s").
 	Interval string `yaml:"interval" mapstructure:"interval"`
 
+	// Timeout for per-host connection and collection (e.g., "8s", "10s").
+	// Shorter timeouts provide faster feedback when hosts are unreachable.
+	Timeout string `yaml:"timeout" mapstructure:"timeout"`
+
 	// Thresholds for metric severity coloring.
 	Thresholds ThresholdConfig `yaml:"thresholds" mapstructure:"thresholds"`
 
@@ -285,6 +289,7 @@ func DefaultConfig() *Config {
 		},
 		Monitor: MonitorConfig{
 			Interval: "2s",
+			Timeout:  "8s",
 			Thresholds: ThresholdConfig{
 				CPU: ThresholdValues{Warning: 70, Critical: 90},
 				RAM: ThresholdValues{Warning: 70, Critical: 90},

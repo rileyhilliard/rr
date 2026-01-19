@@ -145,6 +145,14 @@ var ConnectingSubtextFrames = []string{
 	"almost there",
 }
 
+// RetrySubtextFrames are playful subtexts shown during connection retries
+var RetrySubtextFrames = []string{
+	"giving it another shot",
+	"trying again",
+	"host is being stubborn",
+	"persistence mode activated",
+}
+
 // GetSpinnerColor returns the color for the current spinner frame index.
 // Used for gen-z style color cycling on animated spinners.
 func GetSpinnerColor(frameIndex int) lipgloss.Color {

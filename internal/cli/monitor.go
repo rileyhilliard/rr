@@ -55,6 +55,14 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 			"Add a host with 'rr host add' first.")
 	}
 
+	// Parse timeout from config (default to 8s if not set or invalid)
+	timeout := 8 * time.Second
+	if resolved.Project != nil && resolved.Project.Monitor.Timeout != "" {
+		if parsed, err := time.ParseDuration(resolved.Project.Monitor.Timeout); err == nil {
+			timeout = parsed
+		}
+	}
+
 	// Create collector from filtered hosts
 	collector := monitor.NewCollector(hosts)
 
@@ -64,7 +72,7 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 	}
 
 	// Create Bubble Tea model with host order for default sorting
-	model := monitor.NewModel(collector, interval, hostOrder)
+	model := monitor.NewModel(collector, interval, timeout, hostOrder)
 
 	// Run the TUI program
 	p := tea.NewProgram(model, tea.WithAltScreen())

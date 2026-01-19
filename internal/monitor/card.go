@@ -18,6 +18,27 @@ var cardDividerStyle = lipgloss.NewStyle().
 	Foreground(ColorBorder).
 	Background(ColorSurfaceBg)
 
+// genZErrorMessage converts a technical error message to gen-z themed text.
+func genZErrorMessage(err string) string {
+	errLower := strings.ToLower(err)
+	switch {
+	case strings.Contains(errLower, "timeout") || strings.Contains(errLower, "timed out"):
+		return "host ghosted us (timeout)"
+	case strings.Contains(errLower, "refused") || strings.Contains(errLower, "connection refused"):
+		return "host left us on read (refused)"
+	case strings.Contains(errLower, "unreachable") || strings.Contains(errLower, "no route"):
+		return "host is MIA (unreachable)"
+	case strings.Contains(errLower, "handshake"):
+		return "couldn't vibe (handshake failed)"
+	case strings.Contains(errLower, "permission") || strings.Contains(errLower, "denied"):
+		return "got gatekept (permission denied)"
+	case strings.Contains(errLower, "host key"):
+		return "trust issues (host key problem)"
+	default:
+		return "connection didn't vibe"
+	}
+}
+
 // renderCardDivider creates a subtle thin divider line
 func renderCardDivider(width int) string {
 	divider := strings.Repeat("─", width)
@@ -135,11 +156,32 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		switch status {
 		case StatusConnectingState:
-			// Show connecting state with animated content
-			lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
-			lines = append(lines, renderCardLine("", innerWidth))
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			// Check for retry state
+			connState := m.connState[host]
+			if connState != nil && connState.Attempts > 1 {
+				// Show retry information: "Attempt #3 · 2 failed"
+				attemptText := fmt.Sprintf("Attempt #%d", connState.Attempts)
+				failedText := fmt.Sprintf("%d failed", connState.Attempts-1)
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+attemptText+" · "+failedText), innerWidth))
+				lines = append(lines, renderCardLine("", innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+
+				// Show last error with gen-z spin if available
+				if connState.LastError != "" {
+					errText := genZErrorMessage(connState.LastError)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
+				} else {
+					// Cycle through retry subtexts
+					idx := (m.spinnerFrame / 2) % len(RetrySubtextFrames)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+RetrySubtextFrames[idx]), innerWidth))
+				}
+			} else {
+				// First attempt: show standard "Linking up"
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
+				lines = append(lines, renderCardLine("", innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+				lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			}
 			// Add padding lines to roughly match online card height
 			lines = append(lines, renderCardLine("", innerWidth))
 			lines = append(lines, renderCardLine("", innerWidth))
@@ -447,10 +489,26 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		lines = append(lines, renderCardDivider(innerWidth))
 		switch status {
 		case StatusConnectingState:
-			// Show connecting state with animated content
-			lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			// Check for retry state
+			connState := m.connState[host]
+			if connState != nil && connState.Attempts > 1 {
+				// Show retry info (compact)
+				attemptText := fmt.Sprintf("Attempt #%d · %d failed", connState.Attempts, connState.Attempts-1)
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+attemptText), innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+				if connState.LastError != "" {
+					errText := genZErrorMessage(connState.LastError)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+errText), innerWidth))
+				} else {
+					idx := (m.spinnerFrame / 2) % len(RetrySubtextFrames)
+					lines = append(lines, renderCardLine(LabelStyle.Render("  "+RetrySubtextFrames[idx]), innerWidth))
+				}
+			} else {
+				// First attempt
+				lines = append(lines, renderCardLine(StatusConnectingStyle.Render("  "+m.ConnectingText()), innerWidth))
+				lines = append(lines, renderCardDivider(innerWidth))
+				lines = append(lines, renderCardLine(LabelStyle.Render("  "+m.ConnectingSubtext()), innerWidth))
+			}
 		case StatusUnreachableState:
 			lines = append(lines, renderCardLine(StatusUnreachableStyle.Render("  Unreachable"), innerWidth))
 

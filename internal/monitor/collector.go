@@ -104,6 +104,52 @@ func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 	return c.collectOneWithContext(ctx, alias)
 }
 
+// CollectStreaming gathers metrics from all hosts, streaming results as each completes.
+// Returns a channel that will receive HostResult for each host as it completes.
+// The channel is closed when all hosts have been processed.
+// This allows the UI to update independently per host instead of waiting for all hosts.
+func (c *Collector) CollectStreaming(ctx context.Context) <-chan HostResult {
+	results := make(chan HostResult, len(c.hosts))
+
+	var wg sync.WaitGroup
+	for alias := range c.hosts {
+		wg.Add(1)
+		go func(alias string) {
+			defer wg.Done()
+
+			// Use per-host timeout, respecting parent context cancellation
+			hostCtx, cancel := context.WithTimeout(ctx, c.timeout)
+			defer cancel()
+
+			metrics, err := c.collectOneWithContext(hostCtx, alias)
+
+			result := HostResult{
+				Alias:   alias,
+				Metrics: metrics,
+			}
+
+			if err != nil {
+				result.Error = err
+			}
+
+			// Check lock status if we got metrics
+			if metrics != nil {
+				result.LockInfo = c.checkLockStatus(alias)
+			}
+
+			results <- result
+		}(alias)
+	}
+
+	// Close channel when all hosts complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
+}
+
 // checkLockStatus checks if the rr lock is held on the specified host.
 // Returns lock info if locked, nil otherwise.
 // With per-host locking, there's a single lock at /tmp/rr.lock per host.

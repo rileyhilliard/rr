@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -71,8 +72,9 @@ type Model struct {
 	hostOrder  []string // Original config order for default sorting (priority order)
 	metrics    map[string]*HostMetrics
 	status     map[string]HostStatus
-	errors     map[string]string        // Last error message per host for diagnostics
-	lockInfo   map[string]*HostLockInfo // Lock status per host
+	errors     map[string]string               // Last error message per host for diagnostics
+	lockInfo   map[string]*HostLockInfo        // Lock status per host
+	connState  map[string]*HostConnectionState // Connection attempt tracking per host
 	selected   int
 	collector  *Collector
 	history    *History
@@ -80,10 +82,15 @@ type Model struct {
 	height     int
 	lastUpdate time.Time
 	interval   time.Duration
+	timeout    time.Duration // Per-host collection timeout
 	quitting   bool
 	sortOrder  SortOrder
 	viewMode   ViewMode
 	showHelp   bool
+
+	// Streaming collection state
+	resultsChan <-chan HostResult // Channel for receiving streaming results
+	collecting  bool              // Whether a collection cycle is in progress
 
 	// Animation state
 	spinnerFrame int // Current frame for connecting spinner animation
@@ -99,12 +106,30 @@ type tickMsg time.Time
 // spinnerTickMsg signals a spinner animation frame update.
 type spinnerTickMsg time.Time
 
-// metricsMsg carries new metrics from the collector.
+// metricsMsg carries new metrics from the collector (batched, all hosts).
 type metricsMsg struct {
 	metrics  map[string]*HostMetrics
 	errors   map[string]string        // Connection errors per host
 	lockInfo map[string]*HostLockInfo // Lock status per host
 	time     time.Time
+}
+
+// hostResultMsg carries metrics from a single host (for streaming updates).
+type hostResultMsg struct {
+	alias    string
+	metrics  *HostMetrics  // nil on error
+	error    string        // error message if failed
+	lockInfo *HostLockInfo // lock status
+	attempt  int           // which attempt this was (1-based)
+	time     time.Time
+}
+
+// HostConnectionState tracks connection attempts and errors per host.
+type HostConnectionState struct {
+	Attempts    int       // number of connection attempts
+	LastError   string    // most recent error message
+	Connected   bool      // has successfully connected at least once
+	LastAttempt time.Time // when last attempt started
 }
 
 // spinnerInterval is the animation frame rate for the connecting spinner
@@ -113,7 +138,8 @@ const spinnerInterval = 150 * time.Millisecond
 // NewModel creates a new dashboard model with the given collector.
 // hostOrder is the priority order from config (default host first, then fallbacks).
 // If nil, hosts are sorted alphabetically.
-func NewModel(collector *Collector, interval time.Duration, hostOrder []string) Model {
+// timeout is the per-host collection timeout (0 uses default of 8s).
+func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder []string) Model {
 	hosts := collector.Hosts()
 
 	// Store the original config order for default sorting
@@ -134,6 +160,22 @@ func NewModel(collector *Collector, interval time.Duration, hostOrder []string) 
 		status[h] = StatusConnectingState
 	}
 
+	// Initialize connection state for all hosts
+	connState := make(map[string]*HostConnectionState)
+	for _, h := range hosts {
+		connState[h] = &HostConnectionState{
+			Attempts:    0,
+			LastError:   "",
+			Connected:   false,
+			LastAttempt: time.Time{},
+		}
+	}
+
+	// Default timeout if not specified
+	if timeout == 0 {
+		timeout = 8 * time.Second
+	}
+
 	m := Model{
 		hosts:     hosts, // Will be sorted by sortHosts
 		hostOrder: configOrder,
@@ -141,10 +183,12 @@ func NewModel(collector *Collector, interval time.Duration, hostOrder []string) 
 		status:    status,
 		errors:    make(map[string]string),
 		lockInfo:  make(map[string]*HostLockInfo),
+		connState: connState,
 		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
 		collector: collector,
 		history:   NewHistory(DefaultHistorySize),
 		interval:  interval,
+		timeout:   timeout,
 		sortOrder: SortByDefault, // Start with default sort (online first, config order)
 	}
 
@@ -210,6 +254,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case metricsMsg:
 		m.lastUpdate = msg.time
 		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
+
+	case hostResultMsg:
+		// Update this specific host's state immediately
+		m.lastUpdate = msg.time
+		m.updateHostResult(msg)
+
+		// Continue polling for more results if we have an active channel
+		if m.resultsChan != nil {
+			cmd := m.pollResultsCmd()
+			return m, cmd
+		}
 	}
 
 	return m, nil
@@ -237,14 +292,88 @@ func (m Model) spinnerTickCmd() tea.Cmd {
 	})
 }
 
-// collectCmd returns a command that collects metrics from all hosts.
-func (m Model) collectCmd() tea.Cmd {
+// collectCmd returns a command that starts streaming collection from all hosts.
+// Results are streamed individually via hostResultMsg as each host completes.
+func (m *Model) collectCmd() tea.Cmd {
 	return func() tea.Msg {
-		metrics, errors, lockInfo := m.collector.Collect()
-		return metricsMsg{
-			metrics:  metrics,
-			errors:   errors,
-			lockInfo: lockInfo,
+		// Create a background context for the collection cycle
+		ctx, cancel := context.WithTimeout(context.Background(), m.timeout*time.Duration(len(m.hosts)+1))
+
+		// Start streaming collection
+		resultsChan := m.collector.CollectStreaming(ctx)
+
+		// Increment attempt count for all hosts at start of collection
+		for _, host := range m.hosts {
+			if state, ok := m.connState[host]; ok {
+				state.Attempts++
+				state.LastAttempt = time.Now()
+			}
+		}
+
+		// Store channel for subsequent polling
+		m.resultsChan = resultsChan
+		m.collecting = true
+
+		// Try to get first result (simple receive, not select)
+		result, ok := <-resultsChan
+		if !ok {
+			// Channel closed immediately (no hosts?)
+			m.collecting = false
+			m.resultsChan = nil
+			cancel()
+			return nil
+		}
+		// Store cancel func - we'll need a different approach for cleanup
+		// For now, context will timeout naturally
+		_ = cancel
+
+		errStr := ""
+		if result.Error != nil {
+			errStr = result.Error.Error()
+		}
+		return hostResultMsg{
+			alias:    result.Alias,
+			metrics:  result.Metrics,
+			error:    errStr,
+			lockInfo: result.LockInfo,
+			attempt:  m.connState[result.Alias].Attempts,
+			time:     time.Now(),
+		}
+	}
+}
+
+// pollResultsCmd returns a command that polls for the next streaming result.
+func (m *Model) pollResultsCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.resultsChan == nil {
+			return nil
+		}
+
+		// Simple channel receive (not select with single case)
+		result, ok := <-m.resultsChan
+		if !ok {
+			// Channel closed, collection complete
+			m.collecting = false
+			m.resultsChan = nil
+			return nil
+		}
+
+		errStr := ""
+		if result.Error != nil {
+			errStr = result.Error.Error()
+		}
+
+		attempt := 1
+		if state, ok := m.connState[result.Alias]; ok {
+			attempt = state.Attempts
+		}
+
+		return hostResultMsg{
+			alias:    result.Alias,
+			metrics:  result.Metrics,
+			error:    errStr,
+			lockInfo: result.LockInfo,
+			attempt:  attempt,
 			time:     time.Now(),
 		}
 	}
@@ -284,6 +413,55 @@ func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[
 		// Clear any previous error
 		delete(m.errors, alias)
 	}
+}
+
+// updateHostResult updates the model state for a single host result (streaming mode).
+func (m *Model) updateHostResult(msg hostResultMsg) {
+	alias := msg.alias
+
+	// Update connection state
+	if state, ok := m.connState[alias]; ok {
+		if msg.error != "" {
+			state.LastError = msg.error
+		} else {
+			state.Connected = true
+			state.LastError = ""
+		}
+	}
+
+	if msg.metrics == nil {
+		// Host unreachable or error
+		m.status[alias] = StatusUnreachableState
+		if msg.error != "" {
+			m.errors[alias] = msg.error
+		}
+		delete(m.lockInfo, alias)
+		return
+	}
+
+	// Successfully collected metrics
+	m.metrics[alias] = msg.metrics
+	m.history.Push(alias, msg.metrics)
+
+	// Update lock info
+	if msg.lockInfo != nil {
+		m.lockInfo[alias] = msg.lockInfo
+	} else {
+		delete(m.lockInfo, alias)
+	}
+
+	// Determine status based on lock state
+	if msg.lockInfo != nil && msg.lockInfo.IsLocked {
+		m.status[alias] = StatusRunningState
+	} else {
+		m.status[alias] = StatusIdleState
+	}
+
+	// Clear any previous error
+	delete(m.errors, alias)
+
+	// Re-sort hosts since status may have changed
+	m.sortHosts()
 }
 
 // OnlineCount returns the number of hosts that are online (idle or running).
