@@ -139,8 +139,8 @@ var ConnectingTextFrames = []string{
 }
 
 // ConnectingTextSlowdown controls how many spinner frames pass before advancing
-// the connecting text animation. At 150ms spinner interval, 3 gives ~450ms per text frame.
-const ConnectingTextSlowdown = 3
+// the connecting text animation. At 150ms spinner interval, 7 gives ~1s per text frame.
+const ConnectingTextSlowdown = 7
 
 // GetSpinnerColor returns the color for the current spinner frame index.
 // Used for gen-z style color cycling on animated spinners.

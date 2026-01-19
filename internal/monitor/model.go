@@ -250,8 +250,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.tickCmd(), m.collectCmd())
 
 	case spinnerTickMsg:
-		// Advance spinner animation frame
-		m.spinnerFrame = (m.spinnerFrame + 1) % len(ConnectingSpinnerFrames)
+		// Advance spinner animation frame (use large cycle to allow text animation to complete)
+		m.spinnerFrame = (m.spinnerFrame + 1) % 10000
 		return m, m.spinnerTickCmd()
 
 	case metricsMsg:
@@ -500,12 +500,12 @@ func (m Model) SecondsSinceUpdate() int {
 
 // ConnectingSpinner returns the current spinner character for the connecting animation.
 func (m Model) ConnectingSpinner() string {
-	return ConnectingSpinnerFrames[m.spinnerFrame]
+	return ConnectingSpinnerFrames[m.spinnerFrame%len(ConnectingSpinnerFrames)]
 }
 
 // ConnectingText returns the current animated "Connecting" text.
 func (m Model) ConnectingText() string {
-	// Use slower frame progression for calmer animation (~500ms per frame)
+	// Use slower frame progression for calmer animation (~1s per frame)
 	slowFrame := m.spinnerFrame / ConnectingTextSlowdown
 	return ConnectingTextFrames[slowFrame%len(ConnectingTextFrames)]
 }
