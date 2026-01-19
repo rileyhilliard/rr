@@ -39,14 +39,8 @@ test-all:
 		go test ./... && go test ./tests/integration/... -v; \
 	fi
 
-# Linting via rr
-lint:
-	@if command -v rr >/dev/null 2>&1; then \
-		rr lint; \
-	else \
-		echo "rr not found, running locally..."; \
-		$(MAKE) install-linter && golangci-lint run; \
-	fi
+# Linting (always local - no need for remote execution)
+lint: lint-local
 
 # Full verification in parallel (lint + unit + integration)
 verify-all:
