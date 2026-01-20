@@ -227,6 +227,7 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 		IsLocked: true,
 		Holder:   info.String(),
 		Started:  info.Started,
+		Command:  info.Command,
 	}
 }
 

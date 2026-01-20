@@ -23,7 +23,7 @@ func TestLockAcquireAndRelease(t *testing.T) {
 	}
 
 	// Acquire lock
-	lck, err := lock.Acquire(conn, cfg)
+	lck, err := lock.Acquire(conn, cfg, "")
 	require.NoError(t, err, "Lock acquisition should succeed")
 	require.NotNil(t, lck)
 
@@ -52,7 +52,7 @@ func TestLockTryAcquire(t *testing.T) {
 	}
 
 	// TryAcquire should succeed on first attempt
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err, "TryAcquire should succeed")
 	require.NotNil(t, lck)
 	defer lck.Release()
@@ -72,13 +72,13 @@ func TestLockTryAcquireFailsWhenHeld(t *testing.T) {
 	}
 
 	// First, acquire the lock
-	lck1, err := lock.TryAcquire(conn, cfg)
+	lck1, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lck1)
 	defer lck1.Release()
 
 	// Second TryAcquire should fail with ErrLocked
-	lck2, err := lock.TryAcquire(conn, cfg)
+	lck2, err := lock.TryAcquire(conn, cfg, "")
 	assert.ErrorIs(t, err, lock.ErrLocked, "Second TryAcquire should return ErrLocked")
 	assert.Nil(t, lck2)
 }
@@ -97,7 +97,7 @@ func TestLockIsLocked(t *testing.T) {
 	assert.False(t, lock.IsLocked(conn, cfg))
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lck)
 
@@ -127,7 +127,7 @@ func TestLockGetLockHolder(t *testing.T) {
 	assert.Empty(t, holder)
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -149,7 +149,7 @@ func TestLockForceRelease(t *testing.T) {
 	}
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	lockDir := lck.Dir
 
@@ -176,7 +176,7 @@ func TestLockStaleDetectionSSH(t *testing.T) {
 	}
 
 	// Acquire lock
-	lck1, err := lock.TryAcquire(conn, cfg)
+	lck1, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	lockDir := lck1.Dir
 
@@ -186,7 +186,7 @@ func TestLockStaleDetectionSSH(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Now try to acquire - should succeed because old lock is stale
-	lck2, err := lock.TryAcquire(conn, cfg)
+	lck2, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err, "Should acquire lock after stale detection")
 	require.NotNil(t, lck2)
 	defer lck2.Release()
@@ -206,7 +206,7 @@ func TestLockInfoContent(t *testing.T) {
 	}
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -234,7 +234,7 @@ func TestLockCustomDir(t *testing.T) {
 	}
 
 	// Acquire lock - should create the custom directory
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -264,7 +264,7 @@ func TestLockConcurrentAcquisition(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			lck, err := lock.TryAcquire(conn, cfg)
+			lck, err := lock.TryAcquire(conn, cfg, "")
 			mu.Lock()
 			defer mu.Unlock()
 			if err == nil {
@@ -297,7 +297,7 @@ func TestLockHolder(t *testing.T) {
 	}
 
 	// Acquire lock
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	defer lck.Release()
 
@@ -320,13 +320,13 @@ func TestLockAcquireWithTimeout(t *testing.T) {
 	}
 
 	// First, acquire the lock
-	lck1, err := lock.TryAcquire(conn, cfg)
+	lck1, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	defer lck1.Release()
 
 	// Try to acquire again with blocking - should timeout
 	start := time.Now()
-	lck2, err := lock.Acquire(conn, cfg)
+	lck2, err := lock.Acquire(conn, cfg, "")
 	elapsed := time.Since(start)
 
 	assert.Error(t, err, "Acquire should fail due to timeout")

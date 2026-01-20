@@ -26,6 +26,7 @@ type WorkflowOptions struct {
 	WorkingDir   string        // Override local working directory
 	Quiet        bool          // Minimize output
 	Local        bool          // Force local execution (skip remote hosts)
+	Command      string        // Command being run (stored in lock for monitoring)
 }
 
 // WorkflowContext holds state from workflow setup for use during execution.
@@ -314,7 +315,7 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	lockSpinner.Start()
 
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg)
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
 	if err != nil {
 		lockSpinner.Fail()
 		return err

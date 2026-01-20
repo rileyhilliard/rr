@@ -12,10 +12,11 @@ type LockInfo struct {
 	Hostname string    `json:"hostname"`
 	Started  time.Time `json:"started"`
 	PID      int       `json:"pid"`
+	Command  string    `json:"command,omitempty"`
 }
 
-// NewLockInfo creates a LockInfo with the current user, hostname, time, and PID.
-func NewLockInfo() (*LockInfo, error) {
+// NewLockInfo creates a LockInfo with the current user, hostname, time, PID, and command.
+func NewLockInfo(command string) (*LockInfo, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"
@@ -31,6 +32,7 @@ func NewLockInfo() (*LockInfo, error) {
 		Hostname: hostname,
 		Started:  time.Now(),
 		PID:      os.Getpid(),
+		Command:  command,
 	}, nil
 }
 

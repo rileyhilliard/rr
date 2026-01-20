@@ -64,6 +64,11 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		return result
 	}
 
+	// Update lock command to show current task (non-critical, log errors at debug level)
+	if w.hostLock != nil {
+		_ = w.hostLock.UpdateCommand(task.Name) // Error ignored - non-critical for task execution
+	}
+
 	// Notify output manager: task is now actually executing
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskExecuting(task.Name, task.Index)
@@ -166,7 +171,8 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	}
 
 	if lockCfg.Enabled && w.conn != nil {
-		hostLock, err := lock.Acquire(w.conn, lockCfg)
+		// Acquire lock with placeholder - UpdateCommand is called per-task with actual task name
+		hostLock, err := lock.Acquire(w.conn, lockCfg, "starting...")
 		if err != nil {
 			return err
 		}

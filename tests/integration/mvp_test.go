@@ -253,19 +253,20 @@ func TestLockAcquireRequiresConnection(t *testing.T) {
 	}
 
 	// Acquire should fail without a connection
-	_, err := lock.Acquire(nil, cfg)
+	_, err := lock.Acquire(nil, cfg, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Can't grab the lock")
 }
 
 func TestLockInfoCreation(t *testing.T) {
-	info, err := lock.NewLockInfo()
+	info, err := lock.NewLockInfo("test command")
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, info.User)
 	assert.NotEmpty(t, info.Hostname)
 	assert.NotZero(t, info.PID)
 	assert.False(t, info.Started.IsZero())
+	assert.Equal(t, "test command", info.Command)
 
 	// Started should be recent
 	assert.Less(t, time.Since(info.Started), time.Second)

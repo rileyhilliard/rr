@@ -42,6 +42,7 @@ func Run(opts RunOptions) (int, error) {
 		WorkingDir:   opts.WorkingDir,
 		Quiet:        opts.Quiet,
 		Local:        opts.Local,
+		Command:      opts.Command,
 	})
 	if err != nil {
 		return 1, err

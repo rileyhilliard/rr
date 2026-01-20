@@ -8,13 +8,13 @@ import (
 // BenchmarkNewLockInfo measures lock info creation.
 func BenchmarkNewLockInfo(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_, _ = NewLockInfo()
+		_, _ = NewLockInfo("")
 	}
 }
 
 // BenchmarkLockInfo_JSON measures JSON serialization of lock info.
 func BenchmarkLockInfo_JSON(b *testing.B) {
-	info, err := NewLockInfo()
+	info, err := NewLockInfo("")
 	if err != nil {
 		b.Fatalf("setup failed: NewLockInfo returned error: %v", err)
 	}
