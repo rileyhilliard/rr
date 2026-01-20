@@ -15,6 +15,7 @@ import (
 type AcquireCall struct {
 	Conn    *host.Connection
 	Config  config.LockConfig
+	Command string
 	Success bool
 }
 
@@ -62,13 +63,14 @@ func NewFakeLockManager() *FakeLockManager {
 }
 
 // Acquire simulates lock acquisition.
-func (m *FakeLockManager) Acquire(conn *host.Connection, cfg config.LockConfig) (*FakeLock, error) {
+func (m *FakeLockManager) Acquire(conn *host.Connection, cfg config.LockConfig, command string) (*FakeLock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	call := AcquireCall{
-		Conn:   conn,
-		Config: cfg,
+		Conn:    conn,
+		Config:  cfg,
+		Command: command,
 	}
 
 	// Simulate delay

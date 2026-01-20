@@ -70,6 +70,7 @@ type HostLockInfo struct {
 	IsLocked bool      // True if a lock is held on this host
 	Holder   string    // Description of who holds the lock (user@host)
 	Started  time.Time // When the lock was acquired
+	Command  string    // Command being executed (if available)
 }
 
 // HostResult is the result of collecting metrics from a single host.

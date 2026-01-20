@@ -53,9 +53,11 @@ type Lock struct {
 // at a time, regardless of which project initiated it. This prevents resource
 // contention since rr tasks typically consume significant CPU/memory.
 //
+// The command parameter is stored in the lock info for monitoring purposes.
+//
 // Options can be passed to configure behavior:
 //   - WithLogger(l): Use a custom logger instead of the default
-func Acquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOption) (*Lock, error) {
+func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts ...AcquireOption) (*Lock, error) {
 	// Apply options
 	options := &acquireOptions{
 		logger: defaultLogger,
@@ -82,7 +84,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOption
 	log.Debug("using connection: host=%s, address=%s", conn.Client.GetHost(), conn.Client.GetAddress())
 
 	// Create our lock info
-	info, err := NewLockInfo()
+	info, err := NewLockInfo(command)
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrLock,
 			"Couldn't create lock info",
@@ -193,9 +195,11 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOption
 //   - (nil, ErrLocked) if the lock is held by another process
 //   - (nil, other error) for SSH/permission issues
 //
+// The command parameter is stored in the lock info for monitoring purposes.
+//
 // This is useful for load-balancing across multiple hosts - if one host is locked,
 // the caller can immediately try the next host instead of waiting.
-func TryAcquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOption) (*Lock, error) {
+func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, opts ...AcquireOption) (*Lock, error) {
 	// Apply options
 	options := &acquireOptions{
 		logger: defaultLogger,
@@ -221,7 +225,7 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, opts ...AcquireOpt
 	log.Debug("TryAcquire: attempting lock: dir=%s", lockDir)
 
 	// Create our lock info
-	info, err := NewLockInfo()
+	info, err := NewLockInfo(command)
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrLock,
 			"Couldn't create lock info",
@@ -359,6 +363,32 @@ func (l *Lock) Release() error {
 	}
 
 	return forceRemove(l.conn.Client, l.Dir)
+}
+
+// UpdateCommand updates the command field in the lock info file.
+// This is useful for parallel execution where multiple tasks run under one lock.
+func (l *Lock) UpdateCommand(command string) error {
+	if l == nil || l.conn == nil || l.conn.Client == nil || l.Info == nil {
+		return nil
+	}
+
+	// Update the in-memory info
+	l.Info.Command = command
+
+	// Write updated info to the lock file
+	infoFile := filepath.Join(l.Dir, "info.json")
+	infoJSON, err := l.Info.Marshal()
+	if err != nil {
+		return err
+	}
+
+	writeCmd := fmt.Sprintf("cat > %q << 'LOCKINFO'\n%s\nLOCKINFO", infoFile, string(infoJSON))
+	_, _, exitCode, err := l.conn.Client.Exec(writeCmd)
+	if err != nil || exitCode != 0 {
+		return fmt.Errorf("failed to update lock info")
+	}
+
+	return nil
 }
 
 // ForceRelease forcibly removes a lock directory, regardless of who holds it.

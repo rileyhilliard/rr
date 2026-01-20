@@ -194,15 +194,15 @@ func MetricStyleWithThresholds(percent float64, warning, critical int) lipgloss.
 }
 
 // LatencyColor returns the appropriate color for a latency value in milliseconds.
-// Green < 50ms, Yellow 50-200ms, Orange 200-500ms, Red >= 500ms.
+// Green < 50ms, Cyan 50-200ms, Yellow 200-500ms, Red >= 500ms.
 func LatencyColor(ms float64) lipgloss.Color {
 	switch {
 	case ms >= LatencyDegraded:
 		return ColorCritical
 	case ms >= LatencyNormal:
-		return ColorWarning
+		return lipgloss.Color("#FFCC00") // Yellow for slow (was orange)
 	case ms >= LatencyFast:
-		return lipgloss.Color("#FFCC00") // Amber/yellow for normal
+		return lipgloss.Color("#00D7FF") // Cyan for normal (still good, no concern)
 	default:
 		return ColorHealthy
 	}

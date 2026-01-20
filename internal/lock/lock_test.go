@@ -14,7 +14,7 @@ import (
 )
 
 func TestLockInfo_NewLockInfo(t *testing.T) {
-	info, err := NewLockInfo()
+	info, err := NewLockInfo("")
 	if err != nil {
 		t.Fatalf("NewLockInfo() returned error: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestAcquireNoConnection(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	_, err := Acquire(nil, cfg)
+	_, err := Acquire(nil, cfg, "")
 	if err == nil {
 		t.Error("Expected error when Acquire called with nil connection")
 	}
@@ -266,7 +266,7 @@ func TestLockConfig_DefaultDir(t *testing.T) {
 	}
 
 	// Can't actually acquire without connection, but we can verify the config is accepted
-	_, err := Acquire(nil, cfg)
+	_, err := Acquire(nil, cfg, "")
 	if err == nil {
 		t.Error("Expected error for nil connection")
 	}
@@ -387,7 +387,7 @@ func TestAcquire_Success(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	lock, err := Acquire(conn, cfg)
+	lock, err := Acquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lock)
 
@@ -425,7 +425,7 @@ func TestAcquire_AlreadyHeld_TimesOut(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	_, err := Acquire(conn, cfg)
+	_, err := Acquire(conn, cfg, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Lock timeout")
 	assert.Contains(t, err.Error(), "other@otherhost")
@@ -455,7 +455,7 @@ func TestAcquire_StaleLockRemoved(t *testing.T) {
 	}
 
 	// Should acquire by removing stale lock
-	lock, err := Acquire(conn, cfg)
+	lock, err := Acquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lock)
 
@@ -474,7 +474,7 @@ func TestRelease_Success(t *testing.T) {
 	}
 
 	// Acquire first
-	lock, err := Acquire(conn, cfg)
+	lock, err := Acquire(conn, cfg, "")
 	require.NoError(t, err)
 
 	// Verify lock exists
@@ -603,7 +603,7 @@ func TestAcquire_CustomDir(t *testing.T) {
 		Dir:     "/var/locks", // Custom directory
 	}
 
-	lock, err := Acquire(conn, cfg)
+	lock, err := Acquire(conn, cfg, "")
 	require.NoError(t, err)
 
 	// Verify lock is in custom directory
@@ -627,7 +627,7 @@ func TestAcquire_CreatesParentDirectory(t *testing.T) {
 	// Verify parent doesn't exist before acquire
 	assert.False(t, mock.GetFS().IsDir("/tmp/rr-locks"))
 
-	lock, err := Acquire(conn, cfg)
+	lock, err := Acquire(conn, cfg, "")
 	require.NoError(t, err)
 
 	// Verify parent was created
@@ -660,7 +660,7 @@ func TestAcquire_ParentDirFailure(t *testing.T) {
 		Dir:     "/nonexistent/path",
 	}
 
-	_, err := Acquire(conn, cfg)
+	_, err := Acquire(conn, cfg, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Couldn't create lock directory")
 }
@@ -687,7 +687,7 @@ func TestAcquire_MkdirFailsWithoutParent(t *testing.T) {
 	}
 
 	// With /tmp removed, mkdir /tmp/rr.lock should fail
-	_, err := Acquire(conn, cfg)
+	_, err := Acquire(conn, cfg, "")
 	require.Error(t, err)
 	// Should timeout because mkdir keeps failing
 	assert.Contains(t, err.Error(), "Lock timeout")
@@ -706,7 +706,7 @@ func TestAcquire_LockLifecycle(t *testing.T) {
 	}
 
 	// First acquire should succeed
-	lock1, err := Acquire(conn1, cfg)
+	lock1, err := Acquire(conn1, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lock1)
 
@@ -723,7 +723,7 @@ func TestAcquire_LockLifecycle(t *testing.T) {
 	cfg2 := cfg
 	cfg2.Timeout = 100 * time.Millisecond
 
-	_, err = Acquire(conn2, cfg2)
+	_, err = Acquire(conn2, cfg2, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Lock timeout")
 
@@ -735,7 +735,7 @@ func TestAcquire_LockLifecycle(t *testing.T) {
 	assert.False(t, mock.GetFS().Exists("/tmp/rr.lock"))
 
 	// Third acquire should now succeed
-	lock3, err := Acquire(conn2, cfg)
+	lock3, err := Acquire(conn2, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lock3)
 
@@ -757,7 +757,7 @@ func TestTryAcquire_Success(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	lock, err := TryAcquire(conn, cfg)
+	lock, err := TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lock)
 
@@ -794,7 +794,7 @@ func TestTryAcquire_ReturnsErrLocked(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	_, err := TryAcquire(conn, cfg)
+	_, err := TryAcquire(conn, cfg, "")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLocked)
 }
@@ -823,7 +823,7 @@ func TestTryAcquire_RemovesStaleLock(t *testing.T) {
 	}
 
 	// Should acquire by removing stale lock
-	lock, err := TryAcquire(conn, cfg)
+	lock, err := TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lock)
 
@@ -842,7 +842,7 @@ func TestTryAcquire_NoConnection(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	_, err := TryAcquire(nil, cfg)
+	_, err := TryAcquire(nil, cfg, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Can't grab the lock")
 }
@@ -870,7 +870,7 @@ func TestTryAcquire_DoesNotBlock(t *testing.T) {
 
 	// Measure how long TryAcquire takes
 	start := time.Now()
-	_, err := TryAcquire(conn, cfg)
+	_, err := TryAcquire(conn, cfg, "")
 	elapsed := time.Since(start)
 
 	// Should return ErrLocked almost immediately (not wait for timeout)

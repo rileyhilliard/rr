@@ -73,7 +73,7 @@ func TestLoadBalancing_TryAcquire_ReturnsImmediately(t *testing.T) {
 
 	// TryAcquire should return immediately, not wait for timeout
 	start := time.Now()
-	_, err := lock.TryAcquire(conn, cfg)
+	_, err := lock.TryAcquire(conn, cfg, "")
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -91,7 +91,7 @@ func TestLoadBalancing_TryAcquire_SucceedsWhenFree(t *testing.T) {
 		Dir:     "/tmp",
 	}
 
-	lck, err := lock.TryAcquire(conn, cfg)
+	lck, err := lock.TryAcquire(conn, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lck)
 
@@ -313,12 +313,12 @@ func TestLoadBalancing_SequentialLockAttempts(t *testing.T) {
 	}
 
 	// Try host1 - should return ErrLocked immediately
-	_, err := lock.TryAcquire(conn1, cfg)
+	_, err := lock.TryAcquire(conn1, cfg, "")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, lock.ErrLocked))
 
 	// Try host2 - should succeed (each host has independent lock)
-	lck2, err := lock.TryAcquire(conn2, cfg)
+	lck2, err := lock.TryAcquire(conn2, cfg, "")
 	require.NoError(t, err)
 	require.NotNil(t, lck2)
 

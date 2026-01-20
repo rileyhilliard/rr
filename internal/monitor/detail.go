@@ -30,6 +30,7 @@ const (
 )
 
 // renderDetailHeader renders the host name and status prominently.
+// Includes the running command on a second line when available.
 func (m Model) renderDetailHeader(host string, status HostStatus) string {
 	var indicator string
 	var indicatorStyle lipgloss.Style
@@ -60,7 +61,19 @@ func (m Model) renderDetailHeader(host string, status HostStatus) string {
 
 	statusText := indicatorStyle.Render(indicator + statusLabel)
 
-	return fmt.Sprintf("%s  %s", hostTitle, statusText)
+	headerLine := fmt.Sprintf("%s  %s", hostTitle, statusText)
+
+	// Add command line for running hosts
+	if status == StatusRunningState {
+		if lockInfo, ok := m.lockInfo[host]; ok && lockInfo != nil && lockInfo.Command != "" {
+			cmdStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
+			// Show full command in detail view (more space available)
+			cmdLine := cmdStyle.Render("> " + lockInfo.Command)
+			return headerLine + "\n" + cmdLine
+		}
+	}
+
+	return headerLine
 }
 
 // renderDetailCPUSection renders the CPU section with high-resolution braille graph.

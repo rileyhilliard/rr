@@ -101,6 +101,26 @@ func truncateWithEllipsis(s string, maxLen int) string {
 	return s
 }
 
+// renderCommandLine renders the command being executed, truncated to fit width.
+// Returns empty string if no command is available.
+func (m Model) renderCommandLine(host string, width int) string {
+	lockInfo, ok := m.lockInfo[host]
+	if !ok || lockInfo == nil || lockInfo.Command == "" {
+		return ""
+	}
+
+	// Truncate command to fit within available width
+	// Account for prefix "  > " (4 chars) and padding (2 chars)
+	maxCmdWidth := width - 6
+	if maxCmdWidth < 10 {
+		return "" // Too narrow to show command
+	}
+
+	cmd := truncateWithEllipsis(lockInfo.Command, maxCmdWidth)
+	cmdStyle := lipgloss.NewStyle().Foreground(ColorTextMuted)
+	return cmdStyle.Render("  > " + cmd)
+}
+
 // truncateErrorMsg extracts the most useful part of an error message and truncates to fit.
 func truncateErrorMsg(errMsg string, maxLen int) string {
 	// Extract the most relevant part of the error
@@ -156,6 +176,13 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	// Host name with status indicator and SSH alias on the right
 	hostLine := m.renderHostLineWithSSH(host, status, contentWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
+
+	// Show command line for running hosts (only in standard/wide modes)
+	if status == StatusRunningState {
+		if cmdLine := m.renderCommandLine(host, contentWidth); cmdLine != "" {
+			lines = append(lines, renderCardLine(cmdLine, innerWidth))
+		}
+	}
 
 	// If no metrics available, show status-appropriate placeholder with error details
 	if metrics == nil {
@@ -593,6 +620,13 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	// Host name with status indicator and SSH alias on the right
 	hostLine := m.renderHostLineWithSSH(host, status, contentWidth)
 	lines = append(lines, renderCardLine(hostLine, innerWidth))
+
+	// Show command line for running hosts
+	if status == StatusRunningState {
+		if cmdLine := m.renderCommandLine(host, contentWidth); cmdLine != "" {
+			lines = append(lines, renderCardLine(cmdLine, innerWidth))
+		}
+	}
 
 	// If no metrics available, show status-appropriate placeholder with error details
 	if metrics == nil {
