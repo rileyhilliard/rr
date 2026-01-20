@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-01-20
+
+### Added
+
+- **Command display in monitor** - Host cards and detail view in `rr monitor` now show the currently running task/command. Long commands are truncated with ellipsis based on card width.
+
+### Changed
+
+- **Latency colors** - "Normal" latency (50-200ms) now shows as cyan instead of yellow. Yellow felt like a warning, but normal latency is perfectly fine for VPN/regional connections.
+
 ## [0.13.0] - 2026-01-19
 
 ### Added
