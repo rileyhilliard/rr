@@ -64,9 +64,15 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		return result
 	}
 
-	// Update lock command to show current task (non-critical, log errors at debug level)
-	if w.hostLock != nil {
-		_ = w.hostLock.UpdateCommand(task.Name) // Error ignored - non-critical for task execution
+	// Update lock command to show current task in monitor.
+	// We hold connMu briefly to safely read hostLock (Close() may nil it concurrently).
+	// Error is intentionally ignored: UpdateCommand is best-effort for monitoring visibility
+	// and failure doesn't affect task execution. The lock itself remains valid.
+	w.connMu.Lock()
+	hostLock := w.hostLock
+	w.connMu.Unlock()
+	if hostLock != nil {
+		_ = hostLock.UpdateCommand(task.Name)
 	}
 
 	// Notify output manager: task is now actually executing
@@ -264,11 +270,12 @@ func (w *hostWorker) notifyComplete(result TaskResult) {
 }
 
 // Close releases the lock and closes the worker's connection.
+// Holds connMu to synchronize with executeTask's access to hostLock.
 func (w *hostWorker) Close() error {
 	w.connMu.Lock()
 	defer w.connMu.Unlock()
 
-	// Release the lock first
+	// Release the lock first (error ignored - best effort cleanup)
 	if w.hostLock != nil {
 		_ = w.hostLock.Release()
 		w.hostLock = nil
