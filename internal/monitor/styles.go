@@ -37,7 +37,8 @@ const (
 	CriticalThreshold = 90.0
 )
 
-// Latency thresholds in milliseconds
+// Latency thresholds in milliseconds for actual SSH network latency.
+// These thresholds apply to the SSH probe round-trip time, not metrics collection time.
 const (
 	LatencyFast     = 50.0  // < 50ms is excellent (LAN/nearby)
 	LatencyNormal   = 200.0 // < 200ms is normal (VPN/regional)
