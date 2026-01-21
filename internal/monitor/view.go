@@ -26,13 +26,18 @@ func (m Model) renderDashboard() string {
 	b.WriteString(header)
 	b.WriteString("\n\n")
 
-	// Render host cards based on layout mode
-	cards := m.renderHostCards()
-	b.WriteString(cards)
+	// Render host cards via viewport for scrolling support
+	if m.viewportReady {
+		b.WriteString(m.listViewport.View())
+	} else {
+		// Fallback: render cards directly (no scrolling)
+		cards := m.renderHostCards()
+		b.WriteString(cards)
+	}
 
 	// Render footer only if terminal is tall enough
 	if m.ShowFooter() {
-		footer := m.renderFooter()
+		footer := m.renderListFooterWithScroll()
 		b.WriteString("\n")
 		b.WriteString(footer)
 	}
@@ -168,13 +173,8 @@ func (m Model) calculateCardWidth() int {
 		return cardWidth
 
 	case LayoutWide:
-		// Fit 2 cards per row
-		cardWidth := m.width/2 - perCardOverhead
-		if cardWidth > 70 {
-			// Cap card width to prevent overly wide cards
-			cardWidth = 70
-		}
-		return cardWidth
+		// Fit 2 cards per row, fill available width
+		return m.width/2 - perCardOverhead
 
 	default:
 		return 40
@@ -290,4 +290,59 @@ func FormatRate(bytesPerSecond float64) string {
 		return fmt.Sprintf("%.1f MB/s", bytesPerSecond/(1024*1024))
 	}
 	return fmt.Sprintf("%.1f GB/s", bytesPerSecond/(1024*1024*1024))
+}
+
+// generateListContent generates the scrollable content for the list view (just the cards).
+func (m Model) generateListContent() string {
+	return m.renderHostCards()
+}
+
+// updateListViewportContent updates the list viewport with the current card content.
+// This must be called when content changes (metrics updates, sorting, etc.).
+func (m *Model) updateListViewportContent() {
+	if m.viewportReady {
+		content := m.generateListContent()
+		m.listViewport.SetContent(content)
+	}
+}
+
+// renderListFooterWithScroll renders the footer with scroll position indicator for list view.
+func (m Model) renderListFooterWithScroll() string {
+	layout := m.LayoutMode()
+
+	var hints []string
+
+	// Add scroll indicator if viewport is ready and content is scrollable
+	isScrollable := m.viewportReady && m.listViewport.TotalLineCount() > m.listViewport.Height
+	if isScrollable {
+		scrollPercent := m.listViewport.ScrollPercent() * 100
+		hints = append(hints, fmt.Sprintf("%.0f%%", scrollPercent))
+	}
+
+	switch layout {
+	case LayoutMinimal:
+		if isScrollable {
+			hints = append(hints, "pgup/dn scroll")
+		}
+		hints = append(hints, "q quit", "? help")
+	case LayoutCompact:
+		if isScrollable {
+			hints = append(hints, "pgup/dn scroll")
+		}
+		hints = append(hints, "q quit", "r refresh", "s sort", "? help")
+	default:
+		if isScrollable {
+			hints = append(hints, "pgup/dn scroll")
+		}
+		hints = append(hints,
+			"q quit",
+			"r refresh",
+			"s sort",
+			"\u2191\u2193 select",
+			"Enter expand",
+			"? help",
+		)
+	}
+
+	return FooterStyle.Render(strings.Join(hints, " | "))
 }

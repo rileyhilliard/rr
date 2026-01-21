@@ -97,8 +97,9 @@ type Model struct {
 	// Animation state
 	spinnerFrame int // Current frame for connecting spinner animation
 
-	// Detail view viewport for scrollable content
+	// Viewports for scrollable content
 	detailViewport viewport.Model
+	listViewport   viewport.Model
 	viewportReady  bool
 }
 
@@ -244,11 +245,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+	case tea.MouseMsg:
+		// Handle mouse wheel scrolling
+		if m.viewportReady {
+			if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+				var cmd tea.Cmd
+				if m.viewMode == ViewDetail {
+					m.detailViewport, cmd = m.detailViewport.Update(msg)
+				} else {
+					m.listViewport, cmd = m.listViewport.Update(msg)
+				}
+				return m, cmd
+			}
+		}
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Initialize or resize the detail viewport
+		// Initialize or resize the viewports
 		// Reserve space for header and footer
 		headerHeight := 3
 		footerHeight := 2
@@ -258,17 +273,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if !m.viewportReady {
+			// Detail viewport
 			m.detailViewport = viewport.New(m.width, viewportHeight)
 			m.detailViewport.YPosition = headerHeight
+			// List viewport
+			m.listViewport = viewport.New(m.width, viewportHeight)
+			m.listViewport.YPosition = headerHeight
 			m.viewportReady = true
 		} else {
 			m.detailViewport.Width = m.width
 			m.detailViewport.Height = viewportHeight
+			m.listViewport.Width = m.width
+			m.listViewport.Height = viewportHeight
 		}
 
-		// Update viewport content if in detail view (dimensions changed)
+		// Update viewport content based on current view (dimensions changed)
 		if m.viewMode == ViewDetail {
 			m.updateDetailViewportContent()
+		} else {
+			m.updateListViewportContent()
 		}
 
 	case tickMsg:
@@ -282,9 +305,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case metricsMsg:
 		m.lastUpdate = msg.time
 		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
-		// Update viewport content if in detail view
+		// Update viewport content based on current view
 		if m.viewMode == ViewDetail {
 			m.updateDetailViewportContent()
+		} else {
+			m.updateListViewportContent()
 		}
 
 	case collectStartedMsg:
@@ -314,9 +339,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update this specific host's state immediately
 		m.lastUpdate = msg.time
 		m.updateHostResult(msg)
-		// Update viewport content if in detail view
+		// Update viewport content based on current view
 		if m.viewMode == ViewDetail {
 			m.updateDetailViewportContent()
+		} else {
+			m.updateListViewportContent()
 		}
 
 		// Continue polling for more results if we have an active channel
