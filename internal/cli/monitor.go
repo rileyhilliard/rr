@@ -74,8 +74,8 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 	// Create Bubble Tea model with host order for default sorting
 	model := monitor.NewModel(collector, interval, timeout, hostOrder)
 
-	// Run the TUI program
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	// Run the TUI program with mouse support for scrolling
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 
 	// Graceful shutdown: close all SSH connections

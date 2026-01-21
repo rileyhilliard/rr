@@ -161,21 +161,14 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.viewMode = ViewList
 		// Reset viewport position when leaving detail view
 		m.detailViewport.GotoTop()
+		// Update list viewport content in case it changed
+		m.updateListViewportContent()
 		return true, nil
 	}
 
-	// In detail view, scroll keys control the viewport (intercept before list navigation)
-	if m.viewMode == ViewDetail && m.viewportReady {
-		isScrollKey := key.Matches(msg, keys.ScrollUp) ||
-			key.Matches(msg, keys.ScrollDown) ||
-			key.Matches(msg, keys.PageUp) ||
-			key.Matches(msg, keys.PageDown)
-
-		if isScrollKey {
-			var cmd tea.Cmd
-			m.detailViewport, cmd = m.detailViewport.Update(msg)
-			return true, cmd
-		}
+	// Handle viewport scrolling
+	if handled, cmd := m.handleScrollKeys(msg); handled {
+		return true, cmd
 	}
 
 	switch {
@@ -189,6 +182,10 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case key.Matches(msg, keys.CycleSort):
 		m.sortOrder = m.sortOrder.Next()
 		m.sortHosts()
+		// Update viewport content for new sort order
+		if m.viewMode == ViewList {
+			m.updateListViewportContent()
+		}
 		return true, nil
 
 	case key.Matches(msg, keys.SelectPrev):
@@ -228,6 +225,42 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case key.Matches(msg, keys.Collapse):
 		m.viewMode = ViewList
 		return true, nil
+	}
+
+	return false, nil
+}
+
+// handleScrollKeys handles viewport scrolling based on current view mode.
+// Returns true if the key was handled, false otherwise.
+func (m *Model) handleScrollKeys(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if !m.viewportReady {
+		return false, nil
+	}
+
+	// In detail view, scroll keys control the viewport
+	if m.viewMode == ViewDetail {
+		isScrollKey := key.Matches(msg, keys.ScrollUp) ||
+			key.Matches(msg, keys.ScrollDown) ||
+			key.Matches(msg, keys.PageUp) ||
+			key.Matches(msg, keys.PageDown)
+
+		if isScrollKey {
+			var cmd tea.Cmd
+			m.detailViewport, cmd = m.detailViewport.Update(msg)
+			return true, cmd
+		}
+	}
+
+	// In list view, pgup/pgdn control the viewport (j/k still select hosts)
+	if m.viewMode == ViewList {
+		isPageScrollKey := key.Matches(msg, keys.PageUp) ||
+			key.Matches(msg, keys.PageDown)
+
+		if isPageScrollKey {
+			var cmd tea.Cmd
+			m.listViewport, cmd = m.listViewport.Update(msg)
+			return true, cmd
+		}
 	}
 
 	return false, nil
