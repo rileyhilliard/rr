@@ -11,6 +11,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/lock"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
 // cpuJiffies stores CPU jiffies for delta calculation.
@@ -232,7 +233,8 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 }
 
 // collectOneWithContext gathers metrics from a single host with context for timeout.
-// Returns the metrics, the round-trip latency, and any error.
+// Returns the metrics, the SSH probe latency, and any error.
+// The latency is measured using a lightweight echo command, not the metrics collection time.
 func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, time.Duration, error) {
 	// Check for context cancellation early
 	select {
@@ -247,6 +249,14 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 		return nil, 0, err
 	}
 
+	// First, measure actual SSH latency with a lightweight probe command.
+	// This gives us real network latency, not metrics collection time.
+	probeLatency, err := c.probeLatency(ctx, client)
+	if err != nil {
+		// Probe failed, but we can still try to collect metrics
+		probeLatency = 0
+	}
+
 	// Build and execute the batched metrics command
 	cmd := BuildMetricsCommand(platform)
 
@@ -254,35 +264,65 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	session, err := client.Client.NewSession()
 	if err != nil {
 		c.pool.CloseOne(alias)
-		return nil, 0, err
+		return nil, probeLatency, err
 	}
 	defer session.Close()
 
-	// Run command with timeout, measuring latency
+	// Run metrics command with timeout (we don't track this time since it's not network latency)
 	type result struct {
-		output  []byte
-		err     error
-		latency time.Duration
+		output []byte
+		err    error
 	}
 	resultCh := make(chan result, 1)
 
 	go func() {
-		start := time.Now()
 		out, err := session.CombinedOutput(cmd)
-		latency := time.Since(start)
-		resultCh <- result{out, err, latency}
+		resultCh <- result{out, err}
 	}()
 
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
-		return nil, 0, ctx.Err()
+		return nil, probeLatency, ctx.Err()
 	case r := <-resultCh:
 		if r.err != nil {
-			return nil, r.latency, r.err
+			return nil, probeLatency, r.err
 		}
 		metrics, err := c.parseOutput(alias, platform, string(r.output))
-		return metrics, r.latency, err
+		return metrics, probeLatency, err
+	}
+}
+
+// probeLatency measures the actual SSH round-trip latency using a lightweight command.
+// This is separate from metrics collection time, giving users accurate network latency.
+func (c *Collector) probeLatency(ctx context.Context, client *sshutil.Client) (time.Duration, error) {
+	session, err := client.Client.NewSession()
+	if err != nil {
+		return 0, err
+	}
+	defer session.Close()
+
+	// Use a minimal command that completes instantly on the remote
+	type result struct {
+		latency time.Duration
+		err     error
+	}
+	resultCh := make(chan result, 1)
+
+	go func() {
+		start := time.Now()
+		// "echo 1" is fast and reliable across all platforms
+		_, err := session.Output("echo 1")
+		latency := time.Since(start)
+		resultCh <- result{latency, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = session.Close()
+		return 0, ctx.Err()
+	case r := <-resultCh:
+		return r.latency, r.err
 	}
 }
 
