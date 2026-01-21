@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-01-21
+
+### Added
+
+- **Viewport scrolling in monitor list view** - When host cards exceed the terminal height, the list view now supports scrolling via mouse wheel, trackpad, or pgup/pgdn keys. A scroll percentage indicator appears in the footer when content is scrollable.
+
+### Fixed
+
+- **Cards not filling full width** - Removed the 70-character card width cap in wide terminal layouts so cards now fill the available space instead of leaving unused padding on the right.
+
 ## [0.14.0] - 2026-01-20
 
 ### Added
