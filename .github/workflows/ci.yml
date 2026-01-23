@@ -42,15 +42,42 @@ jobs:
         run: |
           # Run tests with JSON output to file only (quiet on success)
           if ! go test -race -coverprofile=coverage.out -covermode=atomic -json ./... > test-results.json 2>&1; then
-            echo "Tests failed. Showing failures only:"
+            echo "Tests failed. Showing failures:"
             echo ""
+
             # Get list of failed tests and their output
             FAILED_TESTS=$(jq -r 'select(.Action=="fail" and .Test != null) | .Test' test-results.json | sort -u)
-            for test in $FAILED_TESTS; do
-              echo "=== FAIL: $test ==="
-              jq -rs --arg t "$test" '[.[] | select(.Test==$t and .Action=="output")] | map(.Output) | join("")' test-results.json
-              echo ""
-            done
+            if [ -n "$FAILED_TESTS" ]; then
+              for test in $FAILED_TESTS; do
+                echo "=== FAIL: $test ==="
+                jq -rs --arg t "$test" '[.[] | select(.Test==$t and .Action=="output")] | map(.Output) | join("")' test-results.json
+                echo ""
+              done
+            fi
+
+            # Show failed packages (build failures or package-level failures)
+            FAILED_PKGS=$(jq -r 'select(.Action=="fail" and .Test == null) | .Package' test-results.json | sort -u)
+            if [ -n "$FAILED_PKGS" ]; then
+              echo "=== Failed packages ==="
+              for pkg in $FAILED_PKGS; do
+                echo "--- $pkg ---"
+                jq -rs --arg p "$pkg" '[.[] | select(.Package==$p and .Action=="output")] | map(.Output) | join("")' test-results.json
+              done
+            fi
+
+            # Show build failures (compilation errors)
+            BUILD_FAILURES=$(jq -r 'select(.Action=="build-output") | .Output' test-results.json)
+            if [ -n "$BUILD_FAILURES" ]; then
+              echo "=== Build errors ==="
+              echo "$BUILD_FAILURES"
+            fi
+
+            # Fallback: if nothing was shown above, show all fail actions
+            if [ -z "$FAILED_TESTS" ] && [ -z "$FAILED_PKGS" ] && [ -z "$BUILD_FAILURES" ]; then
+              echo "=== Raw failure output ==="
+              jq -c 'select(.Action=="fail" or .Action=="build-fail")' test-results.json
+            fi
+
             exit 1
           fi
           echo "All tests passed"
@@ -181,14 +208,42 @@ jobs:
           RR_TEST_SSH_USER: testuser
         run: |
           if ! go test -race -coverprofile=coverage-integration.out -covermode=atomic -json ./tests/integration/... ./pkg/sshutil/... > integration-results.json 2>&1; then
-            echo "Integration tests failed. Showing failures only:"
+            echo "Integration tests failed. Showing failures:"
             echo ""
+
+            # Get list of failed tests and their output
             FAILED_TESTS=$(jq -r 'select(.Action=="fail" and .Test != null) | .Test' integration-results.json | sort -u)
-            for test in $FAILED_TESTS; do
-              echo "=== FAIL: $test ==="
-              jq -rs --arg t "$test" '[.[] | select(.Test==$t and .Action=="output")] | map(.Output) | join("")' integration-results.json
-              echo ""
-            done
+            if [ -n "$FAILED_TESTS" ]; then
+              for test in $FAILED_TESTS; do
+                echo "=== FAIL: $test ==="
+                jq -rs --arg t "$test" '[.[] | select(.Test==$t and .Action=="output")] | map(.Output) | join("")' integration-results.json
+                echo ""
+              done
+            fi
+
+            # Show failed packages (build failures or package-level failures)
+            FAILED_PKGS=$(jq -r 'select(.Action=="fail" and .Test == null) | .Package' integration-results.json | sort -u)
+            if [ -n "$FAILED_PKGS" ]; then
+              echo "=== Failed packages ==="
+              for pkg in $FAILED_PKGS; do
+                echo "--- $pkg ---"
+                jq -rs --arg p "$pkg" '[.[] | select(.Package==$p and .Action=="output")] | map(.Output) | join("")' integration-results.json
+              done
+            fi
+
+            # Show build failures (compilation errors)
+            BUILD_FAILURES=$(jq -r 'select(.Action=="build-output") | .Output' integration-results.json)
+            if [ -n "$BUILD_FAILURES" ]; then
+              echo "=== Build errors ==="
+              echo "$BUILD_FAILURES"
+            fi
+
+            # Fallback: if nothing was shown above, show all fail actions
+            if [ -z "$FAILED_TESTS" ] && [ -z "$FAILED_PKGS" ] && [ -z "$BUILD_FAILURES" ]; then
+              echo "=== Raw failure output ==="
+              jq -c 'select(.Action=="fail" or .Action=="build-fail")' integration-results.json
+            fi
+
             exit 1
           fi
           echo "All integration tests passed"
