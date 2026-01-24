@@ -120,9 +120,9 @@ func TestBuildLinuxCommand_SectionCount(t *testing.T) {
 func TestBuildDarwinCommand_SectionCount(t *testing.T) {
 	cmd := BuildMetricsCommand(PlatformDarwin)
 
-	// Darwin command should have 3 separators (4 sections)
+	// Darwin command should have 4 separators (5 sections: top, vm_stat, netstat, ioreg GPU, ps)
 	separatorCount := strings.Count(cmd, `echo "---"`)
-	assert.Equal(t, 3, separatorCount, "Darwin command should have 3 separators for 4 sections")
+	assert.Equal(t, 4, separatorCount, "Darwin command should have 4 separators for 5 sections")
 }
 
 func TestBuildMetricsCommand_GracefulGPUFailure(t *testing.T) {

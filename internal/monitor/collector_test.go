@@ -154,7 +154,14 @@ Pages purgeable:                          23456.`
 lo0   16384 <Link#1>                         12345     0    1234567    12345     0    1234567     0
 en0   1500  <Link#4>      xx:xx:xx:xx:xx:xx  98765     0    9876543    56789     0    5678901     0`
 
-	sections := []string{topOutput, vmStatOutput, netstatOutput}
+	gpuOutput := `  |   "PerformanceStatistics" = {"In use system memory (driver)"=0,"Alloc system memory"=635551744,"Tiler Utilization %"=5,"recoveryCount"=0,"lastRecoveryTime"=0,"Renderer Utilization %"=10,"TiledSceneBytes"=0,"Device Utilization %"=25,"SplitSceneCount"=0,"Allocated PB Size"=11534336,"In use system memory"=33390592}
+  |   "model" = "Apple M4"
+  |   "gpu-core-count" = 10`
+
+	psOutput := `USER               PID  %CPU %MEM      VSZ    RSS   TT  STAT STARTED      TIME COMMAND
+root                 1   0.0  0.1  5134736  21456   ??  Ss   Mon09AM  12:34.56 /sbin/launchd`
+
+	sections := []string{topOutput, vmStatOutput, netstatOutput, gpuOutput, psOutput}
 
 	result, err := collector.parseDarwinOutput(metrics, sections)
 	require.NoError(t, err)
@@ -170,7 +177,40 @@ en0   1500  <Link#4>      xx:xx:xx:xx:xx:xx  98765     0    9876543    56789    
 	// Verify network metrics
 	assert.NotEmpty(t, result.Network)
 
-	// macOS doesn't have GPU in this implementation
+	// Verify Apple Silicon GPU metrics
+	require.NotNil(t, result.GPU)
+	assert.Equal(t, "Apple M4", result.GPU.Name)
+	assert.InDelta(t, 25.0, result.GPU.Percent, 0.1) // Device Utilization %
+	assert.Equal(t, int64(33390592), result.GPU.MemoryUsed)
+	assert.Equal(t, int64(635551744), result.GPU.MemoryTotal)
+}
+
+func TestParseDarwinOutput_NoGPU(t *testing.T) {
+	collector := &Collector{}
+	metrics := &HostMetrics{}
+
+	topOutput := `Load Avg: 1.0, 2.0, 3.0
+CPU usage: 10.0% user, 20.0% sys, 70.0% idle`
+
+	vmStatOutput := `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                              123456.`
+
+	netstatOutput := `Name  Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+lo0   16384 <Link#1>                         12345     0    1234567    12345     0    1234567     0`
+
+	// Empty GPU output (no Apple Silicon GPU or ioreg failed)
+	gpuOutput := ``
+
+	psOutput := `USER               PID  %CPU %MEM      VSZ    RSS   TT  STAT STARTED      TIME COMMAND
+root                 1   0.0  0.1  5134736  21456   ??  Ss   Mon09AM  12:34.56 /sbin/launchd`
+
+	sections := []string{topOutput, vmStatOutput, netstatOutput, gpuOutput, psOutput}
+
+	result, err := collector.parseDarwinOutput(metrics, sections)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// GPU should be nil when no data
 	assert.Nil(t, result.GPU)
 }
 

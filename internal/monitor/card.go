@@ -286,12 +286,12 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 		cpuLines := m.renderCardCPUSection(host, metrics.CPU, innerWidth)
 		lines = append(lines, cpuLines...)
 
-		// Divider before RAM
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// RAM metrics with braille graph
-		ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
-		lines = append(lines, ramLines...)
+		// GPU metrics with braille graph (if available)
+		if metrics.GPU != nil {
+			lines = append(lines, renderCardDivider(innerWidth))
+			gpuLines := m.renderCardGPUSection(host, metrics.GPU, innerWidth)
+			lines = append(lines, gpuLines...)
+		}
 
 		// Latency metrics with braille graph (if available)
 		latencyLines := m.renderCardLatencySection(host, innerWidth)
@@ -300,18 +300,23 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 			lines = append(lines, latencyLines...)
 		}
 
-		// Network rates (with divider if present)
-		netLine := m.renderCardNetworkLine(host, innerWidth)
-		if netLine != "" {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(netLine, innerWidth))
-		}
+		// RAM metrics with braille graph
+		lines = append(lines, renderCardDivider(innerWidth))
+		ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
+		lines = append(lines, ramLines...)
 
 		// Top process (with divider if present)
 		if len(metrics.Processes) > 0 {
 			lines = append(lines, renderCardDivider(innerWidth))
 			topLine := m.renderCardTopProcess(metrics.Processes, innerWidth)
 			lines = append(lines, renderCardLine(topLine, innerWidth))
+		}
+
+		// Network rates (with divider if present)
+		netLine := m.renderCardNetworkLine(host, innerWidth)
+		if netLine != "" {
+			lines = append(lines, renderCardDivider(innerWidth))
+			lines = append(lines, renderCardLine(netLine, innerWidth))
 		}
 	}
 
@@ -466,6 +471,57 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 	} else {
 		// Show gradient bar while collecting history
 		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
+}
+
+// renderCardGPUSection renders GPU with a braille sparkline graph.
+// Returns multiple lines: header line + graph rows.
+func (m Model) renderCardGPUSection(host string, gpu *GPUMetrics, lineWidth int) []string {
+	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
+
+	// Header line: "GPU" label + right-aligned percentage + temperature
+	label := LabelStyle.Render("GPU")
+	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
+
+	// Add temperature if available
+	var rightContent string
+	if gpu.Temperature > 0 {
+		tempText := GPUTempStyle(gpu.Temperature).Render(fmt.Sprintf("%dC", gpu.Temperature))
+		rightContent = pctText + " " + tempText
+	} else {
+		rightContent = pctText
+	}
+	rightWidth := lipgloss.Width(rightContent)
+
+	// Calculate padding for right alignment
+	padding := ""
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + rightContent
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Graph width (content area)
+	graphWidth := contentWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	// Braille graph
+	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
+	if len(gpuHistory) > 0 {
+		graph := RenderBrailleSparkline(gpuHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graphLines := strings.Split(graph, "\n")
+		for _, gl := range graphLines {
+			lines = append(lines, renderCardLine(gl, lineWidth))
+		}
+	} else {
+		// Show gradient bar while collecting history
+		bar := RenderGradientBar(graphWidth, gpu.Percent, ColorGraph)
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -696,11 +752,12 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 		cpuLines := m.renderCompactCPUSection(host, metrics.CPU, innerWidth)
 		lines = append(lines, cpuLines...)
 
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// RAM with single-row sparkline
-		ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
-		lines = append(lines, ramLines...)
+		// GPU with single-row sparkline (if available)
+		if metrics.GPU != nil {
+			lines = append(lines, renderCardDivider(innerWidth))
+			gpuLines := m.renderCompactGPUSection(host, metrics.GPU, innerWidth)
+			lines = append(lines, gpuLines...)
+		}
 
 		// Latency with single-row sparkline (if available)
 		latencyLines := m.renderCompactLatencySection(host, innerWidth)
@@ -708,6 +765,11 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 			lines = append(lines, renderCardDivider(innerWidth))
 			lines = append(lines, latencyLines...)
 		}
+
+		// RAM with single-row sparkline
+		lines = append(lines, renderCardDivider(innerWidth))
+		ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
+		lines = append(lines, ramLines...)
 	}
 
 	content := strings.Join(lines, "\n")
@@ -783,6 +845,41 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
 		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		lines = append(lines, renderCardLine(bar, lineWidth))
+	}
+
+	return lines
+}
+
+// renderCompactGPUSection renders GPU with a single-row braille graph for compact mode.
+func (m Model) renderCompactGPUSection(host string, gpu *GPUMetrics, lineWidth int) []string {
+	var lines []string
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
+
+	label := LabelStyle.Render("GPU")
+	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
+
+	// Right-aligned percentage (no temp in compact mode for space)
+	rightWidth := lipgloss.Width(pctText)
+	padding := ""
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
+	}
+	headerLine := label + padding + pctText
+	lines = append(lines, renderCardLine(headerLine, lineWidth))
+
+	// Single-row braille graph
+	graphWidth := contentWidth
+	if graphWidth < cardMinBarWidth {
+		graphWidth = cardMinBarWidth
+	}
+
+	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
+	if len(gpuHistory) > 0 {
+		graph := RenderBrailleSparkline(gpuHistory, graphWidth, 1, ColorGraph)
+		lines = append(lines, renderCardLine(graph, lineWidth))
+	} else {
+		bar := RenderGradientBar(graphWidth, gpu.Percent, ColorGraph)
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -952,7 +1049,7 @@ func (m Model) renderMinimalHostLine(host string, status HostStatus, maxWidth in
 	return indicatorStyle.Render(indicator) + " " + HostNameStyle.Render(displayHost)
 }
 
-// renderMinimalMetricsLine renders a single line with CPU and RAM percentages.
+// renderMinimalMetricsLine renders a single line with CPU, RAM, and optionally GPU percentages.
 func (m Model) renderMinimalMetricsLine(metrics *HostMetrics, width int) string {
 	cpuPct := metrics.CPU.Percent
 
@@ -961,11 +1058,30 @@ func (m Model) renderMinimalMetricsLine(metrics *HostMetrics, width int) string 
 		ramPct = float64(metrics.RAM.UsedBytes) / float64(metrics.RAM.TotalBytes) * 100
 	}
 
-	// Format: "CPU: 45% | RAM: 67%"
 	cpuText := MetricStyle(cpuPct).Render(fmt.Sprintf("%.0f%%", cpuPct))
 	ramText := MetricStyle(ramPct).Render(fmt.Sprintf("%.0f%%", ramPct))
 
-	// Choose format based on available width
+	// Include GPU if available
+	hasGPU := metrics.GPU != nil
+	var gpuText string
+	if hasGPU {
+		gpuText = MetricStyle(metrics.GPU.Percent).Render(fmt.Sprintf("%.0f%%", metrics.GPU.Percent))
+	}
+
+	// Choose format based on available width and GPU presence
+	if hasGPU {
+		if width >= 42 {
+			// Format: "CPU: 45%  RAM: 67%  GPU: 89%"
+			return fmt.Sprintf("%s %s  %s %s  %s %s",
+				LabelStyle.Render("CPU:"), cpuText,
+				LabelStyle.Render("RAM:"), ramText,
+				LabelStyle.Render("GPU:"), gpuText)
+		}
+		// Super compact format with GPU
+		return fmt.Sprintf("C:%s R:%s G:%s", cpuText, ramText, gpuText)
+	}
+
+	// No GPU - original format
 	if width >= 30 {
 		return fmt.Sprintf("%s %s  %s %s",
 			LabelStyle.Render("CPU:"), cpuText,

@@ -144,6 +144,43 @@ func padToWidth(s string, width int) string {
 	return s + strings.Repeat(" ", width-visibleWidth)
 }
 
+// joinSideBySide joins two sections side by side, padding lines to equal heights.
+func joinSideBySide(left, right string, halfWidth int) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+
+	// Handle empty sections
+	if left == "" {
+		leftLines = []string{}
+	}
+	if right == "" {
+		rightLines = []string{}
+	}
+
+	// Pad to same height
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
+	}
+	for len(leftLines) < maxLines {
+		leftLines = append(leftLines, "")
+	}
+	for len(rightLines) < maxLines {
+		rightLines = append(rightLines, "")
+	}
+
+	var result strings.Builder
+	for i := 0; i < maxLines; i++ {
+		leftLine := padToWidth(leftLines[i], halfWidth)
+		rightLine := padToWidth(rightLines[i], halfWidth)
+		result.WriteString(leftLine)
+		result.WriteString(" ")
+		result.WriteString(rightLine)
+		result.WriteString("\n")
+	}
+	return result.String()
+}
+
 // renderDetailLatencySection renders the latency section with a sparkline graph.
 func (m Model) renderDetailLatencySection(host string, width int) string {
 	var lines []string
@@ -290,7 +327,7 @@ func (m Model) renderDetailRAMSection(host string, ram RAMMetrics, width int) st
 	return strings.Join(lines, "\n")
 }
 
-// renderDetailGPUSection renders GPU details with clean sparkline.
+// renderDetailGPUSection renders GPU details with braille sparkline graph (matches CPU style).
 func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) string {
 	var lines []string
 
@@ -300,7 +337,7 @@ func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) s
 	if gpu.Name != "" {
 		title = fmt.Sprintf("GPU (%s)", gpu.Name)
 	}
-	pctText := fmt.Sprintf("%.1f%%", gpu.Percent)
+	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%.1f%%", gpu.Percent))
 	lines = append(lines, SectionHeader(title, pctText, width))
 
 	// Content area (width - 4 for borders and padding)
@@ -309,26 +346,33 @@ func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) s
 		graphWidth = 10
 	}
 
-	gpuHistory := m.history.GetGPUHistory(host, graphWidth)
+	// 8-row braille graph to match CPU section
+	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
 	if len(gpuHistory) > 0 {
-		graph := RenderCleanSparkline(gpuHistory, graphWidth, ColorGraph)
-		lines = append(lines, SectionContentLine(graph, width))
+		graph := RenderBrailleSparkline(gpuHistory, graphWidth, 8, ColorGraph)
+		for _, line := range strings.Split(graph, "\n") {
+			lines = append(lines, SectionContentLine(line, width))
+		}
+	} else {
+		// Show empty graph placeholder while collecting
+		emptyLine := strings.Repeat(" ", graphWidth)
+		for i := 0; i < 8; i++ {
+			if i == 4 {
+				lines = append(lines, SectionContentLine(LabelStyle.Render(centerText("Collecting data...", graphWidth)), width))
+			} else {
+				lines = append(lines, SectionContentLine(emptyLine, width))
+			}
+		}
 	}
 
 	// VRAM, temp, power on one line
 	var details []string
 	if gpu.MemoryTotal > 0 {
 		vramPercent := float64(gpu.MemoryUsed) / float64(gpu.MemoryTotal) * 100
-		details = append(details, fmt.Sprintf("VRAM: %s (%.0f%%)", formatBytes(gpu.MemoryUsed), vramPercent))
+		details = append(details, fmt.Sprintf("VRAM: %s / %s (%.0f%%)", formatBytes(gpu.MemoryUsed), formatBytes(gpu.MemoryTotal), vramPercent))
 	}
 	if gpu.Temperature > 0 {
-		tempColor := ColorHealthy
-		if gpu.Temperature >= 80 {
-			tempColor = ColorCritical
-		} else if gpu.Temperature >= 70 {
-			tempColor = ColorWarning
-		}
-		tempStyle := lipgloss.NewStyle().Foreground(tempColor)
+		tempStyle := GPUTempStyle(gpu.Temperature)
 		details = append(details, tempStyle.Render(fmt.Sprintf("%dC", gpu.Temperature)))
 	}
 	if gpu.PowerWatts > 0 {
@@ -535,34 +579,19 @@ func (m Model) generateDetailContent() string {
 		return content.String()
 	}
 
-	// 1. CPU and Latency side by side (or stacked on narrow terminals)
 	halfWidth := (contentWidth - 1) / 2 // -1 for the space between sections
+
+	// 1. CPU and GPU side by side (or just CPU if no GPU)
 	if contentWidth >= 80 {
-		cpuSection := m.renderDetailCPUSection(host, metrics.CPU, halfWidth)
-		latSection := m.renderDetailLatencySection(host, halfWidth)
-
-		// Join side by side
-		cpuLines := strings.Split(cpuSection, "\n")
-		latLines := strings.Split(latSection, "\n")
-
-		// Pad to same height
-		maxLines := len(cpuLines)
-		if len(latLines) > maxLines {
-			maxLines = len(latLines)
-		}
-		for len(cpuLines) < maxLines {
-			cpuLines = append(cpuLines, "")
-		}
-		for len(latLines) < maxLines {
-			latLines = append(latLines, "")
-		}
-
-		for i := 0; i < maxLines; i++ {
-			cpuLine := padToWidth(cpuLines[i], halfWidth)
-			latLine := padToWidth(latLines[i], halfWidth)
-			content.WriteString(cpuLine)
-			content.WriteString(" ")
-			content.WriteString(latLine)
+		if metrics.GPU != nil {
+			// CPU | GPU side by side
+			cpuSection := m.renderDetailCPUSection(host, metrics.CPU, halfWidth)
+			gpuSection := m.renderDetailGPUSection(host, metrics.GPU, halfWidth)
+			content.WriteString(joinSideBySide(cpuSection, gpuSection, halfWidth))
+		} else {
+			// No GPU - just CPU full width
+			cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
+			content.WriteString(cpuSection)
 			content.WriteString("\n")
 		}
 	} else {
@@ -570,16 +599,30 @@ func (m Model) generateDetailContent() string {
 		cpuSection := m.renderDetailCPUSection(host, metrics.CPU, contentWidth)
 		content.WriteString(cpuSection)
 		content.WriteString("\n")
-
-		latSection := m.renderDetailLatencySection(host, contentWidth)
-		content.WriteString(latSection)
-		content.WriteString("\n")
+		if metrics.GPU != nil {
+			gpuSection := m.renderDetailGPUSection(host, metrics.GPU, contentWidth)
+			content.WriteString(gpuSection)
+			content.WriteString("\n")
+		}
 	}
 
-	// 2. Process Table
-	if len(metrics.Processes) > 0 {
-		procSection := m.renderDetailProcessSection(metrics.Processes, contentWidth)
-		content.WriteString(procSection)
+	// 2. Processes and Latency side by side
+	if contentWidth >= 80 {
+		procSection := ""
+		if len(metrics.Processes) > 0 {
+			procSection = m.renderDetailProcessSection(metrics.Processes, halfWidth)
+		}
+		latSection := m.renderDetailLatencySection(host, halfWidth)
+		content.WriteString(joinSideBySide(procSection, latSection, halfWidth))
+	} else {
+		// Single column for narrow terminals
+		if len(metrics.Processes) > 0 {
+			procSection := m.renderDetailProcessSection(metrics.Processes, contentWidth)
+			content.WriteString(procSection)
+			content.WriteString("\n")
+		}
+		latSection := m.renderDetailLatencySection(host, contentWidth)
+		content.WriteString(latSection)
 		content.WriteString("\n")
 	}
 
@@ -587,34 +630,7 @@ func (m Model) generateDetailContent() string {
 	if contentWidth >= 80 {
 		ramSection := m.renderDetailRAMSection(host, metrics.RAM, halfWidth)
 		netSection := m.renderDetailNetworkSection(host, halfWidth)
-
-		// Join side by side
-		ramLines := strings.Split(ramSection, "\n")
-		netLines := strings.Split(netSection, "\n")
-
-		// Pad to same height
-		maxLines := len(ramLines)
-		if len(netLines) > maxLines {
-			maxLines = len(netLines)
-		}
-
-		// Pad lines to correct width and height
-		for len(ramLines) < maxLines {
-			ramLines = append(ramLines, "")
-		}
-		for len(netLines) < maxLines {
-			netLines = append(netLines, "")
-		}
-
-		for i := 0; i < maxLines; i++ {
-			// Pad each line to halfWidth using visible character count
-			ramLine := padToWidth(ramLines[i], halfWidth)
-			netLine := padToWidth(netLines[i], halfWidth)
-			content.WriteString(ramLine)
-			content.WriteString(" ")
-			content.WriteString(netLine)
-			content.WriteString("\n")
-		}
+		content.WriteString(joinSideBySide(ramSection, netSection, halfWidth))
 	} else {
 		// Single column for narrow terminals
 		ramSection := m.renderDetailRAMSection(host, metrics.RAM, contentWidth)
@@ -624,12 +640,6 @@ func (m Model) generateDetailContent() string {
 		netSection := m.renderDetailNetworkSection(host, contentWidth)
 		content.WriteString(netSection)
 		content.WriteString("\n")
-	}
-
-	// 4. GPU Section (if present)
-	if metrics.GPU != nil {
-		gpuSection := m.renderDetailGPUSection(host, metrics.GPU, contentWidth)
-		content.WriteString(gpuSection)
 	}
 
 	return content.String()

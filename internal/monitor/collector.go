@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -395,7 +396,7 @@ func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, section
 }
 
 // parseDarwinOutput parses macOS metrics from the batched command output.
-// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ps aux
+// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ioreg GPU, 4=ps aux
 func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (*HostMetrics, error) {
 	if len(sections) >= 1 {
 		topOutput := strings.TrimSpace(sections[0])
@@ -421,16 +422,21 @@ func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (
 		}
 	}
 
+	// Parse Apple Silicon GPU metrics from ioreg output
 	if len(sections) >= 4 {
-		psOutput := strings.TrimSpace(sections[3])
+		ioregOutput := strings.TrimSpace(sections[3])
+		if gpu := parseAppleGPU(ioregOutput); gpu != nil {
+			metrics.GPU = gpu
+		}
+	}
+
+	if len(sections) >= 5 {
+		psOutput := strings.TrimSpace(sections[4])
 		procs, err := parseProcesses(psOutput)
 		if err == nil {
 			metrics.Processes = procs
 		}
 	}
-
-	// macOS doesn't have nvidia-smi GPU support in this implementation
-	metrics.GPU = nil
 
 	return metrics, nil
 }
@@ -779,6 +785,83 @@ func parseNvidiaSMI(output string) (*GPUMetrics, error) {
 	}
 
 	return metrics, nil
+}
+
+// parseAppleGPU parses GPU metrics from Apple Silicon ioreg output.
+// Expected input format (filtered grep output):
+//
+//	"PerformanceStatistics" = {"Device Utilization %"=0,"In use system memory"=123456,...}
+//	"model" = "Apple M4"
+//	"gpu-core-count" = 10
+//
+// Returns nil if no GPU data is available or parsing fails.
+func parseAppleGPU(output string) *GPUMetrics {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return nil // No GPU data
+	}
+
+	metrics := &GPUMetrics{}
+
+	// Parse model name: "model" = "Apple M4"
+	modelRe := regexp.MustCompile(`"model"\s*=\s*"([^"]+)"`)
+	if match := modelRe.FindStringSubmatch(output); len(match) > 1 {
+		metrics.Name = match[1]
+	}
+
+	// Parse PerformanceStatistics
+	perfRe := regexp.MustCompile(`"PerformanceStatistics"\s*=\s*\{([^}]+)\}`)
+	if match := perfRe.FindStringSubmatch(output); len(match) > 1 {
+		stats := match[1]
+
+		// Device Utilization % - this is the main GPU utilization metric
+		if val := extractAppleGPUStat(stats, "Device Utilization %"); val >= 0 {
+			metrics.Percent = val
+		}
+
+		// In use system memory (bytes)
+		if val := extractAppleGPUStatInt(stats, "In use system memory"); val >= 0 {
+			metrics.MemoryUsed = val
+		}
+
+		// Alloc system memory (bytes) - use as total
+		if val := extractAppleGPUStatInt(stats, "Alloc system memory"); val >= 0 {
+			metrics.MemoryTotal = val
+		}
+	}
+
+	// If we didn't get any useful data, return nil
+	if metrics.Name == "" && metrics.Percent == 0 && metrics.MemoryUsed == 0 {
+		return nil
+	}
+
+	return metrics
+}
+
+// extractAppleGPUStat extracts a float value from the PerformanceStatistics string.
+func extractAppleGPUStat(stats, key string) float64 {
+	escapedKey := regexp.QuoteMeta(key)
+	re := regexp.MustCompile(`"` + escapedKey + `"\s*=\s*([\d.]+)`)
+	if match := re.FindStringSubmatch(stats); len(match) > 1 {
+		val, err := strconv.ParseFloat(match[1], 64)
+		if err == nil {
+			return val
+		}
+	}
+	return -1
+}
+
+// extractAppleGPUStatInt extracts an int64 value from the PerformanceStatistics string.
+func extractAppleGPUStatInt(stats, key string) int64 {
+	escapedKey := regexp.QuoteMeta(key)
+	re := regexp.MustCompile(`"` + escapedKey + `"\s*=\s*(\d+)`)
+	if match := re.FindStringSubmatch(stats); len(match) > 1 {
+		val, err := strconv.ParseInt(match[1], 10, 64)
+		if err == nil {
+			return val
+		}
+	}
+	return -1
 }
 
 // parseDarwinCPU parses CPU metrics from macOS top command output.
