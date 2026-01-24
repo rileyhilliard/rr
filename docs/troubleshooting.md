@@ -128,6 +128,33 @@ Or per-command:
 rr run --probe-timeout 10s "make test"
 ```
 
+### "handshake failed" but ssh command works
+
+**Symptom:** `rr monitor` or `rr doctor` shows "handshake failed", but `ssh user@host` works fine from the terminal.
+
+**Cause:** Your SSH key is passphrase-protected and not loaded in the agent. The `ssh` command can prompt for the passphrase or use macOS Keychain automatically, but rr's Go SSH library cannot prompt interactively.
+
+**Fix:**
+
+1. Add your key to the SSH agent:
+   ```bash
+   ssh-add ~/.ssh/id_rsa  # or your key file
+   ```
+
+2. Verify the key is loaded:
+   ```bash
+   ssh-add -l
+   ```
+
+3. To persist across reboots (macOS), add to your `~/.ssh/config`:
+   ```
+   Host your-host
+       AddKeysToAgent yes
+       UseKeychain yes
+   ```
+
+This ensures the key is automatically added to the agent and the passphrase is stored in Keychain.
+
 ### "SSH agent not running"
 
 **Symptom:** `rr doctor` shows "SSH_AUTH_SOCK not set"

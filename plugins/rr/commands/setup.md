@@ -55,6 +55,20 @@ If SSH fails, debug systematically:
     - Password prompt: needs key-based auth
     - Host not found: add to `~/.ssh/config`
     - Timeout: host unreachable, try alternative address
+    - **"handshake failed" but ssh works**: Key not in agent. Run `ssh-add ~/.ssh/id_rsa`
+
+**Important for passphrase-protected keys:** Ensure your SSH config includes `AddKeysToAgent yes` and `UseKeychain yes` (macOS) so keys are automatically loaded:
+
+```
+Host your-host
+    HostName 192.168.x.x
+    User youruser
+    IdentityFile ~/.ssh/id_rsa
+    AddKeysToAgent yes
+    UseKeychain yes
+```
+
+This prevents "handshake failed" errors where `ssh` works but rr cannot connect.
 
 ## Step 4: Test Execution
 
@@ -140,6 +154,7 @@ rr run "make test"  # or appropriate command for the project
 | Problem             | Fix                                                         |
 | ------------------- | ----------------------------------------------------------- |
 | SSH fails           | Check `ssh <alias>` manually, verify `~/.ssh/config`        |
+| "handshake failed"  | Key not in agent: `ssh-add`, add `AddKeysToAgent yes` to SSH config |
 | "command not found" | Add `shell: "zsh -l -c"` or `setup_commands` to host config |
 | Sync slow           | Add large dirs to `sync.exclude`                            |
 | Lock stuck          | `rr unlock`                                                 |
