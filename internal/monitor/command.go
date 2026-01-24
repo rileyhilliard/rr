@@ -46,9 +46,10 @@ func buildLinuxCommand() string {
 // 0. top output - CPU usage and load averages
 // 1. vm_stat + sysctl hw.memsize - Memory statistics with total memory
 // 2. netstat output - Network interface statistics
-// 3. ps aux - Process list sorted by CPU (top 16 including header)
+// 3. ioreg GPU output - Apple Silicon GPU metrics (optional, fails silently)
+// 4. ps aux - Process list sorted by CPU (top 16 including header)
 func buildDarwinCommand() string {
-	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ps aux -r 2>/dev/null | head -16`
+	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ioreg -r -c AGXAccelerator 2>/dev/null | grep -E '"(model|gpu-core-count|PerformanceStatistics)"' || true; echo "---"; ps aux -r 2>/dev/null | head -16`
 }
 
 // PlatformDetectCommand returns the command to detect the platform type.

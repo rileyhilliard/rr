@@ -45,6 +45,12 @@ const (
 	LatencyDegraded = 500.0 // >= 500ms is degraded (slow/intercontinental)
 )
 
+// GPU temperature thresholds in Celsius.
+const (
+	GPUTempWarning  = 70 // >= 70C is warm
+	GPUTempCritical = 80 // >= 80C is hot
+)
+
 // Base styles for the dashboard
 var (
 	// Container styles
@@ -226,6 +232,24 @@ func LatencyQualityText(ms float64) string {
 // LatencyStyle returns a style with the appropriate foreground color for latency.
 func LatencyStyle(ms float64) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(LatencyColor(ms))
+}
+
+// GPUTempColor returns the appropriate color for a GPU temperature in Celsius.
+// Cyan < 70C (normal), Purple 70-79C (warm), Pink >= 80C (hot).
+func GPUTempColor(temp int) lipgloss.Color {
+	switch {
+	case temp >= GPUTempCritical:
+		return ColorCritical
+	case temp >= GPUTempWarning:
+		return ColorWarning
+	default:
+		return ColorHealthy
+	}
+}
+
+// GPUTempStyle returns a style with the appropriate foreground color for GPU temperature.
+func GPUTempStyle(temp int) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(GPUTempColor(temp))
 }
 
 // ProgressBar renders a progress bar with the given width and percentage.
