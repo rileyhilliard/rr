@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-01-24
+
+### Added
+
+- **GPU monitoring in dashboard** - GPU utilization and temperature now display in host cards. Cards show GPU percentage with color-coded temperature (cyan normal, purple warm 70C+, pink hot 80C+).
+- **Apple Silicon GPU support** - Monitors Apple M-series GPU utilization via `ioreg AGXAccelerator`. Works on macOS hosts with Apple Silicon chips.
+- **GPU sparkline graphs** - Detail view shows 8-row braille sparkline for GPU utilization history, matching the CPU graph style.
+- **Reorganized detail view layout** - CPU and GPU graphs now display side-by-side. Processes and Latency graphs are side-by-side below them.
+
+### Changed
+
+- **Card section order** - Reordered metrics in cards to: CPU, GPU, LAT, RAM, TOP, NET. Groups compute metrics (CPU/GPU) together.
+
 ## [0.15.0] - 2026-01-24
 
 ### Added
