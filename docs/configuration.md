@@ -409,15 +409,16 @@ tasks:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `description` | string | no | Shown in `rr --help`. |
-| `run` | string | if no steps/parallel | Command to execute (simple tasks). |
+| `run` | string | if no steps/parallel/depends | Command to execute (simple tasks). |
 | `steps` | list | if no run/parallel | Steps for multi-step tasks. |
 | `parallel` | list | if no run/steps | Subtask names to run concurrently across hosts. |
+| `depends` | list | no | Task dependencies to run before this task. |
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. |
 | `require` | list | no | Tools that must exist for this task. |
-| `fail_fast` | bool | no | Stop all tasks on first failure (parallel tasks only). |
+| `fail_fast` | bool | no | Stop all tasks on first failure (parallel/depends tasks). |
 | `max_parallel` | int | no | Limit concurrent tasks (parallel tasks only). |
-| `timeout` | duration | no | Per-subtask timeout (parallel tasks only). |
+| `timeout` | duration | no | Per-subtask timeout (parallel tasks) or total timeout (depends tasks). |
 
 ### Parallel task
 
@@ -470,6 +471,140 @@ Run with: `rr test`
 | `name` | string | no | Identifier shown in output. |
 | `run` | string | yes | Command to execute. |
 | `on_fail` | string | no | Behavior on failure: `stop` (default) or `continue`. |
+
+### Task dependencies
+
+Define task execution order with the `depends` field. Tasks run their dependencies first, then execute their own command.
+
+```yaml
+tasks:
+  lint:
+    run: golangci-lint run
+  test:
+    run: go test ./...
+  build:
+    run: go build ./...
+
+  # Linear dependency chain
+  ci:
+    description: Run full CI pipeline
+    depends:
+      - lint
+      - test
+      - build
+```
+
+Run with: `rr ci`
+
+This executes: `lint` -> `test` -> `build` in order.
+
+#### Parallel groups in dependencies
+
+Run multiple dependencies simultaneously using the `parallel` syntax:
+
+```yaml
+tasks:
+  lint:
+    run: golangci-lint run
+  typecheck:
+    run: mypy .
+  test:
+    run: pytest
+  deploy:
+    run: ./deploy.sh
+
+  ci:
+    description: Run CI pipeline
+    depends:
+      - parallel: [lint, typecheck]  # Run simultaneously
+      - test                          # Run after parallel group completes
+      - deploy
+```
+
+This executes: `[lint, typecheck]` (parallel) -> `test` -> `deploy`
+
+#### Orchestrator tasks (no command)
+
+Tasks with only `depends` orchestrate their dependencies without running their own command:
+
+```yaml
+tasks:
+  lint:
+    run: golangci-lint run
+  test:
+    run: go test ./...
+
+  # Just orchestrates - no 'run' command needed
+  verify:
+    description: Run all verification tasks
+    depends:
+      - lint
+      - test
+```
+
+#### Dependency deduplication
+
+Tasks are deduplicated automatically. In a diamond dependency pattern, shared dependencies run once:
+
+```yaml
+tasks:
+  base:
+    run: echo "base"
+  left:
+    depends: [base]
+    run: echo "left"
+  right:
+    depends: [base]
+    run: echo "right"
+  top:
+    depends: [left, right]
+```
+
+Running `rr top` executes: `base` -> `left` -> `right` (base only runs once)
+
+#### Dependency CLI flags
+
+| Flag | Description |
+|------|-------------|
+| `--skip-deps` | Skip dependencies, run only the target task |
+| `--from <task>` | Start from a specific task in the chain |
+
+```bash
+rr ci                  # Run full dependency chain
+rr ci --skip-deps      # Run only ci task (skip lint, test, build)
+rr ci --from test      # Start from test, skip lint
+```
+
+#### Dependency validation
+
+Dependencies are validated at config load time:
+
+| Validation | Error |
+|------------|-------|
+| Missing reference | `task 'X' depends on non-existent task 'Y'` |
+| Self-reference | `task 'X' can't depend on itself` |
+| Circular dependency | `circular dependency detected: A -> B -> C -> A` |
+
+#### Combining dependencies with other task features
+
+Dependencies work with other task fields:
+
+```yaml
+tasks:
+  setup:
+    run: ./setup.sh
+
+  deploy:
+    description: Deploy with prerequisites
+    depends: [setup]
+    run: ./deploy.sh
+    hosts:
+      - production
+    env:
+      DEPLOY_ENV: staging
+    timeout: 10m
+    fail_fast: true
+```
 
 ### Host-restricted tasks
 
@@ -708,6 +843,10 @@ Fields that accept durations use Go's duration format:
 | "host 'X' has no dir" | Add `dir:` to the host in global config |
 | "reserved task name 'X'" | Rename the task to avoid built-in command names |
 | "task 'X' has both run and steps" | Use either `run` or `steps`, not both |
+| "task 'X' depends on non-existent task 'Y'" | Add the missing task or fix the dependency reference |
+| "task 'X' can't depend on itself" | Remove self-reference from depends list |
+| "circular dependency detected: A -> B -> A" | Break the cycle by removing one of the dependencies |
+| "task 'X' has both parallel and depends" | Parallel tasks can't have dependencies; use depends inside subtasks instead |
 
 ## Minimal config
 

@@ -324,6 +324,79 @@ test_parallel_execution() {
     run_test "parallel: quick-check" 0 "$RR_BIN" quick-check
 }
 
+# Test task dependencies
+test_task_dependencies() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Task Dependencies"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Create a temp directory for dependency test config
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap 'rm -rf "$test_dir"' RETURN
+
+    # Create test config with dependent tasks
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  step1:
+    run: echo step1-output
+  step2:
+    depends:
+      - step1
+    run: echo step2-output
+  pipeline:
+    depends:
+      - step1
+      - step2
+    description: Run the full pipeline
+EOF
+
+    # Test --local flag with dependencies (should work without remote hosts)
+    run_test_contains "deps: linear chain" "step1-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" step2 --local
+    run_test_contains "deps: pipeline" "step2-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" pipeline --local
+
+    # Test --skip-deps flag
+    run_test_contains "deps: --skip-deps" "step2-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" step2 --local --skip-deps
+
+    # Verify --skip-deps actually skips dependencies (step1 output should NOT appear)
+    local output
+    output=$("$RR_BIN" --config "$test_dir/.rr.yaml" step2 --local --skip-deps 2>&1)
+    if [[ "$output" == *"step1-output"* ]]; then
+        log_fail "deps: --skip-deps should not run step1"
+    else
+        log_pass "deps: --skip-deps correctly skips dependencies"
+    fi
+
+    # Test help shows dependency info
+    run_test_contains "deps: help shows dependencies" "Dependencies:" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" step2 --help
+    run_test_contains "deps: help shows --skip-deps flag" "--skip-deps" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" step2 --help
+
+    # Test parallel dependencies
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  lint:
+    run: echo lint-output
+  typecheck:
+    run: echo typecheck-output
+  test:
+    run: echo test-output
+  ci:
+    depends:
+      - parallel: [lint, typecheck]
+      - test
+    description: Run CI pipeline
+EOF
+
+    run_test_contains "deps: parallel group" "lint-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" ci --local
+    run_test_contains "deps: parallel group (typecheck)" "typecheck-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" ci --local
+    run_test_contains "deps: parallel group (test)" "test-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" ci --local
+}
+
 # Test error cases
 test_error_cases() {
     echo ""
@@ -423,6 +496,7 @@ main() {
     test_run_command
     test_task_execution
     test_parallel_execution
+    test_task_dependencies
     test_error_cases
 
     print_summary

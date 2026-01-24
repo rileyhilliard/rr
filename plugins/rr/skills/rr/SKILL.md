@@ -129,6 +129,116 @@ hosts:
     require: [nvidia-smi, python3]  # Host-specific requirements
 ```
 
+Run with: `rr test-all`, `rr quick-check`
+
+#### Parallel Task Flags
+
+| Flag | Purpose |
+|------|---------|
+| `--stream` | Show real-time interleaved output with `[host:task]` prefixes |
+| `--verbose` | Show full output per task on completion |
+| `--quiet` | Summary only |
+| `--fail-fast` | Stop on first failure (overrides config) |
+| `--max-parallel N` | Limit concurrent tasks |
+| `--dry-run` | Show plan without executing |
+| `--local` | Force local execution (no remote hosts) |
+
+### Task Dependencies
+
+Define task execution order with `depends`. Tasks run their dependencies first, then execute their own command:
+
+```yaml
+tasks:
+  lint:
+    run: golangci-lint run
+  test:
+    run: go test ./...
+  build:
+    run: go build ./...
+
+  # Linear chain: lint -> test -> build
+  ci:
+    description: Full CI pipeline
+    depends:
+      - lint
+      - test
+      - build
+```
+
+Run with: `rr ci`
+
+#### Parallel Groups in Dependencies
+
+Run multiple dependencies simultaneously:
+
+```yaml
+tasks:
+  lint:
+    run: golangci-lint run
+  typecheck:
+    run: mypy .
+  test:
+    run: pytest
+
+  ci:
+    depends:
+      - parallel: [lint, typecheck]  # Run simultaneously
+      - test                          # Run after parallel completes
+```
+
+Executes: `[lint, typecheck]` (parallel) -> `test`
+
+#### Orchestrator Tasks
+
+Tasks with only `depends` orchestrate without running their own command:
+
+```yaml
+tasks:
+  lint:
+    run: golangci-lint run
+  test:
+    run: go test ./...
+
+  verify:
+    description: Run all checks
+    depends: [lint, test]
+    # No 'run' - just orchestrates
+```
+
+#### Dependency Flags
+
+| Flag | Purpose |
+|------|---------|
+| `--skip-deps` | Skip dependencies, run only the target task |
+| `--from <task>` | Start from a specific task in the chain |
+
+```bash
+rr ci                  # Full dependency chain
+rr ci --skip-deps      # Only run ci task itself
+rr ci --from test      # Start from test, skip lint
+```
+
+#### Dependency Features
+
+- **Deduplication**: Tasks run once even if referenced multiple times (diamond deps)
+- **Validation**: Circular dependencies detected at config load
+- **Fail-fast**: Stops on first failure when `fail_fast: true`
+- **Timeout**: Honor `timeout` field for entire dependency chain
+
+#### Output Modes
+
+- **progress** (default): Live status indicators with spinners
+- **stream**: Real-time output with `[host:task]` prefixes
+- **verbose**: Full output shown when each task completes
+- **quiet**: Summary only at the end
+
+Example:
+```bash
+rr test-all --stream    # See all output in real-time
+rr test-all --dry-run   # Preview what would run
+rr test-all --local     # Run locally without remote hosts
+```
+
 Missing tools trigger actionable error messages. Tools with built-in installers (40+) can be auto-installed.
 
 **See [requirements.md](requirements.md) for complete requirements reference.**

@@ -1,6 +1,11 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
 
 // CurrentConfigVersion is the schema version for the config file.
 // Increment when making breaking changes to the config structure.
@@ -133,6 +138,12 @@ type TaskConfig struct {
 	// Steps for multi-step tasks (mutually exclusive with Run).
 	Steps []TaskStep `yaml:"steps" mapstructure:"steps"`
 
+	// Depends lists tasks that must complete before this task runs.
+	// Can be simple task names or parallel groups.
+	// Simple: depends: [lint, test]
+	// With parallel groups: depends: [{parallel: [lint, typecheck]}, test]
+	Depends []DependencyItem `yaml:"depends" mapstructure:"depends"`
+
 	// Hosts restricts this task to specific hosts.
 	Hosts []string `yaml:"hosts" mapstructure:"hosts"`
 
@@ -143,8 +154,7 @@ type TaskConfig struct {
 	// When set, this task becomes a parallel orchestrator and Run/Steps are ignored.
 	Parallel []string `yaml:"parallel" mapstructure:"parallel"`
 
-	// FailFast stops parallel execution on first failure when true.
-	// Only applies when Parallel is set.
+	// FailFast stops parallel/dependency execution on first failure when true.
 	FailFast bool `yaml:"fail_fast" mapstructure:"fail_fast"`
 
 	// MaxParallel limits concurrent task execution. 0 means unlimited.
@@ -162,6 +172,77 @@ type TaskConfig struct {
 	// Require lists additional tools needed for this specific task.
 	// Combined with project and host requirements.
 	Require []string `yaml:"require,omitempty" mapstructure:"require"`
+}
+
+// DependencyItem represents a single dependency which can be either
+// a simple task name (string) or a parallel group of tasks.
+type DependencyItem struct {
+	// Task is set when this is a simple task reference (from a string in YAML).
+	Task string `yaml:"-"`
+
+	// Parallel is set when this is a group of tasks to run concurrently.
+	Parallel []string `yaml:"parallel,omitempty" mapstructure:"parallel"`
+}
+
+// UnmarshalYAML handles both string and object dependency formats.
+// String format: "lint" becomes DependencyItem{Task: "lint"}
+// Object format: {parallel: [lint, typecheck]} becomes DependencyItem{Parallel: [lint, typecheck]}
+func (d *DependencyItem) UnmarshalYAML(value *yaml.Node) error {
+	// If it's a scalar (string), treat as a simple task name
+	if value.Kind == yaml.ScalarNode {
+		d.Task = value.Value
+		return nil
+	}
+
+	// Otherwise, expect an object with "parallel" key
+	type depItem DependencyItem
+	return value.Decode((*depItem)(d))
+}
+
+// DependencyItemFromInterface converts a generic interface (from viper/mapstructure)
+// to a DependencyItem. Handles both string and map formats.
+// Returns an error if the input type is unsupported or contains invalid elements.
+func DependencyItemFromInterface(v interface{}) (DependencyItem, error) {
+	switch val := v.(type) {
+	case string:
+		return DependencyItem{Task: val}, nil
+	case map[string]interface{}:
+		d := DependencyItem{}
+		parallel, ok := val["parallel"]
+		if !ok {
+			return DependencyItem{}, fmt.Errorf("dependency map must contain 'parallel' key")
+		}
+		switch p := parallel.(type) {
+		case []interface{}:
+			for i, item := range p {
+				s, ok := item.(string)
+				if !ok {
+					return DependencyItem{}, fmt.Errorf("parallel[%d]: expected string, got %T", i, item)
+				}
+				d.Parallel = append(d.Parallel, s)
+			}
+		case []string:
+			d.Parallel = p
+		default:
+			return DependencyItem{}, fmt.Errorf("parallel: expected array of strings, got %T", parallel)
+		}
+		return d, nil
+	default:
+		return DependencyItem{}, fmt.Errorf("dependency: expected string or map, got %T", v)
+	}
+}
+
+// IsParallel returns true if this dependency is a parallel group.
+func (d *DependencyItem) IsParallel() bool {
+	return len(d.Parallel) > 0
+}
+
+// TaskNames returns all task names referenced by this dependency.
+func (d *DependencyItem) TaskNames() []string {
+	if d.Task != "" {
+		return []string{d.Task}
+	}
+	return d.Parallel
 }
 
 // TaskStep is a single step in a multi-step task.
@@ -315,4 +396,9 @@ func DefaultConfig() *Config {
 // IsParallelTask returns true if the task is configured to run subtasks in parallel.
 func IsParallelTask(task *TaskConfig) bool {
 	return len(task.Parallel) > 0
+}
+
+// HasDependencies returns true if the task has dependencies that must run first.
+func HasDependencies(task *TaskConfig) bool {
+	return len(task.Depends) > 0
 }

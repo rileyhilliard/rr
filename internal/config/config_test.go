@@ -1192,3 +1192,129 @@ func TestLoadOrDefault(t *testing.T) {
 	assert.Equal(t, CurrentConfigVersion, cfg.Version)
 	assert.Empty(t, cfg.Host)
 }
+
+func TestDependencyItemUnmarshal(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []DependencyItem
+	}{
+		{
+			name: "simple string dependencies",
+			yaml: `
+tasks:
+  ci:
+    depends: [lint, test]
+    run: echo done
+`,
+			expected: []DependencyItem{
+				{Task: "lint"},
+				{Task: "test"},
+			},
+		},
+		{
+			name: "parallel group dependency",
+			yaml: `
+tasks:
+  ci:
+    depends:
+      - parallel: [lint, typecheck]
+    run: echo done
+`,
+			expected: []DependencyItem{
+				{Parallel: []string{"lint", "typecheck"}},
+			},
+		},
+		{
+			name: "mixed dependencies",
+			yaml: `
+tasks:
+  ci:
+    depends:
+      - parallel: [lint, typecheck]
+      - test
+    run: echo done
+`,
+			expected: []DependencyItem{
+				{Parallel: []string{"lint", "typecheck"}},
+				{Task: "test"},
+			},
+		},
+		{
+			name: "no dependencies",
+			yaml: `
+tasks:
+  build:
+    run: make build
+`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, ".rr.yaml")
+			content := "version: 1\n" + tt.yaml
+			err := os.WriteFile(configPath, []byte(content), 0644)
+			require.NoError(t, err)
+
+			cfg, err := Load(configPath)
+			require.NoError(t, err)
+
+			// Find the task with depends field
+			var task TaskConfig
+			for name, t := range cfg.Tasks {
+				if name == "ci" || len(t.Depends) > 0 {
+					task = t
+					break
+				}
+			}
+
+			if tt.expected == nil {
+				assert.Empty(t, task.Depends)
+			} else {
+				assert.Equal(t, len(tt.expected), len(task.Depends))
+				for i, exp := range tt.expected {
+					assert.Equal(t, exp.Task, task.Depends[i].Task)
+					assert.Equal(t, exp.Parallel, task.Depends[i].Parallel)
+				}
+			}
+		})
+	}
+}
+
+func TestDependencyItemMethods(t *testing.T) {
+	t.Run("IsParallel", func(t *testing.T) {
+		simple := DependencyItem{Task: "lint"}
+		assert.False(t, simple.IsParallel())
+
+		parallel := DependencyItem{Parallel: []string{"lint", "test"}}
+		assert.True(t, parallel.IsParallel())
+	})
+
+	t.Run("TaskNames", func(t *testing.T) {
+		simple := DependencyItem{Task: "lint"}
+		assert.Equal(t, []string{"lint"}, simple.TaskNames())
+
+		parallel := DependencyItem{Parallel: []string{"lint", "test"}}
+		assert.Equal(t, []string{"lint", "test"}, parallel.TaskNames())
+	})
+}
+
+func TestHasDependencies(t *testing.T) {
+	t.Run("task with dependencies", func(t *testing.T) {
+		task := &TaskConfig{
+			Depends: []DependencyItem{{Task: "lint"}},
+			Run:     "make test",
+		}
+		assert.True(t, HasDependencies(task))
+	})
+
+	t.Run("task without dependencies", func(t *testing.T) {
+		task := &TaskConfig{
+			Run: "make test",
+		}
+		assert.False(t, HasDependencies(task))
+	})
+}

@@ -1,14 +1,17 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/deps"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/output"
@@ -49,6 +52,8 @@ type TaskOptions struct {
 	WorkingDir   string        // Override local working directory
 	Quiet        bool          // If true, minimize output
 	Local        bool          // If true, force local execution (skip remote hosts)
+	SkipDeps     bool          // If true, skip dependencies and run only this task
+	From         string        // If set, start from this task in the dependency chain
 }
 
 // RunTask executes a named task from the configuration.
@@ -97,6 +102,11 @@ func RunTask(opts TaskOptions) (int, error) {
 		return 1, errors.New(errors.ErrConfig,
 			"Can't pass arguments to multi-step tasks",
 			"Arguments are only supported for tasks with a single 'run' command.")
+	}
+
+	// If task has dependencies and we're not skipping them, use dependency executor
+	if config.HasDependencies(task) && !opts.SkipDeps {
+		return runTaskWithDeps(wf, task, opts)
 	}
 
 	// Phase 4: Execute task
@@ -152,6 +162,232 @@ func RunTask(opts TaskOptions) (int, error) {
 	renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 
 	return result.ExitCode, nil
+}
+
+// runTaskWithDeps executes a task and its dependencies using the dependency executor.
+func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOptions) (int, error) {
+	// Create resolver and build execution plan
+	// Note: SkipDeps is not passed here because this function is only called when !opts.SkipDeps
+	resolver := deps.NewResolver(wf.Resolved.Project.Tasks)
+	plan, err := resolver.Resolve(opts.TaskName, deps.ResolveOptions{
+		From: opts.From,
+	})
+	if err != nil {
+		return 1, err
+	}
+
+	// If plan is empty (e.g., task is just an orchestrator with no command)
+	if plan.TaskCount() == 0 {
+		fmt.Println("Nothing to run (task has no command)")
+		return 0, nil
+	}
+
+	// Get host config for setup commands
+	var hostCfg *config.Host
+	if !wf.Conn.IsLocal {
+		if h, ok := wf.Resolved.Global.Hosts[wf.Conn.Name]; ok {
+			hostCfg = &h
+		}
+	}
+
+	// Get remote directory
+	remoteDir := ""
+	if !wf.Conn.IsLocal {
+		remoteDir = config.ExpandRemote(wf.Conn.Host.Dir)
+	}
+
+	// Get merged setup commands
+	setupCommands := config.GetMergedSetupCommands(wf.Resolved.Project, hostCfg)
+
+	// Phase 4: Execute with dependencies
+	wf.PhaseDisplay.Divider()
+
+	// Show execution plan
+	renderExecutionPlan(plan, task, opts.Quiet)
+
+	// Set up output streaming
+	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
+	streamHandler.SetFormatter(output.NewGenericFormatter())
+
+	execStart := time.Now()
+
+	// Create execution context with optional timeout
+	ctx := context.Background()
+	if task.Timeout != "" {
+		d, parseErr := time.ParseDuration(task.Timeout)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: invalid timeout '%s': %v\n", task.Timeout, parseErr)
+		} else {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, d)
+			defer cancel()
+		}
+	}
+
+	// Create and run executor
+	executor := deps.NewExecutor(wf.Resolved, wf.Conn, deps.ExecutorOptions{
+		FailFast:      task.FailFast,
+		Quiet:         opts.Quiet,
+		Stdout:        streamHandler.Stdout(),
+		Stderr:        streamHandler.Stderr(),
+		SetupCommands: setupCommands,
+		WorkDir:       remoteDir,
+		StageHandler:  &depStageHandler{quiet: opts.Quiet},
+	})
+
+	result, err := executor.Execute(ctx, plan)
+	execDuration := time.Since(execStart)
+
+	if err != nil {
+		return 1, err
+	}
+
+	// Release lock early
+	if wf.Lock != nil {
+		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
+	}
+
+	// Show summary
+	wf.PhaseDisplay.ThinDivider()
+	renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+
+	return result.ExitCode(), nil
+}
+
+// renderExecutionPlan displays the execution plan.
+func renderExecutionPlan(plan *deps.ExecutionPlan, task *config.TaskConfig, quiet bool) {
+	if quiet {
+		return
+	}
+
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+	boldStyle := lipgloss.NewStyle().Bold(true)
+
+	fmt.Printf("Task: %s", boldStyle.Render(plan.TargetTask))
+	if task.Description != "" {
+		fmt.Printf(" %s", mutedStyle.Render("- "+task.Description))
+	}
+	fmt.Println()
+
+	// Show the execution plan
+	fmt.Printf("Execution plan: %s\n\n", mutedStyle.Render(plan.String()))
+}
+
+// renderDependencySummary displays the result of dependency execution.
+func renderDependencySummary(result *deps.ExecutionResult, taskName string, totalTime, execTime time.Duration, host string) {
+	var symbol string
+	var symbolColor lipgloss.Color
+
+	if result.Success() {
+		symbol = ui.SymbolSuccess
+		symbolColor = ui.ColorSuccess
+	} else {
+		symbol = ui.SymbolFail
+		symbolColor = ui.ColorError
+	}
+
+	symbolStyle := lipgloss.NewStyle().Foreground(symbolColor)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	// Count passed/failed tasks
+	passed := 0
+	failed := 0
+	for _, sr := range result.StageResults {
+		for _, tr := range sr.TaskResults {
+			if tr.ExitCode == 0 {
+				passed++
+			} else {
+				failed++
+			}
+		}
+	}
+
+	if result.Success() {
+		fmt.Printf("%s Task '%s' completed on %s %s\n",
+			symbolStyle.Render(symbol),
+			taskName,
+			host,
+			mutedStyle.Render(fmt.Sprintf("(%d tasks, %.1fs total, %.1fs exec)",
+				passed, totalTime.Seconds(), execTime.Seconds())),
+		)
+	} else {
+		failInfo := ""
+		if result.FailFast {
+			failInfo = " (stopped on first failure)"
+		}
+		fmt.Printf("%s Task '%s' failed on %s%s %s\n",
+			symbolStyle.Render(symbol),
+			taskName,
+			host,
+			failInfo,
+			mutedStyle.Render(fmt.Sprintf("(%d passed, %d failed, %.1fs)",
+				passed, failed, totalTime.Seconds())),
+		)
+	}
+}
+
+// depStageHandler implements deps.StageHandler for CLI output.
+type depStageHandler struct {
+	quiet bool
+}
+
+func (h *depStageHandler) OnStageStart(stageNum, totalStages int, stage deps.Stage) {
+	if h.quiet {
+		return
+	}
+
+	boldStyle := lipgloss.NewStyle().Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	stageType := ""
+	if stage.Parallel && len(stage.Tasks) > 1 {
+		stageType = " (parallel)"
+	}
+
+	header := fmt.Sprintf("Stage %d/%d: %s%s", stageNum, totalStages, strings.Join(stage.Tasks, ", "), stageType)
+	headerLine := fmt.Sprintf("━━━ %s ━━━", header)
+	fmt.Printf("\n%s\n", boldStyle.Render(headerLine))
+
+	// Show the tasks being run
+	for _, task := range stage.Tasks {
+		fmt.Printf("%s %s\n", mutedStyle.Render("$"), task)
+	}
+	fmt.Println()
+}
+
+func (h *depStageHandler) OnStageComplete(stageNum, totalStages int, stage deps.Stage, result *deps.StageResult, duration time.Duration) {
+	if h.quiet {
+		return
+	}
+
+	var symbol string
+	var symbolColor lipgloss.Color
+
+	if result.Success() {
+		symbol = ui.SymbolSuccess
+		symbolColor = ui.ColorSuccess
+	} else {
+		symbol = ui.SymbolFail
+		symbolColor = ui.ColorError
+	}
+
+	symbolStyle := lipgloss.NewStyle().Foreground(symbolColor)
+	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+
+	fmt.Printf("%s Stage %d/%d complete %s\n",
+		symbolStyle.Render(symbol),
+		stageNum,
+		totalStages,
+		mutedStyle.Render(fmt.Sprintf("(%.1fs)", duration.Seconds())),
+	)
+}
+
+func (h *depStageHandler) OnTaskStart(taskName string, parallel bool) {
+	// Output handled by OnStageStart
+}
+
+func (h *depStageHandler) OnTaskComplete(taskName string, exitCode int, duration time.Duration) {
+	// Output handled by OnStageComplete
 }
 
 // renderTaskHeader displays the task being executed.
@@ -386,13 +622,15 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	var tagFlag string
 	var probeTimeoutFlag string
 	var localFlag bool
+	var skipDepsFlag bool
+	var fromFlag string
 
 	cmd := &cobra.Command{
 		Use:   name + " [args...]",
 		Short: task.Description,
 		Long:  buildTaskLongDescription(name, task),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag)
+			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag)
 		},
 	}
 
@@ -406,6 +644,12 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	cmd.Flags().StringVar(&tagFlag, "tag", "", "select host by tag")
 	cmd.Flags().StringVar(&probeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
+
+	// Add dependency flags if task has dependencies
+	if config.HasDependencies(&task) {
+		cmd.Flags().BoolVar(&skipDepsFlag, "skip-deps", false, "skip dependencies, run only this task")
+		cmd.Flags().StringVar(&fromFlag, "from", "", "start from this task in the dependency chain")
+	}
 
 	return cmd
 }
@@ -488,6 +732,19 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 		desc += task.Description + "\n\n"
 	}
 
+	// Show dependencies if present
+	if config.HasDependencies(&task) {
+		desc += "Dependencies:\n"
+		for i, dep := range task.Depends {
+			if dep.IsParallel() {
+				desc += fmt.Sprintf("  %d. [%s] (parallel)\n", i+1, strings.Join(dep.Parallel, ", "))
+			} else {
+				desc += fmt.Sprintf("  %d. %s\n", i+1, dep.Task)
+			}
+		}
+		desc += "\n"
+	}
+
 	if task.Run != "" {
 		desc += fmt.Sprintf("Command: %s\n", task.Run)
 		desc += "\nExtra arguments are appended to the command.\n"
@@ -502,10 +759,19 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 			desc += fmt.Sprintf("  %d. %s: %s\n", i+1, stepName, step.Run)
 		}
 		desc += "\nNote: Extra arguments are not supported for multi-step tasks.\n"
+	} else if config.HasDependencies(&task) {
+		desc += "This task orchestrates its dependencies without running its own command.\n"
 	}
 
 	if len(task.Hosts) > 0 {
 		desc += fmt.Sprintf("\nRestricted to hosts: %s\n", util.JoinOrNone(task.Hosts))
+	}
+
+	// Show dependency flags if present
+	if config.HasDependencies(&task) {
+		desc += "\nDependency flags:\n"
+		desc += "  --skip-deps    Skip dependencies, run only this task\n"
+		desc += "  --from <task>  Start from a specific task in the chain\n"
 	}
 
 	return desc
@@ -544,7 +810,7 @@ func buildParallelTaskLongDescription(name string, task config.TaskConfig) strin
 }
 
 // runTaskCommand is the implementation for task commands.
-func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag bool) error {
+func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string) error {
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
@@ -558,6 +824,8 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 		ProbeTimeout: probeTimeout,
 		Quiet:        Quiet(),
 		Local:        localFlag,
+		SkipDeps:     skipDepsFlag,
+		From:         fromFlag,
 	})
 
 	if err != nil {
