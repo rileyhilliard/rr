@@ -170,4 +170,4 @@ rr --help           # General help
 rr <command> --help # Command-specific help
 ```
 
-Report issues: https://github.com/rileyhilliard/rr/issues
+Report issues: [GitHub Issues](https://github.com/rileyhilliard/rr/issues)

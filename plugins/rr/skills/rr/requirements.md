@@ -182,7 +182,7 @@ hosts:
 
 When requirements are missing, rr shows actionable errors:
 
-```
+```text
 ✗ Requirements check failed on gpu-box:
   Missing: cargo, rustc
 

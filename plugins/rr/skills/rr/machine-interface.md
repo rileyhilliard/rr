@@ -114,7 +114,7 @@ rr init --non-interactive --host dev-box
 
 ## When to Use rr vs Local Execution
 
-```
+```text
 IF .rr.yaml exists AND rr status --machine shows healthy hosts:
   -> Use rr for tests, builds, remote commands
 

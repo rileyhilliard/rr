@@ -122,7 +122,8 @@ func (c *RequirementsCheck) Fix() error {
 }
 
 // NewRequirementsCheck creates a requirements check for a host.
-// If projectCfg is provided, requirements are merged from project, host, and task configs.
+// If projectCfg is provided, requirements are merged from project and host configs.
+// Note: Task-specific requirements are handled separately in the workflow phase.
 func NewRequirementsCheck(hostName string, hostCfg config.Host, conn *host.Connection, projectCfg *config.Config) *RequirementsCheck {
 	var projectReqs []string
 	if projectCfg != nil {

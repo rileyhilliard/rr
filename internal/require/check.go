@@ -63,7 +63,10 @@ func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName st
 		return results, nil
 	}
 
-	// Check uncached requirements in parallel
+	// Check uncached requirements in parallel with bounded concurrency.
+	// Limit to 5 concurrent SSH calls to avoid overwhelming the connection.
+	const maxConcurrent = 5
+	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -71,6 +74,8 @@ func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName st
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
 
 			result := CheckRequirement(client, reqs[i])
 
