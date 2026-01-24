@@ -3,8 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/spf13/viper"
@@ -408,14 +410,59 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 	// Set up duration parsing for lock timeouts
 	setDurationDefaults(v)
 
-	// Unmarshal into config
-	if err := v.Unmarshal(cfg); err != nil {
+	// Unmarshal with custom decoder for DependencyItem
+	if err := v.Unmarshal(cfg, viper.DecodeHook(
+		mapstructure.ComposeDecodeHookFunc(
+			mapstructure.StringToTimeDurationHookFunc(),
+			dependencyItemDecodeHook(),
+		),
+	)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Config file has some issues",
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
 	return cfg, nil
+}
+
+// dependencyItemDecodeHook returns a decode hook that handles DependencyItem
+// from both string and map formats.
+func dependencyItemDecodeHook() mapstructure.DecodeHookFunc {
+	return func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+		// Only handle conversion to DependencyItem
+		if to != reflect.TypeOf(DependencyItem{}) {
+			return data, nil
+		}
+
+		// Handle string -> DependencyItem
+		if from.Kind() == reflect.String {
+			return DependencyItem{Task: data.(string)}, nil
+		}
+
+		// Handle map -> DependencyItem
+		if from.Kind() == reflect.Map {
+			d := DependencyItem{}
+			m, ok := data.(map[string]interface{})
+			if !ok {
+				return data, nil
+			}
+			if parallel, ok := m["parallel"]; ok {
+				switch p := parallel.(type) {
+				case []interface{}:
+					for _, item := range p {
+						if s, ok := item.(string); ok {
+							d.Parallel = append(d.Parallel, s)
+						}
+					}
+				case []string:
+					d.Parallel = p
+				}
+			}
+			return d, nil
+		}
+
+		return data, nil
+	}
 }
 
 // setDurationDefaults configures viper to handle duration strings for project config.

@@ -109,6 +109,11 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'require' section in your .rr.yaml.")
 	}
 
+	// Validate dependency references and detect cycles
+	if err := ValidateDependencyGraph(cfg); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your task dependencies in .rr.yaml.")
+	}
+
 	return nil
 }
 
@@ -281,6 +286,7 @@ func validateTask(name string, task TaskConfig) error {
 	hasRun := task.Run != ""
 	hasSteps := len(task.Steps) > 0
 	hasParallel := len(task.Parallel) > 0
+	hasDepends := len(task.Depends) > 0
 
 	// Parallel tasks are mutually exclusive with run and steps
 	if hasParallel {
@@ -290,13 +296,35 @@ func validateTask(name string, task TaskConfig) error {
 		if hasSteps {
 			return fmt.Errorf("task '%s' has both 'parallel' and 'steps' - parallel tasks can't have steps", name)
 		}
+		if hasDepends {
+			return fmt.Errorf("task '%s' has both 'parallel' and 'depends' - parallel tasks can't have dependencies (use depends inside the subtasks instead)", name)
+		}
 		// Parallel-specific validation is done separately after all tasks are known
 		return nil
 	}
 
-	// Non-parallel tasks: must have either run or steps, not both
+	// Tasks with dependencies can optionally have a run command or steps
+	// (depends-only tasks just orchestrate their dependencies)
+	if hasDepends {
+		// Can have run, steps, or neither - but not both
+		if hasRun && hasSteps {
+			return fmt.Errorf("task '%s' has both 'run' and 'steps' - pick one or the other", name)
+		}
+		// Validate steps if present
+		for i, step := range task.Steps {
+			if step.Run == "" {
+				return fmt.Errorf("task '%s' step %d is missing the 'run' command", name, i+1)
+			}
+			if step.OnFail != "" && step.OnFail != "stop" && step.OnFail != "continue" {
+				return fmt.Errorf("task '%s' step %d has on_fail='%s' but it needs to be 'stop' or 'continue'", name, i+1, step.OnFail)
+			}
+		}
+		return nil
+	}
+
+	// Non-parallel, non-depends tasks: must have either run or steps, not both
 	if !hasRun && !hasSteps {
-		return fmt.Errorf("task '%s' needs either 'run' (single command), 'steps' (multiple commands), or 'parallel' (concurrent subtasks)", name)
+		return fmt.Errorf("task '%s' needs either 'run' (single command), 'steps' (multiple commands), 'parallel' (concurrent subtasks), or 'depends' (task dependencies)", name)
 	}
 
 	if hasRun && hasSteps {
@@ -485,6 +513,110 @@ func validateRequireList(context string, reqs []string) error {
 	for i, req := range reqs {
 		if strings.TrimSpace(req) == "" {
 			return fmt.Errorf("%s has an empty require entry at position %d", context, i+1)
+		}
+	}
+	return nil
+}
+
+// ValidateDependencyGraph validates task dependency references and detects cycles.
+// It checks:
+// - All dependency references point to existing tasks
+// - No self-references
+// - No circular dependencies (A depends on B, B depends on A)
+func ValidateDependencyGraph(cfg *Config) error {
+	if cfg == nil || cfg.Tasks == nil {
+		return nil
+	}
+
+	// First pass: validate all dependency references exist
+	for name := range cfg.Tasks {
+		task := cfg.Tasks[name]
+		if err := validateDependencies(name, task, cfg.Tasks); err != nil {
+			return err
+		}
+	}
+
+	// Second pass: detect circular dependencies using DFS
+	visited := make(map[string]bool)
+	inStack := make(map[string]bool)
+	var path []string
+
+	var detectCycle func(taskName string) error
+	detectCycle = func(taskName string) error {
+		if inStack[taskName] {
+			// Found a cycle - build the cycle path for the error message
+			cycleStart := -1
+			for i, p := range path {
+				if p == taskName {
+					cycleStart = i
+					break
+				}
+			}
+			cyclePath := make([]string, len(path[cycleStart:])+1)
+			copy(cyclePath, path[cycleStart:])
+			cyclePath[len(cyclePath)-1] = taskName
+			return fmt.Errorf("circular dependency detected: %s", strings.Join(cyclePath, " -> "))
+		}
+
+		if visited[taskName] {
+			return nil
+		}
+
+		visited[taskName] = true
+		inStack[taskName] = true
+		path = append(path, taskName)
+
+		task, ok := cfg.Tasks[taskName]
+		if !ok {
+			// Task doesn't exist - already caught in validateDependencies
+			return nil
+		}
+
+		for _, dep := range task.Depends {
+			for _, depName := range dep.TaskNames() {
+				if err := detectCycle(depName); err != nil {
+					return err
+				}
+			}
+		}
+
+		inStack[taskName] = false
+		path = path[:len(path)-1]
+		return nil
+	}
+
+	for name := range cfg.Tasks {
+		visited = make(map[string]bool)
+		inStack = make(map[string]bool)
+		path = nil
+		if err := detectCycle(name); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateDependencies validates the dependency references for a single task.
+func validateDependencies(taskName string, task TaskConfig, allTasks map[string]TaskConfig) error {
+	for i, dep := range task.Depends {
+		taskNames := dep.TaskNames()
+		if len(taskNames) == 0 {
+			return fmt.Errorf("task '%s' has an empty dependency at position %d", taskName, i+1)
+		}
+
+		for _, depName := range taskNames {
+			// Check for self-reference
+			if depName == taskName {
+				return fmt.Errorf("task '%s' can't depend on itself", taskName)
+			}
+
+			// Check dependency exists
+			if _, ok := allTasks[depName]; !ok {
+				available := getTaskNames(allTasks)
+				return fmt.Errorf("task '%s' depends on non-existent task '%s'. Available tasks: %s",
+					taskName, depName, strings.Join(available, ", "))
+			}
 		}
 	}
 	return nil

@@ -272,3 +272,337 @@ func TestIsParallelTask(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDependencyGraph(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *Config
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "nil config",
+			config:  nil,
+			wantErr: false,
+		},
+		{
+			name:    "no tasks",
+			config:  &Config{},
+			wantErr: false,
+		},
+		{
+			name: "valid linear dependency chain",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"lint":      {Run: "golangci-lint run"},
+					"typecheck": {Run: "mypy ."},
+					"test":      {Run: "pytest"},
+					"ci": {
+						Depends: []DependencyItem{
+							{Task: "lint"},
+							{Task: "typecheck"},
+							{Task: "test"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid parallel group dependency",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"lint":      {Run: "golangci-lint run"},
+					"typecheck": {Run: "mypy ."},
+					"test":      {Run: "pytest"},
+					"ci": {
+						Depends: []DependencyItem{
+							{Parallel: []string{"lint", "typecheck"}},
+							{Task: "test"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "depends-only task (no run command)",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"lint": {Run: "golangci-lint run"},
+					"test": {Run: "pytest"},
+					"ci": {
+						Depends: []DependencyItem{
+							{Task: "lint"},
+							{Task: "test"},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "depends with run command",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"lint": {Run: "golangci-lint run"},
+					"deploy": {
+						Depends: []DependencyItem{{Task: "lint"}},
+						Run:     "./deploy.sh",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "self-reference dependency",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"recursive": {
+						Depends: []DependencyItem{{Task: "recursive"}},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "can't depend on itself",
+		},
+		{
+			name: "non-existent dependency reference",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"test": {Run: "pytest"},
+					"ci": {
+						Depends: []DependencyItem{
+							{Task: "test"},
+							{Task: "missing"},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "non-existent task 'missing'",
+		},
+		{
+			name: "circular dependency - direct",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"a": {
+						Depends: []DependencyItem{{Task: "b"}},
+						Run:     "echo a",
+					},
+					"b": {
+						Depends: []DependencyItem{{Task: "a"}},
+						Run:     "echo b",
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "circular dependency",
+		},
+		{
+			name: "circular dependency - transitive",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"a": {
+						Depends: []DependencyItem{{Task: "b"}},
+						Run:     "echo a",
+					},
+					"b": {
+						Depends: []DependencyItem{{Task: "c"}},
+						Run:     "echo b",
+					},
+					"c": {
+						Depends: []DependencyItem{{Task: "a"}},
+						Run:     "echo c",
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "circular dependency",
+		},
+		{
+			name: "parallel group with non-existent task",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"lint": {Run: "golangci-lint run"},
+					"ci": {
+						Depends: []DependencyItem{
+							{Parallel: []string{"lint", "missing"}},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "non-existent task 'missing'",
+		},
+		{
+			name: "diamond dependency (deduplication case)",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"base":  {Run: "echo base"},
+					"left":  {Depends: []DependencyItem{{Task: "base"}}, Run: "echo left"},
+					"right": {Depends: []DependencyItem{{Task: "base"}}, Run: "echo right"},
+					"top": {
+						Depends: []DependencyItem{
+							{Task: "left"},
+							{Task: "right"},
+						},
+					},
+				},
+			},
+			wantErr: false, // Not a cycle, just shared dependency
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDependencyGraph(tt.config)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidateTask_Depends(t *testing.T) {
+	tests := []struct {
+		name        string
+		task        TaskConfig
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "depends only (no run)",
+			task: TaskConfig{
+				Depends: []DependencyItem{{Task: "lint"}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "depends with run",
+			task: TaskConfig{
+				Depends: []DependencyItem{{Task: "lint"}},
+				Run:     "./deploy.sh",
+			},
+			wantErr: false,
+		},
+		{
+			name: "depends with steps",
+			task: TaskConfig{
+				Depends: []DependencyItem{{Task: "lint"}},
+				Steps: []TaskStep{
+					{Name: "step1", Run: "echo step1"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "depends with both run and steps",
+			task: TaskConfig{
+				Depends: []DependencyItem{{Task: "lint"}},
+				Run:     "echo run",
+				Steps:   []TaskStep{{Name: "step1", Run: "echo step1"}},
+			},
+			wantErr:     true,
+			errContains: "both 'run' and 'steps'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTask("test-task", tt.task)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidate_DependencyIntegration(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *Config
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "full valid config with dependencies",
+			config: &Config{
+				Version: 1,
+				Tasks: map[string]TaskConfig{
+					"lint":      {Run: "golangci-lint run"},
+					"typecheck": {Run: "mypy ."},
+					"test":      {Run: "pytest"},
+					"ci": {
+						Description: "Run full CI pipeline",
+						Depends: []DependencyItem{
+							{Parallel: []string{"lint", "typecheck"}},
+							{Task: "test"},
+						},
+					},
+					"deploy": {
+						Description: "Deploy after CI",
+						Depends:     []DependencyItem{{Task: "ci"}},
+						Run:         "./deploy.sh",
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "dependency with fail_fast",
+			config: &Config{
+				Version: 1,
+				Tasks: map[string]TaskConfig{
+					"lint": {Run: "golangci-lint run"},
+					"test": {Run: "pytest"},
+					"ci": {
+						Depends:  []DependencyItem{{Task: "lint"}, {Task: "test"}},
+						FailFast: true,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "parallel task can't have depends",
+			config: &Config{
+				Version: 1,
+				Tasks: map[string]TaskConfig{
+					"lint": {Run: "golangci-lint run"},
+					"test": {Run: "pytest"},
+					"all": {
+						Parallel: []string{"lint", "test"},
+						Depends:  []DependencyItem{{Task: "lint"}},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "both 'parallel' and 'depends'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Validate(tt.config)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
