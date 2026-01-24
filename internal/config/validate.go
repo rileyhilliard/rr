@@ -281,6 +281,19 @@ func validateShellFormat(hostName, shell string) error {
 	return nil
 }
 
+// validateSteps checks that all steps in a task are valid.
+func validateSteps(name string, steps []TaskStep) error {
+	for i, step := range steps {
+		if step.Run == "" {
+			return fmt.Errorf("task '%s' step %d is missing the 'run' command", name, i+1)
+		}
+		if step.OnFail != "" && step.OnFail != "stop" && step.OnFail != "continue" {
+			return fmt.Errorf("task '%s' step %d has on_fail='%s' but it needs to be 'stop' or 'continue'", name, i+1, step.OnFail)
+		}
+	}
+	return nil
+}
+
 // validateTask checks a single task configuration.
 func validateTask(name string, task TaskConfig) error {
 	hasRun := task.Run != ""
@@ -310,16 +323,7 @@ func validateTask(name string, task TaskConfig) error {
 		if hasRun && hasSteps {
 			return fmt.Errorf("task '%s' has both 'run' and 'steps' - pick one or the other", name)
 		}
-		// Validate steps if present
-		for i, step := range task.Steps {
-			if step.Run == "" {
-				return fmt.Errorf("task '%s' step %d is missing the 'run' command", name, i+1)
-			}
-			if step.OnFail != "" && step.OnFail != "stop" && step.OnFail != "continue" {
-				return fmt.Errorf("task '%s' step %d has on_fail='%s' but it needs to be 'stop' or 'continue'", name, i+1, step.OnFail)
-			}
-		}
-		return nil
+		return validateSteps(name, task.Steps)
 	}
 
 	// Non-parallel, non-depends tasks: must have either run or steps, not both
@@ -332,13 +336,8 @@ func validateTask(name string, task TaskConfig) error {
 	}
 
 	// Validate steps if present
-	for i, step := range task.Steps {
-		if step.Run == "" {
-			return fmt.Errorf("task '%s' step %d is missing the 'run' command", name, i+1)
-		}
-		if step.OnFail != "" && step.OnFail != "stop" && step.OnFail != "continue" {
-			return fmt.Errorf("task '%s' step %d has on_fail='%s' but it needs to be 'stop' or 'continue'", name, i+1, step.OnFail)
-		}
+	if err := validateSteps(name, task.Steps); err != nil {
+		return err
 	}
 
 	// Validate task-level require list
@@ -586,7 +585,7 @@ func ValidateDependencyGraph(cfg *Config) error {
 	}
 
 	for name := range cfg.Tasks {
-		visited = make(map[string]bool)
+		// Reset per-traversal state but keep visited across iterations
 		inStack = make(map[string]bool)
 		path = nil
 		if err := detectCycle(name); err != nil {

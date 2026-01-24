@@ -167,10 +167,10 @@ func RunTask(opts TaskOptions) (int, error) {
 // runTaskWithDeps executes a task and its dependencies using the dependency executor.
 func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOptions) (int, error) {
 	// Create resolver and build execution plan
+	// Note: SkipDeps is not passed here because this function is only called when !opts.SkipDeps
 	resolver := deps.NewResolver(wf.Resolved.Project.Tasks)
 	plan, err := resolver.Resolve(opts.TaskName, deps.ResolveOptions{
-		SkipDeps: opts.SkipDeps,
-		From:     opts.From,
+		From: opts.From,
 	})
 	if err != nil {
 		return 1, err
@@ -211,6 +211,16 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 
 	execStart := time.Now()
 
+	// Create execution context with optional timeout
+	ctx := context.Background()
+	if task.Timeout != "" {
+		if d, parseErr := time.ParseDuration(task.Timeout); parseErr == nil {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, d)
+			defer cancel()
+		}
+	}
+
 	// Create and run executor
 	executor := deps.NewExecutor(wf.Resolved, wf.Conn, deps.ExecutorOptions{
 		FailFast:      task.FailFast,
@@ -222,7 +232,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 		StageHandler:  &depStageHandler{quiet: opts.Quiet},
 	})
 
-	result, err := executor.Execute(context.Background(), plan)
+	result, err := executor.Execute(ctx, plan)
 	execDuration := time.Since(execStart)
 
 	if err != nil {

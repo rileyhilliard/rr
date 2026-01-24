@@ -119,11 +119,21 @@ func (r *Resolver) buildPlan(taskName string, plan *ExecutionPlan, seen map[stri
 					return err
 				}
 			}
-			// Add parallel stage
-			plan.Stages = append(plan.Stages, Stage{
-				Tasks:    dep.Parallel,
-				Parallel: true,
-			})
+			// Filter to only include tasks that have executable work
+			var executableTasks []string
+			for _, pTask := range dep.Parallel {
+				pTaskCfg := r.tasks[pTask]
+				if pTaskCfg.Run != "" || len(pTaskCfg.Steps) > 0 {
+					executableTasks = append(executableTasks, pTask)
+				}
+			}
+			// Only add parallel stage if there are executable tasks
+			if len(executableTasks) > 0 {
+				plan.Stages = append(plan.Stages, Stage{
+					Tasks:    executableTasks,
+					Parallel: true,
+				})
+			}
 		} else {
 			// Simple dependency - resolve its deps first, then add it
 			if err := r.buildPlan(dep.Task, plan, seen); err != nil {

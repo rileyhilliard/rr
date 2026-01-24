@@ -434,31 +434,9 @@ func dependencyItemDecodeHook() mapstructure.DecodeHookFunc {
 			return data, nil
 		}
 
-		// Handle string -> DependencyItem
-		if from.Kind() == reflect.String {
-			return DependencyItem{Task: data.(string)}, nil
-		}
-
-		// Handle map -> DependencyItem
-		if from.Kind() == reflect.Map {
-			d := DependencyItem{}
-			m, ok := data.(map[string]interface{})
-			if !ok {
-				return data, nil
-			}
-			if parallel, ok := m["parallel"]; ok {
-				switch p := parallel.(type) {
-				case []interface{}:
-					for _, item := range p {
-						if s, ok := item.(string); ok {
-							d.Parallel = append(d.Parallel, s)
-						}
-					}
-				case []string:
-					d.Parallel = p
-				}
-			}
-			return d, nil
+		// Delegate to the shared conversion function for supported types
+		if from.Kind() == reflect.String || from.Kind() == reflect.Map {
+			return DependencyItemFromInterface(data)
 		}
 
 		return data, nil

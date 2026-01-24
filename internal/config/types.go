@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -200,6 +201,7 @@ func (d *DependencyItem) UnmarshalYAML(value *yaml.Node) error {
 
 // DependencyItemFromInterface converts a generic interface (from viper/mapstructure)
 // to a DependencyItem. Handles both string and map formats.
+// Returns an error if the input type is unsupported or contains invalid elements.
 func DependencyItemFromInterface(v interface{}) (DependencyItem, error) {
 	switch val := v.(type) {
 	case string:
@@ -209,18 +211,22 @@ func DependencyItemFromInterface(v interface{}) (DependencyItem, error) {
 		if parallel, ok := val["parallel"]; ok {
 			switch p := parallel.(type) {
 			case []interface{}:
-				for _, item := range p {
-					if s, ok := item.(string); ok {
-						d.Parallel = append(d.Parallel, s)
+				for i, item := range p {
+					s, ok := item.(string)
+					if !ok {
+						return DependencyItem{}, fmt.Errorf("parallel[%d]: expected string, got %T", i, item)
 					}
+					d.Parallel = append(d.Parallel, s)
 				}
 			case []string:
 				d.Parallel = p
+			default:
+				return DependencyItem{}, fmt.Errorf("parallel: expected array of strings, got %T", parallel)
 			}
 		}
 		return d, nil
 	default:
-		return DependencyItem{}, nil
+		return DependencyItem{}, fmt.Errorf("dependency: expected string or map, got %T", v)
 	}
 }
 
