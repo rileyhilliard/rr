@@ -223,13 +223,6 @@ func TestOutputManager_ProgressMode(t *testing.T) {
 	mgr.SetWriter(&buf)
 
 	mgr.TaskStarted("test", 0, "dev")
-
-	output := buf.String()
-	assert.Contains(t, output, "test")
-	assert.Contains(t, output, "[dev]")
-
-	buf.Reset()
-
 	mgr.TaskCompleted(TaskResult{
 		TaskName:  "test",
 		TaskIndex: 0,
@@ -237,8 +230,12 @@ func TestOutputManager_ProgressMode(t *testing.T) {
 		ExitCode:  0,
 	})
 
-	output = buf.String()
+	// Stop the animation goroutine before reading the buffer to avoid data race
+	mgr.Close()
+
+	output := buf.String()
 	assert.Contains(t, output, "test")
+	assert.Contains(t, output, "[dev]")
 }
 
 func TestOutputManager_Close(t *testing.T) {
