@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2064  # We intentionally expand trap variables at definition time
 #
 # End-to-end CLI test script for rr
 # Tests all CLI commands and flags against real hosts
@@ -113,7 +114,8 @@ run_test_contains() {
         return 1
     fi
 
-    if echo "$output" | grep -q "$expected"; then
+    # Use grep -F for fixed string matching and -- to prevent pattern as option
+    if echo "$output" | grep -qF -- "$expected"; then
         log_pass "$name"
         return 0
     else
@@ -239,6 +241,207 @@ test_completion_command() {
     run_test "completion powershell" 0 "$RR_BIN" completion powershell
 }
 
+# Test init command
+test_init_command() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Init Command"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    # Test --help
+    run_test_contains "init --help" "Creates a .rr.yaml" 0 "$RR_BIN" init --help
+
+    # Test init in empty directory with --non-interactive (succeeds, creates config without hosts)
+    run_test "init non-interactive without host" 0 \
+        env -C "$test_dir" RR_NON_INTERACTIVE=true "$RR_BIN" init --skip-probe
+
+    # Test init with existing config and no --force (should fail)
+    echo "version: 1" > "$test_dir/.rr.yaml"
+    run_test "init existing config no force (should fail)" 1 \
+        env -C "$test_dir" "$RR_BIN" init --non-interactive --host testhost --skip-probe
+
+    # Test init with --force overwrites existing config
+    run_test "init with --force overwrites" 0 \
+        env -C "$test_dir" HOME="$test_dir" "$RR_BIN" init --non-interactive --host testhost --skip-probe --force
+}
+
+# Test host add command (non-interactive)
+test_host_add_command() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Host Add Command"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+    mkdir -p "$test_dir/.rr"
+
+    # Test host add --help
+    run_test_contains "host add --help" "skip-probe" 0 "$RR_BIN" host add --help
+
+    # Test non-interactive host add with all flags
+    # shellcheck disable=SC2088  # Tilde is intentionally literal for remote expansion
+    run_test "host add non-interactive" 0 \
+        env HOME="$test_dir" "$RR_BIN" host add --name testhost --ssh "user@testserver" --dir "~/projects" --skip-probe
+
+    # Test host add with duplicate name (should fail)
+    run_test "host add duplicate (should fail)" 1 \
+        env HOME="$test_dir" "$RR_BIN" host add --name testhost --ssh "user@other" --skip-probe
+
+    # Verify host was added to config
+    run_test_contains "host add verify in list" "testhost" 0 \
+        env HOME="$test_dir" "$RR_BIN" host list
+
+    # Test host add with tags and env
+    run_test "host add with tags and env" 0 \
+        env HOME="$test_dir" "$RR_BIN" host add --name taggedhost --ssh "tagged@server" --tag gpu --tag fast --env "CUDA_VISIBLE_DEVICES=0" --skip-probe
+}
+
+# Test unlock command
+test_unlock_command() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Unlock Command"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Test unlock --help
+    run_test_contains "unlock --help" "--all" 0 "$RR_BIN" unlock --help
+
+    # Test unlock with invalid host (should fail)
+    run_test "unlock invalid host (should fail)" 1 "$RR_BIN" unlock nonexistenthost
+}
+
+# Test logs clean command
+test_logs_clean_command() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Logs Clean Command"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+    mkdir -p "$test_dir/.rr/logs"
+
+    # Test logs clean --help
+    run_test_contains "logs clean --help" "--older" 0 "$RR_BIN" logs clean --help
+    run_test_contains "logs clean --help shows --all" "--all" 0 "$RR_BIN" logs clean --help
+
+    # Test logs clean with no logs (should succeed with no-op)
+    run_test "logs clean empty" 0 env HOME="$test_dir" "$RR_BIN" logs clean
+
+    # Test logs clean --all on empty
+    run_test "logs clean --all empty" 0 env HOME="$test_dir" "$RR_BIN" logs clean --all
+
+    # Test logs clean --older with valid duration
+    run_test "logs clean --older 7d" 0 env HOME="$test_dir" "$RR_BIN" logs clean --older 7d
+
+    # Test logs clean --older with invalid duration (should fail)
+    run_test "logs clean --older invalid (should fail)" 1 "$RR_BIN" logs clean --older "badvalue"
+}
+
+# Test setup command (basic help only - requires SSH for full test)
+test_setup_command() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Setup Command"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Test setup --help
+    run_test_contains "setup --help" "SSH" 0 "$RR_BIN" setup --help
+
+    # Test setup with no args (should fail - requires host)
+    run_test "setup no args (should fail)" 1 "$RR_BIN" setup
+}
+
+# Test JSON output modes
+test_json_output() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing JSON Output Modes"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Test tasks --json
+    run_test_contains "tasks --json" "\"tasks\"" 0 "$RR_BIN" tasks --json
+
+    # Test host list --json (use temp home with hosts)
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+    mkdir -p "$test_dir/.rr"
+
+    # Add a host first
+    env HOME="$test_dir" "$RR_BIN" host add --name jsontest --ssh "test@server" --skip-probe >/dev/null 2>&1
+
+    run_test_contains "host list --json" "\"hosts\"" 0 \
+        env HOME="$test_dir" "$RR_BIN" host list --json
+
+    run_test_contains "host list --json has name" "jsontest" 0 \
+        env HOME="$test_dir" "$RR_BIN" host list --json
+}
+
+# Test --config flag
+test_config_flag() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing --config Flag"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    # Create a custom config as .rr.yaml in test dir (tasks command looks for .rr.yaml in cwd)
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  custom-task:
+    description: Custom task from custom config
+    run: echo custom-output
+EOF
+
+    # Test tasks lists custom task when in directory with .rr.yaml
+    run_test_contains "config: custom config tasks" "custom-task" 0 \
+        env -C "$test_dir" "$RR_BIN" tasks
+
+    # Test --config with invalid path from empty dir (should fail)
+    local empty_dir
+    empty_dir=$(mktemp -d)
+    run_test "config: invalid path (should fail)" 1 \
+        env -C "$empty_dir" "$RR_BIN" --config "/nonexistent/path.yaml" tasks
+    rm -rf "$empty_dir"
+}
+
+# Test --local flag with tasks
+test_local_flag() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing --local Flag"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: false
+tasks:
+  local-test:
+    run: echo local-test-output
+EOF
+
+    # Test --local forces local execution even when local_fallback is false
+    run_test_contains "local: --local flag works" "local-test-output" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" local-test --local
+}
+
 # Test sync command
 test_sync_command() {
     echo ""
@@ -324,6 +527,72 @@ test_parallel_execution() {
     run_test "parallel: quick-check" 0 "$RR_BIN" quick-check
 }
 
+# Test parallel task flags
+test_parallel_flags() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Parallel Task Flags"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Create temp config with parallel task
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  task1:
+    run: echo task1-done
+  task2:
+    run: echo task2-done
+  parallel-test:
+    description: Test parallel execution
+    parallel:
+      - task1
+      - task2
+    fail_fast: false
+EOF
+
+    # Test --dry-run flag (works without execution)
+    run_test_contains "parallel: --dry-run" "Dry run" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --dry-run
+
+    # Test --dry-run shows tasks
+    run_test_contains "parallel: --dry-run shows tasks" "task1" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --dry-run
+
+    if $QUICK_MODE; then
+        log_skip "parallel: --local (quick mode)"
+        log_skip "parallel: --fail-fast (quick mode)"
+        log_skip "parallel: --max-parallel (quick mode)"
+        log_skip "parallel: --no-logs (quick mode)"
+        log_skip "parallel: --stream (quick mode)"
+        return
+    fi
+
+    # Test --local flag with parallel tasks (check summary shows success)
+    run_test_contains "parallel: --local" "passed" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --local
+
+    # Test --fail-fast flag
+    run_test "parallel: --fail-fast" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --local --fail-fast
+
+    # Test --max-parallel flag
+    run_test "parallel: --max-parallel 1" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --local --max-parallel 1
+
+    # Test --no-logs flag
+    run_test "parallel: --no-logs" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --local --no-logs
+
+    # Test --stream flag (check for task output in stream mode)
+    run_test_contains "parallel: --stream" "task1-done" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" parallel-test --local --stream
+}
+
 # Test task dependencies
 test_task_dependencies() {
     echo ""
@@ -334,7 +603,7 @@ test_task_dependencies() {
     # Create a temp directory for dependency test config
     local test_dir
     test_dir=$(mktemp -d)
-    trap 'rm -rf "$test_dir"' RETURN
+    trap "rm -rf '$test_dir'" RETURN
 
     # Create test config with dependent tasks
     cat > "$test_dir/.rr.yaml" << 'EOF'
@@ -395,6 +664,126 @@ EOF
     run_test_contains "deps: parallel group" "lint-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" ci --local
     run_test_contains "deps: parallel group (typecheck)" "typecheck-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" ci --local
     run_test_contains "deps: parallel group (test)" "test-output" 0 "$RR_BIN" --config "$test_dir/.rr.yaml" ci --local
+}
+
+# Test --from flag for dependencies
+test_from_flag() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing --from Flag for Dependencies"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  step1:
+    run: echo step1-output
+  step2:
+    depends:
+      - step1
+    run: echo step2-output
+  step3:
+    depends:
+      - step2
+    run: echo step3-output
+EOF
+
+    # Test --from flag starts from specified task
+    local output
+    output=$("$RR_BIN" --config "$test_dir/.rr.yaml" step3 --local --from step2 2>&1)
+
+    # Should NOT contain step1-output (skipped)
+    if [[ "$output" == *"step1-output"* ]]; then
+        log_fail "from: --from step2 should skip step1"
+    else
+        log_pass "from: --from step2 skips step1"
+    fi
+
+    # Should contain step2-output
+    if [[ "$output" == *"step2-output"* ]]; then
+        log_pass "from: --from step2 runs step2"
+    else
+        log_fail "from: --from step2 should run step2"
+    fi
+
+    # Test --from help is shown
+    run_test_contains "from: help shows --from flag" "--from" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" step3 --help
+}
+
+# Test multi-step tasks
+test_multi_step_tasks() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Multi-Step Tasks"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  multi-step:
+    description: Multi-step task
+    steps:
+      - name: Step 1
+        run: echo step-one
+      - name: Step 2
+        run: echo step-two
+      - name: Step 3
+        run: echo step-three
+EOF
+
+    # Test multi-step task execution
+    local output
+    output=$("$RR_BIN" --config "$test_dir/.rr.yaml" multi-step --local 2>&1)
+
+    if [[ "$output" == *"step-one"* ]] && [[ "$output" == *"step-two"* ]] && [[ "$output" == *"step-three"* ]]; then
+        log_pass "multi-step: all steps execute"
+    else
+        log_fail "multi-step: all steps should execute"
+        echo "$output" | head -10 | sed 's/^/  /'
+    fi
+
+    # Test help shows steps
+    run_test_contains "multi-step: help shows description" "Multi-step task" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" multi-step --help
+}
+
+# Test task argument passing
+test_task_arguments() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Task Argument Passing"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+
+    cat > "$test_dir/.rr.yaml" << 'EOF'
+version: 1
+local_fallback: true
+tasks:
+  echo-args:
+    description: Echo arguments
+    run: echo
+EOF
+
+    # Test passing arguments to tasks
+    run_test_contains "args: pass extra args" "extra-arg" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" echo-args --local "extra-arg"
+
+    run_test_contains "args: pass multiple args" "arg2" 0 \
+        "$RR_BIN" --config "$test_dir/.rr.yaml" echo-args --local "arg1" "arg2"
 }
 
 # Test error cases
@@ -491,12 +880,24 @@ main() {
     test_host_command
     test_logs_command
     test_completion_command
+    test_init_command
+    test_host_add_command
+    test_unlock_command
+    test_logs_clean_command
+    test_setup_command
+    test_json_output
+    test_config_flag
+    test_local_flag
     test_sync_command
     test_exec_command
     test_run_command
     test_task_execution
     test_parallel_execution
+    test_parallel_flags
     test_task_dependencies
+    test_from_flag
+    test_multi_step_tasks
+    test_task_arguments
     test_error_cases
 
     print_summary
