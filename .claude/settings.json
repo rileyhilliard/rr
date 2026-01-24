@@ -1,0 +1,42 @@
+{
+  "_readme": "Claude Code configuration. Machine-specific overrides go in settings.local.json (gitignored).",
+  "extraKnownMarketplaces": {
+    "claude-essentials": {
+      "source": {
+        "source": "github",
+        "repo": "rileyhilliard/claude-essentials"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ce@claude-essentials": true
+  },
+  "permissions": {
+    "allow": [
+      "Skill",
+      "WebFetch",
+      "WebSearch",
+      "Bash(git:*)",
+      "Bash(make:*)",
+      "Bash(go:*)",
+      "Bash(golangci-lint:*)",
+      "Bash(gofmt:*)",
+      "Bash(goimports:*)",
+      "Bash(rr:*)",
+      "Bash(./rr:*)",
+      "Bash(lefthook:*)",
+      "Bash(gh:*)",
+      "Bash(rsync:*)",
+      "Bash(ssh:*)",
+      "Bash(./scripts/*.sh:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf .)",
+      "Bash(git push --force)",
+      "Bash(git push -f)",
+      "Bash(git reset --hard)"
+    ]
+  }
+}
