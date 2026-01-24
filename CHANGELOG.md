@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-01-24
+
+### Added
+
+- **Task dependencies** - Define task execution order with `depends` field. Tasks run their dependencies first, then execute their own command. Supports linear chains (`depends: [lint, test, build]`) and parallel groups (`depends: [{parallel: [lint, typecheck]}, test]`).
+- **Orchestrator tasks** - Tasks with only `depends` and no `run` command act as pure orchestrators, grouping other tasks without executing anything themselves.
+- **Dependency CLI flags** - New `--skip-deps` flag skips dependencies and runs only the target task. New `--from <task>` flag starts execution from a specific task in the chain.
+- **Remote environment bootstrap** - New `require` field declares tools that must exist before running commands. Supports project-level, host-level, and task-level requirements. Missing tools trigger actionable error messages with install suggestions.
+
+### Fixed
+
+- **CI test output** - Test failures now show all failure types in output instead of truncating.
+
 ## [0.14.2] - 2026-01-21
 
 ### Fixed
