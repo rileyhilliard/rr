@@ -208,21 +208,23 @@ func DependencyItemFromInterface(v interface{}) (DependencyItem, error) {
 		return DependencyItem{Task: val}, nil
 	case map[string]interface{}:
 		d := DependencyItem{}
-		if parallel, ok := val["parallel"]; ok {
-			switch p := parallel.(type) {
-			case []interface{}:
-				for i, item := range p {
-					s, ok := item.(string)
-					if !ok {
-						return DependencyItem{}, fmt.Errorf("parallel[%d]: expected string, got %T", i, item)
-					}
-					d.Parallel = append(d.Parallel, s)
+		parallel, ok := val["parallel"]
+		if !ok {
+			return DependencyItem{}, fmt.Errorf("dependency map must contain 'parallel' key")
+		}
+		switch p := parallel.(type) {
+		case []interface{}:
+			for i, item := range p {
+				s, ok := item.(string)
+				if !ok {
+					return DependencyItem{}, fmt.Errorf("parallel[%d]: expected string, got %T", i, item)
 				}
-			case []string:
-				d.Parallel = p
-			default:
-				return DependencyItem{}, fmt.Errorf("parallel: expected array of strings, got %T", parallel)
+				d.Parallel = append(d.Parallel, s)
 			}
+		case []string:
+			d.Parallel = p
+		default:
+			return DependencyItem{}, fmt.Errorf("parallel: expected array of strings, got %T", parallel)
 		}
 		return d, nil
 	default:

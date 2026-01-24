@@ -214,7 +214,10 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	// Create execution context with optional timeout
 	ctx := context.Background()
 	if task.Timeout != "" {
-		if d, parseErr := time.ParseDuration(task.Timeout); parseErr == nil {
+		d, parseErr := time.ParseDuration(task.Timeout)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: invalid timeout '%s': %v\n", task.Timeout, parseErr)
+		} else {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, d)
 			defer cancel()
