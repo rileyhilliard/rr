@@ -65,6 +65,7 @@ func RunTask(opts TaskOptions) (int, error) {
 		Quiet:        opts.Quiet,
 		Local:        opts.Local,
 		Command:      opts.TaskName,
+		TaskName:     opts.TaskName, // For task-specific requirements
 	})
 	if err != nil {
 		return 1, err

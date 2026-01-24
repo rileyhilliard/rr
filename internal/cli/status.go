@@ -90,7 +90,7 @@ func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
 
 	timeout := host.DefaultProbeTimeout
 
-	for name, h := range hosts {
+	for name := range hosts {
 		wg.Add(1)
 		go func(hostName string, hostCfg config.Host) {
 			defer wg.Done()
@@ -103,7 +103,7 @@ func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
 				Aliases:  aliasResults,
 			}
 			mu.Unlock()
-		}(name, h)
+		}(name, hosts[name])
 	}
 
 	wg.Wait()

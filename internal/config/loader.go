@@ -133,9 +133,10 @@ func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
 	}
 
 	// Expand variables in host directories
-	for name, host := range cfg.Hosts {
-		host.Dir = ExpandRemote(host.Dir)
-		cfg.Hosts[name] = host
+	for name := range cfg.Hosts {
+		h := cfg.Hosts[name]
+		h.Dir = ExpandRemote(h.Dir)
+		cfg.Hosts[name] = h
 	}
 
 	return cfg, nil

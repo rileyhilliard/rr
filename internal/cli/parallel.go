@@ -311,10 +311,10 @@ func renderDryRunPlan(taskName string, tasks []parallel.TaskInfo, hosts map[stri
 	if len(hosts) == 0 {
 		fmt.Println("  (local execution)")
 	} else {
-		for name, host := range hosts {
+		for name := range hosts {
 			fmt.Printf("  - %s", name)
-			if len(host.Tags) > 0 {
-				fmt.Printf(" [%s]", host.Tags)
+			if len(hosts[name].Tags) > 0 {
+				fmt.Printf(" [%s]", hosts[name].Tags)
 			}
 			fmt.Println()
 		}

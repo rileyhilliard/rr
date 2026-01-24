@@ -11,6 +11,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
+	"github.com/rileyhilliard/rr/internal/require"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"golang.org/x/term"
@@ -18,15 +19,17 @@ import (
 
 // WorkflowOptions configures workflow setup behavior.
 type WorkflowOptions struct {
-	Host         string        // Preferred host name
-	Tag          string        // Filter hosts by tag
-	ProbeTimeout time.Duration // Override SSH probe timeout
-	SkipSync     bool          // Skip file sync phase
-	SkipLock     bool          // Skip lock acquisition
-	WorkingDir   string        // Override local working directory
-	Quiet        bool          // Minimize output
-	Local        bool          // Force local execution (skip remote hosts)
-	Command      string        // Command being run (stored in lock for monitoring)
+	Host             string        // Preferred host name
+	Tag              string        // Filter hosts by tag
+	ProbeTimeout     time.Duration // Override SSH probe timeout
+	SkipSync         bool          // Skip file sync phase
+	SkipLock         bool          // Skip lock acquisition
+	SkipRequirements bool          // Skip requirement checks
+	WorkingDir       string        // Override local working directory
+	Quiet            bool          // Minimize output
+	Local            bool          // Force local execution (skip remote hosts)
+	Command          string        // Command being run (stored in lock for monitoring)
+	TaskName         string        // Task name for task-specific requirements
 }
 
 // WorkflowContext holds state from workflow setup for use during execution.
@@ -384,11 +387,65 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 		}
 	}
 
-	// Phase 3: Sync (same for both paths)
+	// Phase 3: Check requirements (before sync)
+	if err := requirementsPhase(ctx, opts); err != nil {
+		ctx.Close()
+		return nil, err
+	}
+
+	// Phase 4: Sync (same for both paths)
 	if err := syncPhase(ctx, opts); err != nil {
 		ctx.Close()
 		return nil, err
 	}
 
 	return ctx, nil
+}
+
+// requirementsPhase verifies that required tools are available on the remote.
+func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
+	// Skip for local execution or if explicitly disabled
+	if ctx.Conn.IsLocal || opts.SkipRequirements {
+		return nil
+	}
+
+	// Gather requirements from all sources
+	var projectReqs, taskReqs []string
+	if ctx.Resolved.Project != nil {
+		projectReqs = ctx.Resolved.Project.Require
+		if opts.TaskName != "" {
+			if task, ok := ctx.Resolved.Project.Tasks[opts.TaskName]; ok {
+				taskReqs = task.Require
+			}
+		}
+	}
+	hostReqs := ctx.Conn.Host.Require
+
+	// Merge requirements (project, host, task) with deduplication
+	reqs := require.Merge(projectReqs, hostReqs, taskReqs)
+	if len(reqs) == 0 {
+		return nil
+	}
+
+	// Check requirements with caching
+	results, err := require.CheckAll(ctx.Conn.Client, reqs, require.GlobalCache(), ctx.Conn.Name)
+	if err != nil {
+		return err
+	}
+
+	// Filter to missing requirements
+	missing := require.FilterMissing(results)
+	if len(missing) == 0 {
+		if !opts.Quiet {
+			ctx.PhaseDisplay.RenderSuccess("Requirements verified", 0)
+		}
+		return nil
+	}
+
+	// For now, just report missing requirements as an error
+	// TODO: Add interactive installation prompt (similar to fix.go HandleMissingTool)
+	missingStr := require.FormatMissing(missing)
+	return errors.New(errors.ErrExec,
+		"Missing required tools: "+missingStr,
+		"Install the missing tools or remove them from require list. Use --skip-requirements to bypass.")
 }
