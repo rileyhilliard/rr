@@ -256,6 +256,7 @@ Missing tools trigger actionable error messages. Tools with built-in installers 
 | Problem | Fix |
 |---------|-----|
 | SSH fails | Check `ssh <alias>` manually, verify `~/.ssh/config` |
+| "handshake failed" but ssh works | Key not in agent: `ssh-add ~/.ssh/id_rsa`, add `AddKeysToAgent yes` to SSH config |
 | "command not found" | Add `setup_commands` or check `require` config |
 | Sync slow | Add large dirs to `sync.exclude` |
 | Lock stuck | `rr unlock` |

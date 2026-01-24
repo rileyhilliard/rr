@@ -124,9 +124,13 @@ Host devbox
     HostName 192.168.1.50
     User riley
     IdentityFile ~/.ssh/id_ed25519
+    AddKeysToAgent yes
+    UseKeychain yes
 ```
 
 Now `ssh devbox` connects to `riley@192.168.1.50` using your key.
+
+**Important:** The `AddKeysToAgent` and `UseKeychain` options (macOS) ensure your key is automatically loaded into the SSH agent. This is required for rr to work with passphrase-protected keys, since rr cannot prompt for passphrases interactively.
 
 The `IdentityFile` line tells SSH which private key to use. This is what makes the connection passwordless (assuming you've copied the public key to the remote with `ssh-copy-id`).
 
@@ -139,11 +143,15 @@ Host devbox-lan
     HostName 192.168.1.50
     User riley
     IdentityFile ~/.ssh/id_ed25519
+    AddKeysToAgent yes
+    UseKeychain yes
 
 Host devbox-tailscale
     HostName devbox.tailnet-name.ts.net
     User riley
     IdentityFile ~/.ssh/id_ed25519
+    AddKeysToAgent yes
+    UseKeychain yes
 ```
 
 Then in your global config (`~/.rr/config.yaml`), list both and rr will use whichever one is reachable:
