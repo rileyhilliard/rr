@@ -777,8 +777,8 @@ func promptAddMoreHosts() (bool, error) {
 // getExistingGlobalHostSSHAliases returns all SSH aliases already configured in global hosts.
 func getExistingGlobalHostSSHAliases(globalCfg *config.GlobalConfig) []string {
 	var aliases []string
-	for _, host := range globalCfg.Hosts {
-		aliases = append(aliases, host.SSH...)
+	for name := range globalCfg.Hosts {
+		aliases = append(aliases, globalCfg.Hosts[name].SSH...)
 	}
 	return aliases
 }

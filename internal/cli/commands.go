@@ -11,28 +11,30 @@ import (
 
 // Command-specific flags
 var (
-	runHostFlag          string
-	runTagFlag           string
-	runProbeTimeoutFlag  string
-	runLocalFlag         bool
-	execHostFlag         string
-	execTagFlag          string
-	execProbeTimeoutFlag string
-	execLocalFlag        bool
-	syncHostFlag         string
-	syncTagFlag          string
-	syncProbeTimeoutFlag string
-	syncDryRun           bool
-	initHostFlag         string
-	initRemoteDirFlag    string
-	initNameFlag         string
-	initForce            bool
-	initNonInteractive   bool
-	initSkipProbe        bool
-	monitorHostsFlag     string
-	monitorIntervalFlag  string
-	hostAddSkipProbe     bool
-	unlockAllFlag        bool
+	runHostFlag              string
+	runTagFlag               string
+	runProbeTimeoutFlag      string
+	runLocalFlag             bool
+	runSkipRequirementsFlag  bool
+	execHostFlag             string
+	execTagFlag              string
+	execProbeTimeoutFlag     string
+	execLocalFlag            bool
+	execSkipRequirementsFlag bool
+	syncHostFlag             string
+	syncTagFlag              string
+	syncProbeTimeoutFlag     string
+	syncDryRun               bool
+	initHostFlag             string
+	initRemoteDirFlag        string
+	initNameFlag             string
+	initForce                bool
+	initNonInteractive       bool
+	initSkipProbe            bool
+	monitorHostsFlag         string
+	monitorIntervalFlag      string
+	hostAddSkipProbe         bool
+	unlockAllFlag            bool
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -50,7 +52,7 @@ Examples:
   rr run --host mini "cargo test"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag)
+		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag)
 	},
 }
 
@@ -68,7 +70,7 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag)
+		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag)
 	},
 }
 
@@ -393,11 +395,13 @@ func init() {
 	runCmd.Flags().StringVar(&runTagFlag, "tag", "", "select host by tag")
 	runCmd.Flags().StringVar(&runProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	runCmd.Flags().BoolVar(&runLocalFlag, "local", false, "force local execution (skip remote hosts)")
+	runCmd.Flags().BoolVar(&runSkipRequirementsFlag, "skip-requirements", false, "skip requirement checks")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
 	execCmd.Flags().StringVar(&execTagFlag, "tag", "", "select host by tag")
 	execCmd.Flags().StringVar(&execProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
+	execCmd.Flags().BoolVar(&execSkipRequirementsFlag, "skip-requirements", false, "skip requirement checks")
 	execCmd.Flags().BoolVar(&execLocalFlag, "local", false, "force local execution (skip remote hosts)")
 
 	// sync command flags

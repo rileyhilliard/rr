@@ -74,6 +74,7 @@ rr fills the gap: **a single binary that handles sync, execution, locking, load 
 -   **Named tasks** — Define `test`, `build`, `deploy` commands in config, run with `rr test`
 -   **Output formatters** — Auto-formats pytest, Jest, Go test, and Cargo output for readable failure summaries
 -   **Real-time monitor** — TUI dashboard showing CPU, RAM, GPU across all your hosts
+-   **Remote environment bootstrap** — Declare required tools with `require:`, rr verifies they exist before running
 -   **Zero dependencies** — Single Go binary, no runtime requirements
 -   **Works anywhere** — macOS, Linux, Windows (WSL)
 
@@ -240,6 +241,7 @@ hosts:
             - mac-mini.local # Try LAN first
             - mac-mini-tailscale # Fall back to VPN
         dir: ${HOME}/projects/${PROJECT}
+        require: [go, node]  # Tools that must exist on this host
 ```
 
 **Project config** — shareable settings:
@@ -249,8 +251,15 @@ hosts:
 version: 1
 hosts: [mini] # Optional: defaults to all hosts
 
+require: [go, golangci-lint]  # Project-level requirements
+
 sync:
     exclude: [.git/, node_modules/, .venv/]
+
+tasks:
+    build:
+        run: cargo build
+        require: [cargo]  # Task-specific requirement
 ```
 
 `${PROJECT}` expands to your local directory name. See [configuration docs](docs/configuration.md) for all options.

@@ -125,13 +125,13 @@ func TestRunOptions_WithValues(t *testing.T) {
 }
 
 func TestRunCommand_NoArgs(t *testing.T) {
-	err := runCommand([]string{}, "", "", "", false)
+	err := runCommand([]string{}, "", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
 
 func TestRunCommand_InvalidProbeTimeout(t *testing.T) {
-	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout", false)
+	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
 }
@@ -150,7 +150,7 @@ func TestRunCommand_JoinsArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined into single command
-	err = runCommand([]string{"make", "test"}, "", "", "", false)
+	err = runCommand([]string{"make", "test"}, "", "", "", false, false)
 	require.Error(t, err)
 	// Should fail on no hosts configured
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -168,20 +168,20 @@ func TestRunCommand_ValidProbeTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	// Valid probe timeout should not fail on parsing
-	err = runCommand([]string{"echo"}, "", "", "5s", false)
+	err = runCommand([]string{"echo"}, "", "", "5s", false, false)
 	require.Error(t, err)
 	// Should fail on no hosts configured, not on probe timeout
 	assert.NotContains(t, err.Error(), "timeout")
 }
 
 func TestExecCommand_NoArgs(t *testing.T) {
-	err := execCommand([]string{}, "", "", "", false)
+	err := execCommand([]string{}, "", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
 
 func TestExecCommand_InvalidProbeTimeout(t *testing.T) {
-	err := execCommand([]string{"ls"}, "", "", "bad-duration", false)
+	err := execCommand([]string{"ls"}, "", "", "bad-duration", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
 }
@@ -198,7 +198,7 @@ func TestExecCommand_JoinsArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined
-	err = execCommand([]string{"ls", "-la"}, "", "", "", false)
+	err = execCommand([]string{"ls", "-la"}, "", "", "", false, false)
 	require.Error(t, err)
 	// Should fail on no hosts configured
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -227,7 +227,7 @@ func TestExecCommand_ValidProbeTimeoutFormats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := execCommand([]string{"ls"}, "", "", tt.timeout, false)
+			err := execCommand([]string{"ls"}, "", "", tt.timeout, false, false)
 			// Should fail with config error, not parse error
 			if err != nil {
 				assert.NotContains(t, err.Error(), "doesn't look like a valid timeout",
@@ -470,7 +470,7 @@ func TestRunOptions_ZeroValues(t *testing.T) {
 }
 
 func TestRunCommand_EmptyArgs(t *testing.T) {
-	err := runCommand([]string{}, "", "", "", false)
+	err := runCommand([]string{}, "", "", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
@@ -487,7 +487,7 @@ func TestRunCommand_MultipleArgsJoined(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined with spaces
-	err = runCommand([]string{"make", "test", "-v"}, "", "", "", false)
+	err = runCommand([]string{"make", "test", "-v"}, "", "", "", false, false)
 	require.Error(t, err)
 	// Fails on no hosts configured, but args were processed
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -504,7 +504,7 @@ func TestRunCommand_WithHostAndTag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	err = runCommand([]string{"echo"}, "myhost", "mytag", "", false)
+	err = runCommand([]string{"echo"}, "myhost", "mytag", "", false, false)
 	require.Error(t, err)
 	// Should fail on no hosts configured, flags were accepted
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -521,7 +521,7 @@ func TestExecCommand_MultipleArgsJoined(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	err = execCommand([]string{"ls", "-la", "/tmp"}, "", "", "", false)
+	err = execCommand([]string{"ls", "-la", "/tmp"}, "", "", "", false, false)
 	require.Error(t, err)
 	// Fails on no hosts configured, but args were processed
 	assert.Contains(t, err.Error(), "No hosts configured")

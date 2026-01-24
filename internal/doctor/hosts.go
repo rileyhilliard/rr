@@ -97,10 +97,10 @@ func (c *HostConnectivityCheck) Fix() error {
 // NewHostsChecks creates connectivity checks for all configured hosts.
 func NewHostsChecks(hosts map[string]config.Host) []Check {
 	checks := make([]Check, 0, len(hosts))
-	for name, hostCfg := range hosts {
+	for name := range hosts {
 		checks = append(checks, &HostConnectivityCheck{
 			HostName:   name,
-			HostConfig: hostCfg,
+			HostConfig: hosts[name],
 		})
 	}
 	return checks

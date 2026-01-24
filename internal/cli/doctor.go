@@ -18,15 +18,17 @@ import (
 )
 
 var (
-	doctorJSON bool
-	doctorFix  bool
-	doctorPath bool
+	doctorJSON         bool
+	doctorFix          bool
+	doctorPath         bool
+	doctorRequirements bool
 )
 
 func init() {
 	doctorCmd.Flags().BoolVar(&doctorJSON, "json", false, "output in JSON format")
 	doctorCmd.Flags().BoolVar(&doctorFix, "fix", false, "attempt automatic fixes where possible")
 	doctorCmd.Flags().BoolVar(&doctorPath, "path", false, "check PATH differences between login and interactive shells")
+	doctorCmd.Flags().BoolVar(&doctorRequirements, "requirements", false, "check that required tools are available on remote hosts")
 }
 
 // DoctorOutput represents the JSON output for doctor command.
@@ -66,14 +68,29 @@ func doctorCommand() error {
 	// Collect all checks
 	checks := collectChecks(cfgPath, projectCfg, globalCfg)
 
-	// If --path flag, establish connections and add PATH checks
+	// If --path or --requirements flag, establish connections
 	var pathClients map[string]sshutil.SSHClient
-	if doctorPath && globalCfg != nil && len(globalCfg.Hosts) > 0 {
+	needConnections := (doctorPath || doctorRequirements) && globalCfg != nil && len(globalCfg.Hosts) > 0
+	if needConnections {
 		pathClients = establishPathConnections(globalCfg)
 		defer closePathConnections(pathClients)
 
 		if len(pathClients) > 0 {
-			checks = append(checks, doctor.NewPathChecks(pathClients)...)
+			if doctorPath {
+				checks = append(checks, doctor.NewPathChecks(pathClients)...)
+			}
+			if doctorRequirements {
+				// Create host.Connection wrappers for requirements checks
+				connections := make(map[string]*host.Connection)
+				for name, client := range pathClients {
+					connections[name] = &host.Connection{
+						Name:   name,
+						Client: client,
+						Host:   globalCfg.Hosts[name],
+					}
+				}
+				checks = append(checks, doctor.NewRequirementsChecks(globalCfg.Hosts, connections, projectCfg)...)
+			}
 		}
 	}
 
@@ -102,7 +119,7 @@ func runChecksWithProgress(checks []doctor.Check) []doctor.CheckResult {
 	results := make([]doctor.CheckResult, len(checks))
 
 	// Group checks by category while preserving order
-	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "PATH", "REMOTE"}
+	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "PATH", "REMOTE", "REQUIREMENTS"}
 	grouped := make(map[string][]int) // category -> indices
 
 	for i, check := range checks {
@@ -171,7 +188,8 @@ func renderCategoryResults(category string, checks []doctor.Check, results []doc
 func establishPathConnections(globalCfg *config.GlobalConfig) map[string]sshutil.SSHClient {
 	clients := make(map[string]sshutil.SSHClient)
 
-	for name, hostCfg := range globalCfg.Hosts {
+	for name := range globalCfg.Hosts {
+		hostCfg := globalCfg.Hosts[name]
 		if len(hostCfg.SSH) == 0 {
 			continue
 		}
@@ -329,7 +347,7 @@ func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error
 	fmt.Println()
 
 	// Group checks by category
-	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "PATH", "REMOTE"}
+	categoryOrder := []string{"CONFIG", "SSH", "HOSTS", "DEPENDENCIES", "PATH", "REMOTE", "REQUIREMENTS"}
 	grouped := make(map[string][]int) // category -> indices
 
 	for i, check := range checks {

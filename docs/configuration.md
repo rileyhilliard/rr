@@ -11,6 +11,7 @@
 - [Sync](#sync)
 - [Lock](#lock)
 - [Tasks](#tasks)
+- [Requirements](#requirements)
 - [Output](#output)
 - [Monitor](#monitor)
 - [Duration syntax](#duration-syntax)
@@ -102,6 +103,7 @@ hosts:
 | `env` | map | no | Environment variables for commands on this host. |
 | `shell` | string | no | Shell invocation format (e.g., `zsh -l -c`). Default uses `$SHELL -l -c`. |
 | `setup_commands` | list | no | Commands to run before each command (e.g., `source ~/.nvm/nvm.sh`). |
+| `require` | list | no | Tools that must exist on this host (verified before running commands). |
 
 ### SSH connection strings
 
@@ -226,6 +228,7 @@ monitor:
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
 | `host` | string | - | Single host reference (from global config). |
 | `hosts` | list | all global hosts | List of host references for load balancing. |
+| `require` | list | `[]` | Tools that must exist on remote hosts. |
 | `sync` | object | see below | File synchronization settings. |
 | `lock` | object | see below | Distributed lock settings. |
 | `tasks` | map | `{}` | Named command sequences. |
@@ -411,6 +414,7 @@ tasks:
 | `parallel` | list | if no run/steps | Subtask names to run concurrently across hosts. |
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. |
+| `require` | list | no | Tools that must exist for this task. |
 | `fail_fast` | bool | no | Stop all tasks on first failure (parallel tasks only). |
 | `max_parallel` | int | no | Limit concurrent tasks (parallel tasks only). |
 | `timeout` | duration | no | Per-subtask timeout (parallel tasks only). |
@@ -488,6 +492,78 @@ You cannot name a task after a built-in command. These names are reserved:
 - `init`, `setup`, `status`
 - `monitor`, `doctor`, `completion`
 - `help`, `version`, `update`, `host`
+
+## Requirements
+
+The `require` field declares tools that must exist on remote hosts before commands run. rr verifies requirements after SSH connect but before file sync.
+
+### Configuration levels
+
+Requirements can be specified at three levels, which are merged together:
+
+**Project level** (applied to all hosts and tasks):
+
+```yaml
+# .rr.yaml
+require:
+  - go
+  - node
+  - golangci-lint
+```
+
+**Host level** (applied to a specific host):
+
+```yaml
+# ~/.rr/config.yaml
+hosts:
+  gpu-box:
+    ssh: [gpu.local]
+    dir: ~/projects/${PROJECT}
+    require:
+      - nvidia-smi
+      - python3
+      - cuda
+```
+
+**Task level** (applied when running a specific task):
+
+```yaml
+# .rr.yaml
+tasks:
+  build:
+    run: cargo build --release
+    require:
+      - cargo
+      - rustc
+```
+
+### How it works
+
+1. SSH connection established
+2. Requirements merged from project + host + task (deduplicated)
+3. Each tool verified with `command -v <tool>`
+4. If any missing, error with actionable suggestions
+
+### Built-in installers
+
+rr includes installers for 40+ common tools. When a required tool is missing and has a built-in installer, rr can auto-install it.
+
+**Supported tools include:** `go`, `node`, `python3`, `rust`, `uv`, `pip`, `npm`, `bun`, `cargo`, `make`, `cmake`, `golangci-lint`, `eslint`, `ruff`, `jq`, `yq`, `ripgrep`, `fd`, `fzf`, and more.
+
+### CLI flags
+
+Skip requirement checks:
+
+```bash
+rr run --skip-requirements "make test"
+rr exec --skip-requirements "echo hello"
+```
+
+Check requirement status with doctor:
+
+```bash
+rr doctor --requirements
+```
 
 ## Output
 

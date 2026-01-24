@@ -344,9 +344,9 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 
 	// Filter hosts to those with the matching tag
 	matchingHosts := make(map[string]config.Host)
-	for name, host := range s.hosts {
-		if hasTag(host.Tags, tag) {
-			matchingHosts[name] = host
+	for name := range s.hosts {
+		if hasTag(s.hosts[name].Tags, tag) {
+			matchingHosts[name] = s.hosts[name]
 		}
 	}
 
@@ -499,8 +499,8 @@ func hasTag(tags []string, tag string) bool {
 // collectTags gathers all unique tags from configured hosts.
 func (s *Selector) collectTags() []string {
 	tagSet := make(map[string]struct{})
-	for _, host := range s.hosts {
-		for _, tag := range host.Tags {
+	for name := range s.hosts {
+		for _, tag := range s.hosts[name].Tags {
 			tagSet[tag] = struct{}{}
 		}
 	}
@@ -524,12 +524,12 @@ func (s *Selector) HostInfo() []HostInfoItem {
 	defer s.mu.Unlock()
 
 	items := make([]HostInfoItem, 0, len(s.hosts))
-	for name, host := range s.hosts {
+	for name := range s.hosts {
 		items = append(items, HostInfoItem{
 			Name: name,
-			SSH:  host.SSH,
-			Dir:  host.Dir,
-			Tags: host.Tags,
+			SSH:  s.hosts[name].SSH,
+			Dir:  s.hosts[name].Dir,
+			Tags: s.hosts[name].Tags,
 		})
 	}
 

@@ -67,8 +67,8 @@ func hostAdd(opts HostAddOptions) error {
 
 	// Get list of existing SSH hosts to exclude from picker
 	var existingSSHHosts []string
-	for _, h := range cfg.Hosts {
-		existingSSHHosts = append(existingSSHHosts, h.SSH...)
+	for name := range cfg.Hosts {
+		existingSSHHosts = append(existingSSHHosts, cfg.Hosts[name].SSH...)
 	}
 
 	// Collect machine config interactively (don't skip probe)
@@ -92,9 +92,9 @@ func hostAdd(opts HostAddOptions) error {
 	remoteDir := opts.Dir
 	if remoteDir == "" {
 		// Use same dir as existing hosts, or default
-		for _, h := range cfg.Hosts {
-			if h.Dir != "" {
-				remoteDir = h.Dir
+		for name := range cfg.Hosts {
+			if cfg.Hosts[name].Dir != "" {
+				remoteDir = cfg.Hosts[name].Dir
 				break
 			}
 		}
@@ -162,9 +162,9 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 	remoteDir := hostAddDir
 	if remoteDir == "" {
 		// Use same dir as existing hosts, or default
-		for _, h := range cfg.Hosts {
-			if h.Dir != "" {
-				remoteDir = h.Dir
+		for name := range cfg.Hosts {
+			if cfg.Hosts[name].Dir != "" {
+				remoteDir = cfg.Hosts[name].Dir
 				break
 			}
 		}

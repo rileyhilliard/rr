@@ -104,6 +104,11 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your parallel task configuration in .rr.yaml.")
 	}
 
+	// Validate project-level require list
+	if err := validateRequireList("project", cfg.Require); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'require' section in your .rr.yaml.")
+	}
+
 	return nil
 }
 
@@ -139,8 +144,8 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 	}
 
 	// Validate each host
-	for name, host := range cfg.Hosts {
-		if err := validateHost(name, host); err != nil {
+	for name := range cfg.Hosts {
+		if err := validateHost(name, cfg.Hosts[name]); err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
 		}
 	}
@@ -231,6 +236,11 @@ func validateHost(name string, host Host) error {
 		}
 	}
 
+	// Validate require list
+	if err := validateRequireList(fmt.Sprintf("host '%s'", name), host.Require); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -301,6 +311,11 @@ func validateTask(name string, task TaskConfig) error {
 		if step.OnFail != "" && step.OnFail != "stop" && step.OnFail != "continue" {
 			return fmt.Errorf("task '%s' step %d has on_fail='%s' but it needs to be 'stop' or 'continue'", name, i+1, step.OnFail)
 		}
+	}
+
+	// Validate task-level require list
+	if err := validateRequireList(fmt.Sprintf("task '%s'", name), task.Require); err != nil {
+		return err
 	}
 
 	return nil
@@ -463,4 +478,14 @@ func ValidateParallelTasks(cfg *Config) error {
 // validateParallelTaskRefs is called from Validate to check parallel task references.
 func validateParallelTaskRefs(cfg *Config) error {
 	return ValidateParallelTasks(cfg)
+}
+
+// validateRequireList checks that a require list has no empty entries.
+func validateRequireList(context string, reqs []string) error {
+	for i, req := range reqs {
+		if strings.TrimSpace(req) == "" {
+			return fmt.Errorf("%s has an empty require entry at position %d", context, i+1)
+		}
+	}
+	return nil
 }

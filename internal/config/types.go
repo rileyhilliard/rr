@@ -53,6 +53,10 @@ type Config struct {
 	Tasks         map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
 	Output        OutputConfig          `yaml:"output" mapstructure:"output"`
 	Monitor       MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
+
+	// Require lists tools that must be available on remote hosts.
+	// Checked before sync; uses built-in installers when available.
+	Require []string `yaml:"require,omitempty" mapstructure:"require"`
 }
 
 // Host defines a remote machine and its connection settings.
@@ -80,6 +84,10 @@ type Host struct {
 	// SetupCommands are run before each command (e.g., "source ~/.zshrc").
 	// These are prepended to the actual command with && separators.
 	SetupCommands []string `yaml:"setup_commands,omitempty" mapstructure:"setup_commands"`
+
+	// Require lists tools that must be available on this host.
+	// Uses built-in installers when available (go, node, cargo, etc.).
+	Require []string `yaml:"require,omitempty" mapstructure:"require"`
 }
 
 // SyncConfig controls file synchronization behavior.
@@ -150,6 +158,10 @@ type TaskConfig struct {
 	// Output controls how task output is displayed: "progress", "stream", "verbose", "quiet".
 	// Overrides the global output settings for this task.
 	Output string `yaml:"output" mapstructure:"output"`
+
+	// Require lists additional tools needed for this specific task.
+	// Combined with project and host requirements.
+	Require []string `yaml:"require,omitempty" mapstructure:"require"`
 }
 
 // TaskStep is a single step in a multi-step task.

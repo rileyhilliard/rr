@@ -17,16 +17,17 @@ import (
 
 // RunOptions holds options for the run command.
 type RunOptions struct {
-	Command      string
-	Host         string        // Preferred host name
-	Tag          string        // Filter hosts by tag
-	ProbeTimeout time.Duration // Override SSH probe timeout (0 means use config default)
-	SkipSync     bool          // If true, skip sync phase (used by exec)
-	SkipLock     bool          // If true, skip locking
-	DryRun       bool          // If true, show what would be done without doing it
-	WorkingDir   string        // Override local working directory
-	Quiet        bool          // If true, minimize output (no individual connection attempts)
-	Local        bool          // If true, force local execution (skip remote hosts)
+	Command          string
+	Host             string        // Preferred host name
+	Tag              string        // Filter hosts by tag
+	ProbeTimeout     time.Duration // Override SSH probe timeout (0 means use config default)
+	SkipSync         bool          // If true, skip sync phase (used by exec)
+	SkipLock         bool          // If true, skip locking
+	SkipRequirements bool          // If true, skip requirement checks
+	DryRun           bool          // If true, show what would be done without doing it
+	WorkingDir       string        // Override local working directory
+	Quiet            bool          // If true, minimize output (no individual connection attempts)
+	Local            bool          // If true, force local execution (skip remote hosts)
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -34,15 +35,16 @@ type RunOptions struct {
 func Run(opts RunOptions) (int, error) {
 	// Setup common workflow phases (config, connect, sync, lock)
 	wf, err := SetupWorkflow(WorkflowOptions{
-		Host:         opts.Host,
-		Tag:          opts.Tag,
-		ProbeTimeout: opts.ProbeTimeout,
-		SkipSync:     opts.SkipSync,
-		SkipLock:     opts.SkipLock,
-		WorkingDir:   opts.WorkingDir,
-		Quiet:        opts.Quiet,
-		Local:        opts.Local,
-		Command:      opts.Command,
+		Host:             opts.Host,
+		Tag:              opts.Tag,
+		ProbeTimeout:     opts.ProbeTimeout,
+		SkipSync:         opts.SkipSync,
+		SkipLock:         opts.SkipLock,
+		SkipRequirements: opts.SkipRequirements,
+		WorkingDir:       opts.WorkingDir,
+		Quiet:            opts.Quiet,
+		Local:            opts.Local,
+		Command:          opts.Command,
 	})
 	if err != nil {
 		return 1, err
@@ -269,7 +271,7 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 }
 
 // runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag bool) error {
+func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
@@ -285,12 +287,13 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 	cmd := strings.Join(args, " ")
 
 	exitCode, err := Run(RunOptions{
-		Command:      cmd,
-		Host:         hostFlag,
-		Tag:          tagFlag,
-		ProbeTimeout: probeTimeout,
-		Quiet:        Quiet(),
-		Local:        localFlag,
+		Command:          cmd,
+		Host:             hostFlag,
+		Tag:              tagFlag,
+		ProbeTimeout:     probeTimeout,
+		SkipRequirements: skipRequirementsFlag,
+		Quiet:            Quiet(),
+		Local:            localFlag,
 	})
 
 	if err != nil {

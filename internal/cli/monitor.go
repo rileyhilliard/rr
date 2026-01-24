@@ -112,9 +112,9 @@ func filterHosts(allHosts map[string]config.Host, filter string) map[string]conf
 
 	// Return only matching hosts
 	result := make(map[string]config.Host)
-	for name, host := range allHosts {
+	for name := range allHosts {
 		if filterNames[name] {
-			result[name] = host
+			result[name] = allHosts[name]
 		}
 	}
 
