@@ -72,23 +72,30 @@ rr run "ls -la"
 
 If the remote directory is wrong, check the `dir` setting in global config.
 
-## Step 5: Verify and Install Dependencies
+## Step 5: Configure and Verify Requirements
 
-For EACH host in the project config, check if required tools exist. Do not skip hosts or disable them - fix them.
+rr supports declarative requirements via the `require:` field. Add required tools to `.rr.yaml`:
 
-Based on the detected tech stack, check each host:
-
-```bash
-# @example Test each host individually
-rr exec --host <hostname> "go version"      # Go projects
-rr exec --host <hostname> "node --version"  # Node projects
-rr exec --host <hostname> "python3 --version && uv --version"  # Python projects
-rr exec --host <hostname> "bun --version"   # If using bun
+```yaml
+# .rr.yaml
+require:
+  - go        # Go projects
+  - node      # Node projects
+  - python3   # Python projects
+  - uv        # Python package manager
 ```
 
-**If a tool is missing, INSTALL IT on that host. Do not disable the host.**
+Then verify requirements with doctor:
 
-Common installation commands (run via `ssh <host-alias>` directly):
+```bash
+rr doctor --requirements
+```
+
+**If tools are missing**, rr shows which ones and whether they can be auto-installed.
+
+### Manual Installation
+
+For tools without built-in installers, install via SSH:
 
 ```bash
 # uv (Python package manager)
@@ -204,18 +211,26 @@ echo "Exit code: $?"
 - Lock issues: `rr unlock` then retry
 - Directory issues: Verify `dir` in `~/.rr/config.yaml`
 
-### Step 5: Verify Dependencies
+### Step 5: Verify Requirements
 
-Based on project type, check tools on each host:
+Use the `require` field and doctor command:
 
 ```bash
-# Check tool availability
-rr exec --host <hostname> "command -v go" && echo "GO_OK" || echo "GO_MISSING"
-rr exec --host <hostname> "command -v node" && echo "NODE_OK" || echo "NODE_MISSING"
-rr exec --host <hostname> "command -v uv" && echo "UV_OK" || echo "UV_MISSING"
+# Check if .rr.yaml has require field
+grep -A5 "require:" .rr.yaml
+
+# Verify requirements with doctor
+rr doctor --requirements --machine
 ```
 
-**IF tool missing:** Install via SSH directly (see installation commands above)
+**Parse response:**
+- `success: true` with all requirements satisfied -> Requirements OK
+- Requirements missing -> Check which tools need installation
+
+**IF tools missing:**
+- Check if auto-installable (doctor shows "(can install)")
+- Install via SSH directly (see installation commands above)
+- Or add `--skip-requirements` to bypass checks
 
 ### Step 6: Final Verification
 
