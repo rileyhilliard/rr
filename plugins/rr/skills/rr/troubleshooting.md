@@ -32,6 +32,48 @@ ssh -vv <host-alias>
 - Timeout → host unreachable, try alternative address
 - Permission denied → run `ssh-copy-id <host-alias>`
 
+### SSH Works Manually but rr Fails (macOS)
+
+**Symptoms:** `ssh <host>` works, but rr shows "encrypted keys" or auth errors
+
+**Cause:** rr uses Go's SSH library which can't access macOS Keychain. The `UseKeychain yes` setting in `~/.ssh/config` only works for the native ssh command.
+
+**Fix:** Configure SSH to automatically load keys into the agent:
+
+```bash
+# Add to ~/.ssh/config (under Host *)
+Host *
+  AddKeysToAgent yes
+  UseKeychain yes
+```
+
+Then load your keys once:
+```bash
+# Add keys to agent with Keychain storage
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+ssh-add --apple-use-keychain ~/.ssh/id_rsa
+# Add any host-specific keys too
+ssh-add --apple-use-keychain ~/.ssh/id_rsa_myhost
+```
+
+**Why this works:** `AddKeysToAgent yes` tells ssh to add keys to the agent after unlocking them. Once in the agent, rr (and any Go-based SSH tool) can use them. The Keychain stores the passphrase, so keys persist across restarts.
+
+**Security notes:**
+- This is Apple's recommended approach - the Keychain is encrypted with your login credentials
+- Only the passphrase is stored, not the private key
+- Keys remain in agent memory while logged in - standard trade-off for convenience
+- For higher security needs:
+  - Use hardware keys (YubiKey) instead of file-based keys
+  - Set agent timeout: `ssh-add -t 3600 <key>` (expires after 1 hour)
+  - Use `AddKeysToAgent confirm` to prompt before each use
+  - Skip Keychain and enter passphrase manually each session
+
+**Verify:**
+```bash
+ssh-add -l  # Should list your keys
+rr doctor   # Should show SSH OK
+```
+
 ### "command not found" Errors
 
 **Symptoms:** Tool exists but rr can't find it

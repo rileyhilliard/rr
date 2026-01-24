@@ -39,7 +39,35 @@ Create or update `.rr.yaml` with:
 
 Refer to the rr skill for config format and task syntax.
 
-## Step 3: Verify SSH
+## Step 3: Configure SSH Agent (Important for macOS)
+
+rr uses Go's SSH library which requires keys to be loaded in the ssh-agent. The native `ssh` command's Keychain integration (`UseKeychain yes`) doesn't work for rr.
+
+**One-time setup for persistent keys:**
+
+```bash
+# Add to ~/.ssh/config (under Host * or at the top)
+Host *
+  AddKeysToAgent yes
+  UseKeychain yes
+```
+
+Then load your keys:
+
+```bash
+# Add keys with Keychain storage (persists across restarts)
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+ssh-add --apple-use-keychain ~/.ssh/id_rsa
+
+# Check what keys are loaded
+ssh-add -l
+```
+
+**Why this matters:** Without `AddKeysToAgent yes`, you'd need to run `ssh-add` after every restart. With it, keys are automatically added to the agent when you use them.
+
+**Security notes:** This is Apple's recommended approach - the Keychain is encrypted with your login credentials and only stores the passphrase, not the key. For higher security needs, use hardware keys (YubiKey), set agent timeouts (`ssh-add -t 3600`), or use `AddKeysToAgent confirm` to prompt before each use.
+
+## Step 4: Verify SSH
 
 Run diagnostics:
 
@@ -49,14 +77,16 @@ rr doctor
 
 If SSH fails, debug systematically:
 
-1. Test manual SSH: `ssh <host-alias>`
-2. Check SSH config: `grep -A5 "<host-alias>" ~/.ssh/config`
-3. Common fixes:
+1. Check agent has keys: `ssh-add -l`
+2. Test manual SSH: `ssh <host-alias>`
+3. Check SSH config: `grep -A5 "<host-alias>" ~/.ssh/config`
+4. Common fixes:
+    - "encrypted keys" error: run `ssh-add --apple-use-keychain <key-path>`
     - Password prompt: needs key-based auth
     - Host not found: add to `~/.ssh/config`
     - Timeout: host unreachable, try alternative address
 
-## Step 4: Test Execution
+## Step 5: Test Execution
 
 Verify basic execution works:
 
@@ -72,7 +102,7 @@ rr run "ls -la"
 
 If the remote directory is wrong, check the `dir` setting in global config.
 
-## Step 5: Configure and Verify Requirements
+## Step 6: Configure and Verify Requirements
 
 rr supports declarative requirements via the `require:` field. Add required tools to `.rr.yaml`:
 
@@ -125,7 +155,7 @@ setup_commands:
 1. Install the tool that creates that file (e.g., uv creates `~/.local/bin/env`)
 2. Or remove/fix the setup_command in `~/.rr/config.yaml`
 
-## Step 6: Final Verification
+## Step 7: Final Verification
 
 Run a real command to confirm everything works end-to-end:
 
@@ -139,6 +169,7 @@ rr run "make test"  # or appropriate command for the project
 
 | Problem             | Fix                                                         |
 | ------------------- | ----------------------------------------------------------- |
+| SSH works, rr fails | Add `AddKeysToAgent yes` to `~/.ssh/config`, run `ssh-add`  |
 | SSH fails           | Check `ssh <alias>` manually, verify `~/.ssh/config`        |
 | "command not found" | Add `shell: "zsh -l -c"` or `setup_commands` to host config |
 | Sync slow           | Add large dirs to `sync.exclude`                            |
@@ -173,7 +204,29 @@ rr doctor --machine 2>&1
 - `success: true` with config checks passing -> Project config OK
 - `error.code == "CONFIG_NOT_FOUND"` -> Run `rr init --non-interactive --host <host>`
 
-### Step 3: Verify Connectivity
+### Step 3: Verify SSH Agent (macOS)
+
+```bash
+ssh-add -l 2>&1
+```
+
+**Parse response:**
+- Lists keys -> Agent OK
+- "no identities" or error -> Keys not loaded
+
+**If keys not loaded:**
+```bash
+# Check if AddKeysToAgent is configured
+grep -i "AddKeysToAgent" ~/.ssh/config
+
+# Load keys with Keychain
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+ssh-add --apple-use-keychain ~/.ssh/id_rsa
+```
+
+**Why this matters:** rr uses Go's SSH library which requires keys in the agent. The native ssh command's Keychain integration doesn't work for rr.
+
+### Step 4: Verify Connectivity
 
 ```bash
 rr status --machine
@@ -189,16 +242,18 @@ FOR each host in data.hosts:
     -> FOR each alias in host.aliases:
       -> Parse alias.error for diagnosis:
          "timeout" -> Network/VPN issue
-         "auth" -> Key not deployed
+         "auth" -> Key not deployed or not in agent
          "host key" -> First connection
+         "encrypted" -> Keys not in ssh-agent
 ```
 
 **Fix connectivity issues:**
+- Encrypted keys: Run `ssh-add --apple-use-keychain <key-path>`
 - Timeout: Check `ping <hostname>`, verify network/VPN
 - Auth: Run `ssh-copy-id <alias>` or `rr setup <host>`
 - Host key: `ssh -o StrictHostKeyChecking=accept-new <alias> exit`
 
-### Step 4: Test Execution
+### Step 5: Test Execution
 
 ```bash
 rr exec "echo rr-test-ok" 2>&1
@@ -211,7 +266,7 @@ echo "Exit code: $?"
 - Lock issues: `rr unlock` then retry
 - Directory issues: Verify `dir` in `~/.rr/config.yaml`
 
-### Step 5: Verify Requirements
+### Step 6: Verify Requirements
 
 Use the `require` field and doctor command:
 
@@ -232,7 +287,7 @@ rr doctor --requirements --machine
 - Install via SSH directly (see installation commands above)
 - Or add `--skip-requirements` to bypass checks
 
-### Step 6: Final Verification
+### Step 7: Final Verification
 
 ```bash
 rr test 2>&1

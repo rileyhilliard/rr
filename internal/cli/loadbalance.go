@@ -120,10 +120,13 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		attempts = append(attempts, attempt)
 	}
 
+	// Resolve local_fallback from project config (overrides global)
+	localFallback := config.ResolveLocalFallback(ctx.Resolved)
+
 	// Phase 2: All hosts tried - handle "all locked" scenario
 	if len(lockedHosts) > 0 {
 		// If local_fallback is enabled, go local immediately
-		if ctx.Resolved.Global.Defaults.LocalFallback {
+		if localFallback {
 			// Close all locked host connections
 			for _, a := range lockedHosts {
 				if a.conn != nil {
@@ -146,7 +149,20 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		return roundRobinWait(ctx, lockedHosts, lockCfg, opts.Command, attempts)
 	}
 
-	// No hosts could be connected to at all
+	// No hosts could be connected to at all - check local fallback
+	if localFallback {
+		return &findAvailableHostResult{
+			conn: &host.Connection{
+				Name:    "local",
+				Alias:   "local",
+				IsLocal: true,
+			},
+			lock:       nil,
+			isLocal:    true,
+			hostsState: attempts,
+		}, nil
+	}
+
 	return nil, buildConnectionError(attempts)
 }
 

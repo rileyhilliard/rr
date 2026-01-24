@@ -145,6 +145,7 @@ Missing tools trigger actionable error messages. Tools with built-in installers 
 
 | Problem | Fix |
 |---------|-----|
+| SSH works but rr fails (macOS) | Add `AddKeysToAgent yes` to `~/.ssh/config`, then `ssh-add --apple-use-keychain <key>` |
 | SSH fails | Check `ssh <alias>` manually, verify `~/.ssh/config` |
 | "command not found" | Add `setup_commands` or check `require` config |
 | Sync slow | Add large dirs to `sync.exclude` |
