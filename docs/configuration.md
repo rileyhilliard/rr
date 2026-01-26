@@ -445,12 +445,16 @@ tasks:
 
 Run with: `rr test`
 
-**How it works:**
+**How it works (work-stealing queue):**
 
-1. Each subtask is assigned to an available host from your pool
-2. Tasks run simultaneously with animated progress indicators
-3. Output is captured and shown in a summary when complete
-4. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
+1. All subtasks are placed in a shared queue
+2. One worker per host pulls tasks from the queue
+3. Fast hosts naturally grab more work as they complete tasks faster
+4. Files are synced and locks acquired once per host (not per task)
+5. Output is captured and shown in a summary when complete
+6. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
+
+This work-stealing approach ensures efficient distribution: if you have 6 tasks across 3 hosts where one host is slower, the fast hosts will grab more tasks from the queue while the slow host is still processing its first task.
 
 #### Setup phase (once per host)
 

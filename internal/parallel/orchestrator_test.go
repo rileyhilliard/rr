@@ -499,3 +499,60 @@ func TestBuildResult(t *testing.T) {
 	assert.Equal(t, duration, result.Duration)
 	assert.Len(t, result.HostsUsed, 2)
 }
+
+// TestOrchestrator_LocalExecution_MultipleTasks verifies that local execution
+// processes all tasks sequentially when no remote hosts are configured.
+// This is the fallback behavior when hosts are unavailable.
+func TestOrchestrator_LocalExecution_MultipleTasks(t *testing.T) {
+	tasks := []TaskInfo{
+		{Name: "task1", Index: 0, Command: "echo task1"},
+		{Name: "task2", Index: 1, Command: "echo task2"},
+		{Name: "task3", Index: 2, Command: "echo task3"},
+		{Name: "task4", Index: 3, Command: "echo task4"},
+		{Name: "task5", Index: 4, Command: "echo task5"},
+		{Name: "task6", Index: 5, Command: "echo task6"},
+	}
+
+	// No hosts configured - runs locally via runLocal()
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{})
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 6, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.True(t, result.Success())
+
+	// Verify all tasks completed
+	assert.Len(t, result.TaskResults, 6)
+
+	// All should be on "local" since no remote hosts
+	for _, tr := range result.TaskResults {
+		assert.Equal(t, "local", tr.Host)
+		assert.Equal(t, 0, tr.ExitCode)
+	}
+}
+
+// TestOrchestrator_LocalExecution_ManyTasks verifies local execution handles
+// larger task counts correctly.
+func TestOrchestrator_LocalExecution_ManyTasks(t *testing.T) {
+	tasks := make([]TaskInfo, 10)
+	for i := 0; i < 10; i++ {
+		tasks[i] = TaskInfo{
+			Name:    fmt.Sprintf("task%d", i+1),
+			Index:   i,
+			Command: fmt.Sprintf("echo task%d", i+1),
+		}
+	}
+
+	// No hosts means local execution
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{})
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 10, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.True(t, result.Success())
+}
