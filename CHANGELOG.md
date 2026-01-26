@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Parallel task setup phase** - New `setup` field for parallel tasks runs a command once per host before any subtasks execute. Avoids redundant work when multiple subtasks on the same host need shared setup (dependency installation, database migrations, etc.). Setup failure aborts all subtasks on that host. Works with both remote and local execution.
+
 ## [0.16.0] - 2026-01-24
 
 ### Added

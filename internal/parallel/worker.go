@@ -64,6 +64,16 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		return result
 	}
 
+	// Run setup command if configured (once per host, after sync)
+	if err := w.ensureSetup(ctx); err != nil {
+		result.Error = err
+		result.ExitCode = 1
+		result.EndTime = time.Now()
+		result.Duration = result.EndTime.Sub(result.StartTime)
+		w.notifyComplete(result)
+		return result
+	}
+
 	// Update lock command to show current task in monitor.
 	// We hold connMu briefly to safely read hostLock (Close() may nil it concurrently).
 	// Error is intentionally ignored: UpdateCommand is best-effort for monitoring visibility
@@ -195,6 +205,45 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	return rrsync.Sync(w.conn, workDir, syncCfg, nil)
 }
 
+// ensureSetup runs the setup command once per host after sync.
+// Setup failures abort all subsequent tasks on this host.
+func (w *hostWorker) ensureSetup(ctx context.Context) error {
+	// No setup configured
+	if w.orchestrator.config.Setup == "" {
+		return nil
+	}
+
+	// Check if setup already attempted for this host
+	alreadyAttempted, previousErr := w.orchestrator.checkHostSetup(w.hostName)
+	if alreadyAttempted {
+		// Return the same error (or nil) as the first attempt
+		return previousErr
+	}
+
+	// Get working directory for setup command
+	workDir := ""
+	if w.host.Dir != "" {
+		workDir = config.ExpandRemote(w.host.Dir)
+	}
+
+	// Execute setup command
+	var stdout, stderr bytes.Buffer
+	exitCode, err := w.execCommand(ctx, w.orchestrator.config.Setup, nil, workDir, &stdout, &stderr)
+
+	var setupErr error
+	if err != nil {
+		setupErr = fmt.Errorf("setup command failed: %w", err)
+	} else if exitCode != 0 {
+		output := stdout.String() + stderr.String()
+		setupErr = fmt.Errorf("setup command failed with exit code %d: %s", exitCode, output)
+	}
+
+	// Record result so subsequent tasks on this host get the same outcome
+	w.orchestrator.recordHostSetup(w.hostName, setupErr)
+
+	return setupErr
+}
+
 // execCommand executes a command on the host with output capture.
 func (w *hostWorker) execCommand(
 	ctx context.Context,
@@ -307,6 +356,22 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 	// Notify output manager: local tasks go straight to executing (no sync needed)
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, "local")
+	}
+
+	// Run setup command if configured (once for local execution)
+	if err := w.ensureSetup(ctx); err != nil {
+		result.Error = err
+		result.ExitCode = 1
+		result.EndTime = time.Now()
+		result.Duration = result.EndTime.Sub(result.StartTime)
+		if w.orchestrator.outputMgr != nil {
+			w.orchestrator.outputMgr.TaskCompleted(result)
+		}
+		return result
+	}
+
+	// Now executing
+	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskExecuting(task.Name, task.Index)
 	}
 
@@ -362,4 +427,40 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 	}
 
 	return result
+}
+
+// ensureSetup runs the setup command once for local execution.
+func (w *localWorker) ensureSetup(ctx context.Context) error {
+	// No setup configured
+	if w.orchestrator.config.Setup == "" {
+		return nil
+	}
+
+	// Check if setup already attempted (use "local" as the host name)
+	alreadyAttempted, previousErr := w.orchestrator.checkHostSetup("local")
+	if alreadyAttempted {
+		// Return the same error (or nil) as the first attempt
+		return previousErr
+	}
+
+	// Execute setup command locally
+	cmd := exec.CommandContext(ctx, "sh", "-c", w.orchestrator.config.Setup)
+	var outputBuf bytes.Buffer
+	cmd.Stdout = &outputBuf
+	cmd.Stderr = &outputBuf
+
+	var setupErr error
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			setupErr = fmt.Errorf("setup command failed with exit code %d: %s", exitErr.ExitCode(), outputBuf.String())
+		} else {
+			setupErr = fmt.Errorf("setup command failed: %w", err)
+		}
+	}
+
+	// Record result so subsequent tasks get the same outcome
+	w.orchestrator.recordHostSetup("local", setupErr)
+
+	return setupErr
 }

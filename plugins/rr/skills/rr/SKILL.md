@@ -131,6 +131,22 @@ hosts:
 
 Run with: `rr test-all`, `rr quick-check`
 
+#### Setup Phase (Once Per Host)
+
+Avoid redundant setup work (dependency sync, migrations) when multiple subtasks run on the same host:
+
+```yaml
+tasks:
+  test-all:
+    setup: pip install -r requirements.txt   # Runs once per host
+    parallel:
+      - test-unit
+      - test-integration
+      - test-e2e
+```
+
+Setup runs exactly once per host before any subtasks execute. If a host runs 3 subtasks, setup runs once (not 3 times).
+
 #### Parallel Task Flags
 
 | Flag | Purpose |

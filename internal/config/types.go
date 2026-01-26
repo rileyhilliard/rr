@@ -154,6 +154,12 @@ type TaskConfig struct {
 	// When set, this task becomes a parallel orchestrator and Run/Steps are ignored.
 	Parallel []string `yaml:"parallel" mapstructure:"parallel"`
 
+	// Setup is a command that runs once per host before any subtasks execute on that host.
+	// Only applies to parallel tasks. Useful for dependency installation, database migrations,
+	// or other one-time setup that shouldn't be repeated for each subtask.
+	// Setup failure aborts all subtasks on that host.
+	Setup string `yaml:"setup,omitempty" mapstructure:"setup"`
+
 	// FailFast stops parallel/dependency execution on first failure when true.
 	FailFast bool `yaml:"fail_fast" mapstructure:"fail_fast"`
 

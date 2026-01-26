@@ -27,6 +27,7 @@ type Config struct {
 	OutputMode  OutputMode    // How to display output
 	SaveLogs    bool          // Write output to log files
 	LogDir      string        // Directory for log files
+	Setup       string        // Command to run once per host before subtasks
 }
 
 // DefaultConfig returns a Config with sensible defaults.

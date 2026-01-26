@@ -412,6 +412,7 @@ tasks:
 | `run` | string | if no steps/parallel/depends | Command to execute (simple tasks). |
 | `steps` | list | if no run/parallel | Steps for multi-step tasks. |
 | `parallel` | list | if no run/steps | Subtask names to run concurrently across hosts. |
+| `setup` | string | no | Command to run once per host before parallel subtasks. |
 | `depends` | list | no | Task dependencies to run before this task. |
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. |
@@ -450,6 +451,33 @@ Run with: `rr test`
 2. Tasks run simultaneously with animated progress indicators
 3. Output is captured and shown in a summary when complete
 4. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
+
+#### Setup phase (once per host)
+
+When subtasks need shared setup (dependency installation, database migrations, etc.), use `setup` to avoid redundant work:
+
+```yaml
+tasks:
+  test-all:
+    setup: pip install -r requirements.txt   # Runs once per host
+    parallel:
+      - test-unit
+      - test-integration
+      - test-e2e
+
+  test-unit:
+    run: pytest tests/unit -v
+  test-integration:
+    run: pytest tests/integration -v
+  test-e2e:
+    run: pytest tests/e2e -v
+```
+
+Setup behavior:
+- Runs exactly once per host, after file sync but before any subtasks
+- If a host runs 3 subtasks, setup runs once (not 3 times)
+- Setup failure aborts all subtasks on that host
+- Works with both remote and local execution
 
 **CLI flags for parallel tasks:**
 

@@ -103,7 +103,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// If dry run, just show the plan
 	if opts.DryRun {
-		renderDryRunPlan(opts.TaskName, tasks, hosts)
+		renderDryRunPlan(opts.TaskName, tasks, hosts, task.Setup)
 		return 0, nil
 	}
 
@@ -116,6 +116,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		FailFast:    task.FailFast,
 		OutputMode:  outputMode,
 		SaveLogs:    !opts.NoLogs,
+		Setup:       task.Setup,
 	}
 
 	// Apply CLI overrides
@@ -295,8 +296,13 @@ func filterHostsByTag(hosts map[string]config.Host, hostOrder []string, tag stri
 }
 
 // renderDryRunPlan shows what would be executed without actually running.
-func renderDryRunPlan(taskName string, tasks []parallel.TaskInfo, hosts map[string]config.Host) {
+func renderDryRunPlan(taskName string, tasks []parallel.TaskInfo, hosts map[string]config.Host, setup string) {
 	fmt.Printf("Dry run for parallel task: %s\n\n", taskName)
+
+	if setup != "" {
+		fmt.Println("Setup (runs once per host):")
+		fmt.Printf("  $ %s\n\n", setup)
+	}
 
 	fmt.Println("Tasks to execute:")
 	for i, task := range tasks {
@@ -386,6 +392,9 @@ func FormatParallelTaskHelp(task *config.TaskConfig, cfg *config.Config) string 
 		help += "\n"
 	}
 
+	if task.Setup != "" {
+		help += fmt.Sprintf("\nSetup (once per host): %s\n", task.Setup)
+	}
 	if task.FailFast {
 		help += "\nStops on first failure (fail_fast: true)\n"
 	}

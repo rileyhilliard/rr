@@ -2,6 +2,7 @@ package parallel
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -154,6 +155,121 @@ func TestOrchestrator_LocalExecution_FailFast(t *testing.T) {
 	assert.Equal(t, 1, len(result.TaskResults))
 	assert.Equal(t, 0, result.Passed)
 	assert.Equal(t, 1, result.Failed)
+}
+
+func TestOrchestrator_LocalExecution_WithSetup(t *testing.T) {
+	// Create a temp file to track setup execution
+	tmpDir := t.TempDir()
+	setupFile := tmpDir + "/setup_ran"
+
+	tasks := []TaskInfo{
+		{Name: "task1", Command: "cat " + setupFile},
+		{Name: "task2", Command: "cat " + setupFile},
+	}
+
+	// Setup command creates a marker file
+	cfg := Config{Setup: "echo setup_complete > " + setupFile}
+	orch := NewOrchestrator(tasks, nil, nil, nil, cfg)
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 2, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+
+	// Both tasks should have read from the setup file
+	for _, tr := range result.TaskResults {
+		assert.Contains(t, string(tr.Output), "setup_complete")
+	}
+}
+
+func TestOrchestrator_LocalExecution_SetupRunsOnce(t *testing.T) {
+	// Create a temp file that counts setup invocations
+	tmpDir := t.TempDir()
+	counterFile := tmpDir + "/counter"
+
+	tasks := []TaskInfo{
+		{Name: "task1", Command: "cat " + counterFile},
+		{Name: "task2", Command: "cat " + counterFile},
+		{Name: "task3", Command: "cat " + counterFile},
+	}
+
+	// Setup command appends a line each time it runs
+	cfg := Config{Setup: "echo x >> " + counterFile}
+	orch := NewOrchestrator(tasks, nil, nil, nil, cfg)
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 3, result.Passed)
+
+	// Each task should see exactly one "x" (setup ran only once)
+	for _, tr := range result.TaskResults {
+		// Output should contain exactly one "x" followed by newline
+		assert.Equal(t, "x\n", string(tr.Output), "Task %s should see setup ran exactly once", tr.TaskName)
+	}
+}
+
+func TestOrchestrator_LocalExecution_SetupFailure_AbortsAllTasks(t *testing.T) {
+	tasks := []TaskInfo{
+		{Name: "task1", Command: "echo task1"},
+		{Name: "task2", Command: "echo task2"},
+		{Name: "task3", Command: "echo task3"},
+	}
+
+	// Setup command that fails
+	cfg := Config{Setup: "exit 1"}
+	orch := NewOrchestrator(tasks, nil, nil, nil, cfg)
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	// All tasks should fail because setup failed
+	assert.Equal(t, 0, result.Passed)
+	assert.Equal(t, 3, result.Failed)
+
+	// Each task should have the setup failure error
+	for _, tr := range result.TaskResults {
+		assert.NotNil(t, tr.Error)
+		assert.Contains(t, tr.Error.Error(), "setup command failed")
+	}
+}
+
+func TestOrchestrator_HostSetupTracking(t *testing.T) {
+	orch := &Orchestrator{
+		setupHosts:  make(map[string]bool),
+		setupErrors: make(map[string]error),
+	}
+
+	// First check should return not attempted
+	attempted, err := orch.checkHostSetup("host1")
+	assert.False(t, attempted)
+	assert.NoError(t, err)
+
+	// Record successful setup
+	orch.recordHostSetup("host1", nil)
+
+	// Second check should return attempted with no error
+	attempted, err = orch.checkHostSetup("host1")
+	assert.True(t, attempted)
+	assert.NoError(t, err)
+
+	// Different host should return not attempted
+	attempted, err = orch.checkHostSetup("host2")
+	assert.False(t, attempted)
+	assert.NoError(t, err)
+
+	// Record failed setup for host2
+	setupErr := fmt.Errorf("setup failed")
+	orch.recordHostSetup("host2", setupErr)
+
+	// Check should return the error
+	attempted, err = orch.checkHostSetup("host2")
+	assert.True(t, attempted)
+	assert.Equal(t, setupErr, err)
 }
 
 func TestOrchestrator_MaxParallelLimiting(t *testing.T) {
