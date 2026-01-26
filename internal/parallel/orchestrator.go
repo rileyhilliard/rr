@@ -20,6 +20,12 @@ type Orchestrator struct {
 	syncedHosts map[string]bool
 	syncMu      sync.Mutex
 
+	// Performance tracking for work-stealing optimization
+	// Tracks first-task completion time per host to identify slow hosts
+	hostFirstTaskTime map[string]time.Duration
+	hostTimeMu        sync.Mutex
+	fastestFirstTask  time.Duration // Duration of fastest first-task completion
+
 	// Setup tracking (runs once per host after sync)
 	// setupHosts tracks whether setup has been attempted for each host
 	// setupErrors stores any error from setup failure (nil = success)
@@ -53,15 +59,16 @@ func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, hostOrder [
 	}
 
 	return &Orchestrator{
-		tasks:       tasks,
-		hosts:       hosts,
-		hostList:    hostList,
-		config:      cfg,
-		resolved:    resolved,
-		syncedHosts: make(map[string]bool),
-		setupHosts:  make(map[string]bool),
-		setupErrors: make(map[string]error),
-		results:     make([]TaskResult, 0, len(tasks)),
+		tasks:             tasks,
+		hosts:             hosts,
+		hostList:          hostList,
+		config:            cfg,
+		resolved:          resolved,
+		syncedHosts:       make(map[string]bool),
+		hostFirstTaskTime: make(map[string]time.Duration),
+		setupHosts:        make(map[string]bool),
+		setupErrors:       make(map[string]error),
+		results:           make([]TaskResult, 0, len(tasks)),
 	}
 }
 
@@ -180,7 +187,9 @@ func (o *Orchestrator) hostWorker(
 	}
 	defer worker.Close()
 
-	for task := range taskQueue {
+	isFirstTask := true
+
+	for {
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
@@ -198,9 +207,55 @@ func (o *Orchestrator) hostWorker(
 			}
 		}
 
+		// Try to grab a task from the queue.
+		// For subsequent tasks on slow hosts, we apply a delay to give fast hosts
+		// priority. But first, check if a task is immediately available (non-blocking).
+		// Only apply the delay if the queue isn't empty and we'd be competing.
+		var task TaskInfo
+		var ok bool
+
+		if !isFirstTask {
+			// Non-blocking check: is a task immediately available?
+			select {
+			case task, ok = <-taskQueue:
+				if !ok {
+					return // Queue closed, no more tasks
+				}
+				// Got a task immediately, skip delay and process it
+			default:
+				// No task immediately available. Apply slow host delay if needed,
+				// then do a blocking read.
+				if delay := o.getSlowHostDelay(hostName); delay > 0 {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(delay):
+					}
+				}
+				// Blocking read after delay
+				task, ok = <-taskQueue
+				if !ok {
+					return // Queue closed, no more tasks
+				}
+			}
+		} else {
+			// First task: grab immediately without delay
+			task, ok = <-taskQueue
+			if !ok {
+				return // Queue closed, no more tasks
+			}
+		}
+
 		// Execute the task
+		taskStart := time.Now()
 		result := worker.executeTask(ctx, task)
 		resultChan <- result
+
+		// Record first-task duration for performance tracking
+		if isFirstTask {
+			o.recordFirstTaskTime(hostName, time.Since(taskStart))
+			isFirstTask = false
+		}
 
 		// Update failed flag for fail-fast
 		if !result.Success() && o.config.FailFast {
@@ -276,6 +331,67 @@ func (o *Orchestrator) recordHostSetup(hostName string, err error) {
 
 	o.setupHosts[hostName] = true
 	o.setupErrors[hostName] = err
+}
+
+// recordFirstTaskTime records the duration of the first task completed by a host.
+// This is used to identify slow hosts and optimize work distribution.
+func (o *Orchestrator) recordFirstTaskTime(hostName string, duration time.Duration) {
+	o.hostTimeMu.Lock()
+	defer o.hostTimeMu.Unlock()
+
+	// Only record if this is the first task for this host
+	if _, exists := o.hostFirstTaskTime[hostName]; exists {
+		return
+	}
+
+	o.hostFirstTaskTime[hostName] = duration
+
+	// Track the fastest first-task completion
+	if o.fastestFirstTask == 0 || duration < o.fastestFirstTask {
+		o.fastestFirstTask = duration
+	}
+}
+
+// getSlowHostDelay returns a delay that slow hosts should wait before grabbing
+// additional tasks. This gives fast hosts a chance to grab tasks first.
+//
+// The delay is based on how much slower this host was compared to the fastest:
+// - If host took 2x as long as fastest, delay is 100% of fastest task time
+// - If host took 1.5x as long, delay is 50% of fastest task time
+// - If host is within 10% of fastest, no delay
+//
+// This delay only applies after the first task (when we have performance data).
+func (o *Orchestrator) getSlowHostDelay(hostName string) time.Duration {
+	o.hostTimeMu.Lock()
+	defer o.hostTimeMu.Unlock()
+
+	hostTime, exists := o.hostFirstTaskTime[hostName]
+	if !exists || o.fastestFirstTask == 0 {
+		return 0 // No data yet, no delay
+	}
+
+	// Calculate slowdown ratio
+	ratio := float64(hostTime) / float64(o.fastestFirstTask)
+
+	// No delay if within 10% of fastest
+	if ratio < 1.1 {
+		return 0
+	}
+
+	// Delay proportional to how slow the host is.
+	// The delay should be long enough that fast hosts can finish their
+	// current task and grab from the queue before the slow host does.
+	//
+	// For a host that's 1.5x slower: delay = (1.5 - 1.0) * fastest = 50% of fastest
+	// For a host that's 2x slower: delay = (2.0 - 1.0) * fastest = 100% of fastest
+	//
+	// This gives fast hosts time to complete their current task and grab more work.
+	delayFactor := ratio - 1.0
+	if delayFactor > 1.0 {
+		delayFactor = 1.0 // Cap at 100% of fastest time
+	}
+
+	return time.Duration(float64(o.fastestFirstTask) * delayFactor)
 }
 
 // GetOutputManager returns the output manager for external access.

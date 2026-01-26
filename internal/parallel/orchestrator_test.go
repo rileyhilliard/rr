@@ -499,3 +499,218 @@ func TestBuildResult(t *testing.T) {
 	assert.Equal(t, duration, result.Duration)
 	assert.Len(t, result.HostsUsed, 2)
 }
+
+// TestOrchestrator_LocalExecution_MultipleTasks verifies that local execution
+// processes all tasks sequentially when no remote hosts are configured.
+// This is the fallback behavior when hosts are unavailable.
+func TestOrchestrator_LocalExecution_MultipleTasks(t *testing.T) {
+	tasks := []TaskInfo{
+		{Name: "task1", Index: 0, Command: "echo task1"},
+		{Name: "task2", Index: 1, Command: "echo task2"},
+		{Name: "task3", Index: 2, Command: "echo task3"},
+		{Name: "task4", Index: 3, Command: "echo task4"},
+		{Name: "task5", Index: 4, Command: "echo task5"},
+		{Name: "task6", Index: 5, Command: "echo task6"},
+	}
+
+	// No hosts configured - runs locally via runLocal()
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{})
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 6, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.True(t, result.Success())
+
+	// Verify all tasks completed
+	assert.Len(t, result.TaskResults, 6)
+
+	// All should be on "local" since no remote hosts
+	for _, tr := range result.TaskResults {
+		assert.Equal(t, "local", tr.Host)
+		assert.Equal(t, 0, tr.ExitCode)
+	}
+}
+
+// TestOrchestrator_LocalExecution_ManyTasks verifies local execution handles
+// larger task counts correctly.
+func TestOrchestrator_LocalExecution_ManyTasks(t *testing.T) {
+	tasks := make([]TaskInfo, 10)
+	for i := 0; i < 10; i++ {
+		tasks[i] = TaskInfo{
+			Name:    fmt.Sprintf("task%d", i+1),
+			Index:   i,
+			Command: fmt.Sprintf("echo task%d", i+1),
+		}
+	}
+
+	// No hosts means local execution
+	orch := NewOrchestrator(tasks, nil, nil, nil, Config{})
+
+	result, err := orch.Run(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 10, result.Passed)
+	assert.Equal(t, 0, result.Failed)
+	assert.True(t, result.Success())
+}
+
+func TestOrchestrator_RecordFirstTaskTime(t *testing.T) {
+	t.Run("records first task time and updates fastest", func(t *testing.T) {
+		orch := &Orchestrator{
+			hostFirstTaskTime: make(map[string]time.Duration),
+		}
+
+		// Record first host
+		orch.recordFirstTaskTime("fast-host", 100*time.Millisecond)
+		assert.Equal(t, 100*time.Millisecond, orch.hostFirstTaskTime["fast-host"])
+		assert.Equal(t, 100*time.Millisecond, orch.fastestFirstTask)
+
+		// Record slower host - fastest should not change
+		orch.recordFirstTaskTime("slow-host", 200*time.Millisecond)
+		assert.Equal(t, 200*time.Millisecond, orch.hostFirstTaskTime["slow-host"])
+		assert.Equal(t, 100*time.Millisecond, orch.fastestFirstTask)
+
+		// Record even faster host - fastest should update
+		orch.recordFirstTaskTime("faster-host", 50*time.Millisecond)
+		assert.Equal(t, 50*time.Millisecond, orch.hostFirstTaskTime["faster-host"])
+		assert.Equal(t, 50*time.Millisecond, orch.fastestFirstTask)
+	})
+
+	t.Run("ignores duplicate recordings for same host", func(t *testing.T) {
+		orch := &Orchestrator{
+			hostFirstTaskTime: make(map[string]time.Duration),
+		}
+
+		// Record first time
+		orch.recordFirstTaskTime("host1", 100*time.Millisecond)
+		assert.Equal(t, 100*time.Millisecond, orch.hostFirstTaskTime["host1"])
+
+		// Try to record again with different value - should be ignored
+		orch.recordFirstTaskTime("host1", 50*time.Millisecond)
+		assert.Equal(t, 100*time.Millisecond, orch.hostFirstTaskTime["host1"])
+	})
+
+	t.Run("handles zero duration", func(t *testing.T) {
+		orch := &Orchestrator{
+			hostFirstTaskTime: make(map[string]time.Duration),
+		}
+
+		// Record zero duration (edge case)
+		orch.recordFirstTaskTime("host1", 0)
+		assert.Equal(t, time.Duration(0), orch.hostFirstTaskTime["host1"])
+		assert.Equal(t, time.Duration(0), orch.fastestFirstTask)
+	})
+}
+
+func TestOrchestrator_GetSlowHostDelay(t *testing.T) {
+	tests := []struct {
+		name             string
+		hostTime         time.Duration
+		fastestTime      time.Duration
+		hostExists       bool
+		expectedDelayMin time.Duration
+		expectedDelayMax time.Duration
+	}{
+		{
+			name:             "no data for host - no delay",
+			hostTime:         0,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       false,
+			expectedDelayMin: 0,
+			expectedDelayMax: 0,
+		},
+		{
+			name:             "no fastest time recorded - no delay",
+			hostTime:         100 * time.Millisecond,
+			fastestTime:      0,
+			hostExists:       true,
+			expectedDelayMin: 0,
+			expectedDelayMax: 0,
+		},
+		{
+			name:             "host within 10% of fastest - no delay",
+			hostTime:         105 * time.Millisecond,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       true,
+			expectedDelayMin: 0,
+			expectedDelayMax: 0,
+		},
+		{
+			name:             "host exactly at 10% threshold - no delay",
+			hostTime:         109 * time.Millisecond,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       true,
+			expectedDelayMin: 0,
+			expectedDelayMax: 0,
+		},
+		{
+			name:             "host 1.5x slower - 50% delay",
+			hostTime:         150 * time.Millisecond,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       true,
+			expectedDelayMin: 49 * time.Millisecond, // Allow small float rounding
+			expectedDelayMax: 51 * time.Millisecond,
+		},
+		{
+			name:             "host 2x slower - 100% delay (capped)",
+			hostTime:         200 * time.Millisecond,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       true,
+			expectedDelayMin: 99 * time.Millisecond,
+			expectedDelayMax: 101 * time.Millisecond,
+		},
+		{
+			name:             "host 3x slower - still 100% delay (capped)",
+			hostTime:         300 * time.Millisecond,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       true,
+			expectedDelayMin: 99 * time.Millisecond,
+			expectedDelayMax: 101 * time.Millisecond,
+		},
+		{
+			name:             "same speed as fastest - no delay",
+			hostTime:         100 * time.Millisecond,
+			fastestTime:      100 * time.Millisecond,
+			hostExists:       true,
+			expectedDelayMin: 0,
+			expectedDelayMax: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orch := &Orchestrator{
+				hostFirstTaskTime: make(map[string]time.Duration),
+				fastestFirstTask:  tt.fastestTime,
+			}
+
+			if tt.hostExists {
+				orch.hostFirstTaskTime["test-host"] = tt.hostTime
+			}
+
+			delay := orch.getSlowHostDelay("test-host")
+
+			assert.GreaterOrEqual(t, delay, tt.expectedDelayMin,
+				"delay %v should be >= %v", delay, tt.expectedDelayMin)
+			assert.LessOrEqual(t, delay, tt.expectedDelayMax,
+				"delay %v should be <= %v", delay, tt.expectedDelayMax)
+		})
+	}
+}
+
+func TestOrchestrator_GetSlowHostDelay_UnknownHost(t *testing.T) {
+	orch := &Orchestrator{
+		hostFirstTaskTime: make(map[string]time.Duration),
+		fastestFirstTask:  100 * time.Millisecond,
+	}
+
+	// Record time for one host
+	orch.hostFirstTaskTime["known-host"] = 150 * time.Millisecond
+
+	// Unknown host should get no delay
+	delay := orch.getSlowHostDelay("unknown-host")
+	assert.Equal(t, time.Duration(0), delay)
+}

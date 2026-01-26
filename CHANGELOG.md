@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Parallel task setup phase** - New `setup` field for parallel tasks runs a command once per host before any subtasks execute. Avoids redundant work when multiple subtasks on the same host need shared setup (dependency installation, database migrations, etc.). Setup failure aborts all subtasks on that host. Works with both remote and local execution.
 
+### Changed
+
+- **Performance-based work-stealing** - Parallel task execution now tracks first-task completion time per host to identify slow hosts. Slow hosts wait before grabbing additional tasks, giving fast hosts priority. This improves work distribution across heterogeneous hosts (e.g., M4 vs M1 machines). Fixes #146.
+
 ## [0.16.0] - 2026-01-24
 
 ### Added
