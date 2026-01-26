@@ -207,23 +207,43 @@ func (o *Orchestrator) hostWorker(
 			}
 		}
 
-		// For subsequent tasks, apply slow host delay BEFORE grabbing from queue.
-		// This gives fast hosts a chance to grab tasks first, improving work
-		// distribution when hosts have different performance characteristics.
+		// Try to grab a task from the queue.
+		// For subsequent tasks on slow hosts, we apply a delay to give fast hosts
+		// priority. But first, check if a task is immediately available (non-blocking).
+		// Only apply the delay if the queue isn't empty and we'd be competing.
+		var task TaskInfo
+		var ok bool
+
 		if !isFirstTask {
-			if delay := o.getSlowHostDelay(hostName); delay > 0 {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(delay):
+			// Non-blocking check: is a task immediately available?
+			select {
+			case task, ok = <-taskQueue:
+				if !ok {
+					return // Queue closed, no more tasks
+				}
+				// Got a task immediately, skip delay and process it
+			default:
+				// No task immediately available. Apply slow host delay if needed,
+				// then do a blocking read.
+				if delay := o.getSlowHostDelay(hostName); delay > 0 {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(delay):
+					}
+				}
+				// Blocking read after delay
+				task, ok = <-taskQueue
+				if !ok {
+					return // Queue closed, no more tasks
 				}
 			}
-		}
-
-		// Try to grab a task from the queue
-		task, ok := <-taskQueue
-		if !ok {
-			return // Queue closed, no more tasks
+		} else {
+			// First task: grab immediately without delay
+			task, ok = <-taskQueue
+			if !ok {
+				return // Queue closed, no more tasks
+			}
 		}
 
 		// Execute the task
