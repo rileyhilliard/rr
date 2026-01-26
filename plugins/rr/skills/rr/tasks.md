@@ -181,7 +181,13 @@ rr test-all --local     # Run locally without remote hosts
 
 ### Work-Stealing Distribution
 
-Tasks are distributed using a work-stealing queue. Fast hosts automatically grab more work, providing natural load balancing.
+Tasks are distributed using a work-stealing queue. All subtasks go into a shared channel, and each host pulls tasks as it becomes available.
+
+**Performance-based optimization:** After the first task completes on each host, rr tracks completion times to identify slow hosts. Slow hosts wait before grabbing additional tasks, giving fast hosts priority. This improves distribution across heterogeneous machines (e.g., M4 vs M1).
+
+For example, with 6 tasks across 3 hosts of varying speeds:
+- Without optimization: 2-2-2 distribution (round-robin pattern)
+- With optimization: 3-2-1 distribution (fast host grabs more work)
 
 ### Log Storage
 

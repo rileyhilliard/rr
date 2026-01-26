@@ -449,12 +449,13 @@ Run with: `rr test`
 
 1. All subtasks are placed in a shared queue
 2. One worker per host pulls tasks from the queue
-3. Fast hosts naturally grab more work as they complete tasks faster
-4. Files are synced and locks acquired once per host (not per task)
-5. Output is captured and shown in a summary when complete
-6. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
+3. Files are synced and locks acquired once per host (not per task)
+4. After first tasks complete, rr tracks host performance
+5. Slow hosts wait before grabbing additional tasks, giving fast hosts priority
+6. Output is captured and shown in a summary when complete
+7. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
 
-This work-stealing approach ensures efficient distribution: if you have 6 tasks across 3 hosts where one host is slower, the fast hosts will grab more tasks from the queue while the slow host is still processing its first task.
+This performance-based work-stealing ensures efficient distribution across heterogeneous hosts. If you have 6 tasks across 3 hosts where one host is slower, the fast hosts grab more tasks (e.g., 3-2-1 distribution) instead of round-robin (2-2-2).
 
 #### Setup phase (once per host)
 
