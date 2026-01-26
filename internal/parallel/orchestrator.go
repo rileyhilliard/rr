@@ -20,6 +20,13 @@ type Orchestrator struct {
 	syncedHosts map[string]bool
 	syncMu      sync.Mutex
 
+	// Setup tracking (runs once per host after sync)
+	// setupHosts tracks whether setup has been attempted for each host
+	// setupErrors stores any error from setup failure (nil = success)
+	setupHosts  map[string]bool
+	setupErrors map[string]error
+	setupMu     sync.Mutex
+
 	// Output management
 	outputMgr *OutputManager
 
@@ -52,6 +59,8 @@ func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, hostOrder [
 		config:      cfg,
 		resolved:    resolved,
 		syncedHosts: make(map[string]bool),
+		setupHosts:  make(map[string]bool),
+		setupErrors: make(map[string]error),
 		results:     make([]TaskResult, 0, len(tasks)),
 	}
 }
@@ -244,6 +253,29 @@ func (o *Orchestrator) markHostSynced(hostName string) bool {
 	}
 	o.syncedHosts[hostName] = true
 	return false
+}
+
+// checkHostSetup checks if setup has already been attempted for a host.
+// Returns (alreadyAttempted, previousError).
+// If alreadyAttempted is true, previousError contains any error from the prior attempt.
+func (o *Orchestrator) checkHostSetup(hostName string) (bool, error) {
+	o.setupMu.Lock()
+	defer o.setupMu.Unlock()
+
+	if o.setupHosts[hostName] {
+		return true, o.setupErrors[hostName]
+	}
+	return false, nil
+}
+
+// recordHostSetup records the result of a setup attempt for a host.
+// Call this after setup completes (successfully or with error).
+func (o *Orchestrator) recordHostSetup(hostName string, err error) {
+	o.setupMu.Lock()
+	defer o.setupMu.Unlock()
+
+	o.setupHosts[hostName] = true
+	o.setupErrors[hostName] = err
 }
 
 // GetOutputManager returns the output manager for external access.

@@ -111,11 +111,45 @@ tasks:
 
 Run with: `rr test-all`, `rr quick-check`
 
+### Setup Phase (Once Per Host)
+
+When parallel subtasks need shared setup (dependencies, migrations, etc.), use `setup` to avoid redundant work:
+
+```yaml
+tasks:
+  test-all:
+    setup: pip install -r requirements.txt    # Runs once per host
+    parallel:
+      - test-unit
+      - test-integration
+      - test-e2e
+
+  test-unit:
+    run: pytest tests/unit -v
+  test-integration:
+    run: pytest tests/integration -v
+  test-e2e:
+    run: pytest tests/e2e -v
+```
+
+**How it works:**
+- Setup runs exactly once per host, after file sync but before any subtasks
+- If a host runs 3 subtasks, setup runs once (not 3 times)
+- Setup failure aborts all subtasks on that host
+- Works with both remote and local execution
+
+**Common use cases:**
+- Dependency installation (`uv sync`, `npm install`)
+- Database migrations or resets
+- Build artifacts needed by multiple tests
+- Environment configuration
+
 ### Parallel Task Options
 
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `parallel` | required | List of subtask names |
+| `setup` | none | Command to run once per host before subtasks |
 | `fail_fast` | `false` | Stop on first failure |
 | `timeout` | none | Overall timeout |
 | `max_parallel` | unlimited | Max concurrent tasks |

@@ -1318,3 +1318,41 @@ func TestHasDependencies(t *testing.T) {
 		assert.False(t, HasDependencies(task))
 	})
 }
+
+func TestParallelTaskSetup(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".rr.yaml")
+
+	content := `
+version: 1
+tasks:
+  test-all:
+    setup: uv sync --quiet
+    parallel:
+      - test-1
+      - test-2
+      - test-3
+  test-1:
+    run: pytest --test-group 1
+  test-2:
+    run: pytest --test-group 2
+  test-3:
+    run: pytest --test-group 3
+`
+	err := os.WriteFile(configPath, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+
+	// Check the parallel task has setup
+	testAll := cfg.Tasks["test-all"]
+	assert.Equal(t, "uv sync --quiet", testAll.Setup)
+	assert.True(t, IsParallelTask(&testAll))
+	assert.Equal(t, []string{"test-1", "test-2", "test-3"}, testAll.Parallel)
+
+	// Check subtasks don't have setup (it's only on the parent)
+	test1 := cfg.Tasks["test-1"]
+	assert.Empty(t, test1.Setup)
+	assert.Equal(t, "pytest --test-group 1", test1.Run)
+}
