@@ -24,6 +24,7 @@ sync:
     - /rr
     - dist/
     - coverage.out
+    - coverage-*.out
     - coverage.html
     # Go caches (rebuilt on remote anyway)
     - .go/
@@ -64,8 +65,12 @@ tasks:
     run: go test ./tests/integration/... -v
 
   coverage:
-    description: Generate test coverage report
+    description: Generate test coverage report (unit tests only)
     run: go test -race -coverprofile=coverage.out -covermode=atomic ./... && go tool cover -func=coverage.out
+
+  coverage-merged:
+    description: Generate merged coverage report (unit + integration, mirrors CI)
+    run: make coverage-merged
 
   lint:
     description: Run golangci-lint
