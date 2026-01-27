@@ -513,3 +513,49 @@ func TestBuildPullArgs_RemoteDirTrailingSlash(t *testing.T) {
 	}
 	assert.True(t, found2, "remote path should not have double slashes")
 }
+
+func TestPull_MultipleDestinations(t *testing.T) {
+	// Test that Pull handles multiple destination groups
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"},
+	}
+
+	// Multiple destinations will create multiple rsync calls
+	// Since we don't have a real connection, this will fail at rsync execution
+	// but it exercises the grouping and sorting logic
+	err := Pull(conn, PullOptions{
+		Patterns: []config.PullItem{
+			{Src: "file1.txt", Dest: "./dest1"},
+			{Src: "file2.txt", Dest: "./dest2"},
+			{Src: "file3.txt", Dest: "./dest1"},
+		},
+	}, nil)
+
+	// Expect error since we don't have real SSH connection
+	// but we're testing that the code doesn't panic and reaches rsync execution
+	if err != nil {
+		assert.NotContains(t, err.Error(), "No connection provided")
+		assert.NotContains(t, err.Error(), "No patterns provided")
+	}
+}
+
+func TestPull_WithFlags(t *testing.T) {
+	// Test Pull with extra rsync flags
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"},
+	}
+
+	err := Pull(conn, PullOptions{
+		Patterns: []config.PullItem{{Src: "file.txt"}},
+		Flags:    []string{"--dry-run", "-v"},
+	}, nil)
+
+	// Will fail at rsync execution, but flags should be passed
+	if err != nil {
+		assert.NotContains(t, err.Error(), "No connection provided")
+	}
+}
