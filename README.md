@@ -210,6 +210,21 @@ Parallel Execution Summary
 
 **Why this is powerful:** A 10-minute test suite split across 4 hosts finishes in ~2.5 minutes. For agentic coding workflows where AI agents constantly run tests to verify their work, this means faster feedback loops and less waiting. Multiple agents or features being developed simultaneously get distributed across your machine pool automatically.
 
+**Nested parallel tasks:** Parallel tasks can reference other parallel tasks. `rr` flattens the hierarchy automatically:
+
+```yaml
+tasks:
+    test-opendata:
+        parallel: [opendata-1, opendata-2, opendata-3]
+    test-backend:
+        parallel: [backend-1, backend-2, backend-3]
+    # References both parallel tasks - expands to 7 tasks total
+    test:
+        parallel: [test-opendata, test-backend, frontend]
+```
+
+Run `rr test-opendata` for just the opendata splits, or `rr test` for everything. Add splits to `test-opendata` and `test` automatically includes them.
+
 **Output modes:**
 
 ```bash

@@ -484,6 +484,62 @@ Setup behavior:
 - Setup failure aborts all subtasks on that host
 - Works with both remote and local execution
 
+#### Nested parallel tasks
+
+Parallel tasks can reference other parallel tasks. When `rr` encounters a nested reference, it flattens the task tree before execution:
+
+```yaml
+tasks:
+  # Split test suites for parallelization
+  opendata-1:
+    run: pytest opendata --test-group-count 3 --test-group 1
+  opendata-2:
+    run: pytest opendata --test-group-count 3 --test-group 2
+  opendata-3:
+    run: pytest opendata --test-group-count 3 --test-group 3
+
+  backend-1:
+    run: pytest backend --test-group-count 3 --test-group 1
+  backend-2:
+    run: pytest backend --test-group-count 3 --test-group 2
+  backend-3:
+    run: pytest backend --test-group-count 3 --test-group 3
+
+  frontend:
+    run: npm test
+
+  # Group related subtasks
+  test-opendata:
+    parallel: [opendata-1, opendata-2, opendata-3]
+
+  test-backend:
+    parallel: [backend-1, backend-2, backend-3]
+
+  # Reference parallel tasks - automatically flattened
+  test:
+    parallel: [test-opendata, test-backend, frontend]
+```
+
+Running `rr test` expands to 7 parallel tasks: `opendata-1`, `opendata-2`, `opendata-3`, `backend-1`, `backend-2`, `backend-3`, `frontend`.
+
+Benefits:
+- Run `rr test-opendata` to run just the 3 opendata splits
+- Run `rr test` to run everything
+- Add a 4th split to `test-opendata` and `test` automatically includes it
+- No manual flattening or repetition required
+- Diamond dependencies are deduplicated (if the same task is reachable through multiple paths, it runs once)
+
+Use `--dry-run` to see the expanded task list:
+
+```bash
+rr test --dry-run
+# Shows: test-opendata -> [opendata-1, opendata-2, opendata-3]
+#        test-backend -> [backend-1, backend-2, backend-3]
+#        Tasks to execute (7 total): ...
+```
+
+Circular references are detected during config validation.
+
 **CLI flags for parallel tasks:**
 
 | Flag | Description |

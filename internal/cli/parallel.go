@@ -56,9 +56,17 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 			"Parallel tasks must have a 'parallel' field with subtask names.")
 	}
 
-	// Build TaskInfo for each subtask
-	tasks := make([]parallel.TaskInfo, 0, len(task.Parallel))
-	for i, subtaskName := range task.Parallel {
+	// Flatten nested parallel references into a list of executable tasks
+	flattenedNames, err := config.FlattenParallelTasks(opts.TaskName, resolved.Project.Tasks)
+	if err != nil {
+		return 1, errors.WrapWithCode(err, errors.ErrConfig,
+			"Failed to flatten parallel tasks",
+			"Check for circular references or missing tasks.")
+	}
+
+	// Build TaskInfo for each flattened subtask
+	tasks := make([]parallel.TaskInfo, 0, len(flattenedNames))
+	for i, subtaskName := range flattenedNames {
 		subtask, err := config.GetTask(resolved.Project, subtaskName)
 		if err != nil {
 			return 1, err
@@ -103,7 +111,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// If dry run, just show the plan
 	if opts.DryRun {
-		renderDryRunPlan(opts.TaskName, tasks, hosts, task.Setup)
+		renderDryRunPlan(opts.TaskName, task.Parallel, flattenedNames, tasks, hosts, task.Setup, resolved.Project.Tasks)
 		return 0, nil
 	}
 
@@ -296,7 +304,7 @@ func filterHostsByTag(hosts map[string]config.Host, hostOrder []string, tag stri
 }
 
 // renderDryRunPlan shows what would be executed without actually running.
-func renderDryRunPlan(taskName string, tasks []parallel.TaskInfo, hosts map[string]config.Host, setup string) {
+func renderDryRunPlan(taskName string, originalRefs []string, flattenedNames []string, tasks []parallel.TaskInfo, hosts map[string]config.Host, setup string, allTasks map[string]config.TaskConfig) {
 	fmt.Printf("Dry run for parallel task: %s\n\n", taskName)
 
 	if setup != "" {
@@ -304,7 +312,22 @@ func renderDryRunPlan(taskName string, tasks []parallel.TaskInfo, hosts map[stri
 		fmt.Printf("  $ %s\n\n", setup)
 	}
 
-	fmt.Println("Tasks to execute:")
+	// Check if any expansion happened
+	wasExpanded := len(originalRefs) != len(flattenedNames)
+	if wasExpanded {
+		fmt.Println("Task expansion:")
+		for _, ref := range originalRefs {
+			if refTask, ok := allTasks[ref]; ok && len(refTask.Parallel) > 0 {
+				// This was a nested parallel task - show its direct subtasks
+				fmt.Printf("  %s -> [%s]\n", ref, strings.Join(refTask.Parallel, ", "))
+			} else {
+				fmt.Printf("  %s\n", ref)
+			}
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("Tasks to execute (%d total):\n", len(tasks))
 	for i, task := range tasks {
 		fmt.Printf("  %d. %s\n", i+1, task.Name)
 		if task.Command != "" {

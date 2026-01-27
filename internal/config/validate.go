@@ -465,7 +465,7 @@ func IsReservedTaskName(name string) bool {
 // This checks:
 // - All referenced tasks exist
 // - No circular references (task A -> task B -> task A)
-// - No nested parallel (parallel task can't reference another parallel task)
+// Nested parallel tasks ARE allowed - they get flattened at execution time.
 func ValidateParallelTasks(cfg *Config) error {
 	if cfg == nil || cfg.Tasks == nil {
 		return nil
@@ -477,29 +477,152 @@ func ValidateParallelTasks(cfg *Config) error {
 			continue
 		}
 
-		// Check each referenced task
+		// Check each referenced task exists
 		for _, ref := range task.Parallel {
-			refTask, ok := cfg.Tasks[ref]
+			_, ok := cfg.Tasks[ref]
 			if !ok {
 				available := getTaskNames(cfg.Tasks)
 				return fmt.Errorf("parallel task '%s' references non-existent task '%s'. Available tasks: %s",
 					name, ref, strings.Join(available, ", "))
 			}
 
-			// No nested parallel tasks
-			if len(refTask.Parallel) > 0 {
-				return fmt.Errorf("parallel task '%s' can't reference another parallel task '%s'. Parallel tasks can only run simple tasks (with 'run' or 'steps')",
-					name, ref)
-			}
-
-			// No self-reference
+			// No self-reference (direct)
 			if ref == name {
 				return fmt.Errorf("parallel task '%s' can't reference itself", name)
 			}
 		}
+
+		// Check for cycles in parallel task references
+		if err := detectParallelCycle(name, cfg.Tasks); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// detectParallelCycle detects circular references in parallel task definitions.
+// Uses DFS to find cycles like: A -> B -> C -> A
+func detectParallelCycle(startTask string, tasks map[string]TaskConfig) error {
+	visited := make(map[string]bool)
+	inStack := make(map[string]bool)
+	var path []string
+
+	var dfs func(taskName string) error
+	dfs = func(taskName string) error {
+		if inStack[taskName] {
+			// Found a cycle - build the cycle path for the error message
+			cycleStart := -1
+			for i, p := range path {
+				if p == taskName {
+					cycleStart = i
+					break
+				}
+			}
+			cyclePath := make([]string, len(path[cycleStart:])+1)
+			copy(cyclePath, path[cycleStart:])
+			cyclePath[len(cyclePath)-1] = taskName
+			return fmt.Errorf("circular reference in parallel tasks: %s", strings.Join(cyclePath, " -> "))
+		}
+
+		if visited[taskName] {
+			return nil
+		}
+
+		task, ok := tasks[taskName]
+		if !ok {
+			return nil // Task doesn't exist - caught elsewhere
+		}
+
+		// Only traverse parallel references
+		if len(task.Parallel) == 0 {
+			return nil
+		}
+
+		visited[taskName] = true
+		inStack[taskName] = true
+		path = append(path, taskName)
+
+		for _, ref := range task.Parallel {
+			if err := dfs(ref); err != nil {
+				return err
+			}
+		}
+
+		inStack[taskName] = false
+		path = path[:len(path)-1]
+		return nil
+	}
+
+	return dfs(startTask)
+}
+
+// FlattenParallelTasks expands nested parallel task references into a flat list.
+// Given a parallel task that references other parallel tasks, this returns
+// the final list of executable (non-parallel) task names.
+//
+// Duplicate tasks are deduplicated - if the same executable task is reachable
+// through multiple paths (diamond dependencies), it only appears once.
+//
+// Example:
+//
+//	test-opendata: {parallel: [test-opendata-1, test-opendata-2]}
+//	test-backend: {parallel: [test-backend-1, test-backend-2]}
+//	test: {parallel: [test-opendata, test-backend, test-frontend]}
+//
+// FlattenParallelTasks("test", tasks) returns:
+// [test-opendata-1, test-opendata-2, test-backend-1, test-backend-2, test-frontend]
+func FlattenParallelTasks(taskName string, tasks map[string]TaskConfig) ([]string, error) {
+	task, ok := tasks[taskName]
+	if !ok {
+		return nil, fmt.Errorf("task '%s' not found", taskName)
+	}
+
+	if len(task.Parallel) == 0 {
+		return nil, fmt.Errorf("task '%s' is not a parallel task", taskName)
+	}
+
+	// Track tasks in current path for cycle detection
+	inPath := make(map[string]bool)
+	// Track already-added executable tasks to deduplicate (diamond dependencies)
+	added := make(map[string]bool)
+	var result []string
+
+	var expand func(name string) error
+	expand = func(name string) error {
+		if inPath[name] {
+			return fmt.Errorf("circular reference detected at task '%s'", name)
+		}
+		inPath[name] = true
+		defer func() { inPath[name] = false }()
+
+		t, ok := tasks[name]
+		if !ok {
+			return fmt.Errorf("referenced task '%s' not found", name)
+		}
+
+		if len(t.Parallel) > 0 {
+			// This is a parallel task - recursively expand its references
+			for _, ref := range t.Parallel {
+				if err := expand(ref); err != nil {
+					return err
+				}
+			}
+		} else if !added[name] {
+			// This is an executable task - add to result if not already added
+			added[name] = true
+			result = append(result, name)
+		}
+		return nil
+	}
+
+	for _, ref := range task.Parallel {
+		if err := expand(ref); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
 }
 
 // validateParallelTaskRefs is called from Validate to check parallel task references.

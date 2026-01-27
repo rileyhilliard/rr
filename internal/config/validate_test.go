@@ -51,7 +51,7 @@ func TestValidateParallelTasks(t *testing.T) {
 			errContains: "non-existent task 'missing'",
 		},
 		{
-			name: "parallel task references another parallel task",
+			name: "nested parallel task is allowed",
 			config: &Config{
 				Tasks: map[string]TaskConfig{
 					"test": {Run: "go test ./..."},
@@ -64,8 +64,27 @@ func TestValidateParallelTasks(t *testing.T) {
 					},
 				},
 			},
-			wantErr:     true,
-			errContains: "can't reference another parallel task",
+			wantErr: false,
+		},
+		{
+			name: "deeply nested parallel tasks allowed",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"test1": {Run: "test1"},
+					"test2": {Run: "test2"},
+					"test3": {Run: "test3"},
+					"level1": {
+						Parallel: []string{"test1", "test2"},
+					},
+					"level2": {
+						Parallel: []string{"level1", "test3"},
+					},
+					"level3": {
+						Parallel: []string{"level2"},
+					},
+				},
+			},
+			wantErr: false,
 		},
 		{
 			name: "parallel task references itself",
@@ -76,9 +95,43 @@ func TestValidateParallelTasks(t *testing.T) {
 					},
 				},
 			},
-			wantErr: true,
-			// Self-reference is caught as nested parallel error (task references itself which is parallel)
-			errContains: "can't reference another parallel task",
+			wantErr:     true,
+			errContains: "can't reference itself",
+		},
+		{
+			name: "circular reference in parallel tasks",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"test": {Run: "go test ./..."},
+					"a": {
+						Parallel: []string{"b", "test"},
+					},
+					"b": {
+						Parallel: []string{"a"},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "circular reference",
+		},
+		{
+			name: "indirect circular reference",
+			config: &Config{
+				Tasks: map[string]TaskConfig{
+					"test": {Run: "go test ./..."},
+					"a": {
+						Parallel: []string{"b"},
+					},
+					"b": {
+						Parallel: []string{"c"},
+					},
+					"c": {
+						Parallel: []string{"a", "test"},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "circular reference",
 		},
 		{
 			name: "parallel task can reference step-based task",
@@ -603,6 +656,144 @@ func TestValidate_DependencyIntegration(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestFlattenParallelTasks(t *testing.T) {
+	tests := []struct {
+		name        string
+		taskName    string
+		tasks       map[string]TaskConfig
+		want        []string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "simple parallel task - no nesting",
+			taskName: "all",
+			tasks: map[string]TaskConfig{
+				"test": {Run: "go test ./..."},
+				"lint": {Run: "golangci-lint run"},
+				"all":  {Parallel: []string{"test", "lint"}},
+			},
+			want: []string{"test", "lint"},
+		},
+		{
+			name:     "nested parallel task - single level",
+			taskName: "outer",
+			tasks: map[string]TaskConfig{
+				"test":  {Run: "go test ./..."},
+				"lint":  {Run: "golangci-lint run"},
+				"inner": {Parallel: []string{"test", "lint"}},
+				"outer": {Parallel: []string{"inner"}},
+			},
+			want: []string{"test", "lint"},
+		},
+		{
+			name:     "nested parallel task - mixed references",
+			taskName: "all",
+			tasks: map[string]TaskConfig{
+				"test-1":       {Run: "test1"},
+				"test-2":       {Run: "test2"},
+				"test-3":       {Run: "test3"},
+				"test-backend": {Run: "backend"},
+				"test-group":   {Parallel: []string{"test-1", "test-2", "test-3"}},
+				"all":          {Parallel: []string{"test-group", "test-backend"}},
+			},
+			want: []string{"test-1", "test-2", "test-3", "test-backend"},
+		},
+		{
+			name:     "deeply nested parallel tasks",
+			taskName: "level3",
+			tasks: map[string]TaskConfig{
+				"a":      {Run: "a"},
+				"b":      {Run: "b"},
+				"c":      {Run: "c"},
+				"d":      {Run: "d"},
+				"level1": {Parallel: []string{"a", "b"}},
+				"level2": {Parallel: []string{"level1", "c"}},
+				"level3": {Parallel: []string{"level2", "d"}},
+			},
+			want: []string{"a", "b", "c", "d"},
+		},
+		{
+			name:     "parallel task with multiple nested parallel refs",
+			taskName: "test",
+			tasks: map[string]TaskConfig{
+				"opendata-1":    {Run: "test opendata 1"},
+				"opendata-2":    {Run: "test opendata 2"},
+				"opendata-3":    {Run: "test opendata 3"},
+				"backend-1":     {Run: "test backend 1"},
+				"backend-2":     {Run: "test backend 2"},
+				"backend-3":     {Run: "test backend 3"},
+				"frontend":      {Run: "test frontend"},
+				"test-opendata": {Parallel: []string{"opendata-1", "opendata-2", "opendata-3"}},
+				"test-backend":  {Parallel: []string{"backend-1", "backend-2", "backend-3"}},
+				"test":          {Parallel: []string{"test-opendata", "test-backend", "frontend"}},
+			},
+			want: []string{
+				"opendata-1", "opendata-2", "opendata-3",
+				"backend-1", "backend-2", "backend-3",
+				"frontend",
+			},
+		},
+		{
+			name:     "non-parallel task returns error",
+			taskName: "simple",
+			tasks: map[string]TaskConfig{
+				"simple": {Run: "echo hello"},
+			},
+			wantErr:     true,
+			errContains: "not a parallel task",
+		},
+		{
+			name:     "missing task returns error",
+			taskName: "missing",
+			tasks: map[string]TaskConfig{
+				"test": {Run: "go test ./..."},
+			},
+			wantErr:     true,
+			errContains: "not found",
+		},
+		{
+			name:     "reference to missing task returns error",
+			taskName: "all",
+			tasks: map[string]TaskConfig{
+				"test": {Run: "go test ./..."},
+				"all":  {Parallel: []string{"test", "missing"}},
+			},
+			wantErr:     true,
+			errContains: "'missing' not found",
+		},
+		{
+			name:     "diamond dependency deduplicates shared task",
+			taskName: "test",
+			tasks: map[string]TaskConfig{
+				"shared":   {Run: "echo shared"},
+				"unique-a": {Run: "echo a"},
+				"unique-b": {Run: "echo b"},
+				"group-a":  {Parallel: []string{"shared", "unique-a"}},
+				"group-b":  {Parallel: []string{"shared", "unique-b"}},
+				"test":     {Parallel: []string{"group-a", "group-b"}},
+			},
+			// shared appears in both group-a and group-b, but should only be in result once
+			want: []string{"shared", "unique-a", "unique-b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := FlattenParallelTasks(tt.taskName, tt.tasks)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
