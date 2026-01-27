@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +17,8 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/output"
+	"github.com/rileyhilliard/rr/internal/parallel"
+	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/spf13/cobra"
@@ -624,13 +628,14 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	var localFlag bool
 	var skipDepsFlag bool
 	var fromFlag string
+	var repeatFlag int
 
 	cmd := &cobra.Command{
 		Use:   name + " [args...]",
 		Short: task.Description,
 		Long:  buildTaskLongDescription(name, task),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag)
+			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag, repeatFlag)
 		},
 	}
 
@@ -644,6 +649,7 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	cmd.Flags().StringVar(&tagFlag, "tag", "", "select host by tag")
 	cmd.Flags().StringVar(&probeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
+	cmd.Flags().IntVar(&repeatFlag, "repeat", 0, "run task N times in parallel across available hosts (for flake detection)")
 
 	// Add dependency flags if task has dependencies
 	if config.HasDependencies(&task) {
@@ -810,10 +816,27 @@ func buildParallelTaskLongDescription(name string, task config.TaskConfig) strin
 }
 
 // runTaskCommand is the implementation for task commands.
-func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string) error {
+func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string, repeatCount int) error {
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
+	}
+
+	// If --repeat is specified, use parallel execution
+	if repeatCount > 1 {
+		if len(args) > 0 {
+			return errors.New(errors.ErrConfig,
+				"Can't use --repeat with task arguments",
+				"Remove extra arguments or run without --repeat.")
+		}
+		exitCode, err := runTaskRepeated(taskName, repeatCount, hostFlag, tagFlag, localFlag)
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return errors.NewExitError(exitCode)
+		}
+		return nil
 	}
 
 	exitCode, err := RunTask(TaskOptions{
@@ -837,6 +860,138 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 	}
 
 	return nil
+}
+
+// runTaskRepeated runs a task N times in parallel across available hosts.
+// Used for flake detection - run the same task multiple times to surface intermittent failures.
+func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string, localFlag bool) (int, error) {
+	// Load and validate config
+	resolved, err := config.LoadResolved(Config())
+	if err != nil {
+		return 1, err
+	}
+
+	if err := config.ValidateResolved(resolved); err != nil {
+		return 1, err
+	}
+
+	// Get the task to extract its command
+	task, err := config.GetTask(resolved.Project, taskName)
+	if err != nil {
+		return 1, err
+	}
+
+	// Build the command from task config
+	cmd := task.Run
+	if cmd == "" && len(task.Steps) > 0 {
+		// For multi-step tasks, build a command that runs all steps
+		cmd = buildStepsCommand(task.Steps)
+	}
+	if cmd == "" {
+		return 1, errors.New(errors.ErrConfig,
+			fmt.Sprintf("Task '%s' has no command to run", taskName),
+			"Task must have a 'run' field or 'steps' defined.")
+	}
+
+	// Check for dependencies - not supported with --repeat
+	if config.HasDependencies(task) {
+		return 1, errors.New(errors.ErrConfig,
+			"Can't use --repeat with tasks that have dependencies",
+			"Use --skip-deps or define a parallel task instead.")
+	}
+
+	// Create N synthetic tasks with the same command
+	tasks := make([]parallel.TaskInfo, repeatCount)
+	for i := 0; i < repeatCount; i++ {
+		tasks[i] = parallel.TaskInfo{
+			Name:    fmt.Sprintf("%s-%d", taskName, i+1),
+			Index:   i,
+			Command: cmd,
+			Env:     task.Env,
+		}
+	}
+
+	// Resolve hosts
+	hostOrder, hosts, err := config.ResolveHosts(resolved, hostFlag)
+	if err != nil {
+		return 1, err
+	}
+
+	// Handle --local flag
+	if localFlag {
+		hosts = make(map[string]config.Host)
+		hostOrder = nil
+	}
+
+	// Filter by tag if specified
+	if tagFlag != "" {
+		hosts, hostOrder = filterHostsByTag(hosts, hostOrder, tagFlag)
+		if len(hosts) == 0 {
+			return 1, errors.New(errors.ErrConfig,
+				fmt.Sprintf("No hosts found with tag '%s'", tagFlag),
+				"Check your host tags in ~/.rr/config.yaml.")
+		}
+	}
+
+	// Build parallel config
+	parallelCfg := parallel.Config{
+		OutputMode: parallel.OutputProgress,
+		SaveLogs:   true,
+	}
+
+	// Set up log writer
+	var logWriter *logs.LogWriter
+	logDir := resolved.Global.Logs.Dir
+	if logDir == "" {
+		logDir = "~/.rr/logs"
+	}
+	logWriter, err = logs.NewLogWriter(logDir, taskName+"-repeat")
+	if err != nil {
+		logWriter = nil
+	} else {
+		parallelCfg.LogDir = logWriter.Dir()
+	}
+
+	// Cleanup old logs
+	_ = logs.Cleanup(resolved.Global.Logs)
+
+	// Create orchestrator
+	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
+
+	// Create context with signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	// Execute
+	result, err := orchestrator.Run(ctx)
+	if err != nil {
+		return 1, err
+	}
+
+	// Write task outputs to logs
+	if logWriter != nil {
+		writeTaskLogs(logWriter, result, taskName+"-repeat")
+	}
+
+	// Render summary
+	logDirPath := ""
+	if logWriter != nil {
+		logDirPath = logWriter.Dir()
+	}
+	parallel.RenderSummary(result, logDirPath)
+
+	// Return aggregate exit code
+	if result.Failed > 0 {
+		return 1, nil
+	}
+	return 0, nil
 }
 
 // taskStepHandler implements exec.StepHandler to show step progress during multi-step tasks.

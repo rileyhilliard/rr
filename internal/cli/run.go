@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -12,6 +15,8 @@ import (
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/output"
+	"github.com/rileyhilliard/rr/internal/parallel"
+	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -271,7 +276,7 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 }
 
 // runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool) error {
+func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
@@ -285,6 +290,18 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 
 	// Join all args as the command (handles "rr run make test")
 	cmd := strings.Join(args, " ")
+
+	// If --repeat is specified, use parallel execution
+	if repeatCount > 1 {
+		exitCode, err := runRepeated(cmd, repeatCount, hostFlag, tagFlag, localFlag)
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return errors.NewExitError(exitCode)
+		}
+		return nil
+	}
 
 	exitCode, err := Run(RunOptions{
 		Command:          cmd,
@@ -305,4 +322,110 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 	}
 
 	return nil
+}
+
+// runRepeated runs a command N times in parallel across available hosts.
+// Used for flake detection - run the same test multiple times to surface intermittent failures.
+func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFlag bool) (int, error) {
+	// Load and validate config
+	resolved, err := config.LoadResolved(Config())
+	if err != nil {
+		return 1, err
+	}
+
+	if err := config.ValidateResolved(resolved); err != nil {
+		return 1, err
+	}
+
+	// Create N synthetic tasks with the same command
+	tasks := make([]parallel.TaskInfo, repeatCount)
+	for i := 0; i < repeatCount; i++ {
+		tasks[i] = parallel.TaskInfo{
+			Name:    fmt.Sprintf("run-%d", i+1),
+			Index:   i,
+			Command: cmd,
+		}
+	}
+
+	// Resolve hosts
+	hostOrder, hosts, err := config.ResolveHosts(resolved, hostFlag)
+	if err != nil {
+		return 1, err
+	}
+
+	// Handle --local flag
+	if localFlag {
+		hosts = make(map[string]config.Host)
+		hostOrder = nil
+	}
+
+	// Filter by tag if specified
+	if tagFlag != "" {
+		hosts, hostOrder = filterHostsByTag(hosts, hostOrder, tagFlag)
+		if len(hosts) == 0 {
+			return 1, errors.New(errors.ErrConfig,
+				fmt.Sprintf("No hosts found with tag '%s'", tagFlag),
+				"Check your host tags in ~/.rr/config.yaml.")
+		}
+	}
+
+	// Build parallel config
+	parallelCfg := parallel.Config{
+		OutputMode: parallel.OutputProgress,
+		SaveLogs:   true,
+	}
+
+	// Set up log writer
+	var logWriter *logs.LogWriter
+	logDir := resolved.Global.Logs.Dir
+	if logDir == "" {
+		logDir = "~/.rr/logs"
+	}
+	logWriter, err = logs.NewLogWriter(logDir, "repeat")
+	if err != nil {
+		logWriter = nil
+	} else {
+		parallelCfg.LogDir = logWriter.Dir()
+	}
+
+	// Cleanup old logs
+	_ = logs.Cleanup(resolved.Global.Logs)
+
+	// Create orchestrator
+	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
+
+	// Create context with signal handling
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	// Execute
+	result, err := orchestrator.Run(ctx)
+	if err != nil {
+		return 1, err
+	}
+
+	// Write task outputs to logs
+	if logWriter != nil {
+		writeTaskLogs(logWriter, result, "repeat")
+	}
+
+	// Render summary
+	logDirPath := ""
+	if logWriter != nil {
+		logDirPath = logWriter.Dir()
+	}
+	parallel.RenderSummary(result, logDirPath)
+
+	// Return aggregate exit code
+	if result.Failed > 0 {
+		return 1, nil
+	}
+	return 0, nil
 }

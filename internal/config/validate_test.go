@@ -767,7 +767,7 @@ func TestFlattenParallelTasks(t *testing.T) {
 			errContains: "'missing' not found",
 		},
 		{
-			name:     "diamond dependency deduplicates shared task",
+			name:     "diamond dependency expands all occurrences",
 			taskName: "test",
 			tasks: map[string]TaskConfig{
 				"shared":   {Run: "echo shared"},
@@ -777,8 +777,30 @@ func TestFlattenParallelTasks(t *testing.T) {
 				"group-b":  {Parallel: []string{"shared", "unique-b"}},
 				"test":     {Parallel: []string{"group-a", "group-b"}},
 			},
-			// shared appears in both group-a and group-b, but should only be in result once
-			want: []string{"shared", "unique-a", "unique-b"},
+			// shared appears in both group-a and group-b, and appears twice in result
+			want: []string{"shared", "unique-a", "shared", "unique-b"},
+		},
+		{
+			name:     "direct duplicates preserved for flake detection",
+			taskName: "flake",
+			tasks: map[string]TaskConfig{
+				"my-test": {Run: "go test ./..."},
+				"flake":   {Parallel: []string{"my-test", "my-test", "my-test"}},
+			},
+			// same task listed 3x runs 3x (flake detection use case)
+			want: []string{"my-test", "my-test", "my-test"},
+		},
+		{
+			name:     "nested parallel with duplicates expands fully",
+			taskName: "outer",
+			tasks: map[string]TaskConfig{
+				"a":     {Run: "a"},
+				"b":     {Run: "b"},
+				"inner": {Parallel: []string{"a", "b"}},
+				"outer": {Parallel: []string{"inner", "inner"}},
+			},
+			// inner listed twice expands to [a, b, a, b]
+			want: []string{"a", "b", "a", "b"},
 		},
 	}
 

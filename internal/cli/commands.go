@@ -16,6 +16,7 @@ var (
 	runProbeTimeoutFlag      string
 	runLocalFlag             bool
 	runSkipRequirementsFlag  bool
+	runRepeatFlag            int
 	execHostFlag             string
 	execTagFlag              string
 	execProbeTimeoutFlag     string
@@ -52,7 +53,7 @@ Examples:
   rr run --host mini "cargo test"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag)
+		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag)
 	},
 }
 
@@ -396,6 +397,7 @@ func init() {
 	runCmd.Flags().StringVar(&runProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	runCmd.Flags().BoolVar(&runLocalFlag, "local", false, "force local execution (skip remote hosts)")
 	runCmd.Flags().BoolVar(&runSkipRequirementsFlag, "skip-requirements", false, "skip requirement checks")
+	runCmd.Flags().IntVar(&runRepeatFlag, "repeat", 0, "run command N times in parallel across available hosts (for flake detection)")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")

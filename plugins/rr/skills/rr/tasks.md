@@ -183,10 +183,35 @@ Running `rr test` expands to: `opendata-1`, `opendata-2`, `opendata-3`, `backend
 - Run `rr test-opendata` for just opendata splits
 - Run `rr test` for everything
 - Add splits to `test-opendata` and `test` automatically includes them
-- Diamond dependencies are deduplicated (shared task runs once)
 - Circular references are detected at config validation
 
 Use `--dry-run` to see the expanded task list.
+
+### Running Tasks Multiple Times (Flake Detection)
+
+List the same task multiple times to run it concurrently across hosts:
+
+```yaml
+tasks:
+  flake-test:
+    description: Run tests 5x to detect flakiness
+    parallel:
+      - test
+      - test
+      - test
+      - test
+      - test
+    fail_fast: false
+```
+
+Each instance runs independently and is distributed across available hosts via work-stealing. This is useful for detecting flaky tests by running the same test suite multiple times in parallel.
+
+For ad-hoc flake detection without config changes, use `--repeat`:
+
+```bash
+rr test --repeat 5           # Run test task 5x
+rr run --repeat 5 "pytest"   # Run raw command 5x
+```
 
 ### Parallel Task Options
 
