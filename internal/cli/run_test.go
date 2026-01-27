@@ -620,3 +620,137 @@ func TestRun_LocalFlag(t *testing.T) {
 		strings.Contains(err.Error(), "No hosts"),
 		"Expected error about missing config or hosts, got: %s", err.Error())
 }
+
+func TestPullCommand_NoArgs(t *testing.T) {
+	err := pullCommand([]string{}, "", "", "", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "What should I pull?")
+}
+
+func TestPullCommand_InvalidProbeTimeout(t *testing.T) {
+	err := pullCommand([]string{"coverage.xml"}, "", "", "", "not-a-duration", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
+}
+
+func TestPullCommand_ValidProbeTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Valid timeout should be parsed correctly (will fail on no hosts, not timeout)
+	err = pullCommand([]string{"file.txt"}, "", "", "", "5s", false)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "doesn't look like a valid timeout")
+}
+
+func TestPullOptions_Defaults(t *testing.T) {
+	opts := PullOptions{}
+
+	assert.Empty(t, opts.Patterns)
+	assert.Empty(t, opts.Dest)
+	assert.Empty(t, opts.Host)
+	assert.Empty(t, opts.Tag)
+	assert.Zero(t, opts.ProbeTimeout)
+	assert.False(t, opts.DryRun)
+}
+
+func TestPullOptions_WithValues(t *testing.T) {
+	opts := PullOptions{
+		Patterns:     []string{"*.xml", "*.html"},
+		Dest:         "/tmp/results",
+		Host:         "remote-server",
+		Tag:          "fast",
+		ProbeTimeout: 10 * time.Second,
+		DryRun:       true,
+	}
+
+	assert.Equal(t, []string{"*.xml", "*.html"}, opts.Patterns)
+	assert.Equal(t, "/tmp/results", opts.Dest)
+	assert.Equal(t, "remote-server", opts.Host)
+	assert.Equal(t, "fast", opts.Tag)
+	assert.Equal(t, 10*time.Second, opts.ProbeTimeout)
+	assert.True(t, opts.DryRun)
+}
+
+func TestPull_NoConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"coverage.xml"},
+	})
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
+}
+
+func TestPull_WithHostFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"file.txt"},
+		Host:     "myhost",
+	})
+	require.Error(t, err)
+	// Should fail on no hosts configured
+}
+
+func TestPull_WithTagFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"file.txt"},
+		Tag:      "gpu",
+	})
+	require.Error(t, err)
+}
+
+func TestPull_DryRunMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"file.txt"},
+		DryRun:   true,
+	})
+	require.Error(t, err)
+	// Should fail on config, not on dry-run flag
+}

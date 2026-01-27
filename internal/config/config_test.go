@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -1683,6 +1684,11 @@ func TestPullItemFromInterface(t *testing.T) {
 			input:   map[string]interface{}{"src": 123},
 			wantErr: true,
 		},
+		{
+			name:    "dest not a string",
+			input:   map[string]interface{}{"src": "file.txt", "dest": 123},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1694,6 +1700,75 @@ func TestPullItemFromInterface(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tt.expected.Src, result.Src)
 				assert.Equal(t, tt.expected.Dest, result.Dest)
+			}
+		})
+	}
+}
+
+func TestPullItemUnmarshalYAML_Direct(t *testing.T) {
+	// Test the UnmarshalYAML method directly by unmarshaling into a slice of PullItems
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []PullItem
+		wantErr  bool
+	}{
+		{
+			name: "string format",
+			yaml: `
+- coverage.xml
+- htmlcov/
+`,
+			expected: []PullItem{
+				{Src: "coverage.xml"},
+				{Src: "htmlcov/"},
+			},
+		},
+		{
+			name: "object format",
+			yaml: `
+- src: dist/*.whl
+  dest: ./artifacts/
+`,
+			expected: []PullItem{
+				{Src: "dist/*.whl", Dest: "./artifacts/"},
+			},
+		},
+		{
+			name: "mixed format",
+			yaml: `
+- coverage.xml
+- src: htmlcov/
+  dest: ./reports/
+`,
+			expected: []PullItem{
+				{Src: "coverage.xml"},
+				{Src: "htmlcov/", Dest: "./reports/"},
+			},
+		},
+		{
+			name:    "empty string",
+			yaml:    `- ""`,
+			wantErr: true,
+		},
+		{
+			name: "object missing src",
+			yaml: `
+- dest: ./artifacts/
+`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result []PullItem
+			err := yaml.Unmarshal([]byte(tt.yaml), &result)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
 			}
 		})
 	}

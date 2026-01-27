@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -368,4 +369,147 @@ func TestBuildPullArgs_CreatesDestDir(t *testing.T) {
 	// Verify directory was created
 	_, statErr := os.Stat(destDir)
 	assert.NoError(t, statErr, "destination directory should be created")
+}
+
+func TestHandlePullError_NonExitError(t *testing.T) {
+	// Test with a non-ExitError (e.g., a generic error)
+	genericErr := errors.New("some random error")
+	result := handlePullError(genericErr, "testhost", "")
+	assert.Error(t, result)
+	assert.Contains(t, result.Error(), "rsync pull failed")
+}
+
+func TestHandlePullError_MoreExitCodes(t *testing.T) {
+	tests := []struct {
+		name         string
+		exitCode     int
+		wantContains string
+	}{
+		{
+			name:         "exit code 2 - protocol incompatibility",
+			exitCode:     2,
+			wantContains: "protocol incompatibility",
+		},
+		{
+			name:         "exit code 5 - client-server protocol",
+			exitCode:     5,
+			wantContains: "client-server protocol",
+		},
+		{
+			name:         "exit code 10 - socket I/O",
+			exitCode:     10,
+			wantContains: "socket I/O",
+		},
+		{
+			name:         "exit code 11 - file I/O",
+			exitCode:     11,
+			wantContains: "file I/O",
+		},
+		{
+			name:         "exit code 12 - protocol data stream",
+			exitCode:     12,
+			wantContains: "protocol data stream",
+		},
+		{
+			name:         "unknown exit code",
+			exitCode:     99,
+			wantContains: "rsync exited with code 99",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", "exit "+strconv.Itoa(tt.exitCode))
+			err := cmd.Run()
+			require.Error(t, err)
+
+			result := handlePullError(err, "testhost", "")
+			assert.Error(t, result)
+			assert.Contains(t, result.Error(), tt.wantContains)
+		})
+	}
+}
+
+func TestPull_FindsRsync(t *testing.T) {
+	// Test that Pull returns error when rsync is not found
+	// This is hard to test directly, but we can at least verify
+	// the function handles the case where rsync exists (common case)
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"},
+	}
+
+	// This will fail because we don't have a real SSH connection,
+	// but it will exercise the rsync finding code path
+	err := Pull(conn, PullOptions{
+		Patterns: []config.PullItem{{Src: "file.txt"}},
+	}, nil)
+
+	// We expect an error (SSH connection will fail), but not a "rsync not found" error
+	// if rsync is installed on the system
+	if err != nil {
+		assert.NotContains(t, err.Error(), "rsync not found")
+	}
+}
+
+func TestGroupByDest_OrderPreserved(t *testing.T) {
+	// Test that multiple patterns going to the same dest are preserved in order
+	items := []config.PullItem{
+		{Src: "first.txt"},
+		{Src: "second.txt"},
+		{Src: "third.txt"},
+	}
+
+	result := groupByDest(items, "./output")
+
+	// All should be grouped under ./output
+	require.Len(t, result, 1)
+	patterns := result["./output"]
+	require.Len(t, patterns, 3)
+	assert.Equal(t, "first.txt", patterns[0])
+	assert.Equal(t, "second.txt", patterns[1])
+	assert.Equal(t, "third.txt", patterns[2])
+}
+
+func TestBuildPullArgs_RemoteDirTrailingSlash(t *testing.T) {
+	// Test that remote dir without trailing slash gets one added
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"}, // no trailing slash
+	}
+
+	args, err := BuildPullArgs(conn, []string{"file.txt"}, ".", nil)
+	require.NoError(t, err)
+
+	// Find the remote source argument
+	found := false
+	for _, arg := range args {
+		if arg == "test-alias:~/projects/myapp/file.txt" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "remote path should include trailing slash before pattern")
+
+	// Also test with trailing slash already present
+	conn2 := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp/"}, // with trailing slash
+	}
+
+	args2, err := BuildPullArgs(conn2, []string{"file.txt"}, ".", nil)
+	require.NoError(t, err)
+
+	found2 := false
+	for _, arg := range args2 {
+		// Should not have double slash
+		if arg == "test-alias:~/projects/myapp/file.txt" {
+			found2 = true
+			break
+		}
+	}
+	assert.True(t, found2, "remote path should not have double slashes")
 }
