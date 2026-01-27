@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -291,6 +292,9 @@ func (p *PullItem) UnmarshalYAML(value *yaml.Node) error {
 func PullItemFromInterface(v interface{}) (PullItem, error) {
 	switch val := v.(type) {
 	case string:
+		if strings.TrimSpace(val) == "" {
+			return PullItem{}, fmt.Errorf("pull item cannot be empty string")
+		}
 		return PullItem{Src: val}, nil
 	case map[string]interface{}:
 		p := PullItem{}

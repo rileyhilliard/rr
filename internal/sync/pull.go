@@ -60,7 +60,11 @@ func Pull(conn *host.Connection, opts PullOptions, progress io.Writer) error {
 	}
 
 	// Ensure the SSH control socket directory exists for ControlMaster
-	_ = os.MkdirAll(controlSocketDir, 0700)
+	if err := os.MkdirAll(controlSocketDir, 0700); err != nil {
+		return errors.WrapWithCode(err, errors.ErrSync,
+			fmt.Sprintf("creating SSH control socket dir %s", controlSocketDir),
+			"Check directory permissions and disk space")
+	}
 
 	// Group patterns by destination
 	groups := groupByDest(opts.Patterns, opts.DefaultDest)
@@ -212,10 +216,13 @@ func runRsyncPull(rsyncPath string, args []string, hostName string, progress io.
 			return handlePullError(err, hostName, stderrBuf.String())
 		}
 	} else {
-		// No progress output, just run and wait
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return handlePullError(err, hostName, string(output))
+		// No progress output - stream stdout to discard, capture only stderr
+		// This avoids OOM with large rsync progress output
+		var stderrBuf bytes.Buffer
+		cmd.Stdout = io.Discard
+		cmd.Stderr = &stderrBuf
+		if err := cmd.Run(); err != nil {
+			return handlePullError(err, hostName, stderrBuf.String())
 		}
 	}
 

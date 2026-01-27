@@ -431,6 +431,11 @@ func TestHandlePullError_MoreExitCodes(t *testing.T) {
 }
 
 func TestPull_FindsRsync(t *testing.T) {
+	// Skip if rsync is not installed on this system
+	if _, err := exec.LookPath("rsync"); err != nil {
+		t.Skipf("rsync not found on system: %v", err)
+	}
+
 	// Test that Pull returns error when rsync is not found
 	// This is hard to test directly, but we can at least verify
 	// the function handles the case where rsync exists (common case)

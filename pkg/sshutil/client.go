@@ -282,14 +282,18 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	}
 
 	// Check for test key override (for CI environments)
-	// When set, ONLY use this key - skip agent and other keys for deterministic test behavior
+	// When set, ONLY use this key - do NOT fall back to agent or other keys
 	testKey := os.Getenv("RR_TEST_SSH_KEY")
 	if testKey != "" {
-		tryKeyFile(testKey)
-	}
-
-	// Only load other auth methods if we're not in test mode (or test key failed to load)
-	if testKey == "" || len(authMethods) == 0 {
+		keyAuth, err := keyFileAuth(testKey)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrSSH,
+				fmt.Sprintf("failed to load RR_TEST_SSH_KEY: %s", testKey),
+				"Check that the key file exists and is valid")
+		}
+		authMethods = append(authMethods, keyAuth)
+	} else {
+		// Normal mode: try multiple auth methods
 		// Try SSH agent first (most common and convenient)
 		if agentAuth := sshAgentAuth(); agentAuth != nil {
 			authMethods = append(authMethods, agentAuth)
