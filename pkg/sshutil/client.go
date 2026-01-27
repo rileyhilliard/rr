@@ -281,33 +281,38 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		authMethods = append(authMethods, keyAuth)
 	}
 
-	// Try SSH agent first (most common and convenient)
-	if agentAuth := sshAgentAuth(); agentAuth != nil {
-		authMethods = append(authMethods, agentAuth)
-	}
-
 	// Check for test key override (for CI environments)
-	if testKey := os.Getenv("RR_TEST_SSH_KEY"); testKey != "" {
+	// When set, ONLY use this key - skip agent and other keys for deterministic test behavior
+	testKey := os.Getenv("RR_TEST_SSH_KEY")
+	if testKey != "" {
 		tryKeyFile(testKey)
 	}
 
-	// Try specific identity file from SSH config
-	if settings.identityFile != "" {
-		tryKeyFile(settings.identityFile)
-	}
-
-	// Try default key files
-	defaultKeys := []string{
-		filepath.Join(homeDir(), ".ssh", "id_ed25519"),
-		filepath.Join(homeDir(), ".ssh", "id_rsa"),
-		filepath.Join(homeDir(), ".ssh", "id_ecdsa"),
-	}
-
-	for _, keyPath := range defaultKeys {
-		if keyPath == settings.identityFile {
-			continue // Already tried this one
+	// Only load other auth methods if we're not in test mode (or test key failed to load)
+	if testKey == "" || len(authMethods) == 0 {
+		// Try SSH agent first (most common and convenient)
+		if agentAuth := sshAgentAuth(); agentAuth != nil {
+			authMethods = append(authMethods, agentAuth)
 		}
-		tryKeyFile(keyPath)
+
+		// Try specific identity file from SSH config
+		if settings.identityFile != "" {
+			tryKeyFile(settings.identityFile)
+		}
+
+		// Try default key files
+		defaultKeys := []string{
+			filepath.Join(homeDir(), ".ssh", "id_ed25519"),
+			filepath.Join(homeDir(), ".ssh", "id_rsa"),
+			filepath.Join(homeDir(), ".ssh", "id_ecdsa"),
+		}
+
+		for _, keyPath := range defaultKeys {
+			if keyPath == settings.identityFile {
+				continue // Already tried this one
+			}
+			tryKeyFile(keyPath)
+		}
 	}
 
 	if len(authMethods) == 0 {
