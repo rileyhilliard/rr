@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-01-27
+
+### Added
+
+- **Repeat flag for parallel tasks** - New `--repeat N` flag runs the same task N times in parallel, useful for detecting flaky tests. Example: `rr test --repeat 10` runs the test task 10 times concurrently across available hosts.
+- **Duplicate tasks in parallel blocks** - Parallel task definitions can now include the same task multiple times. Previously duplicates were deduplicated; now each instance runs independently.
+
+### Fixed
+
+- **Config discovery error messages** - Improved error messages when `.rr.yaml` cannot be found, making it clearer what went wrong and how to fix it.
+
 ## [0.18.0] - 2026-01-26
 
 ### Added
