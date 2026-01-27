@@ -99,15 +99,22 @@ func loadAndValidateConfig(ctx *WorkflowContext) error {
 }
 
 // setupWorkDir determines the working directory.
+// Uses the project root (where .rr.yaml is located) as the default,
+// allowing rr to work correctly from subdirectories.
 func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 	ctx.WorkDir = opts.WorkingDir
 	if ctx.WorkDir == "" {
-		var err error
-		ctx.WorkDir, err = os.Getwd()
-		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrExec,
-				"Can't figure out what directory you're in",
-				"This is unusual - check your directory permissions.")
+		// Use project root if available, otherwise fall back to cwd
+		if ctx.Resolved != nil && ctx.Resolved.ProjectRoot != "" {
+			ctx.WorkDir = ctx.Resolved.ProjectRoot
+		} else {
+			var err error
+			ctx.WorkDir, err = os.Getwd()
+			if err != nil {
+				return errors.WrapWithCode(err, errors.ErrExec,
+					"Can't figure out what directory you're in",
+					"This is unusual - check your directory permissions.")
+			}
 		}
 	}
 	return nil

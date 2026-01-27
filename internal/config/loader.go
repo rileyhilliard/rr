@@ -201,7 +201,7 @@ func Find(explicit string) (string, error) {
 			return configPath, nil
 		}
 
-		// Stop at git root
+		// Stop at git root (but only after checking for .rr.yaml in this directory)
 		gitPath := filepath.Join(dir, ".git")
 		if _, err := os.Stat(gitPath); err == nil {
 			break
@@ -240,9 +240,10 @@ const (
 
 // ResolvedConfig contains both global and project configuration.
 type ResolvedConfig struct {
-	Global  *GlobalConfig
-	Project *Config
-	Source  ConfigSource
+	Global      *GlobalConfig
+	Project     *Config
+	Source      ConfigSource
+	ProjectRoot string // Directory containing .rr.yaml (empty if no project config)
 }
 
 // LoadResolved loads both global and project configuration.
@@ -276,6 +277,7 @@ func LoadResolved(explicitPath string) (*ResolvedConfig, error) {
 			return nil, err
 		}
 		resolved.Project = project
+		resolved.ProjectRoot = filepath.Dir(projectPath)
 
 		// Check if global config has hosts (file existed and was non-empty)
 		if len(global.Hosts) > 0 {
