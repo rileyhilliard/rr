@@ -418,11 +418,12 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 	// Set up duration parsing for lock timeouts
 	setDurationDefaults(v)
 
-	// Unmarshal with custom decoder for DependencyItem
+	// Unmarshal with custom decoders for DependencyItem and PullItem
 	if err := v.Unmarshal(cfg, viper.DecodeHook(
 		mapstructure.ComposeDecodeHookFunc(
 			mapstructure.StringToTimeDurationHookFunc(),
 			dependencyItemDecodeHook(),
+			pullItemDecodeHook(),
 		),
 	)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
@@ -445,6 +446,24 @@ func dependencyItemDecodeHook() mapstructure.DecodeHookFunc {
 		// Delegate to the shared conversion function for supported types
 		if from.Kind() == reflect.String || from.Kind() == reflect.Map {
 			return DependencyItemFromInterface(data)
+		}
+
+		return data, nil
+	}
+}
+
+// pullItemDecodeHook returns a decode hook that handles PullItem
+// from both string and map formats.
+func pullItemDecodeHook() mapstructure.DecodeHookFunc {
+	return func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+		// Only handle conversion to PullItem
+		if to != reflect.TypeOf(PullItem{}) {
+			return data, nil
+		}
+
+		// Delegate to the shared conversion function for supported types
+		if from.Kind() == reflect.String || from.Kind() == reflect.Map {
+			return PullItemFromInterface(data)
 		}
 
 		return data, nil

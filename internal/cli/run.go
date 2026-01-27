@@ -33,6 +33,8 @@ type RunOptions struct {
 	WorkingDir       string        // Override local working directory
 	Quiet            bool          // If true, minimize output (no individual connection attempts)
 	Local            bool          // If true, force local execution (skip remote hosts)
+	Pull             []string      // Patterns to pull from remote after command completes
+	PullDest         string        // Destination directory for pulled files
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -92,6 +94,15 @@ func Run(opts RunOptions) (int, error) {
 	// Release lock early if command completed (wf.Close() will also release, but early release is cleaner)
 	if wf.Lock != nil {
 		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
+	}
+
+	// Phase 5: Pull files (if requested)
+	if len(opts.Pull) > 0 {
+		pullItems := make([]config.PullItem, len(opts.Pull))
+		for i, p := range opts.Pull {
+			pullItems[i] = config.PullItem{Src: p}
+		}
+		ExecutePullPhase(wf, pullItems, opts.PullDest)
 	}
 
 	// Check for command-not-found and other special exit codes
@@ -276,7 +287,7 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 }
 
 // runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int) error {
+func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int, pullPatterns []string, pullDest string) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
@@ -311,6 +322,8 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 		SkipRequirements: skipRequirementsFlag,
 		Quiet:            Quiet(),
 		Local:            localFlag,
+		Pull:             pullPatterns,
+		PullDest:         pullDest,
 	})
 
 	if err != nil {

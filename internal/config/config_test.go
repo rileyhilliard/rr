@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -1543,4 +1544,232 @@ tasks:
 	test1 := cfg.Tasks["test-1"]
 	assert.Empty(t, test1.Setup)
 	assert.Equal(t, "pytest --test-group 1", test1.Run)
+}
+
+func TestPullItemUnmarshal(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []PullItem
+	}{
+		{
+			name: "simple string patterns",
+			yaml: `
+tasks:
+  test:
+    run: pytest --cov
+    pull:
+      - coverage.xml
+      - htmlcov/
+`,
+			expected: []PullItem{
+				{Src: "coverage.xml"},
+				{Src: "htmlcov/"},
+			},
+		},
+		{
+			name: "object with src and dest",
+			yaml: `
+tasks:
+  build:
+    run: make release
+    pull:
+      - src: dist/*.whl
+        dest: ./artifacts/
+      - src: dist/*.tar.gz
+        dest: ./artifacts/
+`,
+			expected: []PullItem{
+				{Src: "dist/*.whl", Dest: "./artifacts/"},
+				{Src: "dist/*.tar.gz", Dest: "./artifacts/"},
+			},
+		},
+		{
+			name: "mixed string and object",
+			yaml: `
+tasks:
+  coverage:
+    run: pytest --cov
+    pull:
+      - coverage.xml
+      - src: htmlcov/
+        dest: ./reports/coverage/
+`,
+			expected: []PullItem{
+				{Src: "coverage.xml"},
+				{Src: "htmlcov/", Dest: "./reports/coverage/"},
+			},
+		},
+		{
+			name: "no pull config",
+			yaml: `
+tasks:
+  build:
+    run: make build
+`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, ".rr.yaml")
+			content := "version: 1\n" + tt.yaml
+			err := os.WriteFile(configPath, []byte(content), 0644)
+			require.NoError(t, err)
+
+			cfg, err := Load(configPath)
+			require.NoError(t, err)
+
+			// Find the task with pull field
+			var task TaskConfig
+			for name, t := range cfg.Tasks {
+				if name == "test" || name == "build" || name == "coverage" {
+					task = t
+					break
+				}
+			}
+
+			if tt.expected == nil {
+				assert.Empty(t, task.Pull)
+			} else {
+				require.Equal(t, len(tt.expected), len(task.Pull))
+				for i, exp := range tt.expected {
+					assert.Equal(t, exp.Src, task.Pull[i].Src)
+					assert.Equal(t, exp.Dest, task.Pull[i].Dest)
+				}
+			}
+		})
+	}
+}
+
+func TestPullItemFromInterface(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected PullItem
+		wantErr  bool
+	}{
+		{
+			name:     "string input",
+			input:    "coverage.xml",
+			expected: PullItem{Src: "coverage.xml"},
+			wantErr:  false,
+		},
+		{
+			name:     "map with src only",
+			input:    map[string]interface{}{"src": "dist/*.whl"},
+			expected: PullItem{Src: "dist/*.whl"},
+			wantErr:  false,
+		},
+		{
+			name:     "map with src and dest",
+			input:    map[string]interface{}{"src": "dist/*.whl", "dest": "./artifacts/"},
+			expected: PullItem{Src: "dist/*.whl", Dest: "./artifacts/"},
+			wantErr:  false,
+		},
+		{
+			name:    "map missing src",
+			input:   map[string]interface{}{"dest": "./artifacts/"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid type",
+			input:   123,
+			wantErr: true,
+		},
+		{
+			name:    "src not a string",
+			input:   map[string]interface{}{"src": 123},
+			wantErr: true,
+		},
+		{
+			name:    "dest not a string",
+			input:   map[string]interface{}{"src": "file.txt", "dest": 123},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := PullItemFromInterface(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected.Src, result.Src)
+				assert.Equal(t, tt.expected.Dest, result.Dest)
+			}
+		})
+	}
+}
+
+func TestPullItemUnmarshalYAML_Direct(t *testing.T) {
+	// Test the UnmarshalYAML method directly by unmarshaling into a slice of PullItems
+	tests := []struct {
+		name     string
+		yaml     string
+		expected []PullItem
+		wantErr  bool
+	}{
+		{
+			name: "string format",
+			yaml: `
+- coverage.xml
+- htmlcov/
+`,
+			expected: []PullItem{
+				{Src: "coverage.xml"},
+				{Src: "htmlcov/"},
+			},
+		},
+		{
+			name: "object format",
+			yaml: `
+- src: dist/*.whl
+  dest: ./artifacts/
+`,
+			expected: []PullItem{
+				{Src: "dist/*.whl", Dest: "./artifacts/"},
+			},
+		},
+		{
+			name: "mixed format",
+			yaml: `
+- coverage.xml
+- src: htmlcov/
+  dest: ./reports/
+`,
+			expected: []PullItem{
+				{Src: "coverage.xml"},
+				{Src: "htmlcov/", Dest: "./reports/"},
+			},
+		},
+		{
+			name:    "empty string",
+			yaml:    `- ""`,
+			wantErr: true,
+		},
+		{
+			name: "object missing src",
+			yaml: `
+- dest: ./artifacts/
+`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result []PullItem
+			err := yaml.Unmarshal([]byte(tt.yaml), &result)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
 }

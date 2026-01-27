@@ -1750,3 +1750,44 @@ func TestWorkflowContext_SignalHandler_CleanupOrder(t *testing.T) {
 	assert.NotNil(t, ctx.Resolved)
 	assert.Equal(t, "/test/dir", ctx.WorkDir)
 }
+
+// ============================================================================
+// Tests for ExecutePullPhase
+// ============================================================================
+
+func TestExecutePullPhase_EmptyPatterns(t *testing.T) {
+	ctx := &WorkflowContext{
+		Conn: &host.Connection{
+			IsLocal: false,
+			Name:    "remote",
+		},
+		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
+	}
+
+	// Empty patterns should return without error or action
+	ExecutePullPhase(ctx, nil, "")
+	ExecutePullPhase(ctx, []config.PullItem{}, "")
+}
+
+func TestExecutePullPhase_LocalConnection(t *testing.T) {
+	ctx := &WorkflowContext{
+		Conn: &host.Connection{
+			IsLocal: true,
+			Name:    "local",
+		},
+		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
+	}
+
+	// Local connections should skip pull
+	ExecutePullPhase(ctx, []config.PullItem{{Src: "file.txt"}}, "")
+}
+
+func TestExecutePullPhase_NilConnection(t *testing.T) {
+	ctx := &WorkflowContext{
+		Conn:         nil,
+		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
+	}
+
+	// Nil connection should be handled gracefully
+	ExecutePullPhase(ctx, []config.PullItem{{Src: "file.txt"}}, "")
+}

@@ -1,5 +1,5 @@
 .PHONY: build test lint fmt clean test-integration test-integration-ssh test-integration-no-ssh completions
-.PHONY: setup setup-hooks verify check ci coverage-check fmt-check install-linter demos demos-mock
+.PHONY: setup setup-hooks verify check ci coverage-check coverage-merged coverage-ci fmt-check install-linter demos demos-mock
 .PHONY: test-local lint-local verify-local test-all verify-all
 
 # Read golangci-lint version from file (shared with CI)
@@ -90,6 +90,48 @@ coverage-check:
 		echo "Coverage $$COVERAGE% is below 50% minimum"; \
 		exit 1; \
 	fi
+
+# Coverage with merged unit + integration tests (mirrors CI behavior)
+# Integration tests skip if SSH env vars aren't set - use coverage-ci for full coverage
+coverage-merged:
+	@echo "Running unit tests with coverage..."
+	@go test -race -coverprofile=coverage-unit.out -covermode=atomic ./... > /dev/null 2>&1
+	@echo "Running integration tests with coverage (tracking all packages)..."
+	@go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... ./tests/integration/... ./pkg/sshutil/... > /dev/null 2>&1 || true
+	@echo "Merging coverage reports..."
+	@if [ ! -f coverage-integration.out ]; then echo "mode: atomic" > coverage-integration.out; fi
+	@go run github.com/wadey/gocovmerge@latest coverage-unit.out coverage-integration.out > coverage-merged.out
+	@COVERAGE=$$(go tool cover -func=coverage-merged.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	echo "Total merged coverage: $$COVERAGE%"; \
+	if [ $$(echo "$$COVERAGE < 60" | bc -l) -eq 1 ]; then \
+		echo "Coverage $$COVERAGE% is below 60% minimum"; \
+		exit 1; \
+	fi
+	@rm -f coverage-unit.out coverage-integration.out
+
+# Full CI-like coverage with Docker SSH server (replicates CI exactly)
+coverage-ci:
+	@echo "Starting Docker SSH server..."
+	@./scripts/ci-ssh-server.sh start
+	@echo ""
+	@set -e; trap './scripts/ci-ssh-server.sh stop' EXIT; \
+	echo "Running unit tests with coverage..."; \
+	go test -race -coverprofile=coverage-unit.out -covermode=atomic ./... > /dev/null 2>&1; \
+	echo "Running integration tests with coverage (with SSH)..."; \
+	RR_TEST_SSH_HOST=localhost:2222 \
+	RR_TEST_SSH_KEY=$${TMPDIR:-/tmp}/rr-ci-ssh-keys/id_ed25519 \
+	RR_TEST_SSH_USER=testuser \
+	go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... ./tests/integration/... ./pkg/sshutil/... > /dev/null 2>&1; \
+	echo "Merging coverage reports..."; \
+	if [ ! -f coverage-integration.out ]; then echo "mode: atomic" > coverage-integration.out; fi; \
+	go run github.com/wadey/gocovmerge@latest coverage-unit.out coverage-integration.out > coverage-merged.out; \
+	COVERAGE=$$(go tool cover -func=coverage-merged.out | grep total | awk '{print $$3}' | sed 's/%//'); \
+	echo "Total merged coverage: $$COVERAGE%"; \
+	if [ $$(echo "$$COVERAGE < 60" | bc -l) -eq 1 ]; then \
+		echo "Coverage $$COVERAGE% is below 60% minimum"; \
+		exit 1; \
+	fi; \
+	rm -f coverage-unit.out coverage-integration.out
 
 lint-local: install-linter
 	golangci-lint run

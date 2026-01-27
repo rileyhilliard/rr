@@ -281,33 +281,42 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		authMethods = append(authMethods, keyAuth)
 	}
 
-	// Try SSH agent first (most common and convenient)
-	if agentAuth := sshAgentAuth(); agentAuth != nil {
-		authMethods = append(authMethods, agentAuth)
-	}
-
 	// Check for test key override (for CI environments)
-	if testKey := os.Getenv("RR_TEST_SSH_KEY"); testKey != "" {
-		tryKeyFile(testKey)
-	}
-
-	// Try specific identity file from SSH config
-	if settings.identityFile != "" {
-		tryKeyFile(settings.identityFile)
-	}
-
-	// Try default key files
-	defaultKeys := []string{
-		filepath.Join(homeDir(), ".ssh", "id_ed25519"),
-		filepath.Join(homeDir(), ".ssh", "id_rsa"),
-		filepath.Join(homeDir(), ".ssh", "id_ecdsa"),
-	}
-
-	for _, keyPath := range defaultKeys {
-		if keyPath == settings.identityFile {
-			continue // Already tried this one
+	// When set, ONLY use this key - do NOT fall back to agent or other keys
+	testKey := os.Getenv("RR_TEST_SSH_KEY")
+	if testKey != "" {
+		keyAuth, err := keyFileAuth(testKey)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrSSH,
+				fmt.Sprintf("failed to load RR_TEST_SSH_KEY: %s", testKey),
+				"Check that the key file exists and is valid")
 		}
-		tryKeyFile(keyPath)
+		authMethods = append(authMethods, keyAuth)
+	} else {
+		// Normal mode: try multiple auth methods
+		// Try SSH agent first (most common and convenient)
+		if agentAuth := sshAgentAuth(); agentAuth != nil {
+			authMethods = append(authMethods, agentAuth)
+		}
+
+		// Try specific identity file from SSH config
+		if settings.identityFile != "" {
+			tryKeyFile(settings.identityFile)
+		}
+
+		// Try default key files
+		defaultKeys := []string{
+			filepath.Join(homeDir(), ".ssh", "id_ed25519"),
+			filepath.Join(homeDir(), ".ssh", "id_rsa"),
+			filepath.Join(homeDir(), ".ssh", "id_ecdsa"),
+		}
+
+		for _, keyPath := range defaultKeys {
+			if keyPath == settings.identityFile {
+				continue // Already tried this one
+			}
+			tryKeyFile(keyPath)
+		}
 	}
 
 	if len(authMethods) == 0 {

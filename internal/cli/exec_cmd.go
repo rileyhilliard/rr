@@ -8,7 +8,7 @@ import (
 
 // execCommand executes a command without syncing files first.
 // This shares the core logic with run but skips the sync phase.
-func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool) error {
+func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, pullPatterns []string, pullDest string) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
@@ -32,6 +32,8 @@ func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, loca
 		SkipRequirements: skipRequirementsFlag,
 		Quiet:            Quiet(),
 		Local:            localFlag,
+		Pull:             pullPatterns,
+		PullDest:         pullDest,
 	})
 
 	if err != nil {

@@ -125,13 +125,13 @@ func TestRunOptions_WithValues(t *testing.T) {
 }
 
 func TestRunCommand_NoArgs(t *testing.T) {
-	err := runCommand([]string{}, "", "", "", false, false, 0)
+	err := runCommand([]string{}, "", "", "", false, false, 0, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
 
 func TestRunCommand_InvalidProbeTimeout(t *testing.T) {
-	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout", false, false, 0)
+	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout", false, false, 0, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
 }
@@ -150,7 +150,7 @@ func TestRunCommand_JoinsArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined into single command
-	err = runCommand([]string{"make", "test"}, "", "", "", false, false, 0)
+	err = runCommand([]string{"make", "test"}, "", "", "", false, false, 0, nil, "")
 	require.Error(t, err)
 	// Should fail on no hosts configured
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -168,20 +168,20 @@ func TestRunCommand_ValidProbeTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	// Valid probe timeout should not fail on parsing
-	err = runCommand([]string{"echo"}, "", "", "5s", false, false, 0)
+	err = runCommand([]string{"echo"}, "", "", "5s", false, false, 0, nil, "")
 	require.Error(t, err)
 	// Should fail on no hosts configured, not on probe timeout
 	assert.NotContains(t, err.Error(), "timeout")
 }
 
 func TestExecCommand_NoArgs(t *testing.T) {
-	err := execCommand([]string{}, "", "", "", false, false)
+	err := execCommand([]string{}, "", "", "", false, false, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
 
 func TestExecCommand_InvalidProbeTimeout(t *testing.T) {
-	err := execCommand([]string{"ls"}, "", "", "bad-duration", false, false)
+	err := execCommand([]string{"ls"}, "", "", "bad-duration", false, false, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
 }
@@ -198,7 +198,7 @@ func TestExecCommand_JoinsArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined
-	err = execCommand([]string{"ls", "-la"}, "", "", "", false, false)
+	err = execCommand([]string{"ls", "-la"}, "", "", "", false, false, nil, "")
 	require.Error(t, err)
 	// Should fail on no hosts configured
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -227,7 +227,7 @@ func TestExecCommand_ValidProbeTimeoutFormats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := execCommand([]string{"ls"}, "", "", tt.timeout, false, false)
+			err := execCommand([]string{"ls"}, "", "", tt.timeout, false, false, nil, "")
 			// Should fail with config error, not parse error
 			if err != nil {
 				assert.NotContains(t, err.Error(), "doesn't look like a valid timeout",
@@ -470,7 +470,7 @@ func TestRunOptions_ZeroValues(t *testing.T) {
 }
 
 func TestRunCommand_EmptyArgs(t *testing.T) {
-	err := runCommand([]string{}, "", "", "", false, false, 0)
+	err := runCommand([]string{}, "", "", "", false, false, 0, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
@@ -487,7 +487,7 @@ func TestRunCommand_MultipleArgsJoined(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined with spaces
-	err = runCommand([]string{"make", "test", "-v"}, "", "", "", false, false, 0)
+	err = runCommand([]string{"make", "test", "-v"}, "", "", "", false, false, 0, nil, "")
 	require.Error(t, err)
 	// Fails on no hosts configured, but args were processed
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -504,7 +504,7 @@ func TestRunCommand_WithHostAndTag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	err = runCommand([]string{"echo"}, "myhost", "mytag", "", false, false, 0)
+	err = runCommand([]string{"echo"}, "myhost", "mytag", "", false, false, 0, nil, "")
 	require.Error(t, err)
 	// Should fail on no hosts configured, flags were accepted
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -521,7 +521,7 @@ func TestExecCommand_MultipleArgsJoined(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	err = execCommand([]string{"ls", "-la", "/tmp"}, "", "", "", false, false)
+	err = execCommand([]string{"ls", "-la", "/tmp"}, "", "", "", false, false, nil, "")
 	require.Error(t, err)
 	// Fails on no hosts configured, but args were processed
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -619,4 +619,138 @@ func TestRun_LocalFlag(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
 		strings.Contains(err.Error(), "No hosts"),
 		"Expected error about missing config or hosts, got: %s", err.Error())
+}
+
+func TestPullCommand_NoArgs(t *testing.T) {
+	err := pullCommand([]string{}, "", "", "", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "What should I pull?")
+}
+
+func TestPullCommand_InvalidProbeTimeout(t *testing.T) {
+	err := pullCommand([]string{"coverage.xml"}, "", "", "", "not-a-duration", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
+}
+
+func TestPullCommand_ValidProbeTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Valid timeout should be parsed correctly (will fail on no hosts, not timeout)
+	err = pullCommand([]string{"file.txt"}, "", "", "", "5s", false)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "doesn't look like a valid timeout")
+}
+
+func TestPullOptions_Defaults(t *testing.T) {
+	opts := PullOptions{}
+
+	assert.Empty(t, opts.Patterns)
+	assert.Empty(t, opts.Dest)
+	assert.Empty(t, opts.Host)
+	assert.Empty(t, opts.Tag)
+	assert.Zero(t, opts.ProbeTimeout)
+	assert.False(t, opts.DryRun)
+}
+
+func TestPullOptions_WithValues(t *testing.T) {
+	opts := PullOptions{
+		Patterns:     []string{"*.xml", "*.html"},
+		Dest:         "/tmp/results",
+		Host:         "remote-server",
+		Tag:          "fast",
+		ProbeTimeout: 10 * time.Second,
+		DryRun:       true,
+	}
+
+	assert.Equal(t, []string{"*.xml", "*.html"}, opts.Patterns)
+	assert.Equal(t, "/tmp/results", opts.Dest)
+	assert.Equal(t, "remote-server", opts.Host)
+	assert.Equal(t, "fast", opts.Tag)
+	assert.Equal(t, 10*time.Second, opts.ProbeTimeout)
+	assert.True(t, opts.DryRun)
+}
+
+func TestPull_NoConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"coverage.xml"},
+	})
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
+}
+
+func TestPull_WithHostFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"file.txt"},
+		Host:     "myhost",
+	})
+	require.Error(t, err)
+	// Should fail on no hosts configured
+}
+
+func TestPull_WithTagFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"file.txt"},
+		Tag:      "gpu",
+	})
+	require.Error(t, err)
+}
+
+func TestPull_DryRunMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	err = Pull(PullOptions{
+		Patterns: []string{"file.txt"},
+		DryRun:   true,
+	})
+	require.Error(t, err)
+	// Should fail on config, not on dry-run flag
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -178,6 +179,12 @@ type TaskConfig struct {
 	// Require lists additional tools needed for this specific task.
 	// Combined with project and host requirements.
 	Require []string `yaml:"require,omitempty" mapstructure:"require"`
+
+	// Pull lists files or patterns to download from remote after command execution.
+	// Can be simple strings (patterns) or objects with src/dest fields.
+	// Simple: pull: [coverage.xml, htmlcov/]
+	// With destinations: pull: [{src: dist/*.whl, dest: ./artifacts/}]
+	Pull []PullItem `yaml:"pull,omitempty" mapstructure:"pull"`
 }
 
 // DependencyItem represents a single dependency which can be either
@@ -188,6 +195,19 @@ type DependencyItem struct {
 
 	// Parallel is set when this is a group of tasks to run concurrently.
 	Parallel []string `yaml:"parallel,omitempty" mapstructure:"parallel"`
+}
+
+// PullItem represents a file or pattern to pull from the remote host.
+// Can be a simple string (path/pattern pulled to current directory)
+// or an object with src and dest fields.
+type PullItem struct {
+	// Src is the remote path or glob pattern to pull.
+	// Set from string format or object format.
+	Src string `yaml:"src,omitempty" mapstructure:"src"`
+
+	// Dest is the local destination directory.
+	// If empty, files are pulled to the current directory.
+	Dest string `yaml:"dest,omitempty" mapstructure:"dest"`
 }
 
 // UnmarshalYAML handles both string and object dependency formats.
@@ -241,6 +261,64 @@ func DependencyItemFromInterface(v interface{}) (DependencyItem, error) {
 // IsParallel returns true if this dependency is a parallel group.
 func (d *DependencyItem) IsParallel() bool {
 	return len(d.Parallel) > 0
+}
+
+// UnmarshalYAML handles both string and object pull item formats.
+// String format: "coverage.xml" becomes PullItem{Src: "coverage.xml"}
+// Object format: {src: "dist/*.whl", dest: "./artifacts/"} becomes PullItem{Src: "dist/*.whl", Dest: "./artifacts/"}
+func (p *PullItem) UnmarshalYAML(value *yaml.Node) error {
+	// If it's a scalar (string), treat as a simple source path
+	if value.Kind == yaml.ScalarNode {
+		if value.Value == "" {
+			return fmt.Errorf("pull item cannot be empty")
+		}
+		p.Src = value.Value
+		return nil
+	}
+
+	// Otherwise, expect an object with "src" and optionally "dest"
+	type pullItem PullItem
+	if err := value.Decode((*pullItem)(p)); err != nil {
+		return err
+	}
+	if p.Src == "" {
+		return fmt.Errorf("pull item must have 'src' field")
+	}
+	return nil
+}
+
+// PullItemFromInterface converts a generic interface (from viper/mapstructure)
+// to a PullItem. Handles both string and map formats.
+func PullItemFromInterface(v interface{}) (PullItem, error) {
+	switch val := v.(type) {
+	case string:
+		if strings.TrimSpace(val) == "" {
+			return PullItem{}, fmt.Errorf("pull item cannot be empty string")
+		}
+		return PullItem{Src: val}, nil
+	case map[string]interface{}:
+		p := PullItem{}
+		if src, ok := val["src"]; ok {
+			if s, ok := src.(string); ok {
+				p.Src = s
+			} else {
+				return PullItem{}, fmt.Errorf("pull src: expected string, got %T", src)
+			}
+		}
+		if dest, ok := val["dest"]; ok {
+			if d, ok := dest.(string); ok {
+				p.Dest = d
+			} else {
+				return PullItem{}, fmt.Errorf("pull dest: expected string, got %T", dest)
+			}
+		}
+		if p.Src == "" {
+			return PullItem{}, fmt.Errorf("pull item must have 'src' field")
+		}
+		return p, nil
+	default:
+		return PullItem{}, fmt.Errorf("pull item: expected string or map, got %T", v)
+	}
 }
 
 // TaskNames returns all task names referenced by this dependency.
