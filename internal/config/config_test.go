@@ -198,10 +198,22 @@ func TestResolveHost(t *testing.T) {
 			resolved: &ResolvedConfig{
 				Global:  &GlobalConfig{Hosts: map[string]Host{}},
 				Project: &Config{},
+				Source:  ProjectOnly,
 			},
 			preferred:   "",
 			wantErr:     true,
 			errContains: "No hosts configured",
+		},
+		{
+			name: "error with contextual message when global only",
+			resolved: &ResolvedConfig{
+				Global:  &GlobalConfig{Hosts: map[string]Host{}},
+				Project: &Config{},
+				Source:  GlobalOnly,
+			},
+			preferred:   "",
+			wantErr:     true,
+			errContains: "no project config found",
 		},
 		{
 			name: "error when host not found",
