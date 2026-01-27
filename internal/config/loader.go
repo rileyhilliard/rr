@@ -310,6 +310,12 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 
 	// Check for hosts early, but allow empty if local_fallback is enabled
 	if len(resolved.Global.Hosts) == 0 && !localFallback {
+		// Provide contextual error based on whether a project config exists
+		if resolved.Source == GlobalOnly {
+			return nil, nil, errors.New(errors.ErrConfig,
+				"No hosts configured and no project config found",
+				"Either:\n  - Run 'rr init' to create a project config\n  - Run 'rr host add' to configure hosts in ~/.rr/config.yaml")
+		}
 		return nil, nil, errors.New(errors.ErrConfig,
 			"No hosts configured",
 			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
