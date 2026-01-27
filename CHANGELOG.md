@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-01-26
+
 ### Added
 
-- **Nested parallel tasks** - Parallel tasks can now reference other parallel tasks. When `rr` encounters a nested parallel reference, it flattens the task tree before execution. This makes maintaining large parallel task groups much easier. For example, `test: {parallel: [test-opendata, test-backend]}` where `test-opendata` is itself a parallel task with 3 subtasks will expand to all 4+ tasks running in parallel. Cycle detection prevents infinite recursion. `--dry-run` shows the expanded task list. Fixes #145.
+- **Nested parallel tasks** - Parallel tasks can now reference other parallel tasks. When `rr` encounters a nested parallel reference, it flattens the task tree before execution. This makes maintaining large parallel task groups much easier. For example, `test: {parallel: [test-opendata, test-backend]}` where `test-opendata` is itself a parallel task with 3 subtasks will expand to all 4+ tasks running in parallel. Cycle detection prevents infinite recursion. Diamond dependencies are deduplicated. `--dry-run` shows the expanded task list. Fixes #145.
 
 - **Parallel task setup phase** - New `setup` field for parallel tasks runs a command once per host before any subtasks execute. Avoids redundant work when multiple subtasks on the same host need shared setup (dependency installation, database migrations, etc.). Setup failure aborts all subtasks on that host. Works with both remote and local execution.
 
