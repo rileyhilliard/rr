@@ -5,7 +5,7 @@
 # sharing build servers.
 #
 # NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
-# See multi-host-global.yaml for an example global config that pairs with this.
+# See global-config.yaml for an example global config that pairs with this.
 #
 # With multiple hosts configured, rr automatically distributes work:
 # - Tries hosts in order with non-blocking lock checks
@@ -45,22 +45,31 @@ tasks:
     run: make test
 
   build-linux:
-    description: Build Linux binary
+    description: Build Linux binary (outputs to dist/myapp-linux-amd64)
     hosts:
       - linux-server
-    run: make build-linux
+    run: make build-linux OUTDIR=dist
 
   build-arm:
-    description: Build ARM binary
+    description: Build ARM binary (outputs to dist/myapp-linux-arm64)
     hosts:
       - raspberry-pi
-    run: make build-arm
+    run: make build-arm OUTDIR=dist
+
+  # Cross-platform release: build on multiple architectures in parallel
+  release:
+    description: Build all platforms in parallel
+    parallel:
+      - build-linux
+      - build-arm
+    fail_fast: true
+    # After task completes, pull artifacts back (see usage below)
 
   docker-build:
     description: Build Docker image
     hosts:
       - linux-server  # Only the Linux box has Docker
-    run: docker build -t myapp .
+    run: docker build -t myapp:latest .
 
   gpu-train:
     description: Run ML training
@@ -68,13 +77,49 @@ tasks:
       - mac-mini  # Only the Mac Mini has a GPU
     run: python train.py
 
+  # Parallel tasks - distribute different tasks across available hosts
+  ci:
+    description: Run all checks in parallel
+    parallel:
+      - test
+      - build-linux
+      - build-arm
+    fail_fast: false
+
+  # Flake detection - run tests multiple times to find intermittent failures
+  flake-check:
+    description: Run tests 5x to detect flaky tests
+    parallel:
+      - test
+      - test
+      - test
+      - test
+      - test
+    fail_fast: false
+
 # Usage:
 #   rr test                     # Runs on first available host (load balanced)
 #   rr test --host linux-server # Runs on specific host (no load balancing)
 #   rr test --tag linux         # Runs on any host tagged 'linux'
 #   rr build-linux              # Only runs on linux-server (task-specific host)
+#   rr ci                       # Run parallel tasks distributed across hosts
+#   rr flake-check              # Run tests 5x to detect flaky tests
+#
+# Pulling build artifacts back:
+#   After running builds on remote hosts, pull artifacts back with rsync:
+#
+#   rr release && \
+#     rsync -av linux-server:~/projects/myapp/dist/ ./dist/ && \
+#     rsync -av raspberry-pi:~/projects/myapp/dist/ ./dist/
+#
+#   Or use a Makefile target that wraps this workflow.
 #
 # Load balancing behavior:
 #   - With multiple hosts and no --host flag, rr tries each host until one is free
 #   - If local_fallback is true and all hosts are locked, runs locally immediately
 #   - Otherwise waits up to wait_timeout, checking hosts in round-robin fashion
+#
+# Flake detection:
+#   - Use --repeat N to run a command/task N times in parallel
+#   - Or list the same task multiple times in a parallel block
+#   - Tasks are distributed across available hosts via work-stealing

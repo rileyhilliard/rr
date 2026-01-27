@@ -4,7 +4,7 @@
 # tests on a remote machine with more CPU/RAM than your laptop.
 #
 # NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
-# See python-global.yaml for an example global config.
+# See global-config.yaml for an example global config.
 
 version: 1
 
@@ -53,6 +53,26 @@ tasks:
         run: python3 -m venv .venv
       - name: Install deps
         run: .venv/bin/pip install -e ".[dev]"
+
+  # Parallel tasks - run multiple checks simultaneously
+  verify:
+    description: Run all checks in parallel
+    parallel:
+      - test
+      - lint
+      - typecheck
+    fail_fast: false
+
+  # Flake detection - run tests multiple times to find intermittent failures
+  flake-check:
+    description: Run tests 5x to detect flaky tests
+    parallel:
+      - test
+      - test
+      - test
+      - test
+      - test
+    fail_fast: false
 
 output:
   format: pytest
