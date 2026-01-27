@@ -189,3 +189,55 @@ func TestHashProject_HexFormat(t *testing.T) {
 		assert.True(t, isHex, "hash should only contain hex characters, got: %c", c)
 	}
 }
+
+func TestValidateLocalAndTag(t *testing.T) {
+	tests := []struct {
+		name    string
+		local   bool
+		tag     string
+		wantErr bool
+	}{
+		{
+			name:    "both false/empty is valid",
+			local:   false,
+			tag:     "",
+			wantErr: false,
+		},
+		{
+			name:    "local only is valid",
+			local:   true,
+			tag:     "",
+			wantErr: false,
+		},
+		{
+			name:    "tag only is valid",
+			local:   false,
+			tag:     "gpu",
+			wantErr: false,
+		},
+		{
+			name:    "both local and tag is invalid",
+			local:   true,
+			tag:     "gpu",
+			wantErr: true,
+		},
+		{
+			name:    "local with different tag is invalid",
+			local:   true,
+			tag:     "linux",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateLocalAndTag(tt.local, tt.tag)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "--local and --tag cannot be used together")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

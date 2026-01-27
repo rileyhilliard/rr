@@ -574,3 +574,49 @@ func TestRun_ProbeTimeoutValues(t *testing.T) {
 		})
 	}
 }
+
+func TestRun_LocalAndTagConflict(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// --local and --tag should conflict
+	exitCode, err := Run(RunOptions{
+		Command: "echo test",
+		Local:   true,
+		Tag:     "gpu",
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--local and --tag cannot be used together")
+}
+
+func TestRun_LocalFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Local flag alone should be accepted (will fail on no config, not on flag)
+	exitCode, err := Run(RunOptions{
+		Command: "echo test",
+		Local:   true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	// Should fail on config/hosts, not on --local flag
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
+}
