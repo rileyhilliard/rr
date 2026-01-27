@@ -1167,6 +1167,7 @@ func TestSetupWorkDir_ExplicitPathUsed(t *testing.T) {
 }
 
 func TestSetupWorkDir_EmptyUsesCurrentDir(t *testing.T) {
+	// When no ProjectRoot is set, should fall back to cwd
 	ctx := &WorkflowContext{}
 	opts := WorkflowOptions{
 		WorkingDir: "",
@@ -1177,6 +1178,38 @@ func TestSetupWorkDir_EmptyUsesCurrentDir(t *testing.T) {
 
 	cwd, _ := os.Getwd()
 	assert.Equal(t, cwd, ctx.WorkDir)
+}
+
+func TestSetupWorkDir_UsesProjectRoot(t *testing.T) {
+	// When ProjectRoot is set in Resolved config, use that as working directory
+	ctx := &WorkflowContext{
+		Resolved: &config.ResolvedConfig{
+			ProjectRoot: "/project/root",
+		},
+	}
+	opts := WorkflowOptions{
+		WorkingDir: "",
+	}
+
+	err := setupWorkDir(ctx, opts)
+	require.NoError(t, err)
+	assert.Equal(t, "/project/root", ctx.WorkDir)
+}
+
+func TestSetupWorkDir_ExplicitOverridesProjectRoot(t *testing.T) {
+	// Explicit WorkingDir should override ProjectRoot
+	ctx := &WorkflowContext{
+		Resolved: &config.ResolvedConfig{
+			ProjectRoot: "/project/root",
+		},
+	}
+	opts := WorkflowOptions{
+		WorkingDir: "/explicit/path",
+	}
+
+	err := setupWorkDir(ctx, opts)
+	require.NoError(t, err)
+	assert.Equal(t, "/explicit/path", ctx.WorkDir)
 }
 
 func TestSetupWorkDir_PreservesExistingWorkDir(t *testing.T) {

@@ -302,6 +302,74 @@ host: dev
 		assert.Equal(t, Both, resolved.Source)
 		assert.Len(t, resolved.Global.Hosts, 1)
 		assert.Equal(t, "dev", resolved.Project.Host)
+		// Use EvalSymlinks for comparison to handle /var -> /private/var on macOS
+		expectedResolved, _ := filepath.EvalSymlinks(tmpProject)
+		actualResolved, _ := filepath.EvalSymlinks(resolved.ProjectRoot)
+		assert.Equal(t, expectedResolved, actualResolved)
+	})
+
+	t.Run("project root set from subdirectory", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		tmpProject := t.TempDir()
+		os.Setenv("HOME", tmpHome)
+
+		// Create global config
+		configDir := filepath.Join(tmpHome, ".rr")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
+		globalContent := `
+version: 1
+hosts:
+  dev:
+    ssh: [dev]
+    dir: ~/dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(globalContent), 0644))
+
+		// Create project config at root
+		projectContent := `
+version: 1
+host: dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(tmpProject, ".rr.yaml"), []byte(projectContent), 0644))
+
+		// Create subdirectory and change to it
+		subdir := filepath.Join(tmpProject, "src", "components")
+		require.NoError(t, os.MkdirAll(subdir, 0755))
+		os.Chdir(subdir)
+
+		resolved, err := LoadResolved("")
+		require.NoError(t, err)
+
+		assert.Equal(t, Both, resolved.Source)
+		// Use EvalSymlinks for comparison to handle /var -> /private/var on macOS
+		expectedResolved, _ := filepath.EvalSymlinks(tmpProject)
+		actualResolved, _ := filepath.EvalSymlinks(resolved.ProjectRoot)
+		assert.Equal(t, expectedResolved, actualResolved)
+	})
+
+	t.Run("project root empty when no project config", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		tmpProject := t.TempDir()
+		os.Setenv("HOME", tmpHome)
+		os.Chdir(tmpProject)
+
+		// Create global config only
+		configDir := filepath.Join(tmpHome, ".rr")
+		require.NoError(t, os.MkdirAll(configDir, 0755))
+		globalContent := `
+version: 1
+hosts:
+  dev:
+    ssh: [dev]
+    dir: ~/dev
+`
+		require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(globalContent), 0644))
+
+		resolved, err := LoadResolved("")
+		require.NoError(t, err)
+
+		assert.Equal(t, GlobalOnly, resolved.Source)
+		assert.Empty(t, resolved.ProjectRoot)
 	})
 }
 
@@ -413,6 +481,114 @@ func TestFind(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFind_WalksUpToParent(t *testing.T) {
+	// Create project structure:
+	// tmpdir/
+	//   .rr.yaml
+	//   src/
+	//     components/
+	tmpdir := t.TempDir()
+	configPath := filepath.Join(tmpdir, ConfigFileName)
+	err := os.WriteFile(configPath, []byte("version: 1"), 0644)
+	require.NoError(t, err)
+
+	subdir := filepath.Join(tmpdir, "src", "components")
+	err = os.MkdirAll(subdir, 0755)
+	require.NoError(t, err)
+
+	// Change to subdirectory (register cleanup before chdir)
+	oldWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(oldWd)
+	err = os.Chdir(subdir)
+	require.NoError(t, err)
+
+	// Should find config in parent
+	path, err := Find("")
+	require.NoError(t, err)
+	// Use EvalSymlinks for comparison to handle /var -> /private/var on macOS
+	expectedResolved, _ := filepath.EvalSymlinks(configPath)
+	actualResolved, _ := filepath.EvalSymlinks(path)
+	assert.Equal(t, expectedResolved, actualResolved)
+}
+
+func TestFind_FindsConfigAtGitRoot(t *testing.T) {
+	// Create project structure:
+	// tmpdir/
+	//   .git/         <- git root
+	//   .rr.yaml      <- config at git root
+	//   src/
+	//     components/
+	tmpdir := t.TempDir()
+
+	// Create .git directory
+	gitDir := filepath.Join(tmpdir, ".git")
+	err := os.MkdirAll(gitDir, 0755)
+	require.NoError(t, err)
+
+	// Create config at git root
+	configPath := filepath.Join(tmpdir, ConfigFileName)
+	err = os.WriteFile(configPath, []byte("version: 1"), 0644)
+	require.NoError(t, err)
+
+	// Create subdirectory
+	subdir := filepath.Join(tmpdir, "src", "components")
+	err = os.MkdirAll(subdir, 0755)
+	require.NoError(t, err)
+
+	// Change to subdirectory (register cleanup before chdir)
+	oldWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(oldWd)
+	err = os.Chdir(subdir)
+	require.NoError(t, err)
+
+	// Should find config at git root
+	path, err := Find("")
+	require.NoError(t, err)
+	// Use EvalSymlinks for comparison to handle /var -> /private/var on macOS
+	expectedResolved, _ := filepath.EvalSymlinks(configPath)
+	actualResolved, _ := filepath.EvalSymlinks(path)
+	assert.Equal(t, expectedResolved, actualResolved)
+}
+
+func TestFind_StopsAtGitRoot(t *testing.T) {
+	// Create project structure:
+	// tmpdir/
+	//   .rr.yaml      <- config above git root (should NOT be found)
+	//   repo/
+	//     .git/       <- git root
+	//     src/
+	tmpdir := t.TempDir()
+
+	// Create config above git root
+	err := os.WriteFile(filepath.Join(tmpdir, ConfigFileName), []byte("version: 1"), 0644)
+	require.NoError(t, err)
+
+	// Create git repo subdirectory
+	repoDir := filepath.Join(tmpdir, "repo")
+	gitDir := filepath.Join(repoDir, ".git")
+	err = os.MkdirAll(gitDir, 0755)
+	require.NoError(t, err)
+
+	// Create subdirectory inside repo
+	subdir := filepath.Join(repoDir, "src")
+	err = os.MkdirAll(subdir, 0755)
+	require.NoError(t, err)
+
+	// Change to subdirectory (register cleanup before chdir)
+	oldWd, err := os.Getwd()
+	require.NoError(t, err)
+	defer os.Chdir(oldWd)
+	err = os.Chdir(subdir)
+	require.NoError(t, err)
+
+	// Should NOT find config above git root
+	path, err := Find("")
+	require.NoError(t, err)
+	assert.Empty(t, path)
 }
 
 func TestExpand(t *testing.T) {
