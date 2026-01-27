@@ -10,6 +10,7 @@ Sync files, then run command on remote host.
 rr run "make test"
 rr run "npm run build"
 rr run --host mini "cargo test"
+rr run --repeat 5 "pytest tests/"  # Run 5x across hosts for flake detection
 ```
 
 **Flags:**
@@ -18,6 +19,7 @@ rr run --host mini "cargo test"
 - `--probe-timeout <duration>` - SSH probe timeout (e.g., `5s`)
 - `--local` - Force local execution
 - `--skip-requirements` - Skip requirement checks
+- `--repeat <N>` - Run command N times in parallel across available hosts (flake detection)
 
 ### `rr exec "cmd"`
 

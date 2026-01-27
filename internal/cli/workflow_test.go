@@ -410,6 +410,17 @@ func TestSetupWorkflow_NoConfig(t *testing.T) {
 		"Expected error about missing config or hosts, got: %s", err.Error())
 }
 
+func TestSetupWorkflow_LocalAndTagConflict(t *testing.T) {
+	// This test verifies that --local and --tag flags are mutually exclusive.
+	// The validation happens before config loading, so no setup needed.
+	_, err := SetupWorkflow(WorkflowOptions{
+		Local: true,
+		Tag:   "gpu",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--local and --tag cannot be used together")
+}
+
 func TestLoadAndValidateConfig_InvalidYAML(t *testing.T) {
 	tmpDir := t.TempDir()
 	origDir, _ := os.Getwd()

@@ -561,8 +561,9 @@ func detectParallelCycle(startTask string, tasks map[string]TaskConfig) error {
 // Given a parallel task that references other parallel tasks, this returns
 // the final list of executable (non-parallel) task names.
 //
-// Duplicate tasks are deduplicated - if the same executable task is reachable
-// through multiple paths (diamond dependencies), it only appears once.
+// Tasks are expanded exactly as listed - if a task appears multiple times,
+// it will appear multiple times in the result. This allows running the same
+// task multiple times (e.g., for flake detection across parallel workers).
 //
 // Example:
 //
@@ -584,8 +585,6 @@ func FlattenParallelTasks(taskName string, tasks map[string]TaskConfig) ([]strin
 
 	// Track tasks in current path for cycle detection
 	inPath := make(map[string]bool)
-	// Track already-added executable tasks to deduplicate (diamond dependencies)
-	added := make(map[string]bool)
 	var result []string
 
 	var expand func(name string) error
@@ -608,9 +607,8 @@ func FlattenParallelTasks(taskName string, tasks map[string]TaskConfig) ([]strin
 					return err
 				}
 			}
-		} else if !added[name] {
-			// This is an executable task - add to result if not already added
-			added[name] = true
+		} else {
+			// This is an executable task - add to result
 			result = append(result, name)
 		}
 		return nil

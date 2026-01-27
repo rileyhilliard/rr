@@ -4,7 +4,7 @@
 # on a remote Linux machine (useful when developing on macOS but deploying to Linux).
 #
 # NOTE: Host definitions belong in your GLOBAL config (~/.rr/config.yaml).
-# See go-global.yaml for an example global config.
+# See global-config.yaml for an example global config.
 
 version: 1
 
@@ -42,6 +42,25 @@ tasks:
   tidy:
     description: Tidy go.mod
     run: go mod tidy
+
+  # Parallel tasks - run multiple checks simultaneously
+  verify:
+    description: Run all checks in parallel
+    parallel:
+      - test
+      - lint
+    fail_fast: false
+
+  # Flake detection - run tests multiple times to find intermittent failures
+  flake-check:
+    description: Run tests 5x to detect flaky tests
+    parallel:
+      - test
+      - test
+      - test
+      - test
+      - test
+    fail_fast: false
 
 output:
   format: go

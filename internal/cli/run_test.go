@@ -125,13 +125,13 @@ func TestRunOptions_WithValues(t *testing.T) {
 }
 
 func TestRunCommand_NoArgs(t *testing.T) {
-	err := runCommand([]string{}, "", "", "", false, false)
+	err := runCommand([]string{}, "", "", "", false, false, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
 
 func TestRunCommand_InvalidProbeTimeout(t *testing.T) {
-	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout", false, false)
+	err := runCommand([]string{"echo hello"}, "", "", "invalid-timeout", false, false, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "doesn't look like a valid timeout")
 }
@@ -150,7 +150,7 @@ func TestRunCommand_JoinsArgs(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined into single command
-	err = runCommand([]string{"make", "test"}, "", "", "", false, false)
+	err = runCommand([]string{"make", "test"}, "", "", "", false, false, 0)
 	require.Error(t, err)
 	// Should fail on no hosts configured
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -168,7 +168,7 @@ func TestRunCommand_ValidProbeTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	// Valid probe timeout should not fail on parsing
-	err = runCommand([]string{"echo"}, "", "", "5s", false, false)
+	err = runCommand([]string{"echo"}, "", "", "5s", false, false, 0)
 	require.Error(t, err)
 	// Should fail on no hosts configured, not on probe timeout
 	assert.NotContains(t, err.Error(), "timeout")
@@ -470,7 +470,7 @@ func TestRunOptions_ZeroValues(t *testing.T) {
 }
 
 func TestRunCommand_EmptyArgs(t *testing.T) {
-	err := runCommand([]string{}, "", "", "", false, false)
+	err := runCommand([]string{}, "", "", "", false, false, 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "What should I run?")
 }
@@ -487,7 +487,7 @@ func TestRunCommand_MultipleArgsJoined(t *testing.T) {
 	require.NoError(t, err)
 
 	// Multiple args should be joined with spaces
-	err = runCommand([]string{"make", "test", "-v"}, "", "", "", false, false)
+	err = runCommand([]string{"make", "test", "-v"}, "", "", "", false, false, 0)
 	require.Error(t, err)
 	// Fails on no hosts configured, but args were processed
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -504,7 +504,7 @@ func TestRunCommand_WithHostAndTag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	err = runCommand([]string{"echo"}, "myhost", "mytag", "", false, false)
+	err = runCommand([]string{"echo"}, "myhost", "mytag", "", false, false, 0)
 	require.Error(t, err)
 	// Should fail on no hosts configured, flags were accepted
 	assert.Contains(t, err.Error(), "No hosts configured")
@@ -573,4 +573,50 @@ func TestRun_ProbeTimeoutValues(t *testing.T) {
 			assert.Contains(t, err.Error(), "No hosts configured")
 		})
 	}
+}
+
+func TestRun_LocalAndTagConflict(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// --local and --tag should conflict
+	exitCode, err := Run(RunOptions{
+		Command: "echo test",
+		Local:   true,
+		Tag:     "gpu",
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--local and --tag cannot be used together")
+}
+
+func TestRun_LocalFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+
+	// Isolate from real user config
+	t.Setenv("HOME", tmpDir)
+
+	err := os.Chdir(tmpDir)
+	require.NoError(t, err)
+
+	// Local flag alone should be accepted (will fail on no config, not on flag)
+	exitCode, err := Run(RunOptions{
+		Command: "echo test",
+		Local:   true,
+	})
+	assert.Equal(t, 1, exitCode)
+	require.Error(t, err)
+	// Should fail on config/hosts, not on --local flag
+	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
+		strings.Contains(err.Error(), "No hosts"),
+		"Expected error about missing config or hosts, got: %s", err.Error())
 }

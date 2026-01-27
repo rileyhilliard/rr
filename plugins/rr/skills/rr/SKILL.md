@@ -34,7 +34,7 @@ rr uses two config files:
 | Global | `~/.rr/config.yaml` | Personal host definitions (SSH, directories) |
 | Project | `.rr.yaml` | Shareable project settings (tasks, sync rules) |
 
-**See [config.md](config.md) for complete config reference.**
+**See [config.md](reference/config.md) for complete config reference.**
 
 ### Minimal Global Config
 
@@ -72,7 +72,7 @@ tasks:
 | `rr doctor` | Diagnose issues |
 | `rr host list/add/remove` | Manage hosts |
 
-**See [commands.md](commands.md) for full command reference.**
+**See [commands.md](reference/commands.md) for full command reference.**
 
 ### Common Flags
 
@@ -103,7 +103,7 @@ Run with: `rr test`, `rr deploy`
 
 Extra arguments append to single-command tasks: `rr test -k "test_login"`
 
-**See [tasks.md](tasks.md) for parallel tasks, multi-step tasks, and advanced configuration.**
+**See [tasks.md](reference/tasks.md) for parallel tasks, multi-step tasks, and advanced configuration.**
 
 ## Remote Environment Bootstrap
 
@@ -257,7 +257,7 @@ rr test-all --local     # Run locally without remote hosts
 
 Missing tools trigger actionable error messages. Tools with built-in installers (40+) can be auto-installed.
 
-**See [requirements.md](requirements.md) for complete requirements reference.**
+**See [requirements.md](reference/requirements.md) for complete requirements reference.**
 
 ## How It Works
 
@@ -277,7 +277,7 @@ Missing tools trigger actionable error messages. Tools with built-in installers 
 | Sync slow | Add large dirs to `sync.exclude` |
 | Lock stuck | `rr unlock` |
 
-**See [troubleshooting.md](troubleshooting.md) for detailed diagnostics.**
+**See [troubleshooting.md](reference/troubleshooting.md) for detailed diagnostics.**
 
 ## Machine Interface (LLM/CI)
 
@@ -289,7 +289,7 @@ rr status --machine
 rr tasks --machine
 ```
 
-**See [machine-interface.md](machine-interface.md) for JSON envelope format and error codes.**
+**See [machine-interface.md](reference/machine-interface.md) for JSON envelope format and error codes.**
 
 ## Quick Setup
 
@@ -321,9 +321,9 @@ rr run "make test"
 
 ## Reference Files
 
-- **[config.md](config.md)** - Complete config reference (global + project)
-- **[commands.md](commands.md)** - All commands and flags
-- **[tasks.md](tasks.md)** - Task definitions, parallel execution, multi-step
-- **[requirements.md](requirements.md)** - Remote environment bootstrap
-- **[machine-interface.md](machine-interface.md)** - JSON output and error codes
-- **[troubleshooting.md](troubleshooting.md)** - Diagnostics and common fixes
+- **[config.md](reference/config.md)** - Complete config reference (global + project)
+- **[commands.md](reference/commands.md)** - All commands and flags
+- **[tasks.md](reference/tasks.md)** - Task definitions, parallel execution, multi-step
+- **[requirements.md](reference/requirements.md)** - Remote environment bootstrap
+- **[machine-interface.md](reference/machine-interface.md)** - JSON output and error codes
+- **[troubleshooting.md](reference/troubleshooting.md)** - Diagnostics and common fixes

@@ -95,6 +95,10 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// Handle --local flag
 	if opts.Local {
+		// --local and --tag are mutually exclusive
+		if err := ValidateLocalAndTag(opts.Local, opts.Tag); err != nil {
+			return 1, err
+		}
 		hosts = make(map[string]config.Host)
 		hostOrder = nil
 	}
