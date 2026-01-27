@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -412,6 +413,34 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	}
 
 	return ctx, nil
+}
+
+// ExecutePullPhase downloads files from remote after command execution.
+// Pull happens regardless of command exit code - often you want test artifacts on failure.
+// Errors are logged but don't fail the overall workflow.
+func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest string) {
+	if len(pullItems) == 0 || wf.Conn.IsLocal {
+		return
+	}
+
+	pullStart := time.Now()
+	spinner := ui.NewSpinner("Pulling files")
+	spinner.Start()
+
+	pullOpts := rrsync.PullOptions{
+		Patterns:    pullItems,
+		DefaultDest: dest,
+	}
+
+	pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
+	if pullErr != nil {
+		spinner.Fail()
+		// Don't fail the overall command for pull errors, just warn
+		fmt.Printf("\n%s Pull failed: %s\n", ui.SymbolFail, pullErr.Error())
+	} else {
+		spinner.Success()
+		wf.PhaseDisplay.RenderSuccess("Files pulled", time.Since(pullStart))
+	}
 }
 
 // requirementsPhase verifies that required tools are available on the remote.

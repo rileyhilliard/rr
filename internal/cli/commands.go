@@ -17,15 +17,24 @@ var (
 	runLocalFlag             bool
 	runSkipRequirementsFlag  bool
 	runRepeatFlag            int
+	runPullFlags             []string
+	runPullDestFlag          string
 	execHostFlag             string
 	execTagFlag              string
 	execProbeTimeoutFlag     string
 	execLocalFlag            bool
 	execSkipRequirementsFlag bool
+	execPullFlags            []string
+	execPullDestFlag         string
 	syncHostFlag             string
 	syncTagFlag              string
 	syncProbeTimeoutFlag     string
 	syncDryRun               bool
+	pullHostFlag             string
+	pullTagFlag              string
+	pullProbeTimeoutFlag     string
+	pullDestFlag             string
+	pullDryRun               bool
 	initHostFlag             string
 	initRemoteDirFlag        string
 	initNameFlag             string
@@ -58,7 +67,7 @@ Examples:
 				fmt.Sprintf("--repeat must be >= 0, got %d", runRepeatFlag),
 				"Use --repeat with a positive number like --repeat 5")
 		}
-		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag)
+		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag, runPullFlags, runPullDestFlag)
 	},
 }
 
@@ -76,7 +85,7 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag)
+		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag, execPullFlags, execPullDestFlag)
 	},
 }
 
@@ -94,6 +103,26 @@ Examples:
   rr sync --host mini`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return syncCommand(syncHostFlag, syncTagFlag, syncProbeTimeoutFlag, syncDryRun)
+	},
+}
+
+// pullCmd downloads files from the remote host
+var pullCmd = &cobra.Command{
+	Use:   "pull <pattern> [pattern...]",
+	Short: "Pull files from remote host",
+	Long: `Download files from the remote host to the local machine.
+
+Uses rsync for efficient file transfer. Supports glob patterns
+which are expanded on the remote side.
+
+Examples:
+  rr pull coverage.xml
+  rr pull "dist/*.whl" --dest ./artifacts/
+  rr pull coverage.xml htmlcov/
+  rr pull --host mini "logs/*.log"`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return pullCommand(args, pullDestFlag, pullHostFlag, pullTagFlag, pullProbeTimeoutFlag, pullDryRun)
 	},
 }
 
@@ -403,6 +432,8 @@ func init() {
 	runCmd.Flags().BoolVar(&runLocalFlag, "local", false, "force local execution (skip remote hosts)")
 	runCmd.Flags().BoolVar(&runSkipRequirementsFlag, "skip-requirements", false, "skip requirement checks")
 	runCmd.Flags().IntVar(&runRepeatFlag, "repeat", 0, "run command N times in parallel across available hosts (for flake detection)")
+	runCmd.Flags().StringArrayVar(&runPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
+	runCmd.Flags().StringVar(&runPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
@@ -410,12 +441,21 @@ func init() {
 	execCmd.Flags().StringVar(&execProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	execCmd.Flags().BoolVar(&execSkipRequirementsFlag, "skip-requirements", false, "skip requirement checks")
 	execCmd.Flags().BoolVar(&execLocalFlag, "local", false, "force local execution (skip remote hosts)")
+	execCmd.Flags().StringArrayVar(&execPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
+	execCmd.Flags().StringVar(&execPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 
 	// sync command flags
 	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")
 	syncCmd.Flags().StringVar(&syncTagFlag, "tag", "", "select host by tag")
 	syncCmd.Flags().StringVar(&syncProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	syncCmd.Flags().BoolVar(&syncDryRun, "dry-run", false, "show what would be synced without syncing")
+
+	// pull command flags
+	pullCmd.Flags().StringVar(&pullHostFlag, "host", "", "target host name")
+	pullCmd.Flags().StringVar(&pullTagFlag, "tag", "", "select host by tag")
+	pullCmd.Flags().StringVar(&pullProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
+	pullCmd.Flags().StringVar(&pullDestFlag, "dest", "", "local destination directory (default: current directory)")
+	pullCmd.Flags().BoolVar(&pullDryRun, "dry-run", false, "show what would be pulled without pulling")
 
 	// init command flags
 	initCmd.Flags().StringVar(&initHostFlag, "host", "", "SSH host (user@hostname or SSH config alias)")
@@ -455,6 +495,7 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(syncCmd)
+	rootCmd.AddCommand(pullCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(statusCmd)

@@ -161,6 +161,9 @@ func RunTask(opts TaskOptions) (int, error) {
 		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
 
+	// Pull files if task has pull config
+	ExecutePullPhase(wf, task.Pull, "")
+
 	// Show summary
 	wf.PhaseDisplay.ThinDivider()
 	renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
@@ -250,6 +253,9 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	if wf.Lock != nil {
 		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
+
+	// Pull files if task has pull config
+	ExecutePullPhase(wf, task.Pull, "")
 
 	// Show summary
 	wf.PhaseDisplay.ThinDivider()
