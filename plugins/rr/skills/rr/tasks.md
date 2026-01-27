@@ -144,6 +144,50 @@ tasks:
 - Build artifacts needed by multiple tests
 - Environment configuration
 
+### Nested Parallel Tasks
+
+Parallel tasks can reference other parallel tasks. `rr` automatically flattens the hierarchy:
+
+```yaml
+tasks:
+  # Split test suites for parallelization
+  opendata-1:
+    run: pytest opendata --test-group 1
+  opendata-2:
+    run: pytest opendata --test-group 2
+  opendata-3:
+    run: pytest opendata --test-group 3
+
+  backend-1:
+    run: pytest backend --test-group 1
+  backend-2:
+    run: pytest backend --test-group 2
+
+  frontend:
+    run: npm test
+
+  # Group by component
+  test-opendata:
+    parallel: [opendata-1, opendata-2, opendata-3]
+  test-backend:
+    parallel: [backend-1, backend-2]
+
+  # Reference parallel tasks - expands to 6 tasks
+  test:
+    parallel: [test-opendata, test-backend, frontend]
+```
+
+Running `rr test` expands to: `opendata-1`, `opendata-2`, `opendata-3`, `backend-1`, `backend-2`, `frontend`
+
+**Benefits:**
+- Run `rr test-opendata` for just opendata splits
+- Run `rr test` for everything
+- Add splits to `test-opendata` and `test` automatically includes them
+- Diamond dependencies are deduplicated (shared task runs once)
+- Circular references are detected at config validation
+
+Use `--dry-run` to see the expanded task list.
+
 ### Parallel Task Options
 
 | Field | Default | Purpose |
