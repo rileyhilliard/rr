@@ -53,6 +53,11 @@ Examples:
   rr run --host mini "cargo test"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if runRepeatFlag < 0 {
+			return errors.New(errors.ErrConfig,
+				fmt.Sprintf("--repeat must be >= 0, got %d", runRepeatFlag),
+				"Use --repeat with a positive number like --repeat 5")
+		}
 		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag)
 	},
 }

@@ -355,6 +355,10 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 
 	// Handle --local flag
 	if localFlag {
+		// --local and --tag are mutually exclusive
+		if err := ValidateLocalAndTag(localFlag, tagFlag); err != nil {
+			return 1, err
+		}
 		hosts = make(map[string]config.Host)
 		hostOrder = nil
 	}

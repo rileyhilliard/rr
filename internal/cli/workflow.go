@@ -348,6 +348,11 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 //
 // The lock-before-sync order ensures we don't waste time syncing to a host we can't use.
 func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
+	// Validate mutually exclusive flags
+	if err := ValidateLocalAndTag(opts.Local, opts.Tag); err != nil {
+		return nil, err
+	}
+
 	ctx := &WorkflowContext{
 		StartTime:    time.Now(),
 		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),

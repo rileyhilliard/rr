@@ -25,6 +25,18 @@ func AddCommonFlags(cmd *cobra.Command, flags *CommonFlags) {
 	cmd.Flags().BoolVar(&flags.Local, "local", false, "force local execution (skip remote hosts)")
 }
 
+// ValidateLocalAndTag checks that --local and --tag are not used together.
+// These flags are mutually exclusive: --local forces local execution while
+// --tag selects remote hosts by tag.
+func ValidateLocalAndTag(local bool, tag string) error {
+	if local && tag != "" {
+		return errors.New(errors.ErrConfig,
+			"--local and --tag cannot be used together",
+			"Use --local to run locally, or --tag to select remote hosts, but not both.")
+	}
+	return nil
+}
+
 // ParseProbeTimeout parses a probe timeout string into a duration.
 // Returns zero duration if the flag is empty.
 func ParseProbeTimeout(flag string) (time.Duration, error) {
