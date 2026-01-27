@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-01-26
+
+### Added
+
+- **Auto-discover project root** - Running `rr` from a subdirectory now works correctly. Config discovery walks up the directory tree to find `.rr.yaml`, similar to how git finds `.git`, npm finds `package.json`, and cargo finds `Cargo.toml`. Sync operations use the project root (where `.rr.yaml` is located) instead of the current directory. Fixes #154.
+
 ## [0.17.0] - 2026-01-26
 
 ### Added
