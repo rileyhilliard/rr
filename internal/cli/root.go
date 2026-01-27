@@ -179,10 +179,12 @@ func findConfigFlag() string {
 }
 
 // isUnknownCommandError checks if the error is an "unknown command" error from Cobra.
+// Uses HasPrefix to match Cobra's exact format: `unknown command "xyz" for "rr"`
 func isUnknownCommandError(err error) bool {
-	errStr := err.Error()
-	return strings.Contains(errStr, "unknown command") ||
-		strings.Contains(errStr, "unknown flag")
+	if err == nil {
+		return false
+	}
+	return strings.HasPrefix(err.Error(), "unknown command ")
 }
 
 // extractUnknownCommand extracts the command name from Cobra's error message.
@@ -225,12 +227,9 @@ func handleUnknownCommand(err error) int {
 			return 1
 		}
 
-		// Case 3: No project config found - suggest init
+		// Case 3: No project config found - preserve the original error details
 		if discoveryState.ProjectErr != nil {
-			rrErr := errors.New(errors.ErrConfig,
-				fmt.Sprintf("Unknown command '%s'", unknownCmd),
-				"No .rr.yaml found. If this is a task, run 'rr init' to create a config file.")
-			fmt.Fprintln(os.Stderr, rrErr.Error())
+			fmt.Fprintln(os.Stderr, discoveryState.ProjectErr.Error())
 			return 1
 		}
 	}

@@ -19,9 +19,9 @@ func TestIsUnknownCommandError(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "unknown flag error",
+			name: "unknown flag error is not unknown command",
 			err:  errors.New(`unknown flag: --foo`),
-			want: true,
+			want: false,
 		},
 		{
 			name: "other error",
@@ -37,10 +37,6 @@ func TestIsUnknownCommandError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.err == nil {
-				// Can't call isUnknownCommandError with nil
-				return
-			}
 			got := isUnknownCommandError(tt.err)
 			assert.Equal(t, tt.want, got)
 		})
