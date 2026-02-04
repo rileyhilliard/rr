@@ -3,6 +3,7 @@ package parallel
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -713,4 +714,108 @@ func TestOrchestrator_GetSlowHostDelay_UnknownHost(t *testing.T) {
 	// Unknown host should get no delay
 	delay := orch.getSlowHostDelay("unknown-host")
 	assert.Equal(t, time.Duration(0), delay)
+}
+
+func TestOrchestrator_UnavailableHostTracking(t *testing.T) {
+	tests := []struct {
+		name              string
+		hostList          []string
+		markUnavailable   []string
+		checkHost         string
+		expectUnavailable bool
+		expectAllDown     bool
+	}{
+		{
+			name:              "no hosts marked unavailable",
+			hostList:          []string{"host1", "host2", "host3"},
+			markUnavailable:   []string{},
+			checkHost:         "host1",
+			expectUnavailable: false,
+			expectAllDown:     false,
+		},
+		{
+			name:              "one host marked unavailable",
+			hostList:          []string{"host1", "host2", "host3"},
+			markUnavailable:   []string{"host1"},
+			checkHost:         "host1",
+			expectUnavailable: true,
+			expectAllDown:     false,
+		},
+		{
+			name:              "check available host when one is down",
+			hostList:          []string{"host1", "host2", "host3"},
+			markUnavailable:   []string{"host1"},
+			checkHost:         "host2",
+			expectUnavailable: false,
+			expectAllDown:     false,
+		},
+		{
+			name:              "all hosts marked unavailable",
+			hostList:          []string{"host1", "host2"},
+			markUnavailable:   []string{"host1", "host2"},
+			checkHost:         "host1",
+			expectUnavailable: true,
+			expectAllDown:     true,
+		},
+		{
+			name:              "single host marked unavailable",
+			hostList:          []string{"only-host"},
+			markUnavailable:   []string{"only-host"},
+			checkHost:         "only-host",
+			expectUnavailable: true,
+			expectAllDown:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orch := &Orchestrator{
+				hostList:         tt.hostList,
+				unavailableHosts: make(map[string]bool),
+			}
+
+			// Mark hosts as unavailable
+			for _, host := range tt.markUnavailable {
+				orch.markHostUnavailable(host)
+			}
+
+			// Check individual host
+			assert.Equal(t, tt.expectUnavailable, orch.isHostUnavailable(tt.checkHost),
+				"isHostUnavailable(%s)", tt.checkHost)
+
+			// Check if all hosts are down
+			assert.Equal(t, tt.expectAllDown, orch.allHostsUnavailable(),
+				"allHostsUnavailable()")
+		})
+	}
+}
+
+func TestOrchestrator_UnavailableHostConcurrency(t *testing.T) {
+	orch := &Orchestrator{
+		hostList:         []string{"host1", "host2", "host3", "host4", "host5"},
+		unavailableHosts: make(map[string]bool),
+	}
+
+	// Concurrent marking and checking of hosts
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		hostName := orch.hostList[i%len(orch.hostList)]
+
+		// Goroutine to mark host unavailable
+		go func(h string) {
+			defer wg.Done()
+			orch.markHostUnavailable(h)
+		}(hostName)
+
+		// Goroutine to check host availability
+		go func(h string) {
+			defer wg.Done()
+			_ = orch.isHostUnavailable(h)
+			_ = orch.allHostsUnavailable()
+		}(hostName)
+	}
+
+	wg.Wait()
+	// No panics = success
 }

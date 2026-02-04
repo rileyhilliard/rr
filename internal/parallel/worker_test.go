@@ -398,3 +398,68 @@ func TestHostWorker_EnsureSync_NilResolved(t *testing.T) {
 	err := worker.ensureSync(context.Background())
 	assert.NoError(t, err)
 }
+
+func TestHostWorker_ExecuteTaskWithRequeue_ContextCancellation(t *testing.T) {
+	// When context is cancelled, the task should NOT be re-queued
+	// (context cancellation is intentional, not a host availability issue)
+
+	orchestrator := &Orchestrator{
+		syncedHosts:      make(map[string]bool),
+		unavailableHosts: make(map[string]bool),
+	}
+
+	worker := &hostWorker{
+		orchestrator: orchestrator,
+		hostName:     "test-host",
+		host:         config.Host{SSH: []string{"nonexistent-host"}},
+	}
+
+	task := TaskInfo{
+		Name:    "test-task",
+		Index:   0,
+		Command: "echo hello",
+	}
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	result, shouldRequeue := worker.executeTaskWithRequeue(ctx, task)
+
+	// Should NOT re-queue when context is cancelled
+	assert.False(t, shouldRequeue, "should not re-queue when context is cancelled")
+	assert.NotNil(t, result.Error, "should have an error")
+	assert.Equal(t, 1, result.ExitCode, "exit code should be 1")
+}
+
+func TestHostWorker_ExecuteTaskWithRequeue_ContextTimeout(t *testing.T) {
+	// When context times out, the task should NOT be re-queued
+
+	orchestrator := &Orchestrator{
+		syncedHosts:      make(map[string]bool),
+		unavailableHosts: make(map[string]bool),
+	}
+
+	worker := &hostWorker{
+		orchestrator: orchestrator,
+		hostName:     "test-host",
+		host:         config.Host{SSH: []string{"nonexistent-host"}},
+	}
+
+	task := TaskInfo{
+		Name:    "test-task",
+		Index:   0,
+		Command: "echo hello",
+	}
+
+	// Create an already-expired context
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+
+	result, shouldRequeue := worker.executeTaskWithRequeue(ctx, task)
+
+	// Should NOT re-queue when context times out
+	assert.False(t, shouldRequeue, "should not re-queue when context times out")
+	assert.NotNil(t, result.Error, "should have an error")
+	assert.Equal(t, 1, result.ExitCode, "exit code should be 1")
+}

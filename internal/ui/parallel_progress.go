@@ -215,6 +215,53 @@ func (p *ParallelProgress) TaskCompleted(name string, index int, success bool) {
 	p.renderLocked()
 }
 
+// TaskRequeued resets a task to pending state when its host becomes unavailable.
+// Displays a warning line and returns the task to the pending state for reassignment.
+func (p *ParallelProgress) TaskRequeued(name string, index int, unavailableHost string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for i := range p.tasks {
+		if p.tasks[i].Index == index {
+			p.tasks[i].Status = TaskStatusPending
+			p.tasks[i].Host = ""
+			p.tasks[i].StartTime = time.Time{}
+			break
+		}
+	}
+
+	// Print warning line (not part of the animated display)
+	// We print above the animated area by clearing current display,
+	// printing warning, then re-rendering the task list
+	if p.isTTY {
+		warningStyle := lipgloss.NewStyle().Foreground(ColorWarning)
+		warning := fmt.Sprintf("%s %s unavailable, re-queuing %s\n",
+			warningStyle.Render(SymbolWarning),
+			unavailableHost,
+			name)
+
+		// Move cursor up, clear lines, print warning, then re-render
+		if p.lineCount > 0 {
+			fmt.Fprintf(p.output, "\x1b[%dA", p.lineCount)
+		}
+		for i := 0; i < p.lineCount; i++ {
+			fmt.Fprint(p.output, "\x1b[K\n") // Clear each line
+		}
+		if p.lineCount > 0 {
+			fmt.Fprintf(p.output, "\x1b[%dA", p.lineCount)
+		}
+
+		// Print warning (permanent line)
+		fmt.Fprint(p.output, warning)
+
+		// Reset line count since we printed new content
+		p.lineCount = 0
+	}
+
+	// Re-render task list
+	p.renderLocked()
+}
+
 // HasRunningTasks returns true if any tasks are still running or syncing.
 func (p *ParallelProgress) HasRunningTasks() bool {
 	p.mu.Lock()

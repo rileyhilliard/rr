@@ -2,6 +2,7 @@ package parallel
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -32,6 +33,12 @@ type Orchestrator struct {
 	setupHosts  map[string]bool
 	setupErrors map[string]error
 	setupMu     sync.Mutex
+
+	// Unavailable host tracking for graceful task re-queuing
+	// When a host's SSH connection fails, it's marked unavailable and
+	// any tasks assigned to it are returned to the queue for other hosts
+	unavailableHosts map[string]bool
+	unavailableMu    sync.Mutex
 
 	// Output management
 	outputMgr *OutputManager
@@ -68,6 +75,7 @@ func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, hostOrder [
 		hostFirstTaskTime: make(map[string]time.Duration),
 		setupHosts:        make(map[string]bool),
 		setupErrors:       make(map[string]error),
+		unavailableHosts:  make(map[string]bool),
 		results:           make([]TaskResult, 0, len(tasks)),
 	}
 }
@@ -80,6 +88,11 @@ func NewOrchestrator(tasks []TaskInfo, hosts map[string]config.Host, hostOrder [
 //   - Naturally load-balances: fast hosts grab more work
 //   - Handles heterogeneous hosts: no pre-assignment needed
 //   - Simplifies cancellation: just close the channel
+//
+// Graceful host failover: When a host's SSH connection fails, the task is
+// returned to the queue for other hosts to pick up. The unavailable host is
+// marked so no more tasks are assigned to it. Only if ALL hosts become
+// unavailable does execution fail.
 //
 // The channel-based approach avoids explicit locking on the queue itself since
 // Go channels are already synchronized.
@@ -113,13 +126,12 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	startTime := time.Now()
 
 	// Create task queue (channel-based work stealing).
-	// The channel is sized to hold all tasks, filled immediately, then closed.
-	// Workers range over this channel, naturally competing for work.
+	// We use an unbuffered send with a goroutine dispatcher to allow re-queuing.
 	taskQueue := make(chan TaskInfo, len(o.tasks))
-	for _, task := range o.tasks {
-		taskQueue <- task
-	}
-	close(taskQueue)
+
+	// Re-queue channel for tasks that need to be assigned to a different host
+	// (e.g., when the original host is unavailable)
+	requeueChan := make(chan TaskInfo, len(o.tasks))
 
 	// Determine number of workers
 	numWorkers := len(o.hostList)
@@ -137,6 +149,86 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	var failed bool
 	var failedMu sync.Mutex
 
+	// Task dispatcher goroutine: feeds tasks to workers, handles re-queuing
+	dispatcherDone := make(chan struct{})
+	go func() {
+		defer close(dispatcherDone)
+		defer close(taskQueue)
+
+		// Initial tasks
+		pending := make([]TaskInfo, len(o.tasks))
+		copy(pending, o.tasks)
+
+		for len(pending) > 0 {
+			// Check if all hosts are unavailable
+			if o.allHostsUnavailable() {
+				// All hosts down - mark remaining tasks as failed
+				for _, task := range pending {
+					result := TaskResult{
+						TaskName:  task.Name,
+						TaskIndex: task.Index,
+						Command:   task.Command,
+						Host:      "none",
+						ExitCode:  1,
+						Error:     fmt.Errorf("all hosts unavailable"),
+						StartTime: time.Now(),
+						EndTime:   time.Now(),
+					}
+					resultChan <- result
+				}
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case task := <-requeueChan:
+				// Task was re-queued because its host was unavailable
+				pending = append(pending, task)
+			case taskQueue <- pending[0]:
+				// Task dispatched to a worker
+				pending = pending[1:]
+			}
+		}
+
+		// After initial batch is dispatched, continue draining re-queued tasks
+		// until requeueChan is closed (which happens after all workers exit).
+		// We must NOT use a `default` case here - that would cause premature exit
+		// and potential task loss if a worker re-queues a task after we check.
+		for task := range requeueChan {
+			// Check for context cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			// Check if all hosts are unavailable
+			if o.allHostsUnavailable() {
+				result := TaskResult{
+					TaskName:  task.Name,
+					TaskIndex: task.Index,
+					Command:   task.Command,
+					Host:      "none",
+					ExitCode:  1,
+					Error:     fmt.Errorf("all hosts unavailable"),
+					StartTime: time.Now(),
+					EndTime:   time.Now(),
+				}
+				resultChan <- result
+				continue
+			}
+
+			// Dispatch re-queued task to an available worker
+			select {
+			case <-ctx.Done():
+				return
+			case taskQueue <- task:
+				// Re-queued task dispatched
+			}
+		}
+	}()
+
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
@@ -144,13 +236,15 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 		wg.Add(1)
 		go func(hostName string) {
 			defer wg.Done()
-			o.hostWorker(ctx, hostName, taskQueue, resultChan, &failed, &failedMu)
+			o.hostWorkerWithRequeue(ctx, hostName, taskQueue, requeueChan, resultChan, &failed, &failedMu)
 		}(hostName)
 	}
 
 	// Collect results in a separate goroutine
 	go func() {
 		wg.Wait()
+		close(requeueChan)
+		<-dispatcherDone
 		close(resultChan)
 	}()
 
@@ -160,7 +254,9 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 		o.resultsMu.Lock()
 		o.results = append(o.results, result)
 		o.resultsMu.Unlock()
-		hostsUsed[result.Host] = true
+		if result.Host != "none" {
+			hostsUsed[result.Host] = true
+		}
 	}
 
 	// Build final result
@@ -168,11 +264,13 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	return o.buildResult(duration, hostsUsed), nil
 }
 
-// hostWorker is a goroutine that grabs tasks from the queue and executes them.
-func (o *Orchestrator) hostWorker(
+// hostWorkerWithRequeue is a goroutine that grabs tasks from the queue and executes them.
+// If the host becomes unavailable (SSH connection fails), tasks are re-queued for other hosts.
+func (o *Orchestrator) hostWorkerWithRequeue(
 	ctx context.Context,
 	hostName string,
 	taskQueue <-chan TaskInfo,
+	requeueChan chan<- TaskInfo,
 	resultChan chan<- TaskResult,
 	failed *bool,
 	failedMu *sync.Mutex,
@@ -190,6 +288,11 @@ func (o *Orchestrator) hostWorker(
 	isFirstTask := true
 
 	for {
+		// Check if this host is marked unavailable
+		if o.isHostUnavailable(hostName) {
+			return
+		}
+
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
@@ -233,22 +336,51 @@ func (o *Orchestrator) hostWorker(
 					}
 				}
 				// Blocking read after delay
-				task, ok = <-taskQueue
-				if !ok {
-					return // Queue closed, no more tasks
+				select {
+				case task, ok = <-taskQueue:
+					if !ok {
+						return // Queue closed, no more tasks
+					}
+				case <-ctx.Done():
+					return
 				}
 			}
 		} else {
 			// First task: grab immediately without delay
-			task, ok = <-taskQueue
-			if !ok {
-				return // Queue closed, no more tasks
+			select {
+			case task, ok = <-taskQueue:
+				if !ok {
+					return // Queue closed, no more tasks
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 
 		// Execute the task
 		taskStart := time.Now()
-		result := worker.executeTask(ctx, task)
+		result, requeue := worker.executeTaskWithRequeue(ctx, task)
+
+		if requeue {
+			// Host is unavailable, mark it and re-queue the task
+			o.markHostUnavailable(hostName)
+
+			// Notify about re-queue
+			if o.outputMgr != nil {
+				o.outputMgr.TaskRequeued(task.Name, task.Index, hostName)
+			}
+
+			// Send task back for another host to pick up
+			select {
+			case requeueChan <- task:
+			case <-ctx.Done():
+				return
+			}
+
+			// This worker is done (host unavailable)
+			return
+		}
+
 		resultChan <- result
 
 		// Record first-task duration for performance tracking
@@ -331,6 +463,34 @@ func (o *Orchestrator) recordHostSetup(hostName string, err error) {
 
 	o.setupHosts[hostName] = true
 	o.setupErrors[hostName] = err
+}
+
+// markHostUnavailable marks a host as unavailable (e.g., SSH connection failed).
+// Tasks assigned to unavailable hosts are re-queued for other hosts.
+func (o *Orchestrator) markHostUnavailable(hostName string) {
+	o.unavailableMu.Lock()
+	defer o.unavailableMu.Unlock()
+	o.unavailableHosts[hostName] = true
+}
+
+// isHostUnavailable checks if a host has been marked unavailable.
+func (o *Orchestrator) isHostUnavailable(hostName string) bool {
+	o.unavailableMu.Lock()
+	defer o.unavailableMu.Unlock()
+	return o.unavailableHosts[hostName]
+}
+
+// allHostsUnavailable returns true if all configured hosts are unavailable.
+func (o *Orchestrator) allHostsUnavailable() bool {
+	o.unavailableMu.Lock()
+	defer o.unavailableMu.Unlock()
+
+	for _, hostName := range o.hostList {
+		if !o.unavailableHosts[hostName] {
+			return false
+		}
+	}
+	return true
 }
 
 // recordFirstTaskTime records the duration of the first task completed by a host.

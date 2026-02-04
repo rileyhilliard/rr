@@ -210,6 +210,40 @@ func (m *OutputManager) TaskOutput(taskName string, taskIndex int, line []byte, 
 	}
 }
 
+// TaskRequeued is called when a task is re-queued because its host became unavailable.
+// This displays a warning to the user and resets the task to pending state.
+func (m *OutputManager) TaskRequeued(taskName string, taskIndex int, unavailableHost string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tid := taskID(taskName, taskIndex)
+	m.taskStatus[tid] = TaskPending
+	delete(m.taskHosts, tid) // Clear host assignment
+
+	// Clear any buffered output from the failed attempt
+	m.taskOutput[tid] = &bytes.Buffer{}
+	delete(m.taskTruncated, tid)
+
+	switch m.mode {
+	case OutputProgress:
+		if m.progress != nil {
+			m.progress.TaskRequeued(taskName, taskIndex, unavailableHost)
+		}
+	case OutputStream:
+		fmt.Fprintf(m.w, "%s %s unavailable, re-queuing %s\n",
+			ui.SymbolWarning, unavailableHost, taskName)
+	case OutputVerbose:
+		fmt.Fprintf(m.w, "%s Host %s unavailable, re-queuing task %s...\n",
+			m.mutedStyle.Render(ui.SymbolWarning),
+			unavailableHost,
+			taskName)
+	case OutputQuiet:
+		// Still show warnings in quiet mode since this is important info
+		fmt.Fprintf(m.w, "%s %s unavailable, re-queuing %s\n",
+			ui.SymbolWarning, unavailableHost, taskName)
+	}
+}
+
 // TaskCompleted is called when a task finishes execution.
 func (m *OutputManager) TaskCompleted(result TaskResult) {
 	m.mu.Lock()
