@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -753,4 +755,178 @@ func TestPull_DryRunMode(t *testing.T) {
 	})
 	require.Error(t, err)
 	// Should fail on config, not on dry-run flag
+}
+
+// captureRunStdout captures stdout during function execution
+func captureRunStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	os.Stdout = w
+
+	fn()
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+
+	return buf.String()
+}
+
+func TestRenderFinalStatus_Success(t *testing.T) {
+	var buf bytes.Buffer
+	pd := ui.NewPhaseDisplay(&buf)
+
+	output := captureRunStdout(t, func() {
+		renderFinalStatus(pd, 0, 5*time.Second, 3*time.Second, "my-server")
+	})
+
+	assert.Contains(t, output, "Completed")
+	assert.Contains(t, output, "my-server")
+	assert.Contains(t, output, "5.0s total")
+	assert.Contains(t, output, "3.0s exec")
+	assert.Contains(t, output, ui.SymbolSuccess)
+}
+
+func TestRenderFinalStatus_Failure(t *testing.T) {
+	var buf bytes.Buffer
+	pd := ui.NewPhaseDisplay(&buf)
+
+	output := captureRunStdout(t, func() {
+		renderFinalStatus(pd, 1, 5*time.Second, 3*time.Second, "my-server")
+	})
+
+	assert.Contains(t, output, "Failed")
+	assert.Contains(t, output, "my-server")
+	assert.Contains(t, output, "exit code 1")
+	assert.Contains(t, output, "5.0s")
+	assert.Contains(t, output, ui.SymbolFail)
+}
+
+func TestRenderFinalStatus_HighExitCode(t *testing.T) {
+	var buf bytes.Buffer
+	pd := ui.NewPhaseDisplay(&buf)
+
+	output := captureRunStdout(t, func() {
+		renderFinalStatus(pd, 127, 2*time.Second, 1*time.Second, "remote-host")
+	})
+
+	assert.Contains(t, output, "Failed")
+	assert.Contains(t, output, "exit code 127")
+	assert.Contains(t, output, ui.SymbolFail)
+}
+
+func TestRenderFailureHelp_CommonExitCodes(t *testing.T) {
+	tests := []struct {
+		name        string
+		exitCode    int
+		wantStrings []string
+	}{
+		{
+			name:        "exit code 1 - general error",
+			exitCode:    1,
+			wantStrings: []string{"General error", "Troubleshooting"},
+		},
+		{
+			name:        "exit code 2 - misuse",
+			exitCode:    2,
+			wantStrings: []string{"Misuse", "dependency", "Troubleshooting"},
+		},
+		{
+			name:        "exit code 126 - not executable",
+			exitCode:    126,
+			wantStrings: []string{"not executable", "permissions"},
+		},
+		{
+			name:        "exit code 127 - command not found",
+			exitCode:    127,
+			wantStrings: []string{"not found", "PATH"},
+		},
+		{
+			name:        "exit code 128 - invalid exit",
+			exitCode:    128,
+			wantStrings: []string{"Invalid exit", "bug"},
+		},
+		{
+			name:        "exit code 137 - OOM killed",
+			exitCode:    137,
+			wantStrings: []string{"Killed", "OOM", "memory"},
+		},
+		{
+			name:        "exit code 139 - segfault",
+			exitCode:    139,
+			wantStrings: []string{"Segmentation fault", "crashed"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := captureRunStdout(t, func() {
+				renderFailureHelp(tt.exitCode, "test-command", "test-host")
+			})
+
+			for _, want := range tt.wantStrings {
+				assert.Contains(t, output, want, "output should contain %q", want)
+			}
+		})
+	}
+}
+
+func TestRenderFailureHelp_SignalExitCodes(t *testing.T) {
+	tests := []struct {
+		name        string
+		exitCode    int
+		wantStrings []string
+		dontWant    []string
+	}{
+		{
+			name:        "exit code 130 - Ctrl+C",
+			exitCode:    130,
+			wantStrings: []string{"Ctrl+C"},
+			dontWant:    []string{"Troubleshooting"}, // No troubleshooting for user interrupts
+		},
+		{
+			name:        "exit code 143 - SIGTERM",
+			exitCode:    143,
+			wantStrings: []string{"SIGTERM"},
+			dontWant:    []string{"Troubleshooting"}, // No troubleshooting for user interrupts
+		},
+		{
+			name:        "exit code 134 - killed by signal",
+			exitCode:    134,
+			wantStrings: []string{"signal", "Troubleshooting"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := captureRunStdout(t, func() {
+				renderFailureHelp(tt.exitCode, "test-command", "test-host")
+			})
+
+			for _, want := range tt.wantStrings {
+				assert.Contains(t, output, want, "output should contain %q", want)
+			}
+			for _, dontWant := range tt.dontWant {
+				assert.NotContains(t, output, dontWant, "output should not contain %q", dontWant)
+			}
+		})
+	}
+}
+
+func TestRenderFailureHelp_IncludesCommandAndHost(t *testing.T) {
+	output := captureRunStdout(t, func() {
+		renderFailureHelp(1, "make test", "build-server")
+	})
+
+	// Should include SSH command suggestion with host and command
+	assert.Contains(t, output, "ssh build-server")
+	assert.Contains(t, output, "make test")
+	assert.Contains(t, output, "rr doctor")
 }

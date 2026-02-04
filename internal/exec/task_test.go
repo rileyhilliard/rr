@@ -390,3 +390,52 @@ func TestBuildRemoteCommand_SetupCommands(t *testing.T) {
 	assert.Contains(t, result, "export PATH=/opt/go/bin:\\$PATH")
 	assert.Contains(t, result, "go test")
 }
+
+func TestExecuteLocalTask_SimpleCommand(t *testing.T) {
+	task := &config.TaskConfig{
+		Run: "echo hello_from_local_task",
+	}
+
+	result, err := ExecuteLocalTask(task, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
+func TestExecuteLocalTask_WithEnv(t *testing.T) {
+	task := &config.TaskConfig{
+		Run: "echo $LOCAL_TASK_VAR",
+	}
+	env := map[string]string{"LOCAL_TASK_VAR": "custom_value_123"}
+
+	result, err := ExecuteLocalTask(task, env)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
+func TestExecuteLocalTask_Failure(t *testing.T) {
+	task := &config.TaskConfig{
+		Run: "exit 99",
+	}
+
+	result, err := ExecuteLocalTask(task, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 99, result.ExitCode)
+}
+
+func TestExecuteLocalTask_WithSteps(t *testing.T) {
+	task := &config.TaskConfig{
+		Steps: []config.TaskStep{
+			{Name: "step1", Run: "echo step1_output"},
+			{Name: "step2", Run: "echo step2_output"},
+		},
+	}
+
+	result, err := ExecuteLocalTask(task, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	require.Len(t, result.StepResults, 2)
+}
