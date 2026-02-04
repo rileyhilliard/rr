@@ -44,10 +44,11 @@ func (w *hostWorker) executeTaskWithRequeue(ctx context.Context, task TaskInfo) 
 		StartTime: time.Now(),
 	}
 
-	// Notify output manager: task is syncing (connecting, syncing files, waiting for lock)
+	// Notify output manager or dashboard: task is syncing (connecting, syncing files, waiting for lock)
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, w.hostName)
 	}
+	w.orchestrator.notifyTaskSyncing(task.Name, task.Index, w.hostName)
 
 	// Ensure we have a connection - if this fails due to host unavailability,
 	// re-queue the task. But if the context was cancelled or timed out,
@@ -106,10 +107,11 @@ func (w *hostWorker) executeTaskInternal(ctx context.Context, task TaskInfo, res
 		_ = hostLock.UpdateCommand(task.Name)
 	}
 
-	// Notify output manager: task is now actually executing
+	// Notify output manager or dashboard: task is now actually executing
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskExecuting(task.Name, task.Index)
 	}
+	w.orchestrator.notifyTaskExecuting(task.Name, task.Index)
 
 	// Execute the task with timeout if configured
 	execCtx := ctx
@@ -338,11 +340,12 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
-// notifyComplete notifies the output manager that a task completed.
+// notifyComplete notifies the output manager and dashboard that a task completed.
 func (w *hostWorker) notifyComplete(result TaskResult) {
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskCompleted(result)
 	}
+	w.orchestrator.notifyTaskCompleted(result)
 }
 
 // Close releases the lock and closes the worker's connection.
@@ -380,10 +383,11 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 		StartTime: time.Now(),
 	}
 
-	// Notify output manager: local tasks go straight to executing (no sync needed)
+	// Notify output manager or dashboard: local tasks go straight to executing (no sync needed)
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, "local")
 	}
+	w.orchestrator.notifyTaskSyncing(task.Name, task.Index, "local")
 
 	// Run setup command if configured (once for local execution)
 	if err := w.ensureSetup(ctx); err != nil {
@@ -401,6 +405,7 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 	if w.orchestrator.outputMgr != nil {
 		w.orchestrator.outputMgr.TaskExecuting(task.Name, task.Index)
 	}
+	w.orchestrator.notifyTaskExecuting(task.Name, task.Index)
 
 	// Execute with timeout if configured
 	execCtx := ctx
@@ -452,6 +457,7 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 		}
 		w.orchestrator.outputMgr.TaskCompleted(result)
 	}
+	w.orchestrator.notifyTaskCompleted(result)
 
 	return result
 }

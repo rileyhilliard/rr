@@ -674,6 +674,7 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 	var streamFlag bool
 	var verboseFlag bool
 	var quietFlag bool
+	var dashboardFlag bool
 	var failFastFlag bool
 	var maxParallelFlag int
 	var noLogsFlag bool
@@ -691,6 +692,7 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 				Stream:      streamFlag,
 				Verbose:     verboseFlag,
 				Quiet:       quietFlag,
+				Dashboard:   dashboardFlag,
 				FailFast:    failFastFlag,
 				MaxParallel: maxParallelFlag,
 				NoLogs:      noLogsFlag,
@@ -714,6 +716,7 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 	cmd.Flags().BoolVar(&streamFlag, "stream", false, "show real-time interleaved output")
 	cmd.Flags().BoolVar(&verboseFlag, "verbose", false, "show full output per task on completion")
 	cmd.Flags().BoolVar(&quietFlag, "quiet", false, "show summary only")
+	cmd.Flags().BoolVar(&dashboardFlag, "dashboard", false, "show interactive TUI dashboard")
 	cmd.Flags().BoolVar(&failFastFlag, "fail-fast", false, "stop on first task failure")
 	cmd.Flags().IntVar(&maxParallelFlag, "max-parallel", 0, "limit concurrent task execution (0 = unlimited)")
 	cmd.Flags().BoolVar(&noLogsFlag, "no-logs", false, "don't save output to log files")

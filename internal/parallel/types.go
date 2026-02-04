@@ -17,6 +17,8 @@ const (
 	OutputVerbose OutputMode = "verbose"
 	// OutputQuiet shows summary only.
 	OutputQuiet OutputMode = "quiet"
+	// OutputDashboard shows an interactive TUI dashboard.
+	OutputDashboard OutputMode = "dashboard"
 )
 
 // Config holds configuration for parallel execution.
@@ -126,4 +128,23 @@ func (t TaskInfo) ID() string {
 // taskID creates a unique task identifier from name and index.
 func taskID(name string, index int) string {
 	return fmt.Sprintf("%s#%d", name, index)
+}
+
+// DashboardBridge is the interface that the orchestrator uses to send events to a dashboard.
+// This allows the dashboard TUI to receive real-time updates about task execution.
+type DashboardBridge interface {
+	InitTasks(tasks []TaskInit)
+	TaskSyncing(name string, index int, host string)
+	TaskExecuting(name string, index int)
+	TaskCompleted(name string, index int, success bool, duration time.Duration)
+	TaskRequeued(name string, index int, unavailableHost string)
+	AllCompleted(passed, failed int, duration time.Duration)
+	OrchestratorDone(err error)
+}
+
+// TaskInit holds initialization info for a task.
+// Used by the dashboard bridge to initialize task entries.
+type TaskInit struct {
+	Name  string
+	Index int
 }

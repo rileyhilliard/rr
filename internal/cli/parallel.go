@@ -12,7 +12,9 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/parallel"
+	"github.com/rileyhilliard/rr/internal/parallel/dashboard"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
+	"golang.org/x/term"
 )
 
 // ParallelTaskOptions configures parallel task execution.
@@ -23,6 +25,7 @@ type ParallelTaskOptions struct {
 	Stream      bool          // Force stream output mode
 	Verbose     bool          // Force verbose output mode
 	Quiet       bool          // Force quiet output mode
+	Dashboard   bool          // Show interactive TUI dashboard
 	FailFast    bool          // Stop on first failure (overrides task config)
 	MaxParallel int           // Limit concurrency (overrides task config)
 	NoLogs      bool          // Don't save output to log files
@@ -119,38 +122,9 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 0, nil
 	}
 
-	// Determine output mode
+	// Determine output mode and build config
 	outputMode := determineOutputMode(opts, task)
-
-	// Build parallel config
-	parallelCfg := parallel.Config{
-		MaxParallel: task.MaxParallel,
-		FailFast:    task.FailFast,
-		OutputMode:  outputMode,
-		SaveLogs:    !opts.NoLogs,
-		Setup:       task.Setup,
-	}
-
-	// Apply CLI overrides
-	if opts.FailFast {
-		parallelCfg.FailFast = true
-	}
-	if opts.MaxParallel > 0 {
-		parallelCfg.MaxParallel = opts.MaxParallel
-	}
-	if opts.Timeout > 0 {
-		parallelCfg.Timeout = opts.Timeout
-	}
-
-	// Parse task timeout if specified
-	if task.Timeout != "" && opts.Timeout == 0 {
-		d, err := time.ParseDuration(task.Timeout)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: invalid timeout '%s', ignoring: %v\n", task.Timeout, err)
-		} else {
-			parallelCfg.Timeout = d
-		}
-	}
+	parallelCfg := buildParallelConfig(opts, task, outputMode)
 
 	// Set up log writer if enabled
 	var logWriter *logs.LogWriter
@@ -189,10 +163,10 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		cancel()
 	}()
 
-	// Execute
-	result, err := orchestrator.Run(ctx)
-	if err != nil {
-		return 1, err
+	// Execute - use dashboard mode if requested and TTY is available
+	result, runErr := executeOrchestrator(ctx, orchestrator, tasks, outputMode)
+	if runErr != nil {
+		return 1, runErr
 	}
 
 	// Write task outputs to logs
@@ -200,12 +174,14 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		writeTaskLogs(logWriter, result, opts.TaskName)
 	}
 
-	// Render summary
-	logDir := ""
-	if logWriter != nil {
-		logDir = logWriter.Dir()
+	// Render summary (skip in dashboard mode - dashboard shows its own summary)
+	if outputMode != parallel.OutputDashboard {
+		logDir := ""
+		if logWriter != nil {
+			logDir = logWriter.Dir()
+		}
+		parallel.RenderSummary(result, logDir)
 	}
-	parallel.RenderSummary(result, logDir)
 
 	// Return aggregate exit code
 	if result.Failed > 0 {
@@ -239,6 +215,9 @@ func writeTaskLogs(logWriter *logs.LogWriter, result *parallel.Result, taskName 
 // determineOutputMode determines the output mode based on options and task config.
 func determineOutputMode(opts ParallelTaskOptions, task *config.TaskConfig) parallel.OutputMode {
 	// CLI flags take precedence
+	if opts.Dashboard {
+		return parallel.OutputDashboard
+	}
 	if opts.Stream {
 		return parallel.OutputStream
 	}
@@ -260,6 +239,8 @@ func determineOutputMode(opts ParallelTaskOptions, task *config.TaskConfig) para
 			return parallel.OutputQuiet
 		case "progress":
 			return parallel.OutputProgress
+		case "dashboard":
+			return parallel.OutputDashboard
 		}
 	}
 
@@ -442,4 +423,46 @@ func ExpandLogsDir(dir string) string {
 		return home + dir[1:]
 	}
 	return dir
+}
+
+// executeOrchestrator runs the orchestrator, using dashboard mode if appropriate.
+func executeOrchestrator(ctx context.Context, orchestrator *parallel.Orchestrator, tasks []parallel.TaskInfo, outputMode parallel.OutputMode) (*parallel.Result, error) {
+	if outputMode == parallel.OutputDashboard && term.IsTerminal(int(os.Stdout.Fd())) {
+		return dashboard.Run(ctx, orchestrator, tasks)
+	}
+	return orchestrator.Run(ctx)
+}
+
+// buildParallelConfig creates a parallel config from task config and CLI options.
+func buildParallelConfig(opts ParallelTaskOptions, task *config.TaskConfig, outputMode parallel.OutputMode) parallel.Config {
+	cfg := parallel.Config{
+		MaxParallel: task.MaxParallel,
+		FailFast:    task.FailFast,
+		OutputMode:  outputMode,
+		SaveLogs:    !opts.NoLogs,
+		Setup:       task.Setup,
+	}
+
+	// Apply CLI overrides
+	if opts.FailFast {
+		cfg.FailFast = true
+	}
+	if opts.MaxParallel > 0 {
+		cfg.MaxParallel = opts.MaxParallel
+	}
+	if opts.Timeout > 0 {
+		cfg.Timeout = opts.Timeout
+	}
+
+	// Parse task timeout if specified
+	if task.Timeout != "" && opts.Timeout == 0 {
+		d, err := time.ParseDuration(task.Timeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: invalid timeout '%s', ignoring: %v\n", task.Timeout, err)
+		} else {
+			cfg.Timeout = d
+		}
+	}
+
+	return cfg
 }

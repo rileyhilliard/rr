@@ -41,7 +41,8 @@ type Orchestrator struct {
 	unavailableMu    sync.Mutex
 
 	// Output management
-	outputMgr *OutputManager
+	outputMgr       *OutputManager
+	dashboardBridge DashboardBridge
 
 	// Results collection
 	results   []TaskResult
@@ -116,12 +117,16 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	// Determine TTY status for output manager
 	isTTY := isTerminal()
 
-	// Initialize output manager
-	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
-	defer o.outputMgr.Close()
-
-	// Show all tasks as pending upfront (pass full TaskInfo for Index tracking)
-	o.outputMgr.InitTasks(o.tasks)
+	// Initialize output manager (skip in dashboard mode - dashboard handles display)
+	if o.dashboardBridge == nil {
+		o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
+		defer o.outputMgr.Close()
+		// Show all tasks as pending upfront (pass full TaskInfo for Index tracking)
+		o.outputMgr.InitTasks(o.tasks)
+	} else {
+		// Notify dashboard of tasks
+		o.notifyInitTasks(o.tasks)
+	}
 
 	startTime := time.Now()
 
@@ -369,6 +374,7 @@ func (o *Orchestrator) hostWorkerWithRequeue(
 			if o.outputMgr != nil {
 				o.outputMgr.TaskRequeued(task.Name, task.Index, hostName)
 			}
+			o.notifyTaskRequeued(task.Name, task.Index, hostName)
 
 			// Send task back for another host to pick up
 			select {
@@ -559,17 +565,66 @@ func (o *Orchestrator) GetOutputManager() *OutputManager {
 	return o.outputMgr
 }
 
+// SetDashboardBridge sets the dashboard bridge for TUI mode.
+// When set, events are forwarded to the bridge instead of the output manager.
+func (o *Orchestrator) SetDashboardBridge(bridge DashboardBridge) {
+	o.dashboardBridge = bridge
+}
+
+// notifyInitTasks sends task initialization to the dashboard bridge if set.
+func (o *Orchestrator) notifyInitTasks(tasks []TaskInfo) {
+	if o.dashboardBridge != nil {
+		inits := make([]TaskInit, len(tasks))
+		for i, t := range tasks {
+			inits[i] = TaskInit{Name: t.Name, Index: t.Index}
+		}
+		o.dashboardBridge.InitTasks(inits)
+	}
+}
+
+// notifyTaskSyncing sends task syncing notification to the dashboard bridge if set.
+func (o *Orchestrator) notifyTaskSyncing(name string, index int, host string) {
+	if o.dashboardBridge != nil {
+		o.dashboardBridge.TaskSyncing(name, index, host)
+	}
+}
+
+// notifyTaskExecuting sends task executing notification to the dashboard bridge if set.
+func (o *Orchestrator) notifyTaskExecuting(name string, index int) {
+	if o.dashboardBridge != nil {
+		o.dashboardBridge.TaskExecuting(name, index)
+	}
+}
+
+// notifyTaskCompleted sends task completion notification to the dashboard bridge if set.
+func (o *Orchestrator) notifyTaskCompleted(result TaskResult) {
+	if o.dashboardBridge != nil {
+		o.dashboardBridge.TaskCompleted(result.TaskName, result.TaskIndex, result.Success(), result.Duration)
+	}
+}
+
+// notifyTaskRequeued sends task requeue notification to the dashboard bridge if set.
+func (o *Orchestrator) notifyTaskRequeued(name string, index int, unavailableHost string) {
+	if o.dashboardBridge != nil {
+		o.dashboardBridge.TaskRequeued(name, index, unavailableHost)
+	}
+}
+
 // runLocal executes tasks locally (sequentially) when no remote hosts are configured.
 func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
 	// Determine TTY status for output manager
 	isTTY := isTerminal()
 
-	// Initialize output manager
-	o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
-	defer o.outputMgr.Close()
-
-	// Show all tasks as pending upfront (pass full TaskInfo for Index tracking)
-	o.outputMgr.InitTasks(o.tasks)
+	// Initialize output manager (skip in dashboard mode - dashboard handles display)
+	if o.dashboardBridge == nil {
+		o.outputMgr = NewOutputManager(o.config.OutputMode, isTTY)
+		defer o.outputMgr.Close()
+		// Show all tasks as pending upfront (pass full TaskInfo for Index tracking)
+		o.outputMgr.InitTasks(o.tasks)
+	} else {
+		// Notify dashboard of tasks
+		o.notifyInitTasks(o.tasks)
+	}
 
 	startTime := time.Now()
 
