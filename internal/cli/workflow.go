@@ -483,10 +483,9 @@ func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return nil
 	}
 
-	// For now, just report missing requirements as an error
-	// TODO: Add interactive installation prompt (similar to fix.go HandleMissingTool)
+	// Report missing requirements with actionable suggestion
 	missingStr := require.FormatMissing(missing)
 	return errors.New(errors.ErrExec,
 		"Missing required tools: "+missingStr,
-		"Install the missing tools or remove them from require list. Use --skip-requirements to bypass.")
+		"Run 'rr provision' to install missing tools, or use --skip-requirements to bypass.")
 }
