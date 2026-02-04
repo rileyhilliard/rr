@@ -174,10 +174,18 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 		return nil
 	}
 
-	// Get working directory
-	workDir, err := os.Getwd()
-	if err != nil {
-		return err
+	// Use project root if available, otherwise fall back to cwd.
+	// This ensures parallel tasks sync from the correct directory when
+	// run from a subdirectory (matching the single-task workflow behavior).
+	var workDir string
+	if w.orchestrator.resolved != nil && w.orchestrator.resolved.ProjectRoot != "" {
+		workDir = w.orchestrator.resolved.ProjectRoot
+	} else {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Acquire lock before syncing
