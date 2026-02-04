@@ -345,3 +345,80 @@ func TestOutputManager_DuplicateTaskNames(t *testing.T) {
 	assert.Equal(t, TaskPassed, statuses["test-opendata#1"])
 	assert.Equal(t, TaskFailed, statuses["test-opendata#2"])
 }
+
+func TestOutputManager_TaskRequeued_StreamMode(t *testing.T) {
+	var buf bytes.Buffer
+	mgr := NewOutputManager(OutputStream, true)
+	mgr.SetWriter(&buf)
+
+	// Start a task on a host
+	mgr.TaskSyncing("test-frontend", 0, "m1-linux")
+	buf.Reset()
+
+	// Re-queue the task because host became unavailable
+	mgr.TaskRequeued("test-frontend", 0, "m1-linux")
+
+	output := buf.String()
+	assert.Contains(t, output, "m1-linux")
+	assert.Contains(t, output, "unavailable")
+	assert.Contains(t, output, "re-queuing")
+	assert.Contains(t, output, "test-frontend")
+
+	// Verify task status is reset to pending
+	assert.Equal(t, TaskPending, mgr.GetTaskStatus("test-frontend", 0))
+
+	// Verify host assignment is cleared
+	mgr.mu.Lock()
+	_, hasHost := mgr.taskHosts["test-frontend#0"]
+	mgr.mu.Unlock()
+	assert.False(t, hasHost, "host assignment should be cleared after requeue")
+}
+
+func TestOutputManager_TaskRequeued_QuietMode(t *testing.T) {
+	var buf bytes.Buffer
+	mgr := NewOutputManager(OutputQuiet, true)
+	mgr.SetWriter(&buf)
+
+	mgr.TaskSyncing("test-task", 0, "bad-host")
+	buf.Reset()
+
+	// Even in quiet mode, requeue warnings should be shown
+	mgr.TaskRequeued("test-task", 0, "bad-host")
+
+	output := buf.String()
+	assert.Contains(t, output, "bad-host")
+	assert.Contains(t, output, "unavailable")
+}
+
+func TestOutputManager_TaskRequeued_ResetsState(t *testing.T) {
+	mgr := NewOutputManager(OutputQuiet, true)
+
+	// Initialize tasks
+	mgr.InitTasks([]TaskInfo{
+		{Name: "task1", Index: 0},
+		{Name: "task2", Index: 1},
+	})
+
+	// Start both tasks
+	mgr.TaskSyncing("task1", 0, "host1")
+	mgr.TaskSyncing("task2", 1, "host2")
+
+	// Add some output to task1
+	mgr.TaskOutput("task1", 0, []byte("some progress output"), false)
+
+	// Re-queue task1
+	mgr.TaskRequeued("task1", 0, "host1")
+
+	// Verify task1 is back to pending with cleared state
+	assert.Equal(t, TaskPending, mgr.GetTaskStatus("task1", 0))
+
+	mgr.mu.Lock()
+	// Output buffer should be reset
+	buf, ok := mgr.taskOutput["task1#0"]
+	mgr.mu.Unlock()
+	assert.True(t, ok)
+	assert.Empty(t, buf.String(), "output buffer should be cleared after requeue")
+
+	// task2 should be unaffected
+	assert.Equal(t, TaskSyncing, mgr.GetTaskStatus("task2", 1))
+}

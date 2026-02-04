@@ -30,8 +30,11 @@ type hostWorker struct {
 	failedMu     *sync.Mutex
 }
 
-// executeTask runs a single task on the host.
-func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult {
+// executeTaskWithRequeue runs a single task on the host, returning whether the task
+// should be re-queued (e.g., if the host is unavailable).
+// Returns (result, shouldRequeue). If shouldRequeue is true, the result should be ignored
+// and the task should be sent to another host.
+func (w *hostWorker) executeTaskWithRequeue(ctx context.Context, task TaskInfo) (TaskResult, bool) {
 	result := TaskResult{
 		TaskName:  task.Name,
 		TaskIndex: task.Index,
@@ -45,15 +48,18 @@ func (w *hostWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult 
 		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, w.hostName)
 	}
 
-	// Ensure we have a connection
+	// Ensure we have a connection - if this fails, re-queue the task
 	if err := w.ensureConnection(ctx); err != nil {
-		result.Error = err
-		result.ExitCode = 1
-		result.EndTime = time.Now()
-		result.Duration = result.EndTime.Sub(result.StartTime)
-		w.notifyComplete(result)
-		return result
+		// Connection failed - signal that this task should be re-queued
+		return result, true
 	}
+
+	// From here, we have a connection. Execute normally.
+	return w.executeTaskInternal(ctx, task, result), false
+}
+
+// executeTaskInternal executes a task after connection has been established.
+func (w *hostWorker) executeTaskInternal(ctx context.Context, task TaskInfo, result TaskResult) TaskResult {
 
 	// Ensure host is synced (once per host)
 	if err := w.ensureSync(ctx); err != nil {
