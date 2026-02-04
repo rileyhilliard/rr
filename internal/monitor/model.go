@@ -300,6 +300,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		// Advance spinner animation frame (use large cycle to allow text animation to complete)
 		m.spinnerFrame = (m.spinnerFrame + 1) % 10000
+		// Refresh viewport content so spinner animation renders with new frame
+		if m.viewportReady && m.viewMode != ViewDetail {
+			m.updateListViewportContent()
+		}
 		return m, m.spinnerTickCmd()
 
 	case metricsMsg:
