@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
@@ -177,14 +178,12 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	// Use project root if available, otherwise fall back to cwd.
 	// This ensures parallel tasks sync from the correct directory when
 	// run from a subdirectory (matching the single-task workflow behavior).
-	var workDir string
-	if w.orchestrator.resolved != nil && w.orchestrator.resolved.ProjectRoot != "" {
-		workDir = w.orchestrator.resolved.ProjectRoot
-	} else {
+	workDir := resolveWorkDir(w.orchestrator.resolved)
+	if workDir == "" {
 		var err error
 		workDir, err = os.Getwd()
 		if err != nil {
-			return err
+			return errors.Wrap(err, "resolve working directory for sync")
 		}
 	}
 
@@ -471,4 +470,13 @@ func (w *localWorker) ensureSetup(ctx context.Context) error {
 	w.orchestrator.recordHostSetup("local", setupErr)
 
 	return setupErr
+}
+
+// resolveWorkDir returns the project root from the resolved config if available,
+// or an empty string if not set. Callers should fall back to os.Getwd() when empty.
+func resolveWorkDir(resolved *config.ResolvedConfig) string {
+	if resolved != nil && resolved.ProjectRoot != "" {
+		return resolved.ProjectRoot
+	}
+	return ""
 }

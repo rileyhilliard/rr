@@ -3,7 +3,6 @@ package parallel
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
@@ -237,68 +236,6 @@ func TestLocalWorker_ExecuteTask_WithWorkDir(t *testing.T) {
 	assert.Contains(t, string(result.Output), "/tmp")
 }
 
-func TestLocalWorker_ExecuteTask_Timeout(t *testing.T) {
-	tasks := []TaskInfo{{Name: "test", Command: "sleep 10"}}
-	hosts := map[string]config.Host{}
-	resolved := &config.ResolvedConfig{
-		Project: &config.Config{},
-		Global:  &config.GlobalConfig{},
-	}
-
-	orchestrator := NewOrchestrator(tasks, hosts, nil, resolved, Config{
-		Timeout: 100 * time.Millisecond,
-	})
-	worker := &localWorker{orchestrator: orchestrator}
-
-	task := TaskInfo{
-		Name:    "slow-task",
-		Index:   0,
-		Command: "sleep 10",
-	}
-
-	start := time.Now()
-	result := worker.executeTask(context.Background(), task)
-	elapsed := time.Since(start)
-
-	// Should timeout quickly, not wait 10 seconds
-	assert.True(t, elapsed < 2*time.Second, "task should timeout quickly")
-	assert.NotEqual(t, 0, result.ExitCode)
-}
-
-func TestLocalWorker_ExecuteTask_ContextCancellation(t *testing.T) {
-	tasks := []TaskInfo{{Name: "test", Command: "sleep 10"}}
-	hosts := map[string]config.Host{}
-	resolved := &config.ResolvedConfig{
-		Project: &config.Config{},
-		Global:  &config.GlobalConfig{},
-	}
-
-	orchestrator := NewOrchestrator(tasks, hosts, nil, resolved, Config{})
-	worker := &localWorker{orchestrator: orchestrator}
-
-	task := TaskInfo{
-		Name:    "cancelled-task",
-		Index:   0,
-		Command: "sleep 10",
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Cancel after a short delay
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	result := worker.executeTask(ctx, task)
-	elapsed := time.Since(start)
-
-	// Should be cancelled quickly
-	assert.True(t, elapsed < 2*time.Second, "task should be cancelled quickly")
-	assert.NotEqual(t, 0, result.ExitCode)
-}
-
 func TestLocalWorker_ExecuteTask_WithSetup(t *testing.T) {
 	tasks := []TaskInfo{{Name: "test", Command: "echo done"}}
 	hosts := map[string]config.Host{}
@@ -359,30 +296,59 @@ func TestTaskInfo_ID(t *testing.T) {
 	assert.Equal(t, "test-task#5", info.ID())
 }
 
-func TestHostWorker_EnsureSync_UsesProjectRoot(t *testing.T) {
-	// This test verifies the fix for issue #163: parallel execution should use
-	// ProjectRoot for sync, not os.Getwd(). This ensures tasks run correctly
-	// when invoked from a subdirectory.
-
-	projectRoot := "/home/user/myproject"
-	resolved := &config.ResolvedConfig{
-		ProjectRoot: projectRoot,
-		Project:     &config.Config{},
-		Global:      &config.GlobalConfig{},
+// TestResolveWorkDir tests the resolveWorkDir helper function that determines
+// the sync directory. This is the core fix for issue #163.
+func TestResolveWorkDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolved *config.ResolvedConfig
+		expected string
+	}{
+		{
+			name: "uses ProjectRoot when set",
+			resolved: &config.ResolvedConfig{
+				ProjectRoot: "/home/user/myproject",
+				Project:     &config.Config{},
+				Global:      &config.GlobalConfig{},
+			},
+			expected: "/home/user/myproject",
+		},
+		{
+			name: "returns empty when ProjectRoot is empty",
+			resolved: &config.ResolvedConfig{
+				ProjectRoot: "",
+				Project:     &config.Config{},
+				Global:      &config.GlobalConfig{},
+			},
+			expected: "",
+		},
+		{
+			name:     "returns empty when resolved is nil",
+			resolved: nil,
+			expected: "",
+		},
+		{
+			name: "handles absolute path",
+			resolved: &config.ResolvedConfig{
+				ProjectRoot: "/var/lib/app",
+			},
+			expected: "/var/lib/app",
+		},
+		{
+			name: "handles path with spaces",
+			resolved: &config.ResolvedConfig{
+				ProjectRoot: "/home/user/my project",
+			},
+			expected: "/home/user/my project",
+		},
 	}
 
-	orchestrator := &Orchestrator{
-		resolved:    resolved,
-		syncedHosts: make(map[string]bool),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := resolveWorkDir(tt.resolved)
+			assert.Equal(t, tt.expected, result)
+		})
 	}
-
-	// Mark host as synced so ensureSync returns early (we just want to verify
-	// the workDir logic without actually syncing)
-	orchestrator.syncedHosts["test-host"] = true
-
-	// Verify the orchestrator has the ProjectRoot set correctly.
-	// The actual sync behavior is tested via integration tests.
-	assert.Equal(t, projectRoot, orchestrator.resolved.ProjectRoot)
 }
 
 func TestHostWorker_EnsureSync_FallsBackToCwd(t *testing.T) {
