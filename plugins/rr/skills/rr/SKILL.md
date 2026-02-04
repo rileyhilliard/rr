@@ -21,6 +21,7 @@ rr run "make test"     # Sync files + run command
 rr exec "git status"   # Run command without syncing
 rr sync                # Just sync files
 rr <taskname>          # Run named task from config
+rr provision           # Install missing tools on hosts
 rr doctor              # Diagnose issues
 rr monitor             # TUI dashboard for host metrics
 ```
@@ -69,6 +70,7 @@ tasks:
 | `rr sync` | Just sync files |
 | `rr <taskname>` | Run named task |
 | `rr tasks` | List available tasks |
+| `rr provision` | Install missing tools on hosts |
 | `rr doctor` | Diagnose issues |
 | `rr host list/add/remove` | Manage hosts |
 
@@ -314,6 +316,7 @@ rr run "make test"
 | Run tests with latest code | `rr run "make test"` |
 | Quick check on remote | `rr exec "git log -1"` |
 | Prep remote before multiple runs | `rr sync` |
+| Install missing tools on hosts | `rr provision` |
 | Debug connection issues | `rr doctor` |
 | Watch resource usage | `rr monitor` |
 | First time setup | `rr init` |

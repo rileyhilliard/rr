@@ -45,6 +45,9 @@ var (
 	monitorIntervalFlag      string
 	hostAddSkipProbe         bool
 	unlockAllFlag            bool
+	provisionHostFlag        string
+	provisionCheckOnly       bool
+	provisionAutoYes         bool
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -424,6 +427,31 @@ Examples:
 	},
 }
 
+// provisionCmd installs required tools on remote hosts
+var provisionCmd = &cobra.Command{
+	Use:   "provision",
+	Short: "Install required tools on remote hosts",
+	Long: `Check and install required tools on remote hosts.
+
+Reads the 'require' field from project and host configs, checks which
+tools are missing, and offers to install tools that have built-in
+installers (40+ common dev tools supported).
+
+Examples:
+  rr provision              # Check and install on all hosts
+  rr provision --host mini  # Provision specific host
+  rr provision --check      # Report status without installing
+  rr provision --yes        # Auto-confirm installations`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return provisionCommand(ProvisionOptions{
+			Host:       provisionHostFlag,
+			CheckOnly:  provisionCheckOnly,
+			AutoYes:    provisionAutoYes,
+			MachineOut: machineMode,
+		})
+	},
+}
+
 func init() {
 	// run command flags
 	runCmd.Flags().StringVar(&runHostFlag, "host", "", "target host name")
@@ -486,6 +514,11 @@ func init() {
 	// tasks command flags
 	tasksCmd.Flags().BoolVar(&tasksJSON, "json", false, "output in JSON format")
 
+	// provision command flags
+	provisionCmd.Flags().StringVar(&provisionHostFlag, "host", "", "target specific host (default: all project hosts)")
+	provisionCmd.Flags().BoolVar(&provisionCheckOnly, "check", false, "report status without installing (dry-run)")
+	provisionCmd.Flags().BoolVarP(&provisionAutoYes, "yes", "y", false, "auto-confirm installations (skip prompts)")
+
 	// Register host subcommands
 	hostCmd.AddCommand(hostAddCmd)
 	hostCmd.AddCommand(hostRemoveCmd)
@@ -505,4 +538,5 @@ func init() {
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(unlockCmd)
 	rootCmd.AddCommand(tasksCmd)
+	rootCmd.AddCommand(provisionCmd)
 }
