@@ -345,6 +345,22 @@ var toolInstallers = map[string]ToolInstaller{
 		},
 		PathAdditions: []string{},
 	},
+	"chromium": {
+		Name: "chromium",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install --cask chromium; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium; elif command -v yum &>/dev/null; then sudo yum install -y chromium; elif command -v dnf &>/dev/null; then sudo dnf install -y chromium; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
+	"chromium-browser": {
+		Name: "chromium-browser",
+		Installers: map[string]string{
+			"darwin": `if command -v brew &>/dev/null; then brew install --cask chromium; else echo "Homebrew not found" && exit 1; fi`,
+			"linux":  `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium; elif command -v yum &>/dev/null; then sudo yum install -y chromium; elif command -v dnf &>/dev/null; then sudo dnf install -y chromium; else echo "No supported package manager found" && exit 1; fi`,
+		},
+		PathAdditions: []string{},
+	},
 }
 
 // GetToolInstaller returns the installer for a tool, if one exists.
@@ -476,6 +492,12 @@ func GetInstallCommandDescription(toolName, osName string) string {
 	}
 	if strings.Contains(cmd, "sdk.cloud.google.com") {
 		return "gcloud (official installer)"
+	}
+	if strings.Contains(cmd, "chromium") {
+		if strings.Contains(cmd, "brew") {
+			return "brew install --cask chromium"
+		}
+		return "apt-get install chromium"
 	}
 
 	// Fallback: truncate if too long
