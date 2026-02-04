@@ -350,6 +350,21 @@ func TestHostCheckResult_WithError(t *testing.T) {
 	assert.Equal(t, "connection refused", result.connErr.Error())
 }
 
+func TestHostCheckResult_WithCheckError(t *testing.T) {
+	// Simulates when requirement checking itself fails (e.g., SSH failure during check)
+	result := hostCheckResult{
+		name:       "check-failed-host",
+		connected:  true,
+		checkErr:   fmt.Errorf("SSH session closed unexpectedly"),
+		installErr: make(map[string]error),
+	}
+
+	assert.True(t, result.connected)
+	assert.Nil(t, result.connErr)
+	assert.NotNil(t, result.checkErr)
+	assert.Equal(t, "SSH session closed unexpectedly", result.checkErr.Error())
+}
+
 func TestProvisionOptions_Defaults(t *testing.T) {
 	opts := ProvisionOptions{}
 

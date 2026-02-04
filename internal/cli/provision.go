@@ -144,6 +144,7 @@ type hostCheckResult struct {
 	os         string
 	connected  bool
 	connErr    error
+	checkErr   error // Error from requirement checking (e.g., SSH failures)
 	client     sshutil.SSHClient
 	results    []require.CheckResult
 	reqs       []string
@@ -194,8 +195,9 @@ func checkHosts(hostNames []string, hosts map[string]config.Host, projectReqs []
 
 		// Check requirements
 		cache := require.NewCache()
-		checkResults, _ := require.CheckAll(client, result.reqs, cache, name)
+		checkResults, checkErr := require.CheckAll(client, result.reqs, cache, name)
 		result.results = checkResults
+		result.checkErr = checkErr
 
 		results = append(results, result)
 	}
@@ -340,6 +342,8 @@ func outputProvisionJSON(results []hostCheckResult) error {
 
 		if r.connErr != nil {
 			hostResult.Error = r.connErr.Error()
+		} else if r.checkErr != nil {
+			hostResult.Error = fmt.Sprintf("requirement check failed: %v", r.checkErr)
 		}
 
 		for _, req := range r.results {
@@ -417,6 +421,12 @@ func outputProvisionText(results []hostCheckResult, opts ProvisionOptions) error
 
 		if !r.connected {
 			fmt.Printf("  %s Could not connect: %v\n", errorStyle.Render(ui.SymbolFail), r.connErr)
+			fmt.Println()
+			continue
+		}
+
+		if r.checkErr != nil {
+			fmt.Printf("  %s Requirement check failed: %v\n", errorStyle.Render(ui.SymbolFail), r.checkErr)
 			fmt.Println()
 			continue
 		}
