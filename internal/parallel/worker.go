@@ -3,6 +3,7 @@ package parallel
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,9 +49,22 @@ func (w *hostWorker) executeTaskWithRequeue(ctx context.Context, task TaskInfo) 
 		w.orchestrator.outputMgr.TaskSyncing(task.Name, task.Index, w.hostName)
 	}
 
-	// Ensure we have a connection - if this fails, re-queue the task
+	// Ensure we have a connection - if this fails due to host unavailability,
+	// re-queue the task. But if the context was cancelled or timed out,
+	// don't re-queue since that's an intentional stop.
 	if err := w.ensureConnection(ctx); err != nil {
-		// Connection failed - signal that this task should be re-queued
+		// Check if context was cancelled or timed out - don't re-queue in that case
+		if ctx.Err() != nil ||
+			stderrors.Is(err, context.Canceled) ||
+			stderrors.Is(err, context.DeadlineExceeded) {
+			result.Error = err
+			result.ExitCode = 1
+			result.EndTime = time.Now()
+			result.Duration = result.EndTime.Sub(result.StartTime)
+			w.notifyComplete(result)
+			return result, false
+		}
+		// Connection failed due to host unavailability - re-queue the task
 		return result, true
 	}
 
