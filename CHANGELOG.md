@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-02-04
+
+### Added
+
+- **Provision command** - New `rr provision` command installs missing tools on remote hosts. Detects missing dependencies and offers to install them automatically.
+- **Pull command** - New `rr pull` command downloads files from remote hosts to local machine. Useful for retrieving build artifacts, logs, or generated files.
+
+### Fixed
+
+- **Parallel task sync uses project root** - Parallel tasks now sync from the project root (where `.rr.yaml` is located) instead of the current working directory. Fixes sync issues when running tasks from subdirectories.
+- **Graceful task re-queuing** - When a host becomes unavailable during parallel execution, tasks are now re-queued to other available hosts instead of failing immediately.
+
 ## [0.18.1] - 2026-01-27
 
 ### Added
