@@ -72,7 +72,7 @@ type Host struct {
 	SSH []string `yaml:"ssh" mapstructure:"ssh"`
 
 	// Dir is the working directory on remote (where files sync to).
-	// Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}, and ~.
+	// Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}, ${BRANCH}, and ~.
 	Dir string `yaml:"dir" mapstructure:"dir"`
 
 	// Tags for filtering hosts with --tag flag.

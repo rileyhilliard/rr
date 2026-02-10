@@ -41,6 +41,7 @@ func ExpandTilde(path string) string {
 //   - ${PROJECT} - git repo name or directory name
 //   - ${USER}    - current username
 //   - ${HOME}    - user's home directory (LOCAL - use ExpandRemote for remote paths)
+//   - ${BRANCH}  - current git branch (sanitized for filesystem safety)
 //
 // Note: Does NOT expand ~ - use ExpandTilde for local paths if needed.
 // For remote paths (like host.Dir), use ExpandRemote instead.
@@ -64,6 +65,10 @@ func Expand(s string) string {
 		result = strings.ReplaceAll(result, "${HOME}", getHome())
 	}
 
+	if strings.Contains(result, "${BRANCH}") {
+		result = strings.ReplaceAll(result, "${BRANCH}", getBranch())
+	}
+
 	return result
 }
 
@@ -73,6 +78,7 @@ func Expand(s string) string {
 //   - ${PROJECT} - git repo name or directory name (from local context)
 //   - ${USER}    - current username (from local context)
 //   - ${HOME}    - expands to ~ (for remote shell to expand)
+//   - ${BRANCH}  - current git branch, sanitized for filesystem safety (from local context)
 //   - ~          - kept as ~ (for remote shell to expand)
 func ExpandRemote(s string) string {
 	if s == "" {
@@ -92,6 +98,10 @@ func ExpandRemote(s string) string {
 	// For remote paths, ${HOME} becomes ~ so the remote shell expands it
 	if strings.Contains(result, "${HOME}") {
 		result = strings.ReplaceAll(result, "${HOME}", "~")
+	}
+
+	if strings.Contains(result, "${BRANCH}") {
+		result = strings.ReplaceAll(result, "${BRANCH}", getBranch())
 	}
 
 	return result
@@ -194,4 +204,35 @@ func getHome() string {
 	}
 
 	return "~"
+}
+
+// getBranch returns the current git branch name, sanitized for filesystem safety.
+// Falls back to "HEAD" when in detached HEAD state or outside a git repo.
+func getBranch() string {
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "HEAD"
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		return "HEAD"
+	}
+	return sanitizeBranch(branch)
+}
+
+// sanitizeBranch replaces characters unsafe for filesystems with hyphens.
+func sanitizeBranch(branch string) string {
+	replacer := strings.NewReplacer(
+		"/", "-",
+		"\\", "-",
+		":", "-",
+		"*", "-",
+		"?", "-",
+		"\"", "-",
+		"<", "-",
+		">", "-",
+		"|", "-",
+	)
+	return replacer.Replace(branch)
 }
