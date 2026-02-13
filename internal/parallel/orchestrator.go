@@ -145,6 +145,12 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	// Result channel for collecting task results
 	resultChan := make(chan TaskResult, len(o.tasks))
 
+	// Signal channel closed when all expected results have been collected.
+	// This breaks the circular dependency between the dispatcher (waiting on
+	// requeueChan) and workers (waiting on taskQueue) by letting the dispatcher
+	// know it can exit and close taskQueue, which unblocks the workers.
+	allDone := make(chan struct{})
+
 	// Failed flag for fail-fast mode
 	var failed bool
 	var failedMu sync.Mutex
@@ -182,6 +188,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-allDone:
+				return
 			case task := <-requeueChan:
 				// Task was re-queued because its host was unavailable
 				pending = append(pending, task)
@@ -191,40 +199,46 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 			}
 		}
 
-		// After initial batch is dispatched, continue draining re-queued tasks
-		// until requeueChan is closed (which happens after all workers exit).
-		// We must NOT use a `default` case here - that would cause premature exit
-		// and potential task loss if a worker re-queues a task after we check.
-		for task := range requeueChan {
-			// Check for context cancellation
+		// All initial tasks dispatched. Wait for either requeued tasks or completion.
+		// We listen on allDone to break the circular dependency: without it, the
+		// dispatcher blocks on requeueChan (closed only after workers exit), while
+		// workers block on taskQueue (closed only when dispatcher exits).
+		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
-			}
-
-			// Check if all hosts are unavailable
-			if o.allHostsUnavailable() {
-				result := TaskResult{
-					TaskName:  task.Name,
-					TaskIndex: task.Index,
-					Command:   task.Command,
-					Host:      "none",
-					ExitCode:  1,
-					Error:     fmt.Errorf("all hosts unavailable"),
-					StartTime: time.Now(),
-					EndTime:   time.Now(),
+			case <-allDone:
+				return
+			case task, ok := <-requeueChan:
+				if !ok {
+					return
 				}
-				resultChan <- result
-				continue
-			}
 
-			// Dispatch re-queued task to an available worker
-			select {
-			case <-ctx.Done():
-				return
-			case taskQueue <- task:
-				// Re-queued task dispatched
+				// Check if all hosts are unavailable
+				if o.allHostsUnavailable() {
+					result := TaskResult{
+						TaskName:  task.Name,
+						TaskIndex: task.Index,
+						Command:   task.Command,
+						Host:      "none",
+						ExitCode:  1,
+						Error:     fmt.Errorf("all hosts unavailable"),
+						StartTime: time.Now(),
+						EndTime:   time.Now(),
+					}
+					resultChan <- result
+					continue
+				}
+
+				// Dispatch re-queued task to an available worker
+				select {
+				case <-ctx.Done():
+					return
+				case <-allDone:
+					return
+				case taskQueue <- task:
+					// Re-queued task dispatched
+				}
 			}
 		}
 	}()
@@ -240,7 +254,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 		}(hostName)
 	}
 
-	// Collect results in a separate goroutine
+	// Collect results, signal completion, then wait for shutdown
 	go func() {
 		wg.Wait()
 		close(requeueChan)
@@ -249,6 +263,9 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	}()
 
 	// Gather results
+	expectedResults := len(o.tasks)
+	collected := 0
+	var closeAllDone sync.Once
 	hostsUsed := make(map[string]bool)
 	for result := range resultChan {
 		o.resultsMu.Lock()
@@ -256,6 +273,10 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 		o.resultsMu.Unlock()
 		if result.Host != "none" {
 			hostsUsed[result.Host] = true
+		}
+		collected++
+		if collected >= expectedResults {
+			closeAllDone.Do(func() { close(allDone) })
 		}
 	}
 

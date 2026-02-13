@@ -790,6 +790,93 @@ func TestOrchestrator_UnavailableHostTracking(t *testing.T) {
 	}
 }
 
+// TestOrchestrator_RemotePath_CompletesWithoutDeadlock is a regression test for
+// issue #177: the orchestrator would deadlock when all tasks completed because
+// the dispatcher blocked on requeueChan while workers blocked on taskQueue.
+// The fix added an allDone signal channel that breaks this circular dependency.
+//
+// Uses unreachable hosts to exercise the full remote code path (dispatcher,
+// workers, requeue channel, result channel, allDone signal) without needing SSH.
+func TestOrchestrator_RemotePath_CompletesWithoutDeadlock(t *testing.T) {
+	tests := []struct {
+		name  string
+		tasks []TaskInfo
+		hosts map[string]config.Host
+	}{
+		{
+			name:  "single task single host",
+			tasks: []TaskInfo{{Name: "test", Index: 0, Command: "echo test"}},
+			hosts: map[string]config.Host{
+				"fake": {SSH: []string{"nonexistent-host-xxxx"}, Dir: "~/proj"},
+			},
+		},
+		{
+			name: "multiple tasks single host",
+			tasks: []TaskInfo{
+				{Name: "vet", Index: 0, Command: "go vet"},
+				{Name: "lint", Index: 1, Command: "golangci-lint run"},
+			},
+			hosts: map[string]config.Host{
+				"fake": {SSH: []string{"nonexistent-host-xxxx"}, Dir: "~/proj"},
+			},
+		},
+		{
+			name: "multiple tasks multiple hosts",
+			tasks: []TaskInfo{
+				{Name: "test", Index: 0, Command: "go test"},
+				{Name: "vet", Index: 1, Command: "go vet"},
+				{Name: "lint", Index: 2, Command: "golangci-lint run"},
+			},
+			hosts: map[string]config.Host{
+				"host-a": {SSH: []string{"fake-a"}, Dir: "~"},
+				"host-b": {SSH: []string{"fake-b"}, Dir: "~"},
+			},
+		},
+		{
+			name: "more tasks than hosts",
+			tasks: []TaskInfo{
+				{Name: "t1", Index: 0, Command: "echo 1"},
+				{Name: "t2", Index: 1, Command: "echo 2"},
+				{Name: "t3", Index: 2, Command: "echo 3"},
+				{Name: "t4", Index: 3, Command: "echo 4"},
+				{Name: "t5", Index: 4, Command: "echo 5"},
+			},
+			hosts: map[string]config.Host{
+				"h1": {SSH: []string{"fake1"}, Dir: "~"},
+				"h2": {SSH: []string{"fake2"}, Dir: "~"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orch := NewOrchestrator(tt.tasks, tt.hosts, nil, nil, Config{})
+
+			// 5-second timeout acts as a deadlock detector. Run() should complete
+			// well within this window since all hosts are unreachable.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			result, err := orch.Run(ctx)
+
+			require.NoError(t, err, "Run() should not return an error")
+			require.NotNil(t, result, "Run() should return a result")
+
+			// The key assertion: Run() returned before the deadline, meaning no deadlock.
+			// Before the fix, Run() would hang indefinitely here.
+			require.NoError(t, ctx.Err(),
+				"context timed out — likely deadlock in orchestrator shutdown")
+
+			// All returned results should be failures (hosts are unreachable)
+			assert.Greater(t, len(result.TaskResults), 0,
+				"should have at least one task result")
+			for _, tr := range result.TaskResults {
+				assert.False(t, tr.Success(), "task %s should have failed", tr.TaskName)
+			}
+		})
+	}
+}
+
 func TestOrchestrator_UnavailableHostConcurrency(t *testing.T) {
 	orch := &Orchestrator{
 		hostList:         []string{"host1", "host2", "host3", "host4", "host5"},
