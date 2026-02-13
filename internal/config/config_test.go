@@ -1106,7 +1106,7 @@ func TestValidateOutput(t *testing.T) {
 }
 
 func TestIsReservedTaskName(t *testing.T) {
-	reserved := []string{"run", "exec", "sync", "init", "setup", "status", "monitor", "doctor", "help", "version", "completion", "update"}
+	reserved := []string{"run", "exec", "sync", "init", "setup", "status", "monitor", "doctor", "help", "version", "completion", "update", "clean"}
 	for _, name := range reserved {
 		assert.True(t, IsReservedTaskName(name), "expected %q to be reserved", name)
 	}

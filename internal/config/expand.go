@@ -221,6 +221,100 @@ func getBranch() string {
 	return sanitizeBranch(branch)
 }
 
+// ExpandRemoteGlob expands variables in a remote path template, but replaces
+// ${BRANCH} with a shell glob wildcard (*) instead of the current branch.
+// Returns the glob pattern and whether ${BRANCH} was present in the template.
+func ExpandRemoteGlob(s string) (pattern string, hasBranch bool) {
+	if s == "" {
+		return s, false
+	}
+
+	hasBranch = strings.Contains(s, "${BRANCH}")
+	result := s
+
+	if strings.Contains(result, "${PROJECT}") {
+		result = strings.ReplaceAll(result, "${PROJECT}", getProject())
+	}
+
+	if strings.Contains(result, "${USER}") {
+		result = strings.ReplaceAll(result, "${USER}", getUser())
+	}
+
+	// For remote paths, ${HOME} becomes ~ so the remote shell expands it
+	if strings.Contains(result, "${HOME}") {
+		result = strings.ReplaceAll(result, "${HOME}", "~")
+	}
+
+	if hasBranch {
+		result = strings.ReplaceAll(result, "${BRANCH}", "*")
+	}
+
+	return result, hasBranch
+}
+
+// ExtractBranchFromPath extracts the branch segment from a fully-expanded
+// remote directory path, given the original dir template.
+// Returns empty string if the template has no ${BRANCH}, has multiple ${BRANCH}
+// occurrences, or the path doesn't match.
+func ExtractBranchFromPath(template, expandedPath string) string {
+	if expandedPath == "" {
+		return ""
+	}
+
+	glob, hasBranch := ExpandRemoteGlob(template)
+	if !hasBranch {
+		return ""
+	}
+
+	// Only support templates with exactly one ${BRANCH} (one wildcard in glob)
+	if strings.Count(glob, "*") != 1 {
+		return ""
+	}
+
+	// Split on the wildcard to get prefix and suffix
+	parts := strings.SplitN(glob, "*", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	prefix := parts[0]
+	suffix := parts[1]
+
+	// Verify the path matches the prefix and suffix
+	if !strings.HasPrefix(expandedPath, prefix) {
+		return ""
+	}
+	if suffix != "" && !strings.HasSuffix(expandedPath, suffix) {
+		return ""
+	}
+
+	// Extract the branch segment
+	result := expandedPath[len(prefix):]
+	if suffix != "" {
+		result = result[:len(result)-len(suffix)]
+	}
+	return result
+}
+
+// ListLocalBranches returns the sanitized names of all local git branches.
+// Each branch name is passed through sanitizeBranch to match the format
+// used in directory names created by ${BRANCH} expansion.
+func ListLocalBranches() ([]string, error) {
+	cmd := exec.Command("git", "branch", "--format=%(refname:short)")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	branches := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			branches = append(branches, sanitizeBranch(line))
+		}
+	}
+	return branches, nil
+}
+
 // sanitizeBranch replaces characters unsafe for filesystems with hyphens.
 func sanitizeBranch(branch string) string {
 	replacer := strings.NewReplacer(

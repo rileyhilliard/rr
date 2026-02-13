@@ -25,6 +25,7 @@ var ReservedTaskNames = map[string]bool{
 	"host":       true,
 	"unlock":     true,
 	"tasks":      true,
+	"clean":      true,
 }
 
 // ValidationOption controls validation behavior.
