@@ -3,11 +3,13 @@ package cli
 import (
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
@@ -18,6 +20,7 @@ type SyncOptions struct {
 	Tag          string        // Filter hosts by tag
 	ProbeTimeout time.Duration // Override SSH probe timeout (0 means use config default)
 	DryRun       bool          // If true, show what would be synced without syncing
+	SkipLock     bool          // If true, skip locking
 	WorkingDir   string        // Override local working directory
 }
 
@@ -91,7 +94,29 @@ func Sync(opts SyncOptions) error {
 	spinner.Success()
 	phaseDisplay.RenderSuccess("Connected to "+conn.Alias, time.Since(connectStart))
 
-	// Phase 2: Sync
+	// Phase 2: Acquire lock (skip for dry-run and local connections)
+	lockCfg := config.DefaultConfig().Lock
+	if resolved.Project != nil {
+		lockCfg = resolved.Project.Lock
+	}
+
+	if lockCfg.Enabled && !opts.DryRun && !opts.SkipLock && !conn.IsLocal {
+		lockStart := time.Now()
+		lockSpinner := ui.NewSpinner("Acquiring lock")
+		lockSpinner.Start()
+
+		lck, err := lock.Acquire(conn, lockCfg, "sync")
+		if err != nil {
+			lockSpinner.Fail()
+			return err
+		}
+		defer lck.Release() //nolint:errcheck // Lock release errors are non-fatal
+
+		lockSpinner.Success()
+		phaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+	}
+
+	// Phase 3: Sync
 	syncStart := time.Now()
 	spinner = ui.NewSpinner("Syncing files")
 	spinner.Start()
@@ -101,9 +126,9 @@ func Sync(opts SyncOptions) error {
 	if resolved.Project != nil {
 		syncCfg = resolved.Project.Sync
 	}
-	// Add dry-run flag if requested
+	// Add dry-run flag if requested (copy first to avoid mutating shared config slice)
 	if opts.DryRun {
-		syncCfg.Flags = append(syncCfg.Flags, "--dry-run", "-v")
+		syncCfg.Flags = append(slices.Clone(syncCfg.Flags), "--dry-run", "-v")
 	}
 
 	err = sync.Sync(conn, workDir, syncCfg, nil)
