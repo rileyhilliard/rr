@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-02-13
+
+### Fixed
+
+- **Orchestrator deadlock on parallel task completion** - Fixed a circular channel deadlock in the orchestrator shutdown sequence that caused parallel tasks to hang indefinitely after all tasks completed. Workers waiting on `taskQueue` while the dispatcher blocked on `requeueChan` created a circular dependency. Added `allDone` signal channel to break the cycle. Also fixed unconsumed tasks in the queue when all hosts are unavailable not producing failure results. (#177, #178)
+
+### Changed
+
+- **Dependency updates** - Bumped `charmbracelet/bubbles` to v0.21.1, `go-viper/mapstructure/v2` to v2.5.0, `golang.org/x/crypto` to v0.48.0, `golang.org/x/term` to v0.40.0. Bumped Go toolchain to 1.24.13 to fix GO-2026-4337 (crypto/tls session resumption vulnerability). (#179)
+
 ## [0.19.0] - 2026-02-04
 
 ### Added
