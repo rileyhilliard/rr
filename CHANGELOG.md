@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-02-13
+
+### Fixed
+
+- **Sync command now acquires lock** - `rr sync` previously skipped lock acquisition, allowing it to overwrite files on a remote host while another `rr run` or `rr <task>` was actively executing. Sync now follows the same Connect -> Lock -> Sync -> Release flow as other commands. Lock is skipped for dry-run mode and local connections. (#181, #182)
+
+- **Defensive slice copy for dry-run flags** - Fixed a pre-existing issue where appending dry-run flags could mutate the shared config slice's backing array. Now uses `slices.Clone` before appending.
+
 ## [0.19.1] - 2026-02-13
 
 ### Fixed
