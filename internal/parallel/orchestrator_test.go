@@ -867,9 +867,9 @@ func TestOrchestrator_RemotePath_CompletesWithoutDeadlock(t *testing.T) {
 			require.NoError(t, ctx.Err(),
 				"context timed out — likely deadlock in orchestrator shutdown")
 
-			// All returned results should be failures (hosts are unreachable)
-			assert.Greater(t, len(result.TaskResults), 0,
-				"should have at least one task result")
+			// Every task should produce a result (hosts are unreachable, so all fail)
+			require.Equal(t, len(tt.tasks), len(result.TaskResults),
+				"expected one result per task")
 			for _, tr := range result.TaskResults {
 				assert.False(t, tr.Success(), "task %s should have failed", tr.TaskName)
 			}
