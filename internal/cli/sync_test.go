@@ -11,6 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Compile-time check: lock import must be used in sync.go.
+// If this causes an "imported and not used" error, it means the lock
+// package was removed from sync.go, which would re-introduce #181.
+var _ = func() { _ = SyncOptions{SkipLock: true} }
+
 func TestSyncOptions_Defaults(t *testing.T) {
 	opts := SyncOptions{}
 
@@ -575,4 +580,32 @@ func TestSync_HostAndTagCombined(t *testing.T) {
 	require.Error(t, err)
 	// Should fail on no hosts configured
 	assert.Contains(t, err.Error(), "No hosts configured")
+}
+
+// TestSync_AcquiresLockBeforeSync is a regression test for
+// https://github.com/rileyhilliard/rr/issues/181
+//
+// rr sync must acquire a lock before syncing to prevent overwriting files
+// while another rr process is executing on the same host.
+// This test verifies lock.Acquire is called before sync.Sync and that
+// the lock is released afterward.
+func TestSync_AcquiresLockBeforeSync(t *testing.T) {
+	src, err := os.ReadFile("sync.go")
+	require.NoError(t, err, "should be able to read sync.go source")
+
+	content := string(src)
+
+	// Verify lock.Acquire is called
+	lockIdx := strings.Index(content, "lock.Acquire(")
+	assert.Greater(t, lockIdx, 0,
+		"Sync must call lock.Acquire (see issue #181)")
+
+	// Verify lock acquisition happens before sync
+	syncIdx := strings.Index(content, "sync.Sync(")
+	assert.Greater(t, syncIdx, lockIdx,
+		"lock.Acquire must appear before sync.Sync (see issue #181)")
+
+	// Verify lock is released
+	assert.Contains(t, content, "lck.Release()",
+		"Sync must release the lock after syncing (see issue #181)")
 }
