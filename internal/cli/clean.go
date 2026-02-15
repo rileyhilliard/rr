@@ -1,6 +1,7 @@
 package cli
 
 import (
+	stderrors "errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -136,8 +137,8 @@ func cleanCommand(opts CleanOptions) error {
 	}
 
 	if opts.DryRun {
-		fmt.Printf("%s Dry run: would remove %d stale director%s\n",
-			ui.SymbolPending, allStale, pluralize(allStale))
+		fmt.Printf("%s Dry run: would remove %d stale %s\n",
+			ui.SymbolPending, allStale, dirNoun(allStale))
 		return nil
 	}
 
@@ -146,13 +147,17 @@ func cleanCommand(opts CleanOptions) error {
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title(fmt.Sprintf("Remove %d stale director%s?", allStale, pluralize(allStale))).
+				Title(fmt.Sprintf("Remove %d stale %s?", allStale, dirNoun(allStale))).
 				Description("This cannot be undone").
 				Value(&confirm),
 		),
 	)
 	if err := form.Run(); err != nil {
-		return nil
+		if stderrors.Is(err, huh.ErrUserAborted) {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+		return err
 	}
 	if !confirm {
 		fmt.Println("Cancelled.")
@@ -184,11 +189,11 @@ func cleanCommand(opts CleanOptions) error {
 	}
 
 	if totalRemoved > 0 {
-		fmt.Printf("%s Removed %d stale director%s\n", ui.SymbolSuccess, totalRemoved, pluralize(totalRemoved))
+		fmt.Printf("%s Removed %d stale %s\n", ui.SymbolSuccess, totalRemoved, dirNoun(totalRemoved))
 	}
 	if totalFailed > 0 {
 		return errors.New(errors.ErrExec,
-			fmt.Sprintf("Failed to remove %d director%s", totalFailed, pluralize(totalFailed)),
+			fmt.Sprintf("Failed to remove %d %s", totalFailed, dirNoun(totalFailed)),
 			"Check host connectivity and permissions.")
 	}
 
@@ -246,9 +251,9 @@ func connectToHost(hostCfg config.Host, probeTimeout time.Duration) (*host.Conne
 		"Check that the host is online and SSH is configured correctly.")
 }
 
-func pluralize(n int) string {
+func dirNoun(n int) string {
 	if n == 1 {
-		return "y"
+		return "directory"
 	}
-	return "ies"
+	return "directories"
 }
