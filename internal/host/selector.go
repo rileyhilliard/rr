@@ -525,11 +525,12 @@ func (s *Selector) HostInfo() []HostInfoItem {
 
 	items := make([]HostInfoItem, 0, len(s.hosts))
 	for name := range s.hosts {
+		h := s.hosts[name]
 		items = append(items, HostInfoItem{
 			Name: name,
-			SSH:  s.hosts[name].SSH,
-			Dir:  s.hosts[name].Dir,
-			Tags: s.hosts[name].Tags,
+			SSH:  h.SSH,
+			Dir:  h.Dir,
+			Tags: h.Tags,
 		})
 	}
 

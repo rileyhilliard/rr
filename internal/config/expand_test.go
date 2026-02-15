@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -220,6 +221,11 @@ func TestExtractBranchFromPath(t *testing.T) {
 }
 
 func TestListLocalBranches(t *testing.T) {
+	// Skip if not in a git repo (e.g., tarball-based CI builds)
+	if err := exec.Command("git", "rev-parse", "--git-dir").Run(); err != nil {
+		t.Skip("not inside a git repository")
+	}
+
 	// This test runs in a real git repo, so it should find at least one branch.
 	// The results should be sanitized (no slashes).
 	branches, err := ListLocalBranches()

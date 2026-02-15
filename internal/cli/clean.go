@@ -64,8 +64,9 @@ func cleanCommand(opts CleanOptions) error {
 	for _, hostName := range hostsToClean {
 		hostCfg := globalCfg.Hosts[hostName]
 
-		// Check if this host uses ${BRANCH}
-		_, hasBranch := config.ExpandRemoteGlob(hostCfg.Dir)
+		// Check if this host uses ${BRANCH} — must use the raw template,
+		// since Dir has already been expanded by LoadGlobal.
+		_, hasBranch := config.ExpandRemoteGlob(hostCfg.DirTemplate)
 		if !hasBranch {
 			fmt.Printf("%s %s: dir template has no ${BRANCH}, skipping\n", dimStyle.Render("·"), hostName)
 			continue
@@ -75,18 +76,21 @@ func cleanCommand(opts CleanOptions) error {
 		spinner := ui.NewSpinner(fmt.Sprintf("Scanning %s for stale directories", hostName))
 		spinner.Start()
 
-		conn, err := connectToHost(hostCfg, probeTimeout)
+		staleDirs, err := func() ([]clean.StaleDir, error) {
+			conn, err := connectToHost(hostCfg, probeTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("connect: %w", err)
+			}
+			defer conn.Close()
+			return clean.Discover(conn.Client, hostCfg.DirTemplate, localBranches)
+		}()
 		if err != nil {
 			spinner.Fail()
-			fmt.Printf("  %s Could not connect: %v\n", ui.SymbolWarning, err)
-			continue
-		}
-
-		staleDirs, err := clean.Discover(conn.Client, hostCfg.Dir, localBranches)
-		conn.Close()
-		if err != nil {
-			spinner.Fail()
-			fmt.Printf("  %s Discovery failed: %v\n", ui.SymbolWarning, err)
+			if strings.Contains(err.Error(), "connect:") {
+				fmt.Printf("  %s Could not connect: %v\n", ui.SymbolWarning, err)
+			} else {
+				fmt.Printf("  %s Discovery failed: %v\n", ui.SymbolWarning, err)
+			}
 			continue
 		}
 
@@ -105,8 +109,8 @@ func cleanCommand(opts CleanOptions) error {
 
 	// Collect all stale dirs across hosts
 	var allStale int
-	for _, r := range totalStale {
-		allStale += len(r.stale)
+	for i := range totalStale {
+		allStale += len(totalStale[i].stale)
 	}
 
 	if allStale == 0 {
@@ -116,7 +120,8 @@ func cleanCommand(opts CleanOptions) error {
 
 	// Display results
 	fmt.Println()
-	for _, r := range totalStale {
+	for i := range totalStale {
+		r := &totalStale[i]
 		if len(r.stale) == 0 {
 			continue
 		}
@@ -160,25 +165,28 @@ func cleanCommand(opts CleanOptions) error {
 
 	// Delete stale dirs
 	var totalRemoved, totalFailed int
-	for _, r := range totalStale {
+	for i := range totalStale {
+		r := &totalStale[i]
 		if len(r.stale) == 0 {
 			continue
 		}
 
-		conn, err := connectToHost(r.hostCfg, probeTimeout)
-		if err != nil {
-			fmt.Printf("%s %s: reconnection failed: %v\n", ui.SymbolFail, r.hostName, err)
-			totalFailed += len(r.stale)
-			continue
-		}
-
-		removed, errs := clean.Remove(conn.Client, r.stale)
-		conn.Close()
+		removed, errs := func() ([]string, []error) {
+			conn, err := connectToHost(r.hostCfg, probeTimeout)
+			if err != nil {
+				fmt.Printf("%s %s: reconnection failed: %v\n", ui.SymbolFail, r.hostName, err)
+				return nil, make([]error, len(r.stale)) // count all dirs as failed
+			}
+			defer conn.Close()
+			return clean.Remove(conn.Client, r.stale)
+		}()
 
 		totalRemoved += len(removed)
 		totalFailed += len(errs)
 		for _, e := range errs {
-			fmt.Printf("  %s %s\n", ui.SymbolWarning, e)
+			if e != nil {
+				fmt.Printf("  %s %s\n", ui.SymbolWarning, e)
+			}
 		}
 	}
 
@@ -238,7 +246,7 @@ func connectToHost(hostCfg config.Host, probeTimeout time.Duration) (*host.Conne
 			}, nil
 		}
 	}
-	return nil, fmt.Errorf("all SSH aliases unreachable")
+	return nil, fmt.Errorf("all SSH aliases unreachable: %v", hostCfg.SSH)
 }
 
 func pluralize(n int) string {

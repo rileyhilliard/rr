@@ -35,10 +35,18 @@ func (m *mockExecutor) onCommandErr(prefix string, err error) {
 }
 
 func (m *mockExecutor) Exec(cmd string) (stdout, stderr []byte, exitCode int, err error) {
+	// Match longest prefix first to avoid non-deterministic behavior
+	// when prefixes overlap (e.g., "rm" vs "rm -rf").
+	bestPrefix := ""
+	var bestResp execResponse
 	for prefix, resp := range m.responses {
-		if strings.HasPrefix(cmd, prefix) {
-			return resp.stdout, resp.stderr, resp.exitCode, resp.err
+		if strings.HasPrefix(cmd, prefix) && len(prefix) > len(bestPrefix) {
+			bestPrefix = prefix
+			bestResp = resp
 		}
+	}
+	if bestPrefix != "" {
+		return bestResp.stdout, bestResp.stderr, bestResp.exitCode, bestResp.err
 	}
 	return nil, []byte("command not found"), 127, nil
 }
@@ -207,6 +215,75 @@ func TestRemove_RejectsDangerousPaths(t *testing.T) {
 	assert.Len(t, removed, 1, "only the valid path should be removed")
 	assert.Equal(t, "~/rr/valid-dir", removed[0])
 	assert.Len(t, errs, 3, "dangerous paths should produce errors")
+}
+
+// TestDiscover_ExpandedDirReturnsNil verifies that passing an already-expanded dir
+// (without ${BRANCH}) to Discover correctly returns nil, while the raw template works.
+// This is a regression test for the bug where cleanCommand passed the expanded Dir
+// instead of the raw DirTemplate, making Discover always skip the host.
+func TestDiscover_ExpandedDirReturnsNil(t *testing.T) {
+	executor := newMockExecutor()
+	executor.onCommand("ls -d", "~/rr/myproject-main\n~/rr/myproject-stale-one\n", 0)
+	executor.onCommand("du -sh", "50M\t~/rr/myproject-stale-one\n", 0)
+
+	// Simulates what LoadGlobal returns: Dir already expanded (no ${BRANCH})
+	expandedDir := "~/rr/myproject-main"
+	result, err := Discover(executor, expandedDir, []string{"main"})
+	assert.NoError(t, err)
+	assert.Nil(t, result, "expanded dir (no ${BRANCH}) should return nil")
+
+	// Same executor, but with the raw template — should find stale dirs
+	rawTemplate := "~/rr/myproject-${BRANCH}"
+	result, err = Discover(executor, rawTemplate, []string{"main"})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "stale-one", result[0].BranchName)
+}
+
+// TestDiscover_LsNoMatchesExitCode1 verifies that ls returning exit code 1
+// with empty output (no glob matches) is treated as "no matches found"
+// rather than an error.
+func TestDiscover_LsNoMatchesExitCode1(t *testing.T) {
+	executor := newMockExecutor()
+	// ls -d with no matches: exit code 1, empty stdout and stderr
+	executor.responses["ls -d"] = execResponse{exitCode: 1}
+
+	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	assert.NoError(t, err, "exit code 1 with empty output should not be an error")
+	assert.Empty(t, result)
+}
+
+// TestGetDiskUsage_EmptyOutput verifies getDiskUsage returns "?" for empty output.
+func TestGetDiskUsage_EmptyOutput(t *testing.T) {
+	executor := newMockExecutor()
+	executor.onCommand("du -sh", "", 0)
+
+	result := getDiskUsage(executor, "~/rr/some-dir")
+	assert.Equal(t, "?", result, "empty du output should return ?")
+}
+
+// TestGetDiskUsage_ValidOutput verifies getDiskUsage extracts the size.
+func TestGetDiskUsage_ValidOutput(t *testing.T) {
+	executor := newMockExecutor()
+	executor.onCommand("du -sh", "142M\t~/rr/some-dir\n", 0)
+
+	result := getDiskUsage(executor, "~/rr/some-dir")
+	assert.Equal(t, "142M", result)
+}
+
+// TestRemove_CombinesErrAndStderr verifies that Remove includes both err and stderr
+// when both are present.
+func TestRemove_CombinesErrAndStderr(t *testing.T) {
+	executor := &countingExecutor{
+		execFunc: func(cmd string) ([]byte, []byte, int, error) {
+			return nil, []byte("disk full"), 1, fmt.Errorf("ssh timeout")
+		},
+	}
+	dirs := []StaleDir{{Path: "~/rr/myproject-old", BranchName: "old"}}
+	_, errs := Remove(executor, dirs)
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Error(), "ssh timeout")
+	assert.Contains(t, errs[0].Error(), "disk full")
 }
 
 // countingExecutor lets tests control per-call behavior.

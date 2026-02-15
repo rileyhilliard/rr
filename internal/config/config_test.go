@@ -128,6 +128,54 @@ defaults:
 	assert.True(t, cfg.Defaults.LocalFallback)
 }
 
+// TestLoadGlobal_PreservesDirTemplate verifies that LoadGlobal stores the raw
+// dir template in DirTemplate before expanding variables in Dir.
+// This is critical for `rr clean`, which needs the unexpanded template to build
+// glob patterns for discovering stale per-branch directories.
+func TestLoadGlobal_PreservesDirTemplate(t *testing.T) {
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".rr")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+
+	content := `
+version: 1
+hosts:
+  gpu:
+    ssh:
+      - gpu-lan
+    dir: ~/rr/${PROJECT}-${BRANCH}
+  static:
+    ssh:
+      - static-host
+    dir: ~/projects/myapp
+`
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(content), 0644))
+
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+
+	// Host with ${BRANCH}: DirTemplate should have the raw template
+	gpu := cfg.Hosts["gpu"]
+	assert.Equal(t, "~/rr/${PROJECT}-${BRANCH}", gpu.DirTemplate,
+		"DirTemplate should preserve the raw config value")
+	assert.NotContains(t, gpu.Dir, "${BRANCH}",
+		"Dir should have ${BRANCH} expanded")
+	assert.NotContains(t, gpu.Dir, "${PROJECT}",
+		"Dir should have ${PROJECT} expanded")
+
+	// Host without ${BRANCH}: DirTemplate should still be set (to the raw value)
+	static := cfg.Hosts["static"]
+	assert.Equal(t, "~/projects/myapp", static.DirTemplate,
+		"DirTemplate should be set even for hosts without variables")
+	assert.Equal(t, "~/projects/myapp", static.Dir,
+		"Dir should be unchanged when there are no variables to expand")
+}
+
 func TestResolveHost(t *testing.T) {
 	tests := []struct {
 		name        string

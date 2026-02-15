@@ -71,9 +71,14 @@ type Host struct {
 	// Can be: hostname, user@hostname, or SSH config alias.
 	SSH []string `yaml:"ssh" mapstructure:"ssh"`
 
-	// Dir is the working directory on remote (where files sync to).
+	// Dir is the working directory on remote (where files sync to), with variables expanded.
 	// Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}, ${BRANCH}, and ~.
 	Dir string `yaml:"dir" mapstructure:"dir"`
+
+	// DirTemplate is the raw Dir value before variable expansion.
+	// Used by `rr clean` to discover per-branch directories via glob patterns.
+	// Not serialized to YAML — populated at load time by parseGlobalConfig.
+	DirTemplate string `yaml:"-" mapstructure:"-"`
 
 	// Tags for filtering hosts with --tag flag.
 	Tags []string `yaml:"tags" mapstructure:"tags"`

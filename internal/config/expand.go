@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // ExpandTilde replaces ~ or ~/path with the user's home directory.
@@ -206,19 +207,31 @@ func getHome() string {
 	return "~"
 }
 
+var (
+	branchOnce  sync.Once
+	branchCache string
+)
+
 // getBranch returns the current git branch name, sanitized for filesystem safety.
 // Falls back to "HEAD" when in detached HEAD state or outside a git repo.
+// The result is cached for the lifetime of the process since the branch
+// won't change mid-execution.
 func getBranch() string {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	out, err := cmd.Output()
-	if err != nil {
-		return "HEAD"
-	}
-	branch := strings.TrimSpace(string(out))
-	if branch == "" {
-		return "HEAD"
-	}
-	return sanitizeBranch(branch)
+	branchOnce.Do(func() {
+		cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		out, err := cmd.Output()
+		if err != nil {
+			branchCache = "HEAD"
+			return
+		}
+		branch := strings.TrimSpace(string(out))
+		if branch == "" {
+			branchCache = "HEAD"
+			return
+		}
+		branchCache = sanitizeBranch(branch)
+	})
+	return branchCache
 }
 
 // ExpandRemoteGlob expands variables in a remote path template, but replaces
@@ -315,18 +328,20 @@ func ListLocalBranches() ([]string, error) {
 	return branches, nil
 }
 
+// branchSanitizer replaces filesystem-unsafe characters with hyphens.
+var branchSanitizer = strings.NewReplacer(
+	"/", "-",
+	"\\", "-",
+	":", "-",
+	"*", "-",
+	"?", "-",
+	"\"", "-",
+	"<", "-",
+	">", "-",
+	"|", "-",
+)
+
 // sanitizeBranch replaces characters unsafe for filesystems with hyphens.
 func sanitizeBranch(branch string) string {
-	replacer := strings.NewReplacer(
-		"/", "-",
-		"\\", "-",
-		":", "-",
-		"*", "-",
-		"?", "-",
-		"\"", "-",
-		"<", "-",
-		">", "-",
-		"|", "-",
-	)
-	return replacer.Replace(branch)
+	return branchSanitizer.Replace(branch)
 }

@@ -77,9 +77,15 @@ func Remove(executor RemoteExecutor, dirs []StaleDir) (removed []string, errs []
 		cmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(dir.Path))
 		_, stderr, exitCode, err := executor.Exec(cmd)
 		if err != nil || exitCode != 0 {
-			errMsg := string(stderr)
+			errMsg := strings.TrimSpace(string(stderr))
 			if err != nil {
-				errMsg = err.Error()
+				if errMsg != "" {
+					errMsg = fmt.Sprintf("%v (stderr: %s)", err, errMsg)
+				} else {
+					errMsg = err.Error()
+				}
+			} else if errMsg == "" {
+				errMsg = fmt.Sprintf("exit code %d", exitCode)
 			}
 			errs = append(errs, fmt.Errorf("failed to remove %s: %s", dir.Path, errMsg))
 			continue
@@ -111,10 +117,15 @@ func listRemoteDirs(executor RemoteExecutor, glob string) ([]remoteDir, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Exit code 0 = matches found (or no matches with 2>/dev/null on some shells).
-	// Exit code 2 = real error (permission denied, etc). Treat as failure.
+	// ls -d returns exit 1 when glob matches nothing (stderr silenced by 2>/dev/null).
+	// Treat non-zero exit with empty stdout+stderr as "no matches found".
 	if exitCode != 0 {
-		msg := strings.TrimSpace(string(stderr))
+		trimmedOut := strings.TrimSpace(string(stdout))
+		trimmedErr := strings.TrimSpace(string(stderr))
+		if trimmedOut == "" && trimmedErr == "" {
+			return nil, nil
+		}
+		msg := trimmedErr
 		if msg == "" {
 			msg = fmt.Sprintf("ls exited with code %d", exitCode)
 		}
@@ -141,8 +152,11 @@ func getDiskUsage(executor RemoteExecutor, path string) string {
 		return "?"
 	}
 	output := strings.TrimSpace(string(stdout))
+	if output == "" {
+		return "?"
+	}
 	// du output format: "142M\t/path/to/dir"
-	if parts := strings.SplitN(output, "\t", 2); len(parts) >= 1 {
+	if parts := strings.SplitN(output, "\t", 2); parts[0] != "" {
 		return parts[0]
 	}
 	return "?"
@@ -152,22 +166,13 @@ func getDiskUsage(executor RemoteExecutor, path string) string {
 // Only safe to use with output from config.ExpandRemoteGlob, where * comes exclusively
 // from ${BRANCH} substitution. Project names, usernames, etc. cannot contain literal *.
 func shellQuoteGlob(path string) string {
-	// Strategy: split on * boundaries, quote each non-empty segment preserving tilde, rejoin with *
+	// Strategy: split on * boundaries, quote each non-empty segment preserving tilde,
+	// rejoin with * between every segment (including empty ones for leading/trailing *).
 	segments := strings.Split(path, "*")
-	var quoted []string
 	for i, seg := range segments {
-		if seg == "" {
-			// Skip empty segments (from * at start/end) unless it's the only segment
-			if len(segments) > 1 {
-				continue
-			}
-		}
-		q := util.ShellQuotePreserveTilde(seg)
-		quoted = append(quoted, q)
-		// Add * between segments (not after the last one)
-		if i < len(segments)-1 {
-			quoted = append(quoted, "*")
+		if seg != "" {
+			segments[i] = util.ShellQuotePreserveTilde(seg)
 		}
 	}
-	return strings.Join(quoted, "")
+	return strings.Join(segments, "*")
 }
