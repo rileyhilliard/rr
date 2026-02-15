@@ -9,6 +9,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Standard template used across tests. Uses a literal project name
+// (not ${PROJECT}) so tests don't depend on the test runner's git context.
+const testTemplate = "~/rr/myproject-${BRANCH}"
+
 // mockExecutor is a test double for RemoteExecutor.
 type mockExecutor struct {
 	// responses maps command prefixes to (stdout, stderr, exitCode, err).
@@ -60,14 +64,10 @@ func TestDiscover_NoBranchInTemplate(t *testing.T) {
 
 func TestDiscover_FindsStaleDirs(t *testing.T) {
 	executor := newMockExecutor()
-	// Simulate ls -d returning 3 directories
 	executor.onCommand("ls -d", "~/rr/myproject-main\n~/rr/myproject-feat-auth\n~/rr/myproject-old-experiment\n", 0)
-	// Simulate du -sh for each stale dir
 	executor.onCommand("du -sh", "142M\t~/rr/myproject-old-experiment\n", 0)
 
-	// Template uses a literal project name for test determinism
-	// (in real usage, ${PROJECT} would be expanded by ExpandRemoteGlob)
-	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main", "feat-auth"})
+	result, err := Discover(executor, testTemplate, []string{"main", "feat-auth"})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, "~/rr/myproject-old-experiment", result[0].Path)
@@ -78,7 +78,7 @@ func TestDiscover_AllBranchesActive(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommand("ls -d", "~/rr/myproject-main\n~/rr/myproject-dev\n", 0)
 
-	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main", "dev"})
+	result, err := Discover(executor, testTemplate, []string{"main", "dev"})
 	assert.NoError(t, err)
 	assert.Empty(t, result, "should return empty when all branches are active")
 }
@@ -87,7 +87,7 @@ func TestDiscover_NoDirsOnRemote(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommand("ls -d", "", 0)
 
-	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	result, err := Discover(executor, testTemplate, []string{"main"})
 	assert.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -96,17 +96,16 @@ func TestDiscover_RemoteCommandFails(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommandErr("ls -d", fmt.Errorf("connection lost"))
 
-	_, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	_, err := Discover(executor, testTemplate, []string{"main"})
 	assert.Error(t, err)
 }
 
 func TestDiscover_ProtectsCurrentBranch(t *testing.T) {
 	executor := newMockExecutor()
-	// Include a dir that matches the current branch — it should never be stale
 	executor.onCommand("ls -d", "~/rr/myproject-main\n~/rr/myproject-stale-one\n", 0)
 	executor.onCommand("du -sh", "50M\t~/rr/myproject-stale-one\n", 0)
 
-	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	result, err := Discover(executor, testTemplate, []string{"main"})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, "stale-one", result[0].BranchName, "main should not appear as stale")
@@ -120,7 +119,7 @@ func TestRemove_Success(t *testing.T) {
 		{Path: "~/rr/myproject-old", BranchName: "old"},
 		{Path: "~/rr/myproject-stale", BranchName: "stale"},
 	}
-	removed, errs := Remove(executor, dirs)
+	removed, errs := Remove(executor, testTemplate, dirs)
 	assert.Len(t, removed, 2)
 	assert.Empty(t, errs)
 }
@@ -141,26 +140,24 @@ func TestRemove_PartialFailure(t *testing.T) {
 		{Path: "~/rr/myproject-old", BranchName: "old"},
 		{Path: "~/rr/myproject-stale", BranchName: "stale"},
 	}
-	removed, errs := Remove(executor, dirs)
+	removed, errs := Remove(executor, testTemplate, dirs)
 	assert.Len(t, removed, 1)
 	assert.Len(t, errs, 1)
 }
 
 func TestDiscover_RemoteLsNonZeroExit(t *testing.T) {
 	executor := newMockExecutor()
-	// ls returns exit code 2 (permission error, not "no matches")
 	executor.responses["ls -d"] = execResponse{stderr: []byte("permission denied"), exitCode: 2}
 
-	_, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	_, err := Discover(executor, testTemplate, []string{"main"})
 	assert.Error(t, err, "non-zero exit from ls should be an error")
 }
 
 func TestDiscover_RemoteLsNoMatches(t *testing.T) {
 	executor := newMockExecutor()
-	// ls -d with no matches returns empty stdout and exit code 0 (because of 2>/dev/null)
 	executor.onCommand("ls -d", "", 0)
 
-	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	result, err := Discover(executor, testTemplate, []string{"main"})
 	assert.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -201,7 +198,66 @@ func TestShellQuoteGlob(t *testing.T) {
 	}
 }
 
-func TestRemove_RejectsDangerousPaths(t *testing.T) {
+// TestValidateRemovalTarget exercises the allowlist safety checks.
+// Rather than maintaining a denylist of dangerous paths, validation ensures
+// every path provably matches the DirTemplate pattern before deletion.
+func TestValidateRemovalTarget(t *testing.T) {
+	template := "~/rr/myproject-${BRANCH}"
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string // empty = valid
+	}{
+		// Valid paths that match the template
+		{name: "valid branch dir", path: "~/rr/myproject-feat-auth"},
+		{name: "valid simple branch", path: "~/rr/myproject-main"},
+		{name: "valid long branch", path: "~/rr/myproject-fix-login-page-v2"},
+
+		// Dangerous system paths - all rejected because they don't match the template
+		{name: "empty path", path: "", wantErr: "empty path"},
+		{name: "root", path: "/", wantErr: "does not match template"},
+		{name: "home tilde", path: "~", wantErr: "does not match template"},
+		{name: "home slash", path: "~/", wantErr: "does not match template"},
+		{name: "/home", path: "/home", wantErr: "does not match template"},
+		{name: "/tmp", path: "/tmp", wantErr: "does not match template"},
+		{name: "/var", path: "/var", wantErr: "does not match template"},
+		{name: "/etc", path: "/etc", wantErr: "does not match template"},
+		{name: "/usr", path: "/usr", wantErr: "does not match template"},
+
+		// Paths that look similar but don't match the template
+		{name: "wrong prefix", path: "~/other/myproject-main", wantErr: "does not match template"},
+		{name: "completely different", path: "/opt/important/data", wantErr: "does not match template"},
+
+		// Shallow paths are caught by template mismatch before depth check
+		{name: "shallow path", path: "~/x", wantErr: "does not match template"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRemovalTarget(tt.path, template)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateRemovalTarget_NoTemplate verifies that removal is blocked
+// when the template doesn't contain ${BRANCH}.
+func TestValidateRemovalTarget_NoTemplate(t *testing.T) {
+	err := validateRemovalTarget("~/rr/myproject", "~/rr/myproject")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no ${BRANCH}")
+}
+
+// TestRemove_RejectsPathsNotMatchingTemplate verifies Remove refuses to delete
+// paths that don't match the DirTemplate pattern, even if they appear in the
+// StaleDir list (defense against programming errors in the caller).
+func TestRemove_RejectsPathsNotMatchingTemplate(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommand("rm -rf", "", 0)
 
@@ -214,30 +270,27 @@ func TestRemove_RejectsDangerousPaths(t *testing.T) {
 		{Path: "/tmp", BranchName: "tmp-dir"},
 		{Path: "/var/", BranchName: "var-dir"},
 		{Path: "/etc", BranchName: "etc-dir"},
-		{Path: "~/rr/valid-dir", BranchName: "valid-dir"},
+		{Path: "~/other/myproject-main", BranchName: "wrong-prefix"},
+		{Path: "~/rr/myproject-valid", BranchName: "valid"},
 	}
-	removed, errs := Remove(executor, dirs)
-	assert.Len(t, removed, 1, "only the valid path should be removed")
-	assert.Equal(t, "~/rr/valid-dir", removed[0])
-	assert.Len(t, errs, 8, "dangerous paths should produce errors")
+	removed, errs := Remove(executor, testTemplate, dirs)
+	assert.Len(t, removed, 1, "only the path matching the template should be removed")
+	assert.Equal(t, "~/rr/myproject-valid", removed[0])
+	assert.Len(t, errs, 9, "all non-matching paths should produce errors")
 }
 
 // TestDiscover_ExpandedDirReturnsNil verifies that passing an already-expanded dir
 // (without ${BRANCH}) to Discover correctly returns nil, while the raw template works.
-// This is a regression test for the bug where cleanCommand passed the expanded Dir
-// instead of the raw DirTemplate, making Discover always skip the host.
 func TestDiscover_ExpandedDirReturnsNil(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommand("ls -d", "~/rr/myproject-main\n~/rr/myproject-stale-one\n", 0)
 	executor.onCommand("du -sh", "50M\t~/rr/myproject-stale-one\n", 0)
 
-	// Simulates what LoadGlobal returns: Dir already expanded (no ${BRANCH})
 	expandedDir := "~/rr/myproject-main"
 	result, err := Discover(executor, expandedDir, []string{"main"})
 	assert.NoError(t, err)
 	assert.Nil(t, result, "expanded dir (no ${BRANCH}) should return nil")
 
-	// Same executor, but with the raw template — should find stale dirs
 	rawTemplate := "~/rr/myproject-${BRANCH}"
 	result, err = Discover(executor, rawTemplate, []string{"main"})
 	require.NoError(t, err)
@@ -246,19 +299,16 @@ func TestDiscover_ExpandedDirReturnsNil(t *testing.T) {
 }
 
 // TestDiscover_LsNoMatchesExitCode1 verifies that ls returning exit code 1
-// with empty output (no glob matches) is treated as "no matches found"
-// rather than an error.
+// with empty output is treated as "no matches found" rather than an error.
 func TestDiscover_LsNoMatchesExitCode1(t *testing.T) {
 	executor := newMockExecutor()
-	// ls -d with no matches: exit code 1, empty stdout and stderr
 	executor.responses["ls -d"] = execResponse{exitCode: 1}
 
-	result, err := Discover(executor, "~/rr/myproject-${BRANCH}", []string{"main"})
+	result, err := Discover(executor, testTemplate, []string{"main"})
 	assert.NoError(t, err, "exit code 1 with empty output should not be an error")
 	assert.Empty(t, result)
 }
 
-// TestGetDiskUsage_EmptyOutput verifies getDiskUsage returns "?" for empty output.
 func TestGetDiskUsage_EmptyOutput(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommand("du -sh", "", 0)
@@ -267,7 +317,6 @@ func TestGetDiskUsage_EmptyOutput(t *testing.T) {
 	assert.Equal(t, "?", result, "empty du output should return ?")
 }
 
-// TestGetDiskUsage_ValidOutput verifies getDiskUsage extracts the size.
 func TestGetDiskUsage_ValidOutput(t *testing.T) {
 	executor := newMockExecutor()
 	executor.onCommand("du -sh", "142M\t~/rr/some-dir\n", 0)
@@ -276,8 +325,6 @@ func TestGetDiskUsage_ValidOutput(t *testing.T) {
 	assert.Equal(t, "142M", result)
 }
 
-// TestRemove_CombinesErrAndStderr verifies that Remove includes both err and stderr
-// when both are present.
 func TestRemove_CombinesErrAndStderr(t *testing.T) {
 	executor := &countingExecutor{
 		execFunc: func(cmd string) ([]byte, []byte, int, error) {
@@ -285,7 +332,7 @@ func TestRemove_CombinesErrAndStderr(t *testing.T) {
 		},
 	}
 	dirs := []StaleDir{{Path: "~/rr/myproject-old", BranchName: "old"}}
-	_, errs := Remove(executor, dirs)
+	_, errs := Remove(executor, testTemplate, dirs)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Error(), "ssh timeout")
 	assert.Contains(t, errs[0].Error(), "disk full")

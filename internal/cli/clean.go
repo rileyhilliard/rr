@@ -173,7 +173,7 @@ func cleanCommand(opts CleanOptions) error {
 			totalFailed += len(r.stale)
 			continue
 		}
-		removed, errs := clean.Remove(conn.Client, r.stale)
+		removed, errs := clean.Remove(conn.Client, r.hostCfg.DirTemplate, r.stale)
 		conn.Close()
 
 		totalRemoved += len(removed)

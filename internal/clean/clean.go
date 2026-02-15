@@ -59,12 +59,14 @@ func Discover(executor RemoteExecutor, dirTemplate string, activeBranches []stri
 }
 
 // Remove deletes the specified directories on the remote host.
-// Dangerous paths (empty, root, home) are rejected.
+// Each path is validated against dirTemplate to ensure it matches the expected
+// pattern from ${BRANCH} expansion. This is an allowlist approach: only paths
+// that demonstrably came from the template are eligible for deletion.
 // Returns the paths that were successfully removed and any errors.
-func Remove(executor RemoteExecutor, dirs []StaleDir) (removed []string, errs []error) {
+func Remove(executor RemoteExecutor, dirTemplate string, dirs []StaleDir) (removed []string, errs []error) {
 	for _, dir := range dirs {
-		if isDangerousPath(dir.Path) {
-			errs = append(errs, fmt.Errorf("refusing to delete dangerous path: %q", dir.Path))
+		if err := validateRemovalTarget(dir.Path, dirTemplate); err != nil {
+			errs = append(errs, fmt.Errorf("refusing to delete %q: %s", dir.Path, err))
 			continue
 		}
 		cmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(dir.Path))
@@ -88,16 +90,54 @@ func Remove(executor RemoteExecutor, dirs []StaleDir) (removed []string, errs []
 	return removed, errs
 }
 
-// isDangerousPath rejects paths that should never be deleted.
-func isDangerousPath(path string) bool {
+// validateRemovalTarget checks that a path is safe to delete by verifying it
+// matches the expected pattern from the host's DirTemplate. This is an allowlist:
+// instead of trying to enumerate dangerous paths, we only allow paths that
+// provably came from the template's ${BRANCH} expansion.
+//
+// A path is valid for deletion when ALL of:
+//  1. The dirTemplate contains ${BRANCH} (otherwise we shouldn't be deleting anything)
+//  2. The path matches the template pattern (prefix/suffix from ExpandRemoteGlob)
+//  3. The extracted branch segment is non-empty and doesn't contain path separators
+//  4. The path has at least 3 components (defense-in-depth minimum depth)
+func validateRemovalTarget(path, dirTemplate string) error {
 	trimmed := strings.TrimSpace(path)
-	switch trimmed {
-	case "", "/", "~", "~/",
-		"/home", "/tmp", "/var", "/etc", "/usr", "/opt", "/root",
-		"/home/", "/tmp/", "/var/", "/etc/", "/usr/", "/opt/", "/root/":
-		return true
+	if trimmed == "" {
+		return fmt.Errorf("empty path")
 	}
-	return false
+
+	// The template must contain ${BRANCH} for any removal to make sense
+	if !strings.Contains(dirTemplate, "${BRANCH}") {
+		return fmt.Errorf("dir template has no ${BRANCH}")
+	}
+
+	// Extract the branch segment using the same logic Discover uses.
+	// This proves the path matches the template's prefix and suffix.
+	branch := config.ExtractBranchFromPath(dirTemplate, trimmed)
+	if branch == "" {
+		return fmt.Errorf("path does not match template pattern")
+	}
+
+	// The branch segment must not contain path separators (prevents traversal)
+	if strings.ContainsAny(branch, "/\\") {
+		return fmt.Errorf("extracted branch contains path separators")
+	}
+
+	// Defense-in-depth: require minimum path depth.
+	// Even if everything above passes, short paths like "/" or "~" are never OK.
+	// Count meaningful segments (split on / and ignore empty parts from leading /).
+	// ~/rr/project-branch -> ["~", "rr", "project-branch"] = 3 segments
+	segments := 0
+	for _, seg := range strings.Split(trimmed, "/") {
+		if seg != "" {
+			segments++
+		}
+	}
+	if segments < 3 {
+		return fmt.Errorf("path too shallow (need at least 3 components, got %d)", segments)
+	}
+
+	return nil
 }
 
 type remoteDir struct {
