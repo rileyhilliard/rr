@@ -141,6 +141,8 @@ dir: ~/rr/${PROJECT}-${BRANCH}
 
 **Branch name sanitization:** Slashes and other filesystem-unsafe characters (`\ : * ? " < > |`) are replaced with hyphens. Falls back to `HEAD` in detached HEAD state or outside a git repo.
 
+**Cleanup:** Per-branch directories accumulate as branches are merged or deleted. Use `rr clean` to discover and remove stale directories that no longer correspond to a local branch.
+
 ## Project config (.rr.yaml)
 
 The project config lives in your project root and contains settings that can be shared with your team.
