@@ -76,21 +76,17 @@ func cleanCommand(opts CleanOptions) error {
 		spinner := ui.NewSpinner(fmt.Sprintf("Scanning %s for stale directories", hostName))
 		spinner.Start()
 
-		staleDirs, err := func() ([]clean.StaleDir, error) {
-			conn, err := connectToHost(hostCfg, probeTimeout)
-			if err != nil {
-				return nil, fmt.Errorf("connect: %w", err)
-			}
-			defer conn.Close()
-			return clean.Discover(conn.Client, hostCfg.DirTemplate, localBranches)
-		}()
-		if err != nil {
+		conn, connErr := connectToHost(hostCfg, probeTimeout)
+		if connErr != nil {
 			spinner.Fail()
-			if strings.Contains(err.Error(), "connect:") {
-				fmt.Printf("  %s Could not connect: %v\n", ui.SymbolWarning, err)
-			} else {
-				fmt.Printf("  %s Discovery failed: %v\n", ui.SymbolWarning, err)
-			}
+			fmt.Printf("  %s Could not connect: %v\n", ui.SymbolWarning, connErr)
+			continue
+		}
+		staleDirs, discoverErr := clean.Discover(conn.Client, hostCfg.DirTemplate, localBranches)
+		conn.Close()
+		if discoverErr != nil {
+			spinner.Fail()
+			fmt.Printf("  %s Discovery failed: %v\n", ui.SymbolWarning, discoverErr)
 			continue
 		}
 
@@ -171,22 +167,19 @@ func cleanCommand(opts CleanOptions) error {
 			continue
 		}
 
-		removed, errs := func() ([]string, []error) {
-			conn, err := connectToHost(r.hostCfg, probeTimeout)
-			if err != nil {
-				fmt.Printf("%s %s: reconnection failed: %v\n", ui.SymbolFail, r.hostName, err)
-				return nil, make([]error, len(r.stale)) // count all dirs as failed
-			}
-			defer conn.Close()
-			return clean.Remove(conn.Client, r.stale)
-		}()
+		conn, connErr := connectToHost(r.hostCfg, probeTimeout)
+		if connErr != nil {
+			fmt.Printf("%s %s: reconnection failed: %v\n", ui.SymbolFail, r.hostName, connErr)
+			totalFailed += len(r.stale)
+			continue
+		}
+		removed, errs := clean.Remove(conn.Client, r.stale)
+		conn.Close()
 
 		totalRemoved += len(removed)
 		totalFailed += len(errs)
 		for _, e := range errs {
-			if e != nil {
-				fmt.Printf("  %s %s\n", ui.SymbolWarning, e)
-			}
+			fmt.Printf("  %s %s\n", ui.SymbolWarning, e)
 		}
 	}
 
@@ -235,6 +228,7 @@ func selectHostsForClean(globalCfg *config.GlobalConfig, preferredHost string) (
 
 // connectToHost tries each SSH alias for a host until one connects.
 func connectToHost(hostCfg config.Host, probeTimeout time.Duration) (*host.Connection, error) {
+	var lastErr error
 	for _, sshAlias := range hostCfg.SSH {
 		client, latency, err := host.ProbeAndConnect(sshAlias, probeTimeout)
 		if err == nil {
@@ -245,8 +239,11 @@ func connectToHost(hostCfg config.Host, probeTimeout time.Duration) (*host.Conne
 				Latency: latency,
 			}, nil
 		}
+		lastErr = err
 	}
-	return nil, fmt.Errorf("all SSH aliases unreachable: %v", hostCfg.SSH)
+	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
+		fmt.Sprintf("All SSH aliases unreachable: %v", hostCfg.SSH),
+		"Check that the host is online and SSH is configured correctly.")
 }
 
 func pluralize(n int) string {

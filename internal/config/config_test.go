@@ -176,6 +176,53 @@ hosts:
 		"Dir should be unchanged when there are no variables to expand")
 }
 
+// TestSaveGlobal_PreservesDirTemplate verifies that SaveGlobal writes the raw
+// DirTemplate back to the YAML file instead of the expanded Dir value.
+// Without this, a LoadGlobal -> SaveGlobal round-trip would silently corrupt
+// templates like ~/rr/${PROJECT}-${BRANCH} into ~/rr/myproject-main.
+func TestSaveGlobal_PreservesDirTemplate(t *testing.T) {
+	originalHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", originalHome)
+
+	tmpHome := t.TempDir()
+	os.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".rr")
+	require.NoError(t, os.MkdirAll(configDir, 0755))
+
+	content := `
+version: 1
+hosts:
+  gpu:
+    ssh:
+      - gpu-lan
+    dir: ~/rr/${PROJECT}-${BRANCH}
+  static:
+    ssh:
+      - static-host
+    dir: ~/projects/myapp
+`
+	configPath := filepath.Join(configDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0644))
+
+	// Load (expands Dir, preserves DirTemplate)
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+	assert.NotContains(t, cfg.Hosts["gpu"].Dir, "${BRANCH}", "Dir should be expanded after load")
+	assert.Equal(t, "~/rr/${PROJECT}-${BRANCH}", cfg.Hosts["gpu"].DirTemplate)
+
+	// Save (should restore DirTemplate to Dir before writing)
+	require.NoError(t, SaveGlobal(cfg))
+
+	// Reload and verify templates survived the round-trip
+	cfg2, err := LoadGlobal()
+	require.NoError(t, err)
+	assert.Equal(t, "~/rr/${PROJECT}-${BRANCH}", cfg2.Hosts["gpu"].DirTemplate,
+		"DirTemplate should survive a LoadGlobal -> SaveGlobal round-trip")
+	assert.Equal(t, "~/projects/myapp", cfg2.Hosts["static"].DirTemplate,
+		"static host DirTemplate should survive round-trip")
+}
+
 func TestResolveHost(t *testing.T) {
 	tests := []struct {
 		name        string

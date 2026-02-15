@@ -209,12 +209,17 @@ func TestRemove_RejectsDangerousPaths(t *testing.T) {
 		{Path: "", BranchName: "empty"},
 		{Path: "/", BranchName: "root"},
 		{Path: "~", BranchName: "home"},
+		{Path: "~/", BranchName: "home-slash"},
+		{Path: "/home", BranchName: "home-dir"},
+		{Path: "/tmp", BranchName: "tmp-dir"},
+		{Path: "/var/", BranchName: "var-dir"},
+		{Path: "/etc", BranchName: "etc-dir"},
 		{Path: "~/rr/valid-dir", BranchName: "valid-dir"},
 	}
 	removed, errs := Remove(executor, dirs)
 	assert.Len(t, removed, 1, "only the valid path should be removed")
 	assert.Equal(t, "~/rr/valid-dir", removed[0])
-	assert.Len(t, errs, 3, "dangerous paths should produce errors")
+	assert.Len(t, errs, 8, "dangerous paths should produce errors")
 }
 
 // TestDiscover_ExpandedDirReturnsNil verifies that passing an already-expanded dir

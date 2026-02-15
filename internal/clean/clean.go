@@ -22,13 +22,6 @@ type StaleDir struct {
 	DiskUsage  string // Human-readable size (e.g., "142M")
 }
 
-// HostResult contains discovery results for a single host.
-type HostResult struct {
-	HostName  string
-	StaleDirs []StaleDir
-	Error     error // Non-nil if discovery failed for this host
-}
-
 // Discover finds stale per-branch directories on a remote host.
 // It lists directories matching the glob pattern derived from dirTemplate,
 // extracts branch names, and compares against activeBranches.
@@ -98,7 +91,10 @@ func Remove(executor RemoteExecutor, dirs []StaleDir) (removed []string, errs []
 // isDangerousPath rejects paths that should never be deleted.
 func isDangerousPath(path string) bool {
 	trimmed := strings.TrimSpace(path)
-	if trimmed == "" || trimmed == "/" || trimmed == "~" || trimmed == "~/" {
+	switch trimmed {
+	case "", "/", "~", "~/",
+		"/home", "/tmp", "/var", "/etc", "/usr", "/opt", "/root",
+		"/home/", "/tmp/", "/var/", "/etc/", "/usr/", "/opt/", "/root/":
 		return true
 	}
 	return false

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExpandRemote(t *testing.T) {
@@ -229,7 +230,7 @@ func TestListLocalBranches(t *testing.T) {
 	// This test runs in a real git repo, so it should find at least one branch.
 	// The results should be sanitized (no slashes).
 	branches, err := ListLocalBranches()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotEmpty(t, branches, "should find at least one local branch")
 
 	// All branches should be sanitized (no filesystem-unsafe chars)

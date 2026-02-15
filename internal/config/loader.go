@@ -106,9 +106,20 @@ func SaveGlobal(cfg *GlobalConfig) error {
 		return err
 	}
 
+	// Restore raw templates before saving so expanded values don't overwrite
+	// user-authored templates like ~/rr/${PROJECT}-${BRANCH}.
+	hostsCopy := make(map[string]Host, len(cfg.Hosts))
+	for name := range cfg.Hosts {
+		h := cfg.Hosts[name]
+		if h.DirTemplate != "" {
+			h.Dir = h.DirTemplate
+		}
+		hostsCopy[name] = h
+	}
+
 	v := viper.New()
 	v.Set("version", cfg.Version)
-	v.Set("hosts", cfg.Hosts)
+	v.Set("hosts", hostsCopy)
 	v.Set("defaults", cfg.Defaults)
 
 	if err := v.WriteConfigAs(path); err != nil {

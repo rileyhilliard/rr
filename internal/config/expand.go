@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -315,7 +316,7 @@ func ListLocalBranches() ([]string, error) {
 	cmd := exec.Command("git", "branch", "--format=%(refname:short)")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list local git branches: %w", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	branches := make([]string, 0, len(lines))
