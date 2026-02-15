@@ -259,6 +259,18 @@ func TestListLocalBranches(t *testing.T) {
 	}
 }
 
+func TestSanitizeBranch_CollisionDetection(t *testing.T) {
+	// Verify that branches differing only by sanitized characters produce
+	// identical sanitized names (the known collision documented on branchSanitizer).
+	assert.Equal(t, sanitizeBranch("feature/login"), sanitizeBranch("feature-login"),
+		"slash and hyphen should produce the same sanitized output")
+	assert.Equal(t, sanitizeBranch("fix\\bug"), sanitizeBranch("fix-bug"),
+		"backslash and hyphen should produce the same sanitized output")
+
+	// Verify branches with different meaningful content don't collide
+	assert.NotEqual(t, sanitizeBranch("feature/login"), sanitizeBranch("feature/signup"))
+}
+
 func TestExpandRemote_Branch(t *testing.T) {
 	branch := getBranch()
 

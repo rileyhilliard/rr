@@ -336,16 +336,29 @@ func ListLocalBranches() ([]string, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	branches := make([]string, 0, len(lines))
+	// Track sanitized -> original mappings to detect collisions
+	seen := make(map[string]string, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line != "" {
-			branches = append(branches, sanitizeBranch(line))
+		if line == "" {
+			continue
 		}
+		sanitized := sanitizeBranch(line)
+		if prev, exists := seen[sanitized]; exists && prev != line {
+			return nil, fmt.Errorf(
+				"branch name collision: %q and %q both sanitize to %q (rename one to avoid conflicts)",
+				prev, line, sanitized)
+		}
+		seen[sanitized] = line
+		branches = append(branches, sanitized)
 	}
 	return branches, nil
 }
 
 // branchSanitizer replaces filesystem-unsafe characters with hyphens.
+// This means branches that differ only in these characters will collide:
+// e.g., "feature/login" and "feature-login" both become "feature-login".
+// ListLocalBranches detects these collisions and warns callers.
 var branchSanitizer = strings.NewReplacer(
 	"/", "-",
 	"\\", "-",
