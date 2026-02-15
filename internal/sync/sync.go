@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/gitdiff"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/util"
 )
@@ -25,16 +27,19 @@ var controlSocketDir = filepath.Join(os.TempDir(), "rr-ssh")
 // host configurations.
 var SSHConfigFile string
 
+// maxGitAwareFiles is the threshold above which git-aware sync falls back to
+// full rsync. At this scale the include filter processing overhead approaches
+// the full stat pass cost.
+const maxGitAwareFiles = 500
+
 // Sync transfers files from localDir to the remote host using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
 // If conn.IsLocal is true, sync is skipped entirely since we're already local.
 //
-// The rsync command follows the pattern from proof-of-concept.sh:
-// - Base flags: -az --delete --force
-// - Preserve patterns prevent deletion of specified paths on remote
-// - Exclude patterns prevent files from being synced
-// - Custom flags from config are appended
+// When cfg.GitAware is true, Sync tries a fast path that uses git to detect
+// changed files and scopes rsync to only those files. If anything goes wrong,
+// it falls back to a full rsync transparently.
 func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer) error {
 	// Skip sync for local connections - we're already working with local files
 	if conn != nil && conn.IsLocal {
@@ -55,14 +60,163 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 		return err
 	}
 
+	// Try git-aware fast path when enabled
+	if cfg.GitAware {
+		err := gitAwareSync(rsyncPath, conn, localDir, cfg, progress)
+		if err == nil {
+			// Fast path succeeded, save state and return
+			saveSyncStateAfterSuccess(conn, localDir)
+			return nil
+		}
+		log.Printf("git-aware sync fallback: %v", err)
+		// Fall through to full sync
+	}
+
+	// Full rsync (default path or fallback from git-aware)
 	args, err := BuildArgs(conn, localDir, cfg)
 	if err != nil {
 		return err
 	}
 
+	if err := runRsync(rsyncPath, args, conn.Name, progress); err != nil {
+		return err
+	}
+
+	// Save sync state after any successful sync so git-aware can work next time
+	if cfg.GitAware {
+		saveSyncStateAfterSuccess(conn, localDir)
+	}
+
+	return nil
+}
+
+// gitAwareSync uses git to detect changed files and scopes rsync to only
+// those files. Returns an error to trigger full sync fallback.
+func gitAwareSync(rsyncPath string, conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer) error {
+	changes, err := gitdiff.Detect(gitdiff.DetectOptions{
+		WorkDir:    localDir,
+		BaseBranch: cfg.BaseBranch,
+		ProjectDir: localDir,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Check sync state - force full sync on branch/host switch
+	prevState, _ := LoadSyncState(localDir)
+	currentState := &SyncState{Branch: changes.Branch, Host: conn.Name, Alias: conn.Alias}
+	if prevState == nil || SyncStateChanged(currentState, prevState) {
+		return fmt.Errorf("branch or host changed (prev=%v, curr=%v), full sync required", prevState, currentState)
+	}
+
+	if len(changes.Files) == 0 {
+		// No changes detected. Remote should already match since we're on the
+		// same branch/host and there are no new changes.
+		return nil
+	}
+
+	if len(changes.Files) > maxGitAwareFiles {
+		return fmt.Errorf("too many changed files (%d > %d), full sync required", len(changes.Files), maxGitAwareFiles)
+	}
+
+	args, err := BuildGitAwareArgs(conn, localDir, cfg, changes.Files)
+	if err != nil {
+		return err
+	}
+
+	return runRsync(rsyncPath, args, conn.Name, progress)
+}
+
+// saveSyncStateAfterSuccess updates the sync state file after a successful sync.
+// Errors are logged but don't fail the sync since this is best-effort.
+func saveSyncStateAfterSuccess(conn *host.Connection, localDir string) {
+	changes, err := gitdiff.Detect(gitdiff.DetectOptions{
+		WorkDir:    localDir,
+		ProjectDir: localDir,
+	})
+	if err != nil {
+		return
+	}
+	state := &SyncState{Branch: changes.Branch, Host: conn.Name, Alias: conn.Alias}
+	if err := SaveSyncState(localDir, state); err != nil {
+		log.Printf("warning: couldn't save sync state: %v", err)
+	}
+}
+
+// BuildGitAwareArgs constructs rsync arguments scoped to only the changed files.
+// Uses include/exclude filters to limit rsync's stat pass to changed files while
+// keeping --delete active for proper remote cleanup.
+func BuildGitAwareArgs(conn *host.Connection, localDir string, cfg config.SyncConfig, files []string) ([]string, error) {
+	if conn == nil {
+		return nil, errors.New(errors.ErrSync,
+			"No connection provided",
+			"Connect to the remote host first.")
+	}
+
+	// Ensure localDir ends with / so rsync syncs contents, not directory itself
+	localDir = filepath.Clean(localDir)
+	if !strings.HasSuffix(localDir, "/") {
+		localDir += "/"
+	}
+
+	// Build remote destination: ssh-alias:remote-dir
+	remoteDir := config.ExpandRemote(conn.Host.Dir)
+	if !strings.HasSuffix(remoteDir, "/") {
+		remoteDir += "/"
+	}
+	remoteDest := fmt.Sprintf("%s:%s", conn.Alias, remoteDir)
+
+	args := []string{
+		"-az",      // archive mode, compress
+		"--delete", // delete files on remote not in source
+		"--force",  // force deletion of non-empty dirs
+	}
+
+	// SSH options (same as BuildArgs)
+	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
+		controlSocketDir)
+	if SSHConfigFile != "" {
+		sshCmd = fmt.Sprintf("%s -F %q", sshCmd, SSHConfigFile)
+	}
+	args = append(args, "-e", sshCmd)
+
+	args = append(args, "--info=progress2")
+
+	// Preserve patterns (same as BuildArgs: --filter=P pattern + --filter=P **/pattern)
+	// These go first so they protect paths from deletion
+	for _, pattern := range cfg.Preserve {
+		args = append(args, fmt.Sprintf("--filter=P %s", pattern))
+		if !strings.HasPrefix(pattern, "**/") {
+			args = append(args, fmt.Sprintf("--filter=P **/%s", pattern))
+		}
+	}
+
+	// Scope rsync to only changed files via include/exclude filters.
+	// Order matters: rsync uses first-match-wins.
+	args = append(args, "--include=*/") // traverse all directories
+	for _, f := range files {
+		args = append(args, fmt.Sprintf("--include=%s", f))
+	}
+	args = append(args, "--exclude=*") // catch-all: ignore everything else
+
+	// NOTE: config excludes are intentionally omitted here.
+	// The explicit include list + catch-all exclude already restricts rsync
+	// to only the files git identified. Config excludes would be dead rules
+	// since any non-included file is already caught by --exclude=*.
+
+	// Custom flags from config
+	args = append(args, cfg.Flags...)
+
+	// Source and destination last
+	args = append(args, localDir, remoteDest)
+
+	return args, nil
+}
+
+// runRsync executes rsync with the given arguments, streaming progress if provided.
+func runRsync(rsyncPath string, args []string, hostName string, progress io.Writer) error {
 	cmd := exec.Command(rsyncPath, args...)
 
-	// Set up progress output if provided
 	if progress != nil {
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -88,19 +242,16 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 		var stderrBuf bytes.Buffer
 		stderrWriter := io.MultiWriter(&stderrBuf, progress)
 
-		// Stream stdout (progress info)
 		go streamOutput(stdout, progress)
-		// Stream stderr (errors/warnings) to both buffer and progress
 		go streamOutput(stderr, stderrWriter)
 
 		if err := cmd.Wait(); err != nil {
-			return handleRsyncError(err, conn.Name, stderrBuf.String())
+			return handleRsyncError(err, hostName, stderrBuf.String())
 		}
 	} else {
-		// No progress output, just run and wait
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return handleRsyncError(err, conn.Name, string(output))
+			return handleRsyncError(err, hostName, string(output))
 		}
 	}
 
