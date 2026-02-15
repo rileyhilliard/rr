@@ -211,6 +211,24 @@ func TestExtractBranchFromPath(t *testing.T) {
 			path:     "~/rr/main/main",
 			expected: "",
 		},
+		{
+			name:     "absolute path from ls -d with tilde template",
+			template: "~/rr/${PROJECT}-${BRANCH}",
+			path:     "/Users/someone/rr/" + project + "-feat-auth",
+			expected: "feat-auth",
+		},
+		{
+			name:     "absolute path with different home dir",
+			template: "~/rr/${PROJECT}-${BRANCH}",
+			path:     "/home/deploy/rr/" + project + "-main",
+			expected: "main",
+		},
+		{
+			name:     "absolute path that does not match relative portion",
+			template: "~/rr/${PROJECT}-${BRANCH}",
+			path:     "/Users/someone/other/" + project + "-main",
+			expected: "",
+		},
 	}
 
 	for _, tt := range tests {

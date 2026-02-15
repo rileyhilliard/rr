@@ -154,11 +154,14 @@ func listRemoteDirs(executor RemoteExecutor, glob string) ([]remoteDir, error) {
 		return nil, err
 	}
 	// ls -d returns exit 1 when glob matches nothing (stderr silenced by 2>/dev/null).
-	// Treat non-zero exit with empty stdout+stderr as "no matches found".
+	// On zsh, a no-match glob produces "no matches found" from the shell itself
+	// (before ls runs), which may appear on stderr via the SSH channel.
+	// Treat non-zero exit with empty stdout as "no matches found" when stderr
+	// only contains a "no matches found" message.
 	if exitCode != 0 {
 		trimmedOut := strings.TrimSpace(string(stdout))
 		trimmedErr := strings.TrimSpace(string(stderr))
-		if trimmedOut == "" && trimmedErr == "" {
+		if trimmedOut == "" && (trimmedErr == "" || strings.Contains(trimmedErr, "no matches found")) {
 			return nil, nil
 		}
 		msg := trimmedErr

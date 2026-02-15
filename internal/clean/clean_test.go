@@ -209,10 +209,14 @@ func TestValidateRemovalTarget(t *testing.T) {
 		path    string
 		wantErr string // empty = valid
 	}{
-		// Valid paths that match the template
+		// Valid paths that match the template (tilde prefix)
 		{name: "valid branch dir", path: "~/rr/myproject-feat-auth"},
 		{name: "valid simple branch", path: "~/rr/myproject-main"},
 		{name: "valid long branch", path: "~/rr/myproject-fix-login-page-v2"},
+
+		// Valid absolute paths (as returned by ls -d on remote)
+		{name: "absolute path linux", path: "/home/deploy/rr/myproject-feat-auth"},
+		{name: "absolute path macos", path: "/Users/someone/rr/myproject-main"},
 
 		// Dangerous system paths - all rejected because they don't match the template
 		{name: "empty path", path: "", wantErr: "empty path"},
@@ -306,6 +310,20 @@ func TestDiscover_LsNoMatchesExitCode1(t *testing.T) {
 
 	result, err := Discover(executor, testTemplate, []string{"main"})
 	assert.NoError(t, err, "exit code 1 with empty output should not be an error")
+	assert.Empty(t, result)
+}
+
+// TestDiscover_ZshNoMatchesFound verifies that zsh's "no matches found" error
+// is treated as "no directories" rather than a hard error.
+func TestDiscover_ZshNoMatchesFound(t *testing.T) {
+	executor := newMockExecutor()
+	executor.responses["ls -d"] = execResponse{
+		stderr:   []byte("zsh:1: no matches found: ~/rr/myproject-*"),
+		exitCode: 1,
+	}
+
+	result, err := Discover(executor, testTemplate, []string{"main"})
+	assert.NoError(t, err, "zsh 'no matches found' should not be an error")
 	assert.Empty(t, result)
 }
 

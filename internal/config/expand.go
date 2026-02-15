@@ -293,9 +293,25 @@ func ExtractBranchFromPath(template, expandedPath string) string {
 	prefix := parts[0]
 	suffix := parts[1]
 
-	// Verify the path matches the prefix and suffix
+	// Verify the path matches the prefix and suffix.
+	// When the template uses ~/, ls -d returns absolute paths with the home
+	// directory expanded. Try matching both the tilde prefix and the path
+	// as-is so that ~/rr/proj-* matches /Users/someone/rr/proj-feat.
 	if !strings.HasPrefix(expandedPath, prefix) {
-		return ""
+		if strings.HasPrefix(prefix, "~/") {
+			// Infer the home directory from the expanded path:
+			// glob prefix "~/rr/proj-" -> relative "rr/proj-"
+			// then find this relative suffix in the expanded path.
+			relPrefix := prefix[2:] // strip "~/"
+			idx := strings.Index(expandedPath, relPrefix)
+			if idx < 0 {
+				return ""
+			}
+			// Rewrite prefix to use the resolved home dir
+			prefix = expandedPath[:idx] + relPrefix
+		} else {
+			return ""
+		}
 	}
 	if suffix != "" && !strings.HasSuffix(expandedPath, suffix) {
 		return ""
