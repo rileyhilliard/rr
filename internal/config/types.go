@@ -106,6 +106,16 @@ type SyncConfig struct {
 
 	// Flags are extra rsync flags to pass.
 	Flags []string `yaml:"flags" mapstructure:"flags"`
+
+	// GitAware enables git-based sync optimization. When true, rr uses git to
+	// detect changed files and scopes rsync to only those files instead of
+	// comparing every file. Falls back to full rsync on any failure.
+	GitAware bool `yaml:"git_aware" mapstructure:"git_aware"`
+
+	// BaseBranch overrides auto-detection of the base branch for git-aware sync.
+	// If empty, rr auto-detects via git symbolic-ref refs/remotes/origin/HEAD,
+	// then falls back to origin/main, then main.
+	BaseBranch string `yaml:"base_branch,omitempty" mapstructure:"base_branch"`
 }
 
 // LockConfig controls the distributed lock behavior to prevent concurrent executions.
@@ -432,6 +442,7 @@ func DefaultConfig() *Config {
 		Sync: SyncConfig{
 			Exclude: []string{
 				".git/",
+				".rr/",
 				".venv/",
 				"__pycache__/",
 				"*.pyc",
