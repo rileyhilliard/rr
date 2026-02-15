@@ -78,8 +78,8 @@ func TestSanitizeBranch(t *testing.T) {
 		expected string
 	}{
 		{name: "simple branch", input: "main", expected: "main"},
-		{name: "slash separated", input: "feature/webhooks", expected: "feature-webhooks"},
-		{name: "nested slashes", input: "feat/sub/branch", expected: "feat-sub-branch"},
+		{name: "slash separated", input: "feature/webhooks", expected: "feature_swebhooks"},
+		{name: "nested slashes", input: "feat/sub/branch", expected: "feat_ssub_sbranch"},
 		{name: "backslash", input: "branch\\name", expected: "branch-name"},
 		{name: "colon", input: "fix:issue", expected: "fix-issue"},
 		{name: "asterisk", input: "feat*wild", expected: "feat-wild"},
@@ -88,6 +88,9 @@ func TestSanitizeBranch(t *testing.T) {
 		{name: "pipe", input: "feat|alt", expected: "feat-alt"},
 		{name: "double quotes", input: "feat\"quoted\"", expected: "feat-quoted-"},
 		{name: "empty string", input: "", expected: ""},
+		{name: "underscore preserved via escape", input: "my_branch", expected: "my__branch"},
+		{name: "slash and underscore combined", input: "feat/my_thing", expected: "feat_smy__thing"},
+		{name: "hyphen unchanged", input: "feature-login", expected: "feature-login"},
 	}
 
 	for _, tt := range tests {
@@ -259,16 +262,48 @@ func TestListLocalBranches(t *testing.T) {
 	}
 }
 
-func TestSanitizeBranch_CollisionDetection(t *testing.T) {
-	// Verify that branches differing only by sanitized characters produce
-	// identical sanitized names (the known collision documented on branchSanitizer).
-	assert.Equal(t, sanitizeBranch("feature/login"), sanitizeBranch("feature-login"),
-		"slash and hyphen should produce the same sanitized output")
-	assert.Equal(t, sanitizeBranch("fix\\bug"), sanitizeBranch("fix-bug"),
-		"backslash and hyphen should produce the same sanitized output")
+func TestSanitizeBranch_NoCollisions(t *testing.T) {
+	// These pairs all collided under the old scheme (everything -> '-')
+	// but are now distinct thanks to underscore-prefixed escape sequences.
+	pairs := []struct {
+		name string
+		a, b string
+	}{
+		{"slash vs hyphen", "feature/login", "feature-login"},
+		{"underscore vs hyphen", "my_branch", "my-branch"},
+		{"underscore vs slash", "a_b", "a/b"},
+		{"adjacent slash-underscore order", "a_/b", "a/_b"},
+	}
+	for _, p := range pairs {
+		t.Run(p.name, func(t *testing.T) {
+			assert.NotEqual(t, sanitizeBranch(p.a), sanitizeBranch(p.b),
+				"%q and %q should produce different sanitized output", p.a, p.b)
+		})
+	}
 
-	// Verify branches with different meaningful content don't collide
+	// Branches with different meaningful content still don't collide
 	assert.NotEqual(t, sanitizeBranch("feature/login"), sanitizeBranch("feature/signup"))
+}
+
+func TestUnsanitizeBranch_RoundTrip(t *testing.T) {
+	// UnsanitizeBranch should reverse sanitizeBranch for branches using / and _
+	branches := []string{
+		"main",
+		"feature/login",
+		"feat/sub/branch",
+		"my_branch",
+		"feat/my_thing",
+		"a_/b",
+		"a/_b",
+		"_leading",
+		"trailing_",
+	}
+	for _, b := range branches {
+		t.Run(b, func(t *testing.T) {
+			assert.Equal(t, b, UnsanitizeBranch(sanitizeBranch(b)),
+				"round-trip should recover original branch name")
+		})
+	}
 }
 
 func TestExpandRemote_Branch(t *testing.T) {

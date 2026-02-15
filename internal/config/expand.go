@@ -336,42 +336,63 @@ func ListLocalBranches() ([]string, error) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	branches := make([]string, 0, len(lines))
-	// Track sanitized -> original mappings to detect collisions
-	seen := make(map[string]string, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		sanitized := sanitizeBranch(line)
-		if prev, exists := seen[sanitized]; exists && prev != line {
-			return nil, fmt.Errorf(
-				"branch name collision: %q and %q both sanitize to %q (rename one to avoid conflicts)",
-				prev, line, sanitized)
-		}
-		seen[sanitized] = line
-		branches = append(branches, sanitized)
+		branches = append(branches, sanitizeBranch(line))
 	}
 	return branches, nil
 }
 
-// branchSanitizer replaces filesystem-unsafe characters with hyphens.
-// This means branches that differ only in these characters will collide:
-// e.g., "feature/login" and "feature-login" both become "feature-login".
-// ListLocalBranches detects these collisions and warns callers.
-var branchSanitizer = strings.NewReplacer(
-	"/", "-",
-	"\\", "-",
-	":", "-",
-	"*", "-",
-	"?", "-",
-	"\"", "-",
-	"<", "-",
-	">", "-",
-	"|", "-",
-)
-
-// sanitizeBranch replaces characters unsafe for filesystems with hyphens.
+// sanitizeBranch encodes a git branch name for filesystem safety using
+// underscore-prefixed escape sequences to guarantee no collisions:
+//   - '_' -> '__' (escape literal underscore)
+//   - '/' -> '_s' (slash, the only common unsafe char git allows)
+//   - other unsafe chars (\:*?"<>|) -> '-' (git forbids these, collision impossible)
+//
+// This is a one-to-one mapping: different branch names always produce different
+// sanitized output. Use UnsanitizeBranch to reverse.
 func sanitizeBranch(branch string) string {
-	return branchSanitizer.Replace(branch)
+	var b strings.Builder
+	b.Grow(len(branch) + 4) // slight over-allocation for escape sequences
+	for _, r := range branch {
+		switch r {
+		case '_':
+			b.WriteString("__")
+		case '/':
+			b.WriteString("_s")
+		case '\\', ':', '*', '?', '"', '<', '>', '|':
+			b.WriteByte('-')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// UnsanitizeBranch reverses sanitizeBranch, recovering the original git branch name.
+// Decodes '__' -> '_' and '_s' -> '/'. Characters replaced with '-' (which git
+// forbids in branch names anyway) cannot be reversed.
+func UnsanitizeBranch(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '_' && i+1 < len(s) {
+			switch s[i+1] {
+			case '_':
+				b.WriteByte('_')
+				i++ // skip next char
+			case 's':
+				b.WriteByte('/')
+				i++ // skip next char
+			default:
+				b.WriteByte(s[i])
+			}
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
