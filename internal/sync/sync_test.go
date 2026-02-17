@@ -1,7 +1,10 @@
 package sync
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -787,4 +790,308 @@ func TestScanLinesWithCR(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildGitAwareArgs(t *testing.T) {
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"},
+	}
+
+	tests := []struct {
+		name      string
+		cfg       config.SyncConfig
+		files     []string
+		checkArgs func(t *testing.T, args []string)
+	}{
+		{
+			name:  "basic single file",
+			cfg:   config.SyncConfig{},
+			files: []string{"src/main.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				assert.Contains(t, args, "-az")
+				assert.Contains(t, args, "--delete")
+				assert.Contains(t, args, "--force")
+				assert.Contains(t, args, "--info=progress2")
+				assert.Contains(t, args, "--include=*/")
+				assert.Contains(t, args, "--include=src/main.go")
+				assert.Contains(t, args, "--exclude=*")
+
+				// Verify ordering: --include=*/ before file includes, --exclude=* after all includes
+				includeAllIdx := indexOf(args, "--include=*/")
+				fileIncludeIdx := indexOf(args, "--include=src/main.go")
+				excludeAllIdx := indexOf(args, "--exclude=*")
+				assert.Greater(t, fileIncludeIdx, includeAllIdx, "--include=*/ should come before file includes")
+				assert.Greater(t, excludeAllIdx, fileIncludeIdx, "--exclude=* should come after all includes")
+
+				// No config excludes should be present
+				for _, arg := range args {
+					if strings.HasPrefix(arg, "--exclude=") && arg != "--exclude=*" {
+						t.Errorf("unexpected config exclude in git-aware args: %s", arg)
+					}
+				}
+			},
+		},
+		{
+			name:  "multiple files",
+			cfg:   config.SyncConfig{},
+			files: []string{"a.go", "pkg/b.go", "deep/nested/c.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				assert.Contains(t, args, "--include=a.go")
+				assert.Contains(t, args, "--include=pkg/b.go")
+				assert.Contains(t, args, "--include=deep/nested/c.go")
+
+				// Verify all includes come before --exclude=*
+				excludeAllIdx := indexOf(args, "--exclude=*")
+				for _, f := range []string{"a.go", "pkg/b.go", "deep/nested/c.go"} {
+					idx := indexOf(args, "--include="+f)
+					assert.Greater(t, excludeAllIdx, idx, fmt.Sprintf("--exclude=* should come after --include=%s", f))
+				}
+			},
+		},
+		{
+			name: "with preserve patterns",
+			cfg: config.SyncConfig{
+				Preserve: []string{".venv/", "node_modules/"},
+			},
+			files: []string{"main.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				assert.Contains(t, args, "--filter=P .venv/")
+				assert.Contains(t, args, "--filter=P **/.venv/")
+				assert.Contains(t, args, "--filter=P node_modules/")
+				assert.Contains(t, args, "--filter=P **/node_modules/")
+
+				// Preserve filters should come before --include=*/
+				preserveIdx := indexOf(args, "--filter=P .venv/")
+				includeAllIdx := indexOf(args, "--include=*/")
+				assert.Greater(t, includeAllIdx, preserveIdx, "preserve filters should come before --include=*/")
+			},
+		},
+		{
+			name: "with custom flags",
+			cfg: config.SyncConfig{
+				Flags: []string{"--compress-level=9"},
+			},
+			files: []string{"main.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				assert.Contains(t, args, "--compress-level=9")
+			},
+		},
+		{
+			name:  "ssh options present",
+			cfg:   config.SyncConfig{},
+			files: []string{"main.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				foundE := false
+				for i, arg := range args {
+					if arg == "-e" && i+1 < len(args) {
+						sshCmd := args[i+1]
+						foundE = true
+						assert.Contains(t, sshCmd, "ControlMaster=auto")
+						assert.Contains(t, sshCmd, "BatchMode=yes")
+						break
+					}
+				}
+				assert.True(t, foundE, "expected -e flag with SSH command")
+			},
+		},
+		{
+			name:  "source and dest correct",
+			cfg:   config.SyncConfig{},
+			files: []string{"main.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				// Last two args should be source (with /) and destination
+				assert.Equal(t, "test-alias:~/projects/myapp/", args[len(args)-1])
+				// Source should end with /
+				src := args[len(args)-2]
+				assert.True(t, strings.HasSuffix(src, "/"), "source should end with /")
+			},
+		},
+		{
+			name: "config excludes absent",
+			cfg: config.SyncConfig{
+				Exclude: []string{".git/", "__pycache__/"},
+			},
+			files: []string{"main.go"},
+			checkArgs: func(t *testing.T, args []string) {
+				// Config excludes should NOT appear in git-aware args
+				assert.NotContains(t, args, "--exclude=.git/")
+				assert.NotContains(t, args, "--exclude=__pycache__/")
+				// Only the catch-all exclude should be present
+				excludeCount := 0
+				for _, arg := range args {
+					if strings.HasPrefix(arg, "--exclude=") {
+						excludeCount++
+						assert.Equal(t, "--exclude=*", arg, "only catch-all exclude should be present")
+					}
+				}
+				assert.Equal(t, 1, excludeCount)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := BuildGitAwareArgs(conn, "/home/user/myapp", tt.cfg, tt.files)
+			require.NoError(t, err)
+			tt.checkArgs(t, args)
+		})
+	}
+}
+
+func TestBuildGitAwareArgs_NilConnection(t *testing.T) {
+	_, err := BuildGitAwareArgs(nil, "/home/user/myapp", config.SyncConfig{}, []string{"main.go"})
+	assert.Error(t, err)
+}
+
+func TestGitAwareSync_FallbackTriggers(t *testing.T) {
+	// These tests use gitAwareSync directly to test its error-return paths.
+	// Since gitAwareSync calls gitdiff.Detect which needs a real git repo,
+	// we set up actual git repos for the tests.
+
+	t.Run("no sync state file", func(t *testing.T) {
+		dir := initTestGitRepo(t)
+		commitTestFile(t, dir, "file.txt", "content", "add file")
+		createTestBranch(t, dir, "feat")
+
+		cfg := config.SyncConfig{GitAware: true, BaseBranch: "main"}
+		conn := &host.Connection{Name: "test", Alias: "test-alias", Host: config.Host{Dir: "~/test"}}
+
+		err := gitAwareSync("rsync", conn, dir, cfg, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "full sync")
+	})
+
+	t.Run("branch changed", func(t *testing.T) {
+		dir := initTestGitRepo(t)
+		commitTestFile(t, dir, "file.txt", "content", "add file")
+
+		// Save state for feat-a
+		require.NoError(t, SaveSyncState(dir, &SyncState{Branch: "feat-a", Host: "test", Alias: "test-alias"}))
+
+		createTestBranch(t, dir, "feat-b")
+		cfg := config.SyncConfig{GitAware: true, BaseBranch: "main"}
+		conn := &host.Connection{Name: "test", Alias: "test-alias", Host: config.Host{Dir: "~/test"}}
+
+		err := gitAwareSync("rsync", conn, dir, cfg, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "branch or host changed")
+	})
+
+	t.Run("host changed", func(t *testing.T) {
+		dir := initTestGitRepo(t)
+		commitTestFile(t, dir, "file.txt", "content", "add file")
+		createTestBranch(t, dir, "feat")
+
+		// Save state with different host
+		require.NoError(t, SaveSyncState(dir, &SyncState{Branch: "feat", Host: "m4-mini", Alias: "mini-lan"}))
+
+		cfg := config.SyncConfig{GitAware: true, BaseBranch: "main"}
+		conn := &host.Connection{Name: "m1-mini", Alias: "m1-vpn", Host: config.Host{Dir: "~/test"}}
+
+		err := gitAwareSync("rsync", conn, dir, cfg, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "branch or host changed")
+	})
+
+	t.Run("too many files", func(t *testing.T) {
+		dir := initTestGitRepo(t)
+		createTestBranch(t, dir, "feat")
+
+		// Create >500 files
+		for i := 0; i <= maxGitAwareFiles; i++ {
+			writeTestFile(t, dir, fmt.Sprintf("file_%d.txt", i), fmt.Sprintf("content %d", i))
+		}
+
+		require.NoError(t, SaveSyncState(dir, &SyncState{Branch: "feat", Host: "test", Alias: "test-alias"}))
+
+		cfg := config.SyncConfig{GitAware: true, BaseBranch: "main"}
+		conn := &host.Connection{Name: "test", Alias: "test-alias", Host: config.Host{Dir: "~/test"}}
+
+		err := gitAwareSync("rsync", conn, dir, cfg, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "too many changed files")
+	})
+
+	t.Run("git detect error (not a git repo)", func(t *testing.T) {
+		dir := t.TempDir()
+
+		cfg := config.SyncConfig{GitAware: true}
+		conn := &host.Connection{Name: "test", Alias: "test-alias", Host: config.Host{Dir: "~/test"}}
+
+		err := gitAwareSync("rsync", conn, dir, cfg, nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not a git repository")
+	})
+
+	t.Run("zero changes same state", func(t *testing.T) {
+		dir := initTestGitRepo(t)
+		commitTestFile(t, dir, "file.txt", "content", "add file")
+		createTestBranch(t, dir, "feat")
+
+		// Save matching state
+		require.NoError(t, SaveSyncState(dir, &SyncState{Branch: "feat", Host: "test", Alias: "test-alias"}))
+
+		cfg := config.SyncConfig{GitAware: true, BaseBranch: "main"}
+		conn := &host.Connection{Name: "test", Alias: "test-alias", Host: config.Host{Dir: "~/test"}}
+
+		err := gitAwareSync("rsync", conn, dir, cfg, nil)
+		assert.NoError(t, err) // No-op, remote already up to date
+	})
+}
+
+// Helper functions for test git repos
+
+func initTestGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	runGit(t, dir, "config", "user.email", "test@test.com")
+	runGit(t, dir, "config", "user.name", "Test")
+
+	// Ignore .rr/ so sync state doesn't show as untracked
+	writeTestFile(t, dir, ".gitignore", ".rr/\n")
+	writeTestFile(t, dir, "README.md", "# test")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "initial commit")
+
+	return dir
+}
+
+func commitTestFile(t *testing.T, dir, path, content, msg string) {
+	t.Helper()
+	writeTestFile(t, dir, path, content)
+	runGit(t, dir, "add", path)
+	runGit(t, dir, "commit", "-m", msg)
+}
+
+func createTestBranch(t *testing.T, dir, name string) {
+	t.Helper()
+	runGit(t, dir, "checkout", "-b", name)
+}
+
+func writeTestFile(t *testing.T, dir, path, content string) {
+	t.Helper()
+	full := filepath.Join(dir, path)
+	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0755))
+	require.NoError(t, os.WriteFile(full, []byte(content), 0644))
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v failed: %s", args, string(out))
+}
+
+// indexOf returns the index of the first occurrence of target in args, or -1.
+func indexOf(args []string, target string) int {
+	for i, a := range args {
+		if a == target {
+			return i
+		}
+	}
+	return -1
 }

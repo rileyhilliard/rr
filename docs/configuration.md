@@ -280,6 +280,48 @@ sync:
 | `exclude` | list | see below | Patterns for files not sent to remote. |
 | `preserve` | list | see below | Patterns for files not deleted on remote. |
 | `flags` | list | `[]` | Extra flags passed to rsync. |
+| `git_aware` | bool | `false` | Use git to detect changed files and scope rsync to only those. |
+| `base_branch` | string | auto-detect | Base branch for git-aware diff. Auto-detected from origin HEAD if omitted. |
+
+### Git-aware sync
+
+When `git_aware: true`, rr uses git to figure out which files changed relative to the base branch, then tells rsync to only look at those files. This skips the expensive full-directory stat pass that rsync normally does, which can save significant time on large repos over VPN.
+
+```yaml
+sync:
+  git_aware: true
+  base_branch: develop  # optional, auto-detected if omitted
+```
+
+**How it works:**
+
+1. Git detects all changed, added, deleted, and untracked files relative to the base branch
+2. Rsync runs with include/exclude filters scoped to only those files
+3. `--delete` stays active so deleted files are removed on the remote
+4. If anything goes wrong (not a git repo, git errors, too many changes), rr falls back to a full rsync automatically
+
+**Branch-switch detection:** rr tracks the last synced branch and host in a `.rr/sync-state.json` file. If you switch branches or hosts, rr forces a full sync to ensure the remote is clean. The `.rr/` directory is automatically excluded from sync.
+
+**When to use it:**
+
+- Large repos (thousands of files) where rsync's stat pass is slow
+- Working over VPN where per-file latency adds up
+- Feature branch workflows where only a handful of files change
+
+**When to leave it off:**
+
+- Small repos where full rsync is already fast
+- Heavy use of gitignored build artifacts that need syncing
+- Submodules under the project directory (not supported)
+
+**Fallback conditions:** git-aware sync automatically falls back to full rsync when:
+
+- Git isn't installed or the directory isn't a git repo
+- No previous sync state exists (first sync on a project)
+- Branch or host changed since the last sync
+- More than 500 files changed (diminishing returns at that scale)
+- Any git command fails
+- Submodules exist under the project directory
 
 ### Default excludes
 
@@ -288,6 +330,7 @@ If you don't specify `exclude`, these patterns are used:
 ```yaml
 exclude:
   - .git/
+  - .rr/
   - .venv/
   - __pycache__/
   - "*.pyc"
