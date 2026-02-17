@@ -127,12 +127,21 @@ The `dir` field supports these variables:
 | `${PROJECT}` | Current directory name | `myapp` |
 | `${USER}` | Local username | `riley` |
 | `${HOME}` | Remote user's home directory | `/home/riley` |
+| `${BRANCH}` | Current git branch (sanitized: `/` → `-`) | `feature-webhooks` |
 
 ```yaml
 # If your local project is /Users/riley/code/myapp
 dir: ~/projects/${PROJECT}
 # Expands to: ~/projects/myapp
+
+# Per-branch directories (useful with git worktrees)
+dir: ~/rr/${PROJECT}-${BRANCH}
+# On branch feature/webhooks, expands to: ~/rr/myapp-feature-webhooks
 ```
+
+**Branch name sanitization:** Slashes and other filesystem-unsafe characters (`\ : * ? " < > |`) are replaced with hyphens. Falls back to `HEAD` in detached HEAD state or outside a git repo.
+
+**Cleanup:** Per-branch directories accumulate as branches are merged or deleted. Use `rr clean` to discover and remove stale directories that no longer correspond to a local branch.
 
 ## Project config (.rr.yaml)
 
