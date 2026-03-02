@@ -275,12 +275,12 @@ jobs:
           cache: true
 
       - name: Download unit test coverage
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: coverage-unit
 
       - name: Download integration test coverage
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: coverage-integration
 
