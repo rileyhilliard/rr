@@ -156,3 +156,6 @@ The `dir` field supports:
 | `${PROJECT}` | Current directory name |
 | `${USER}` | Local username |
 | `${HOME}` | Remote user's home directory |
+| `${BRANCH}` | Current git branch (sanitized for filesystem safety) |
+
+`${BRANCH}` creates per-branch working directories on the remote, so each branch gets its own isolated copy. Use `rr clean` to remove directories for branches that no longer exist locally.

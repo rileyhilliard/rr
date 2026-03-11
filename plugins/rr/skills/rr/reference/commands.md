@@ -175,6 +175,25 @@ rr setup myserver
 rr setup user@192.168.1.100
 ```
 
+### `rr clean`
+
+Remove stale per-branch directories from remote hosts.
+
+When using `${BRANCH}` in a host's `dir` template (e.g., `~/rr/${PROJECT}-${BRANCH}`), directories accumulate as branches are merged or deleted. This command finds directories on remotes that no longer correspond to a local branch and offers to remove them.
+
+```bash
+rr clean              # Interactive: discover and prompt for removal
+rr clean --dry-run    # Show what would be removed without deleting
+rr clean --host mini  # Clean only a specific host
+```
+
+**Flags:**
+- `--dry-run` - Show what would be removed without deleting
+- `--host <name>` - Clean only a specific host
+- `--probe-timeout <duration>` - SSH probe timeout (e.g., `5s`)
+
+Hosts without `${BRANCH}` in their `dir` template are automatically skipped.
+
 ### `rr unlock`
 
 Release stuck lock on remote host.
