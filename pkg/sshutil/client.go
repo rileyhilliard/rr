@@ -180,6 +180,7 @@ type sshSettings struct {
 	user          string
 	identityFile  string
 	proxyCommand  string   // ProxyCommand from SSH config (if any)
+	identityAgent string   // IdentityAgent socket path from SSH config (if any)
 	encryptedKeys []string // Keys that exist but are encrypted
 }
 
@@ -280,6 +281,14 @@ func resolveSSHSettings(host string) *sshSettings {
 		hostFound = true
 	}
 
+	// Get IdentityAgent (e.g. 1Password, YubiKey agent sockets)
+	if identityAgent, _ := cfg.Get(host, "IdentityAgent"); identityAgent != "" {
+		// Expand env vars first ($SSH_AUTH_SOCK), then tilde (~/)
+		expanded := os.ExpandEnv(identityAgent)
+		settings.identityAgent = expandPath(expanded)
+		hostFound = true
+	}
+
 	// Warn about ProxyJump (not yet supported, but detectable)
 	if settings.proxyCommand == "" {
 		if proxyJump, _ := cfg.Get(host, "ProxyJump"); proxyJump != "" {
@@ -340,7 +349,7 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	} else {
 		// Normal mode: try multiple auth methods
 		// Try SSH agent first (most common and convenient)
-		if agentAuth := sshAgentAuth(); agentAuth != nil {
+		if agentAuth := sshAgentAuth(settings.identityAgent); agentAuth != nil {
 			authMethods = append(authMethods, agentAuth)
 		}
 
@@ -407,17 +416,52 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	}, nil
 }
 
-// agentConn holds the reusable SSH agent connection.
+// agentConn holds the reusable SSH agent connection for the default SSH_AUTH_SOCK.
 var (
 	agentConn     net.Conn
 	agentClient   agent.ExtendedAgent
 	agentConnOnce sync.Once
 )
 
+// perHostAgentConns tracks agent connections opened for per-host IdentityAgent sockets.
+var (
+	perHostAgentConns   []net.Conn
+	perHostAgentConnsMu sync.Mutex
+)
+
 // sshAgentAuth returns an auth method using the SSH agent if available.
-// The agent connection is reused across multiple SSH connections.
-// Returns nil if the agent has no keys loaded.
-func sshAgentAuth() ssh.AuthMethod {
+// If identityAgent is set, it uses that socket path instead of SSH_AUTH_SOCK.
+// If identityAgent is "none", agent auth is explicitly disabled.
+// The default SSH_AUTH_SOCK connection is cached; per-host connections are tracked for cleanup.
+func sshAgentAuth(identityAgent string) ssh.AuthMethod {
+	if identityAgent == "none" {
+		return nil
+	}
+
+	// Per-host IdentityAgent: open a dedicated connection (not cached globally
+	// since different hosts may use different agent sockets)
+	if identityAgent != "" {
+		conn, err := net.Dial("unix", identityAgent)
+		if err != nil {
+			return nil
+		}
+
+		client := agent.NewClient(conn)
+		signers, err := client.Signers()
+		if err != nil || len(signers) == 0 {
+			conn.Close()
+			return nil
+		}
+
+		// Only track the connection for cleanup if we're actually using it
+		perHostAgentConnsMu.Lock()
+		perHostAgentConns = append(perHostAgentConns, conn)
+		perHostAgentConnsMu.Unlock()
+
+		return ssh.PublicKeysCallback(client.Signers)
+	}
+
+	// Default: use SSH_AUTH_SOCK with cached connection
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
 		return nil
@@ -446,12 +490,18 @@ func sshAgentAuth() ssh.AuthMethod {
 	return ssh.PublicKeysCallback(agentClient.Signers)
 }
 
-// CloseAgent closes the SSH agent connection if one is open.
+// CloseAgent closes all SSH agent connections (both default and per-host).
 // This should be called when the application is shutting down.
 func CloseAgent() {
 	if agentConn != nil {
 		agentConn.Close()
 	}
+	perHostAgentConnsMu.Lock()
+	for _, conn := range perHostAgentConns {
+		conn.Close()
+	}
+	perHostAgentConns = nil
+	perHostAgentConnsMu.Unlock()
 }
 
 // keyFileAuth returns an auth method using a private key file.
@@ -472,6 +522,22 @@ func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 			return nil, &EncryptedKeyError{Path: keyPath}
 		}
 		return nil, err
+	}
+
+	// Check for an accompanying SSH certificate file (e.g. id_ed25519-cert.pub).
+	// If found, combine it with the private key for certificate-based auth.
+	certPath := keyPath + "-cert.pub"
+	if certData, err := os.ReadFile(certPath); err == nil {
+		pubKey, _, _, _, parseErr := ssh.ParseAuthorizedKey(certData)
+		if parseErr != nil {
+			emitWarning(fmt.Sprintf("Found certificate %s but couldn't parse it: %v", certPath, parseErr))
+		} else if cert, ok := pubKey.(*ssh.Certificate); !ok {
+			emitWarning(fmt.Sprintf("Found %s but it's not a certificate", certPath))
+		} else if certSigner, certErr := ssh.NewCertSigner(cert, signer); certErr != nil {
+			emitWarning(fmt.Sprintf("Found certificate %s but couldn't use it: %v", certPath, certErr))
+		} else {
+			return ssh.PublicKeys(certSigner), nil
+		}
 	}
 
 	return ssh.PublicKeys(signer), nil

@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -26,7 +27,7 @@ func TestExecuteTask_SingleCommand(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -43,7 +44,7 @@ func TestExecuteTask_SingleCommandWithArgs(t *testing.T) {
 	args := []string{"world", "foo"}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, args, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, args, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -59,7 +60,7 @@ func TestExecuteTask_SingleCommandWithEnv(t *testing.T) {
 	env := map[string]string{"MY_VAR": "test_value"}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, env, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, env, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -73,7 +74,7 @@ func TestExecuteTask_SingleCommandFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err) // No error - command ran but returned non-zero
 	assert.Equal(t, 42, result.ExitCode)
@@ -91,7 +92,7 @@ func TestExecuteTask_MultiStepAllPassing(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -119,7 +120,7 @@ func TestExecuteTask_MultiStepFailureWithStop(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ExitCode)
@@ -146,7 +147,7 @@ func TestExecuteTask_MultiStepFailureWithContinue(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ExitCode)   // Final exit code is from failed step
@@ -175,7 +176,7 @@ func TestExecuteTask_MultiStepMixedOnFail(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.ExitCode)   // Exit code from step3
@@ -203,7 +204,7 @@ func TestExecuteTask_StepNamesDefault(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	require.Len(t, result.StepResults, 3)
@@ -224,7 +225,7 @@ func TestExecuteTask_OnFailDefaults(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	require.Len(t, result.StepResults, 4)
@@ -240,7 +241,7 @@ func TestExecuteTask_NilTask(t *testing.T) {
 	conn := createLocalConn()
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, nil, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, nil, nil, nil, "", &stdout, &stderr, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -252,7 +253,7 @@ func TestExecuteTask_EmptyTask(t *testing.T) {
 	task := &config.TaskConfig{}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, result)

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -45,30 +46,59 @@ type WorkflowContext struct {
 	// Internal state
 	selector   *host.Selector
 	signalChan chan os.Signal
+	ctx        context.Context
+	cancel     context.CancelFunc
 	closeOnce  sync.Once
 }
 
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
+// Instead of calling os.Exit, it cancels the workflow context so in-flight
+// commands (like remote SSH sessions) can send SIGINT to the remote process
+// before the connection is torn down.
 func (w *WorkflowContext) setupSignalHandler() {
-	w.signalChan = make(chan os.Signal, 1)
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.signalChan = make(chan os.Signal, 2)
 	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		sig, ok := <-w.signalChan
+		_, ok := <-w.signalChan
 		if !ok {
 			// Channel was closed by Close(), not a signal
 			return
 		}
-		// Received actual signal, clean up and exit
-		_ = sig
+		// Cancel context first so in-flight SSH commands can clean up
+		w.cancel()
+
+		// Second signal force-quits immediately (users expect double Ctrl+C to kill)
+		go func() {
+			_, ok := <-w.signalChan
+			if !ok {
+				return
+			}
+			os.Exit(130)
+		}()
+
 		w.Close()
-		os.Exit(130) // 128 + SIGINT(2) = 130, standard exit code for Ctrl+C
 	}()
+}
+
+// Context returns the workflow's cancellable context. This context is cancelled
+// when the user sends SIGINT/SIGTERM, allowing callers to propagate cancellation
+// to remote commands.
+func (w *WorkflowContext) Context() context.Context {
+	if w.ctx == nil {
+		return context.Background()
+	}
+	return w.ctx
 }
 
 // Close releases workflow resources. Safe to call multiple times.
 func (w *WorkflowContext) Close() {
 	w.closeOnce.Do(func() {
+		// Cancel context to signal in-flight operations
+		if w.cancel != nil {
+			w.cancel()
+		}
 		// Stop listening for signals
 		if w.signalChan != nil {
 			signal.Stop(w.signalChan)

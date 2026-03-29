@@ -17,8 +17,9 @@ import (
 )
 
 // controlSocketDir is the directory for SSH ControlMaster sockets.
-// Using /tmp for cross-platform compatibility.
-var controlSocketDir = filepath.Join(os.TempDir(), "rr-ssh")
+// Uses /tmp with per-user namespacing to keep paths short (macOS has a 104-byte
+// Unix socket path limit, and os.TempDir() returns long /var/folders/... paths).
+var controlSocketDir = fmt.Sprintf("/tmp/rr-ssh-%d", os.Getuid())
 
 // SSHConfigFile can be set to use a custom SSH config file for rsync.
 // If empty, uses the default SSH config. Useful for testing with custom
