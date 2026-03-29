@@ -104,7 +104,9 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 		// Check for cancellation between steps
 		select {
 		case <-ctx.Done():
-			return result, ctx.Err()
+			return result, errors.WrapWithCode(ctx.Err(), errors.ErrExec,
+				"task execution canceled",
+				"The task was interrupted (e.g. Ctrl+C).")
 		default:
 		}
 

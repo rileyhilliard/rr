@@ -223,8 +223,8 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 
 	execStart := time.Now()
 
-	// Create execution context with optional timeout
-	ctx := context.Background()
+	// Create execution context from workflow (inherits signal cancellation)
+	ctx := wf.Context()
 	if task.Timeout != "" {
 		d, parseErr := time.ParseDuration(task.Timeout)
 		if parseErr != nil {

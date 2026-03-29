@@ -1494,6 +1494,16 @@ func TestSshAgentAuth_InvalidSocket(t *testing.T) {
 	_ = result
 }
 
+func TestSshAgentAuth_NoneDisablesAgent(t *testing.T) {
+	result := sshAgentAuth("none")
+	assert.Nil(t, result, "IdentityAgent='none' should disable agent auth")
+}
+
+func TestSshAgentAuth_InvalidSocketPath(t *testing.T) {
+	result := sshAgentAuth("/nonexistent/agent.sock")
+	assert.Nil(t, result, "Invalid socket path should return nil without panic")
+}
+
 // Tests for buildSSHConfig with strict host key checking
 
 func TestBuildSSHConfig_StrictHostKeyChecking(t *testing.T) {

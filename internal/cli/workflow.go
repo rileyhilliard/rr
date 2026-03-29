@@ -86,6 +86,9 @@ func (w *WorkflowContext) setupSignalHandler() {
 // when the user sends SIGINT/SIGTERM, allowing callers to propagate cancellation
 // to remote commands.
 func (w *WorkflowContext) Context() context.Context {
+	if w.ctx == nil {
+		return context.Background()
+	}
 	return w.ctx
 }
 
