@@ -445,15 +445,19 @@ func sshAgentAuth(identityAgent string) ssh.AuthMethod {
 		if err != nil {
 			return nil
 		}
-		perHostAgentConnsMu.Lock()
-		perHostAgentConns = append(perHostAgentConns, conn)
-		perHostAgentConnsMu.Unlock()
 
 		client := agent.NewClient(conn)
 		signers, err := client.Signers()
 		if err != nil || len(signers) == 0 {
+			conn.Close()
 			return nil
 		}
+
+		// Only track the connection for cleanup if we're actually using it
+		perHostAgentConnsMu.Lock()
+		perHostAgentConns = append(perHostAgentConns, conn)
+		perHostAgentConnsMu.Unlock()
+
 		return ssh.PublicKeysCallback(client.Signers)
 	}
 
@@ -524,13 +528,15 @@ func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 	// If found, combine it with the private key for certificate-based auth.
 	certPath := keyPath + "-cert.pub"
 	if certData, err := os.ReadFile(certPath); err == nil {
-		pubKey, _, _, _, err := ssh.ParseAuthorizedKey(certData)
-		if err == nil {
-			if cert, ok := pubKey.(*ssh.Certificate); ok {
-				if certSigner, err := ssh.NewCertSigner(cert, signer); err == nil {
-					return ssh.PublicKeys(certSigner), nil
-				}
-			}
+		pubKey, _, _, _, parseErr := ssh.ParseAuthorizedKey(certData)
+		if parseErr != nil {
+			emitWarning(fmt.Sprintf("Found certificate %s but couldn't parse it: %v", certPath, parseErr))
+		} else if cert, ok := pubKey.(*ssh.Certificate); !ok {
+			emitWarning(fmt.Sprintf("Found %s but it's not a certificate", certPath))
+		} else if certSigner, certErr := ssh.NewCertSigner(cert, signer); certErr != nil {
+			emitWarning(fmt.Sprintf("Found certificate %s but couldn't use it: %v", certPath, certErr))
+		} else {
+			return ssh.PublicKeys(certSigner), nil
 		}
 	}
 

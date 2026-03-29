@@ -57,7 +57,7 @@ type WorkflowContext struct {
 // before the connection is torn down.
 func (w *WorkflowContext) setupSignalHandler() {
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	w.signalChan = make(chan os.Signal, 1)
+	w.signalChan = make(chan os.Signal, 2)
 	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
@@ -68,6 +68,16 @@ func (w *WorkflowContext) setupSignalHandler() {
 		}
 		// Cancel context first so in-flight SSH commands can clean up
 		w.cancel()
+
+		// Second signal force-quits immediately (users expect double Ctrl+C to kill)
+		go func() {
+			_, ok := <-w.signalChan
+			if !ok {
+				return
+			}
+			os.Exit(130)
+		}()
+
 		w.Close()
 	}()
 }
