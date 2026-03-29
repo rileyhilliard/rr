@@ -1001,7 +1001,7 @@ func TestSshAgentAuth_NoSocket(t *testing.T) {
 	os.Unsetenv("SSH_AUTH_SOCK")
 	defer os.Setenv("SSH_AUTH_SOCK", orig)
 
-	result := sshAgentAuth()
+	result := sshAgentAuth("")
 	assert.Nil(t, result)
 }
 
@@ -1488,7 +1488,7 @@ func TestSshAgentAuth_InvalidSocket(t *testing.T) {
 	// Reset agent state to force reconnection attempt
 	// Note: Due to sync.Once, this might not trigger new connection
 	// But we're testing the code path doesn't panic
-	result := sshAgentAuth()
+	result := sshAgentAuth("")
 
 	// Result can be nil (no valid agent) or non-nil (if agent was cached)
 	_ = result

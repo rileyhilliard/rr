@@ -83,9 +83,14 @@ func Run(opts RunOptions) (int, error) {
 			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
 		}
 		fullCmd := exec.BuildRemoteCommand(cmd, &wf.Conn.Host)
-		exitCode, err = wf.Conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = wf.Conn.Client.ExecStreamContext(wf.Context(), fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
+
+	// If cancelled by signal, return standard Ctrl+C exit code
+	if wf.Context().Err() != nil {
+		return 130, nil
+	}
 
 	if err != nil {
 		return 1, err

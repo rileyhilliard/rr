@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"golang.org/x/crypto/ssh"
@@ -82,12 +83,11 @@ func (c *Client) ExecStreamContext(ctx context.Context, cmd string, stdout, stde
 	case <-ctx.Done():
 		// Context cancelled - send SIGINT to the remote process
 		_ = session.Signal(ssh.SIGINT)
-		// Give it a moment to terminate gracefully, then force close
+		// Give the remote process time to handle SIGINT before force-closing
 		select {
 		case runErr := <-done:
 			return exitCodeFromError(runErr), ctx.Err()
-		default:
-			// Force close the session if it doesn't respond to SIGINT
+		case <-time.After(3 * time.Second):
 			session.Close()
 			return 130, ctx.Err()
 		}

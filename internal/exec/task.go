@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -51,7 +52,7 @@ type StepHandler interface {
 // ExecuteTask runs a task on the given connection.
 // Handles both single-command tasks (Run field) and multi-step tasks (Steps field).
 // Extra args are appended to single-command tasks (not supported for multi-step).
-func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, env map[string]string, workDir string, stdout, stderr io.Writer, opts *TaskExecOptions) (*TaskResult, error) {
+func ExecuteTask(ctx context.Context, conn *host.Connection, task *config.TaskConfig, args []string, env map[string]string, workDir string, stdout, stderr io.Writer, opts *TaskExecOptions) (*TaskResult, error) {
 	if task == nil {
 		return nil, errors.New(errors.ErrExec,
 			"No task provided",
@@ -70,7 +71,7 @@ func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, 
 		if len(args) > 0 {
 			cmd = cmd + " " + strings.Join(args, " ")
 		}
-		exitCode, err := executeCommand(conn, cmd, env, workDir, opts.SetupCommands, stdout, stderr)
+		exitCode, err := executeCommand(ctx, conn, cmd, env, workDir, opts.SetupCommands, stdout, stderr)
 		if err != nil {
 			return nil, err
 		}
@@ -87,11 +88,11 @@ func ExecuteTask(conn *host.Connection, task *config.TaskConfig, args []string, 
 			"Add a 'run' command or 'steps' to your task config.")
 	}
 
-	return executeSteps(conn, task.Steps, env, workDir, opts, stdout, stderr)
+	return executeSteps(ctx, conn, task.Steps, env, workDir, opts, stdout, stderr)
 }
 
 // executeSteps runs multiple steps in sequence.
-func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string]string, workDir string, opts *TaskExecOptions, stdout, stderr io.Writer) (*TaskResult, error) {
+func executeSteps(ctx context.Context, conn *host.Connection, steps []config.TaskStep, env map[string]string, workDir string, opts *TaskExecOptions, stdout, stderr io.Writer) (*TaskResult, error) {
 	result := &TaskResult{
 		StepResults: make([]StepResult, 0, len(steps)),
 		FailedStep:  -1,
@@ -100,6 +101,13 @@ func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string
 	totalSteps := len(steps)
 
 	for i, step := range steps {
+		// Check for cancellation between steps
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		default:
+		}
+
 		stepNum := i + 1
 		stepResult := StepResult{
 			Name:   step.Name,
@@ -116,7 +124,7 @@ func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string
 		}
 
 		stepStart := time.Now()
-		exitCode, err := executeCommand(conn, step.Run, env, workDir, opts.SetupCommands, stdout, stderr)
+		exitCode, err := executeCommand(ctx, conn, step.Run, env, workDir, opts.SetupCommands, stdout, stderr)
 		stepDuration := time.Since(stepStart)
 
 		if err != nil {
@@ -150,7 +158,7 @@ func executeSteps(conn *host.Connection, steps []config.TaskStep, env map[string
 }
 
 // executeCommand runs a single command on the connection.
-func executeCommand(conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
+func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
 	// Build the full command with environment variables, working directory, and setup commands
 	fullCmd := buildCommand(cmd, env, workDir, setupCommands, conn.IsLocal)
 
@@ -159,7 +167,7 @@ func executeCommand(conn *host.Connection, cmd string, env map[string]string, wo
 	}
 
 	// Remote execution
-	return conn.Client.ExecStream(fullCmd, stdout, stderr)
+	return conn.Client.ExecStreamContext(ctx, fullCmd, stdout, stderr)
 }
 
 // buildCommand constructs the full command string with setup commands, env vars, and cd.
@@ -215,7 +223,7 @@ func ExecuteLocalTask(task *config.TaskConfig, env map[string]string) (*TaskResu
 		IsLocal: true,
 	}
 
-	return ExecuteTask(conn, task, nil, env, workDir, os.Stdout, os.Stderr, nil)
+	return ExecuteTask(context.Background(), conn, task, nil, env, workDir, os.Stdout, os.Stderr, nil)
 }
 
 // DefaultShell is used when no shell is configured.
