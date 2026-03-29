@@ -1,3 +1,6 @@
+// NOTE: This file uses Unix-specific syscalls (Setpgid, Kill with negative PID).
+// If Windows support is ever needed, this file needs a //go:build !windows constraint.
+
 package sshutil
 
 import (
@@ -73,13 +76,13 @@ func (c *proxyConn) Close() error {
 
 		// Wait for process to exit with a grace period
 		select {
-		case <-c.waitCh:
-			// Process exited
+		case err := <-c.waitCh:
+			c.closeErr = err
 		case <-time.After(2 * time.Second):
 			// Force kill the process group
 			if c.cmd.Process != nil {
 				_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
-				<-c.waitCh
+				c.closeErr = <-c.waitCh
 			}
 		}
 
@@ -88,8 +91,14 @@ func (c *proxyConn) Close() error {
 	return c.closeErr
 }
 
-func (c *proxyConn) LocalAddr() net.Addr                { return proxyAddr{addr: "proxy"} }
-func (c *proxyConn) RemoteAddr() net.Addr               { return proxyAddr{addr: c.addr} }
+func (c *proxyConn) LocalAddr() net.Addr  { return proxyAddr{addr: "proxy"} }
+func (c *proxyConn) RemoteAddr() net.Addr { return proxyAddr{addr: c.addr} }
+
+// Deadline methods are no-ops. Verified in golang.org/x/crypto@v0.48.0 that
+// ssh.NewClientConn does NOT call SetDeadline on the net.Conn. The SSH library's
+// own test mocks (server_test.go, recording_test.go) use no-op deadlines.
+// Handshake timeout for proxy connections is enforced externally via time.AfterFunc
+// in Dial(), which closes the conn if the handshake stalls.
 func (c *proxyConn) SetDeadline(_ time.Time) error      { return nil }
 func (c *proxyConn) SetReadDeadline(_ time.Time) error  { return nil }
 func (c *proxyConn) SetWriteDeadline(_ time.Time) error { return nil }
@@ -130,10 +139,11 @@ func dialViaProxy(proxyCommand, originalHost string, settings *sshSettings) (net
 		waitCh <- cmd.Wait()
 	}()
 
-	// Check if process exited immediately (bad command, connection refused, etc.)
+	// Best-effort check for commands that fail immediately (bad command, connection
+	// refused, etc.). 100ms is enough for obvious failures while avoiding false
+	// positives on legitimate proxy commands that take a moment to connect.
 	select {
 	case err := <-waitCh:
-		// Process already exited, that's an error
 		stderr := strings.TrimSpace(stderrBuf.String())
 		if stderr != "" {
 			return nil, fmt.Errorf("proxy command exited immediately: %s", stderr)
@@ -142,8 +152,8 @@ func dialViaProxy(proxyCommand, originalHost string, settings *sshSettings) (net
 			return nil, fmt.Errorf("proxy command exited immediately: %w", err)
 		}
 		return nil, fmt.Errorf("proxy command exited immediately with no output")
-	case <-time.After(50 * time.Millisecond):
-		// Process is still running, good. It's acting as a proxy.
+	case <-time.After(100 * time.Millisecond):
+		// Process is still running, acting as a proxy.
 	}
 
 	conn := &proxyConn{
