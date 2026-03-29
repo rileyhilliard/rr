@@ -144,6 +144,9 @@ func dialViaProxy(proxyCommand, originalHost string, settings *sshSettings) (net
 	// positives on legitimate proxy commands that take a moment to connect.
 	select {
 	case err := <-waitCh:
+		// Process already exited - clean up pipes before returning
+		stdin.Close()
+		stdout.Close()
 		stderr := strings.TrimSpace(stderrBuf.String())
 		if stderr != "" {
 			return nil, fmt.Errorf("proxy command exited immediately: %s", stderr)
