@@ -1,7 +1,9 @@
 package sync
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -282,7 +284,7 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 		Host:  config.Host{Dir: "~/projects/app"},
 	}
 
-	t.Run("without custom config", func(t *testing.T) {
+	t.Run("without custom config uses default ssh config if present", func(t *testing.T) {
 		SSHConfigFile = ""
 		args, err := BuildArgs(conn, "/home/user/app", config.SyncConfig{})
 		require.NoError(t, err)
@@ -295,7 +297,17 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 			}
 		}
 
-		assert.NotContains(t, sshCmd, "-F ", "should not include -F flag when SSHConfigFile is empty")
+		// When ~/.ssh/config exists, -F should point to it so rsync inherits
+		// ProxyCommand, IdentityFile, and other host-specific SSH settings.
+		home, err := os.UserHomeDir()
+		require.NoError(t, err)
+		defaultConfig := filepath.Join(home, ".ssh", "config")
+		if _, err := os.Stat(defaultConfig); err == nil {
+			assert.Contains(t, sshCmd, "-F", "should include -F when ~/.ssh/config exists")
+			assert.Contains(t, sshCmd, defaultConfig)
+		} else {
+			assert.NotContains(t, sshCmd, "-F", "should not include -F when ~/.ssh/config doesn't exist")
+		}
 	})
 
 	t.Run("with custom config", func(t *testing.T) {
@@ -330,6 +342,40 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 
 		assert.Contains(t, sshCmd, `-F "/tmp/my ssh config/config"`,
 			"should properly quote paths with spaces")
+	})
+}
+
+func TestBuildSSHCmd(t *testing.T) {
+	origConfigFile := SSHConfigFile
+	defer func() { SSHConfigFile = origConfigFile }()
+
+	t.Run("includes ControlMaster options", func(t *testing.T) {
+		SSHConfigFile = ""
+		cmd := buildSSHCmd()
+		assert.Contains(t, cmd, "ControlMaster=auto")
+		assert.Contains(t, cmd, "ControlPath=")
+		assert.Contains(t, cmd, "ControlPersist=60")
+		assert.Contains(t, cmd, "BatchMode=yes")
+	})
+
+	t.Run("custom config file", func(t *testing.T) {
+		SSHConfigFile = "/tmp/custom-ssh-config"
+		cmd := buildSSHCmd()
+		assert.Contains(t, cmd, `-F "/tmp/custom-ssh-config"`)
+	})
+
+	t.Run("default config when file exists", func(t *testing.T) {
+		SSHConfigFile = ""
+		home, err := os.UserHomeDir()
+		require.NoError(t, err)
+		defaultConfig := filepath.Join(home, ".ssh", "config")
+		if _, err := os.Stat(defaultConfig); err == nil {
+			cmd := buildSSHCmd()
+			assert.Contains(t, cmd, "-F")
+			assert.Contains(t, cmd, defaultConfig)
+		} else {
+			t.Skip("~/.ssh/config does not exist")
+		}
 	})
 }
 

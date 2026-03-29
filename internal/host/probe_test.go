@@ -30,6 +30,7 @@ func TestCategorizeProbeError_Refused(t *testing.T) {
 	err := categorizeProbeError("test-host", errors.New("connection refused"))
 	if err == nil {
 		t.Fatal("categorizeProbeError returned nil")
+		return
 	}
 
 	if err.Reason != ProbeFailRefused {
@@ -82,6 +83,7 @@ func TestCategorizeProbeError_HostKey(t *testing.T) {
 	err := categorizeProbeError("test-host", errors.New("host key verification failed"))
 	if err == nil {
 		t.Fatal("categorizeProbeError returned nil")
+		return
 	}
 
 	if err.Reason != ProbeFailHostKey {
@@ -93,6 +95,7 @@ func TestCategorizeProbeError_Unknown(t *testing.T) {
 	err := categorizeProbeError("test-host", errors.New("some random error"))
 	if err == nil {
 		t.Fatal("categorizeProbeError returned nil")
+		return
 	}
 
 	if err.Reason != ProbeFailUnknown {

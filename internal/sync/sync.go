@@ -25,6 +25,27 @@ var controlSocketDir = filepath.Join(os.TempDir(), "rr-ssh")
 // host configurations.
 var SSHConfigFile string
 
+// buildSSHCmd returns the SSH command string for rsync's -e flag.
+// It includes ControlMaster for connection reuse and loads the user's SSH config
+// so rsync inherits ProxyCommand, IdentityFile, and other host-specific settings.
+func buildSSHCmd() string {
+	cmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
+		controlSocketDir)
+	configFile := SSHConfigFile
+	if configFile == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			candidate := filepath.Join(home, ".ssh", "config")
+			if _, err := os.Stat(candidate); err == nil {
+				configFile = candidate
+			}
+		}
+	}
+	if configFile != "" {
+		cmd = fmt.Sprintf("%s -F %q", cmd, configFile)
+	}
+	return cmd
+}
+
 // Sync transfers files from localDir to the remote host using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
@@ -136,20 +157,9 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 		"--force",  // force deletion of non-empty dirs
 	}
 
-	// Use SSH ControlMaster to reuse existing connections.
-	// This avoids a second SSH handshake when we already have an active connection.
-	// ControlPath uses a hash of the host to create unique socket files.
-	// ControlMaster=auto: reuse existing socket or create new one if needed.
-	// ControlPersist=60: keep the socket alive for 60s after last use.
-	// BatchMode=yes: prevent SSH from prompting for input (passwords, host keys, etc.)
-	//   which would cause rsync to hang since there's no terminal attached.
-	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
-		controlSocketDir)
-	// Support custom SSH config file (useful for testing)
-	if SSHConfigFile != "" {
-		sshCmd = fmt.Sprintf("%s -F %q", sshCmd, SSHConfigFile)
-	}
-	args = append(args, "-e", sshCmd)
+	// Use SSH with ControlMaster for connection reuse and user's SSH config
+	// for ProxyCommand, IdentityFile, and other host-specific settings.
+	args = append(args, "-e", buildSSHCmd())
 
 	// Add progress info flag for parsing
 	args = append(args, "--info=progress2")

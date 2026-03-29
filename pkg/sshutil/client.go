@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kevinburke/ssh_config"
@@ -68,19 +69,47 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 			"Check your keys are loaded: ssh-add -l")
 	}
 
-	// Dial with timeout
+	// Dial with timeout, using ProxyCommand if configured
 	address := settings.address()
-	conn, err := net.DialTimeout("tcp", address, timeout)
-	if err != nil {
-		return nil, errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Can't reach '%s' at %s", host, address),
-			suggestionForDialError(err))
+	var conn net.Conn
+	if settings.proxyCommand != "" {
+		conn, err = dialViaProxy(settings.proxyCommand, host, settings)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrSSH,
+				fmt.Sprintf("ProxyCommand failed for '%s'", host),
+				"Check your ProxyCommand in ~/.ssh/config and verify it works: ssh "+host)
+		}
+	} else {
+		conn, err = net.DialTimeout("tcp", address, timeout)
+		if err != nil {
+			return nil, errors.WrapWithCode(err, errors.ErrSSH,
+				fmt.Sprintf("Can't reach '%s' at %s", host, address),
+				suggestionForDialError(err))
+		}
 	}
 
-	// SSH handshake
+	// SSH handshake with timeout for proxy connections.
+	// For direct TCP, net.DialTimeout already enforces the timeout on the TCP connection.
+	// For proxy connections, we need our own timeout since the proxy may connect but the
+	// SSH handshake could stall (e.g., hung bastion host).
+	var proxyTimedOut atomic.Bool
+	if settings.proxyCommand != "" {
+		timer := time.AfterFunc(timeout, func() {
+			proxyTimedOut.Store(true)
+			conn.Close()
+		})
+		defer timer.Stop()
+	}
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, address, config)
 	if err != nil {
 		conn.Close()
+
+		// If the proxy handshake timed out, give a specific error
+		if proxyTimedOut.Load() {
+			return nil, errors.WrapWithCode(err, errors.ErrSSH,
+				fmt.Sprintf("SSH handshake via ProxyCommand timed out for '%s'", host),
+				"The proxy connected but the SSH handshake didn't complete. Check the remote host is running SSH.")
+		}
 
 		// Check for host key mismatch error (provides detailed suggestion)
 		var hostKeyErr *HostKeyMismatchError
@@ -150,6 +179,7 @@ type sshSettings struct {
 	port          string
 	user          string
 	identityFile  string
+	proxyCommand  string   // ProxyCommand from SSH config (if any)
 	encryptedKeys []string // Keys that exist but are encrypted
 }
 
@@ -242,6 +272,21 @@ func resolveSSHSettings(host string) *sshSettings {
 	if identity, _ := cfg.Get(host, "IdentityFile"); identity != "" {
 		settings.identityFile = expandPath(identity)
 		hostFound = true
+	}
+
+	// Get ProxyCommand
+	if proxyCmd, _ := cfg.Get(host, "ProxyCommand"); proxyCmd != "" {
+		settings.proxyCommand = proxyCmd
+		hostFound = true
+	}
+
+	// Warn about ProxyJump (not yet supported, but detectable)
+	if settings.proxyCommand == "" {
+		if proxyJump, _ := cfg.Get(host, "ProxyJump"); proxyJump != "" {
+			emitWarning(fmt.Sprintf(
+				"Host '%s' uses ProxyJump which is not yet supported. "+
+					"Convert to ProxyCommand: ProxyCommand ssh -W %%h:%%p %s", host, proxyJump))
+		}
 	}
 
 	// Only warn about Match block if host wasn't found - it might be defined after the Match
