@@ -96,7 +96,7 @@ tasks:
     description: Run full CI suite locally
     run: make ci
 
-  clean:
+  tidy:
     description: Remove build artifacts
     run: rm -f rr coverage.out coverage.html && rm -rf dist/
 
