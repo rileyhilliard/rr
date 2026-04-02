@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
-	github.com/charmbracelet/huh v0.8.0
+	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/kevinburke/ssh_config v1.6.0
