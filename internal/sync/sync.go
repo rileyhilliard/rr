@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -297,6 +298,86 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 	}
 
 	return errors.WrapWithCode(err, errors.ErrSync, msg, suggestion)
+}
+
+// InvalidateStaleDirectories checks each lockfile invalidation entry and deletes
+// the corresponding remote directories when the local lockfile is newer than the
+// remote directory. This handles the common case where a lockfile (bun.lock,
+// package-lock.json, etc.) is updated locally but the remote install directory
+// (node_modules/, .venv/, etc.) is stale and won't be re-installed because rsync
+// preserves it.
+//
+// Skip silently if conn is nil, local, or invalidations is empty.
+func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation) error {
+	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
+		return nil
+	}
+
+	remoteDir := config.ExpandRemote(conn.Host.Dir)
+
+	for _, inv := range invalidations {
+		if inv.Lockfile == "" || len(inv.Dirs) == 0 {
+			continue
+		}
+
+		// Check if lockfile exists locally
+		localLockfile := filepath.Join(localDir, inv.Lockfile)
+		localInfo, err := os.Stat(localLockfile)
+		if err != nil {
+			// Lockfile doesn't exist locally - nothing to invalidate
+			continue
+		}
+		localMtime := localInfo.ModTime().Unix()
+
+		// For each directory this lockfile controls, check the remote mtime
+		for _, dir := range inv.Dirs {
+			remotePath := remoteDir + "/" + strings.TrimSuffix(dir, "/")
+
+			// Get remote directory mtime. We try Linux stat first, then fall back
+			// to macOS stat. If the directory doesn't exist, echo 0.
+			statCmd := fmt.Sprintf(
+				`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d" 2>/dev/null || echo 0; else echo 0; fi`,
+				util.ShellQuotePreserveTilde(remotePath),
+			)
+
+			stdout, _, _, execErr := conn.Client.Exec(statCmd)
+			remoteMtimeStr := strings.TrimSpace(string(stdout))
+
+			var remoteMtime int64
+			if execErr != nil || remoteMtimeStr == "" {
+				// On any error, assume stale - safer to delete than to leave stale
+				remoteMtime = 0
+			} else {
+				parsed, parseErr := strconv.ParseInt(remoteMtimeStr, 10, 64)
+				if parseErr != nil {
+					remoteMtime = 0
+				} else {
+					remoteMtime = parsed
+				}
+			}
+
+			// If local lockfile is newer than remote dir (or remote dir is missing),
+			// delete the remote directory so the package manager reinstalls
+			if localMtime > remoteMtime {
+				fmt.Printf("Invalidating stale %s (%s changed)\n", dir, inv.Lockfile)
+
+				rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(remotePath))
+				_, rmStderr, rmExit, rmErr := conn.Client.Exec(rmCmd)
+				if rmErr != nil {
+					return errors.WrapWithCode(rmErr, errors.ErrSync,
+						fmt.Sprintf("Failed to delete stale remote directory %s", dir),
+						"Check SSH connection and remote permissions.")
+				}
+				if rmExit != 0 {
+					return errors.New(errors.ErrSync,
+						fmt.Sprintf("Failed to delete stale remote directory %s", dir),
+						fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(rmStderr))))
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // ensureRemoteDir creates the remote sync directory if it doesn't exist.

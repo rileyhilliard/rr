@@ -293,18 +293,27 @@ func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	return syncQuiet(ctx, syncStart)
 }
 
+// resolveSyncConfig returns the sync config to use, falling back to defaults.
+func resolveSyncConfig(ctx *WorkflowContext) config.SyncConfig {
+	if ctx.Resolved.Project != nil {
+		return ctx.Resolved.Project.Sync
+	}
+	return config.DefaultConfig().Sync
+}
+
 // syncWithProgress syncs files with progress bar display.
 func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
+	syncCfg := resolveSyncConfig(ctx)
+
+	// Delete stale remote directories when lockfiles have changed before syncing.
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations); err != nil {
+		return err
+	}
+
 	syncProgress := ui.NewInlineProgress("Syncing files", os.Stdout)
 	syncProgress.SetUseFakeProgress(false) // Use real rsync progress
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
-
-	// Use project sync config if available, otherwise use defaults
-	syncCfg := config.DefaultConfig().Sync
-	if ctx.Resolved.Project != nil {
-		syncCfg = ctx.Resolved.Project.Sync
-	}
 
 	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter)
 	if err != nil {
@@ -319,14 +328,15 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 
 // syncQuiet syncs files with minimal output (spinner only).
 func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
+	syncCfg := resolveSyncConfig(ctx)
+
+	// Delete stale remote directories when lockfiles have changed before syncing.
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations); err != nil {
+		return err
+	}
+
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
-
-	// Use project sync config if available, otherwise use defaults
-	syncCfg := config.DefaultConfig().Sync
-	if ctx.Resolved.Project != nil {
-		syncCfg = ctx.Resolved.Project.Sync
-	}
 
 	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
 	if err != nil {

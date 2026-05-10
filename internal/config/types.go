@@ -96,6 +96,20 @@ type Host struct {
 	Require []string `yaml:"require,omitempty" mapstructure:"require"`
 }
 
+// LockfileInvalidation maps a lockfile to remote directories that should be
+// deleted when the lockfile has been modified since the last sync. This
+// handles the case where a lockfile (e.g. bun.lock) changes locally but the
+// corresponding install directory (e.g. node_modules/) is preserved on remote
+// and never re-installed because the package manager sees no changes.
+type LockfileInvalidation struct {
+	// Lockfile is a filename relative to the project root (e.g. "bun.lock").
+	Lockfile string `yaml:"lockfile" mapstructure:"lockfile"`
+
+	// Dirs are remote directories to delete when the lockfile changes
+	// (e.g. ["node_modules/", "frontend/node_modules/"]).
+	Dirs []string `yaml:"dirs" mapstructure:"dirs"`
+}
+
 // SyncConfig controls file synchronization behavior.
 type SyncConfig struct {
 	// Exclude patterns for files/dirs not sent to remote (rsync syntax).
@@ -106,6 +120,11 @@ type SyncConfig struct {
 
 	// Flags are extra rsync flags to pass.
 	Flags []string `yaml:"flags" mapstructure:"flags"`
+
+	// Invalidations maps lockfiles to remote directories to delete when the
+	// lockfile changes. Prevents stale install directories (node_modules, .venv,
+	// etc.) from being used after a lockfile update.
+	Invalidations []LockfileInvalidation `yaml:"invalidations" mapstructure:"invalidations"`
 }
 
 // LockConfig controls the distributed lock behavior to prevent concurrent executions.
@@ -449,6 +468,14 @@ func DefaultConfig() *Config {
 				".cache/",
 			},
 			Flags: []string{},
+			Invalidations: []LockfileInvalidation{
+				{Lockfile: "bun.lock", Dirs: []string{"node_modules/"}},
+				{Lockfile: "package-lock.json", Dirs: []string{"node_modules/"}},
+				{Lockfile: "yarn.lock", Dirs: []string{"node_modules/"}},
+				{Lockfile: "pnpm-lock.yaml", Dirs: []string{"node_modules/"}},
+				{Lockfile: "poetry.lock", Dirs: []string{".venv/"}},
+				{Lockfile: "Pipfile.lock", Dirs: []string{".venv/"}},
+			},
 		},
 		Lock: LockConfig{
 			Enabled:     true,
