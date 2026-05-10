@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.21.0] - 2026-05-10
 
+### Security
+
+- **Go toolchain bumped to 1.25.10** - Fixes 6 stdlib vulnerabilities (GO-2026-4971, GO-2026-4947, GO-2026-4946, GO-2026-4918, GO-2026-4870, GO-2026-4869) in net, crypto/x509, crypto/tls, net/http, and archive/tar.
+
 ### Breaking Changes
 
 - **Structured output is now default** - `rr run`, `rr exec`, and all commands now emit structured JSON phase events to stderr and pass command stdout/stderr through undecorated. Human-readable output with spinners and colors is opt-in via `--pretty` / `-p`. The `--machine` / `-m` flag is kept for backward compatibility but is now a no-op (structured is already the default).
