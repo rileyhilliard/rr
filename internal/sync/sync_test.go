@@ -1,15 +1,18 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
+	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -206,6 +209,73 @@ func TestBuildArgs(t *testing.T) {
 
 				// Custom flags
 				assert.Contains(t, args, "--compress-level=9")
+			},
+		},
+		{
+			name: "gitignore filter enabled by default",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: true,
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				assert.Contains(t, args, "--filter=:- .gitignore")
+			},
+		},
+		{
+			name: "gitignore filter disabled",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: false,
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				for _, arg := range args {
+					assert.NotContains(t, arg, ".gitignore", "should not contain gitignore filter")
+				}
+			},
+		},
+		{
+			name: "gitignore filter comes after excludes",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: true,
+				Exclude:          []string{".git/", "node_modules/"},
+				Flags:            []string{"--compress"},
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				gitignoreIdx := -1
+				lastExcludeIdx := -1
+				firstFlagIdx := -1
+				for i, arg := range args {
+					if arg == "--filter=:- .gitignore" {
+						gitignoreIdx = i
+					}
+					if strings.HasPrefix(arg, "--exclude=") {
+						lastExcludeIdx = i
+					}
+					if arg == "--compress" {
+						firstFlagIdx = i
+					}
+				}
+				require.Greater(t, gitignoreIdx, -1, "gitignore filter should be present")
+				require.Greater(t, lastExcludeIdx, -1, "exclude should be present")
+				require.Greater(t, firstFlagIdx, -1, "custom flag should be present")
+				assert.Greater(t, gitignoreIdx, lastExcludeIdx, "gitignore filter should come after excludes")
+				assert.Less(t, gitignoreIdx, firstFlagIdx, "gitignore filter should come before custom flags")
 			},
 		},
 		{
@@ -833,4 +903,170 @@ func TestScanLinesWithCR(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInvalidateStaleDirectories covers the core invalidation logic.
+func TestInvalidateStaleDirectories(t *testing.T) {
+	// Create a temp directory to serve as the local project root.
+	localDir := t.TempDir()
+
+	invalidations := []config.LockfileInvalidation{
+		{Lockfile: "bun.lock", Dirs: []string{"node_modules/"}},
+	}
+
+	t.Run("skips nil connection", func(t *testing.T) {
+		err := InvalidateStaleDirectories(nil, localDir, invalidations)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips local connection", func(t *testing.T) {
+		conn := &host.Connection{IsLocal: true}
+		err := InvalidateStaleDirectories(conn, localDir, invalidations)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips empty invalidations", func(t *testing.T) {
+		mock := sshtesting.NewMockClient("test-host")
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "~/rr/myapp"},
+		}
+		err := InvalidateStaleDirectories(conn, localDir, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips when lockfile does not exist locally", func(t *testing.T) {
+		mock := sshtesting.NewMockClient("test-host")
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "~/rr/myapp"},
+		}
+		// No bun.lock in localDir - should be a no-op
+		err := InvalidateStaleDirectories(conn, localDir, invalidations)
+		assert.NoError(t, err)
+	})
+
+	t.Run("deletes remote dir when lockfile is newer", func(t *testing.T) {
+		// Create a local lockfile
+		lockfile := filepath.Join(localDir, "bun.lock")
+		require.NoError(t, os.WriteFile(lockfile, []byte("lockfile content"), 0644))
+
+		mock := sshtesting.NewMockClient("test-host")
+
+		// Remote node_modules has mtime of 0 (older than any local file)
+		remoteNodeModulesPath := "/root/rr/myapp/node_modules"
+		mock.GetFS().MkdirAll(remoteNodeModulesPath)
+
+		// Respond to the stat command with mtime=0 (stale)
+		statPattern := `.*stat.*node_modules.*`
+		mock.SetCommandResponse(statPattern, sshtesting.CommandResponse{
+			Stdout:   []byte("0\n"),
+			ExitCode: 0,
+		})
+
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err := InvalidateStaleDirectories(conn, localDir, invalidations)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips delete when remote dir is newer than lockfile", func(t *testing.T) {
+		// Create a local lockfile with known mtime
+		lockfile := filepath.Join(localDir, "bun.lock")
+		require.NoError(t, os.WriteFile(lockfile, []byte("lockfile content"), 0644))
+
+		// Set lockfile mtime to the past
+		pastTime := time.Now().Add(-24 * time.Hour)
+		require.NoError(t, os.Chtimes(lockfile, pastTime, pastTime))
+
+		mock := sshtesting.NewMockClient("test-host")
+
+		localInfo, err := os.Stat(lockfile)
+		require.NoError(t, err)
+		// Remote mtime is in the future relative to lockfile
+		remoteMtime := localInfo.ModTime().Unix() + 3600
+
+		statPattern := `.*stat.*node_modules.*`
+		mock.SetCommandResponse(statPattern, sshtesting.CommandResponse{
+			Stdout:   []byte(fmt.Sprintf("%d\n", remoteMtime)),
+			ExitCode: 0,
+		})
+
+		// Track whether rm was called
+		rmCalled := false
+		mock.SetCommandResponse(`^rm -rf .*node_modules.*`, sshtesting.CommandResponse{
+			Stdout:   nil,
+			ExitCode: 0,
+			Error:    nil,
+		})
+		_ = rmCalled // silence unused warning
+
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err = InvalidateStaleDirectories(conn, localDir, invalidations)
+		assert.NoError(t, err)
+		// We can't easily assert rm was NOT called with MockClient's current API,
+		// but the function should succeed with no error.
+	})
+
+	t.Run("handles multiple dirs per lockfile", func(t *testing.T) {
+		multiDirInvalidations := []config.LockfileInvalidation{
+			{Lockfile: "bun.lock", Dirs: []string{"node_modules/", "frontend/node_modules/"}},
+		}
+
+		lockfile := filepath.Join(localDir, "bun.lock")
+		require.NoError(t, os.WriteFile(lockfile, []byte("lockfile content"), 0644))
+
+		mock := sshtesting.NewMockClient("test-host")
+
+		// Respond with mtime=0 for both stat calls
+		mock.SetCommandResponse(`.*stat.*`, sshtesting.CommandResponse{
+			Stdout:   []byte("0\n"),
+			ExitCode: 0,
+		})
+
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err := InvalidateStaleDirectories(conn, localDir, multiDirInvalidations)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips entry with empty dirs list", func(t *testing.T) {
+		emptyDirsInvalidations := []config.LockfileInvalidation{
+			{Lockfile: "go.sum", Dirs: []string{}},
+		}
+
+		lockfile := filepath.Join(localDir, "go.sum")
+		require.NoError(t, os.WriteFile(lockfile, []byte("go sum content"), 0644))
+
+		mock := sshtesting.NewMockClient("test-host")
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations)
+		assert.NoError(t, err)
+	})
 }

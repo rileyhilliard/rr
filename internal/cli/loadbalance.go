@@ -98,6 +98,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		lck, err := lock.TryAcquire(conn, lockCfg, opts.Command)
 		if err == nil {
 			// Got the lock
+			lck.StartHeartbeat()
 			return &findAvailableHostResult{
 				conn:       conn,
 				lock:       lck,
@@ -158,15 +159,18 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 	}
 
 	startTime := time.Now()
-	spinner := ui.NewSpinner("Waiting for available host")
-	spinner.Start()
+	var spinner *ui.Spinner
+	if PrettyMode() {
+		spinner = ui.NewSpinner("Waiting for available host")
+		spinner.Start()
+	}
 
-	// Track which hosts we're cycling through
 	for {
 		elapsed := time.Since(startTime)
 		if elapsed >= waitTimeout {
-			spinner.Fail()
-			// Close all connections
+			if spinner != nil {
+				spinner.Fail()
+			}
 			for _, a := range lockedHosts {
 				if a.conn != nil {
 					a.conn.Close()
@@ -175,17 +179,17 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 			return nil, buildAllHostsLockedError(lockedHosts, waitTimeout)
 		}
 
-		// Try each locked host
 		for i, attempt := range lockedHosts {
 			if attempt.conn == nil {
 				continue
 			}
 
-			// Try to acquire lock
 			lck, err := lock.TryAcquire(attempt.conn, lockCfg, command)
 			if err == nil {
-				spinner.Success()
-				// Close other connections
+				lck.StartHeartbeat()
+				if spinner != nil {
+					spinner.Success()
+				}
 				for j, a := range lockedHosts {
 					if j != i && a.conn != nil {
 						a.conn.Close()
@@ -199,13 +203,11 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 			}
 
 			if !errors.Is(err, lock.ErrLocked) {
-				// Connection died or other error - remove from rotation
 				attempt.conn.Close()
 				lockedHosts[i].conn = nil
 			}
 		}
 
-		// Check if all connections are dead
 		aliveCount := 0
 		for _, a := range lockedHosts {
 			if a.conn != nil {
@@ -213,13 +215,14 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 			}
 		}
 		if aliveCount == 0 {
-			spinner.Fail()
+			if spinner != nil {
+				spinner.Fail()
+			}
 			return nil, rrerrors.New(rrerrors.ErrSSH,
 				"All host connections lost while waiting",
 				"Check network connectivity and try again.")
 		}
 
-		// Wait before next round
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -277,12 +280,14 @@ func buildAllHostsLockedError(lockedHosts []hostAttempt, timeout time.Duration) 
 //
 // This avoids syncing to a host we can't lock.
 func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error {
-	// Show connection display
+	if !PrettyMode() {
+		return setupWorkflowLoadBalancedStructured(ctx, opts)
+	}
+
 	connDisplay := ui.NewConnectionDisplay(os.Stdout)
 	connDisplay.SetQuiet(opts.Quiet)
 	connDisplay.Start()
 
-	// Set up event handler for connection progress
 	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
 		case host.EventFailed:
@@ -293,7 +298,6 @@ func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error
 		}
 	})
 
-	// Find an available host (connect + lock)
 	result, err := findAvailableHost(ctx, opts)
 	if err != nil {
 		connDisplay.Fail(err.Error())
@@ -303,12 +307,34 @@ func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error
 	ctx.Conn = result.conn
 	ctx.Lock = result.lock
 
-	// Show connection result
 	if result.isLocal {
 		connDisplay.SuccessLocal()
 	} else {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}
+
+	return nil
+}
+
+func setupWorkflowLoadBalancedStructured(ctx *WorkflowContext, opts WorkflowOptions) error {
+	connectStart := time.Now()
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("connect")
+
+	result, err := findAvailableHost(ctx, opts)
+	if err != nil {
+		reporter.PhaseFailed("connect", err)
+		return err
+	}
+
+	ctx.Conn = result.conn
+	ctx.Lock = result.lock
+
+	host := ctx.Conn.Name
+	if result.isLocal {
+		host = "local"
+	}
+	reporter.PhaseComplete("connect", host, time.Since(connectStart))
 
 	return nil
 }

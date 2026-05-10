@@ -78,10 +78,13 @@ tasks:
 
 ### Common Flags
 
+- `--pretty` / `-p` - Opt into human-readable output (spinners, colors). Default is structured JSON.
 - `--host <name>` - Target specific host
 - `--tag <tag>` - Select host by tag
 - `--local` - Force local execution
 - `--skip-requirements` - Skip requirement checks
+
+Run `rr --help` or `rr <command> --help` for complete flag reference.
 
 ## Tasks
 
@@ -281,17 +284,22 @@ Missing tools trigger actionable error messages. Tools with built-in installers 
 
 **See [troubleshooting.md](reference/troubleshooting.md) for detailed diagnostics.**
 
-## Machine Interface (LLM/CI)
+## Structured Output (Default)
 
-Use `--machine` or `-m` for structured JSON output:
+rr defaults to structured output (agent-first). No flags needed. Phase events are emitted as JSON lines to stderr, command stdout/stderr passes through undecorated.
 
 ```bash
-rr doctor --machine
-rr status --machine
-rr tasks --machine
+# Default behavior - structured JSON events on stderr, raw output on stdout
+rr run "make test"
+rr test
+
+# Opt into human-readable spinners/colors
+rr run --pretty "make test"
 ```
 
-**See [machine-interface.md](reference/machine-interface.md) for JSON envelope format and error codes.**
+The `--machine` / `-m` flag still works but is a no-op (structured is already the default).
+
+**See [machine-interface.md](reference/machine-interface.md) for JSON event format and error codes.**
 
 ## Quick Setup
 

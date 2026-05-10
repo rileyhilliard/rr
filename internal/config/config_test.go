@@ -18,7 +18,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Empty(t, cfg.Host) // Project config has optional host reference
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.Lock.Timeout)
-	assert.Equal(t, 10*time.Minute, cfg.Lock.Stale)
+	assert.Equal(t, 3*time.Minute, cfg.Lock.Stale)
 	assert.Equal(t, "auto", cfg.Output.Color)
 	assert.Equal(t, "auto", cfg.Output.Format)
 	assert.True(t, cfg.Output.Timing)
@@ -1147,10 +1147,9 @@ func TestValidateLock(t *testing.T) {
 			errMsg:  "can't be negative",
 		},
 		{
-			name:    "timeout greater than stale",
+			name:    "timeout greater than stale is allowed (heartbeat keeps locks alive)",
 			lock:    LockConfig{Enabled: true, Timeout: 10 * time.Minute, Stale: 5 * time.Minute},
-			wantErr: true,
-			errMsg:  "is longer than",
+			wantErr: false,
 		},
 		{
 			name:    "zero timeout is allowed",

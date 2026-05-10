@@ -13,15 +13,15 @@ import (
 )
 
 func TestMachineMode_DefaultValue(t *testing.T) {
-	// Reset to default
-	oldMode := machineMode
-	defer func() { machineMode = oldMode }()
+	oldPretty := prettyMode
+	defer func() { prettyMode = oldPretty }()
 
-	machineMode = false
-	assert.False(t, MachineMode())
-
-	machineMode = true
+	// MachineMode() returns !prettyMode (structured output is default)
+	prettyMode = false
 	assert.True(t, MachineMode())
+
+	prettyMode = true
+	assert.False(t, MachineMode())
 }
 
 func TestWriteJSONSuccess_BasicData(t *testing.T) {

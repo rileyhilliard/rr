@@ -2,6 +2,7 @@ package lock
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1021,4 +1022,134 @@ func TestGetLockHolder_EmptyWhenStale(t *testing.T) {
 	// Stale lock should return empty holder
 	holder := GetLockHolder(conn, cfg)
 	assert.Empty(t, holder)
+}
+
+// ============================================================================
+// Heartbeat tests
+// ============================================================================
+
+func TestLock_StartStopHeartbeat(t *testing.T) {
+	conn, _ := newMockConnection("testhost")
+
+	l := &Lock{
+		Dir:  "/tmp/rr.lock",
+		Info: &LockInfo{User: "test", Hostname: "host", PID: 1},
+		conn: conn,
+	}
+
+	// Start should not panic
+	l.StartHeartbeat()
+
+	// Stop should not panic
+	l.StopHeartbeat()
+}
+
+func TestLock_StopHeartbeat_Idempotent(t *testing.T) {
+	conn, _ := newMockConnection("testhost")
+
+	l := &Lock{
+		Dir:  "/tmp/rr.lock",
+		Info: &LockInfo{User: "test", Hostname: "host", PID: 1},
+		conn: conn,
+	}
+
+	l.StartHeartbeat()
+	l.StopHeartbeat()
+	l.StopHeartbeat() // Second call should be a no-op
+}
+
+func TestLock_StartHeartbeat_Idempotent(t *testing.T) {
+	conn, _ := newMockConnection("testhost")
+
+	l := &Lock{
+		Dir:  "/tmp/rr.lock",
+		Info: &LockInfo{User: "test", Hostname: "host", PID: 1},
+		conn: conn,
+	}
+
+	l.StartHeartbeat()
+	l.StartHeartbeat() // Second call should be a no-op
+	l.StopHeartbeat()
+}
+
+func TestLock_StartHeartbeat_NilLock(t *testing.T) {
+	var l *Lock
+	l.StartHeartbeat() // Should not panic
+}
+
+func TestLock_StopHeartbeat_NilLock(t *testing.T) {
+	var l *Lock
+	l.StopHeartbeat() // Should not panic
+}
+
+func TestLock_Release_StopsHeartbeat(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	l, err := Acquire(conn, cfg, "test")
+	require.NoError(t, err)
+
+	l.StartHeartbeat()
+
+	// Release should stop heartbeat and remove lock
+	err = l.Release()
+	require.NoError(t, err)
+	assert.False(t, mock.GetFS().Exists("/tmp/rr.lock"))
+}
+
+func TestIsLockStale_MtimeBased(t *testing.T) {
+	mock := sshtesting.NewMockClient("testhost")
+
+	// Set up stat to return a recent mtime (not stale)
+	recentMtime := time.Now().Unix()
+	mock.SetCommandResponse(`.*stat.*`, sshtesting.CommandResponse{
+		Stdout:   []byte(strconv.Itoa(int(recentMtime)) + "\n"),
+		ExitCode: 0,
+	})
+
+	stale := isLockStale(mock, "/tmp/info.json", 3*time.Minute)
+	assert.False(t, stale)
+}
+
+func TestIsLockStale_MtimeBased_Stale(t *testing.T) {
+	mock := sshtesting.NewMockClient("testhost")
+
+	// Set up stat to return an old mtime (stale)
+	oldMtime := time.Now().Add(-10 * time.Minute).Unix()
+	mock.SetCommandResponse(`.*stat.*`, sshtesting.CommandResponse{
+		Stdout:   []byte(strconv.Itoa(int(oldMtime)) + "\n"),
+		ExitCode: 0,
+	})
+
+	stale := isLockStale(mock, "/tmp/info.json", 3*time.Minute)
+	assert.True(t, stale)
+}
+
+func TestIsLockStale_FallbackToStarted(t *testing.T) {
+	mock := sshtesting.NewMockClient("testhost")
+
+	// Stat returns 0 (can't determine mtime), fallback to Started
+	mock.SetCommandResponse(`.*stat.*`, sshtesting.CommandResponse{
+		Stdout:   []byte("0\n"),
+		ExitCode: 0,
+	})
+
+	// Create old lock info
+	info := &LockInfo{
+		User:     "old",
+		Hostname: "oldhost",
+		Started:  time.Now().Add(-1 * time.Hour),
+		PID:      1234,
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/info.json", infoJSON)
+
+	stale := isLockStale(mock, "/tmp/info.json", 10*time.Minute)
+	assert.True(t, stale)
 }

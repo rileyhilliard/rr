@@ -490,6 +490,9 @@ func TestProvisionSummary_VariousCombinations(t *testing.T) {
 }
 
 func TestOutputProvisionJSON_Format(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	results := []hostCheckResult{
 		{
 			name:      "test-host",
@@ -518,6 +521,9 @@ func TestOutputProvisionJSON_Format(t *testing.T) {
 }
 
 func TestOutputProvisionJSON_WithMissing(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	results := []hostCheckResult{
 		{
 			name:      "test-host",
@@ -546,6 +552,9 @@ func TestOutputProvisionJSON_WithMissing(t *testing.T) {
 }
 
 func TestOutputProvisionJSON_ConnectionError(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	results := []hostCheckResult{
 		{
 			name:      "failed-host",

@@ -119,8 +119,11 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 0, nil
 	}
 
-	// Determine output mode
+	// Determine output mode - force progress (non-TUI) in structured mode
 	outputMode := determineOutputMode(opts, task)
+	if !PrettyMode() && outputMode == parallel.OutputProgress {
+		outputMode = parallel.OutputQuiet
+	}
 
 	// Build parallel config
 	parallelCfg := parallel.Config{
@@ -195,23 +198,41 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 1, err
 	}
 
-	// Write task outputs to logs
+	return renderParallelResult(result, logWriter, opts.TaskName), nil
+}
+
+func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, taskName string) int {
 	if logWriter != nil {
-		writeTaskLogs(logWriter, result, opts.TaskName)
+		writeTaskLogs(logWriter, result, taskName)
 	}
 
-	// Render summary
-	logDir := ""
-	if logWriter != nil {
-		logDir = logWriter.Dir()
+	if PrettyMode() {
+		logDir := ""
+		if logWriter != nil {
+			logDir = logWriter.Dir()
+		}
+		parallel.RenderSummary(result, logDir)
+	} else {
+		exitCode := 0
+		if result.Failed > 0 {
+			exitCode = 1
+		}
+		WritePhaseEvent(PhaseEvent{
+			Type:     "result",
+			Status:   map[bool]string{true: "success", false: "failed"}[result.Failed == 0],
+			ExitCode: &exitCode,
+			Details: map[string]interface{}{
+				"total":  result.Passed + result.Failed,
+				"passed": result.Passed,
+				"failed": result.Failed,
+			},
+		})
 	}
-	parallel.RenderSummary(result, logDir)
 
-	// Return aggregate exit code
 	if result.Failed > 0 {
-		return 1, nil
+		return 1
 	}
-	return 0, nil
+	return 0
 }
 
 // writeTaskLogs writes task outputs to log files, warning on errors.

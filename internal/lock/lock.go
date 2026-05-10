@@ -3,7 +3,9 @@ package lock
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -42,6 +44,10 @@ type Lock struct {
 	Dir  string    // The lock directory path on the remote
 	Info *LockInfo // Info about the lock holder (us)
 	conn *host.Connection
+
+	heartbeatStop chan struct{}
+	heartbeatDone chan struct{}
+	heartbeatMu   sync.Mutex
 }
 
 // Acquire attempts to acquire a distributed lock on the remote host.
@@ -356,12 +362,84 @@ func GetLockHolder(conn *host.Connection, cfg config.LockConfig) string {
 	return readLockHolder(conn.Client, infoFile)
 }
 
+// StartHeartbeat spawns a goroutine that touches the info.json file every 30
+// seconds to prove the lock holder is still alive. Stale detection uses the
+// file's mtime, so regular touches keep the lock from being stolen.
+// Idempotent: no-op if already running.
+func (l *Lock) StartHeartbeat() {
+	if l == nil || l.conn == nil || l.conn.Client == nil {
+		return
+	}
+
+	l.heartbeatMu.Lock()
+	defer l.heartbeatMu.Unlock()
+
+	if l.heartbeatStop != nil {
+		return
+	}
+
+	l.heartbeatStop = make(chan struct{})
+	l.heartbeatDone = make(chan struct{})
+	stopCh := l.heartbeatStop
+	doneCh := l.heartbeatDone
+	infoFile := filepath.Join(l.Dir, "info.json")
+
+	go func() {
+		defer close(doneCh)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		consecutiveFailures := 0
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				touchCmd := fmt.Sprintf("touch %q", infoFile)
+				_, _, _, err := l.conn.Client.Exec(touchCmd)
+				if err != nil {
+					consecutiveFailures++
+					debugf("heartbeat touch failed (%d consecutive): %v", consecutiveFailures, err)
+					if consecutiveFailures >= 3 {
+						debugf("heartbeat stopping after %d consecutive failures", consecutiveFailures)
+						return
+					}
+				} else {
+					consecutiveFailures = 0
+				}
+			}
+		}
+	}()
+}
+
+// StopHeartbeat stops the heartbeat goroutine. Idempotent and safe for
+// concurrent calls.
+func (l *Lock) StopHeartbeat() {
+	if l == nil {
+		return
+	}
+
+	l.heartbeatMu.Lock()
+	if l.heartbeatStop == nil {
+		l.heartbeatMu.Unlock()
+		return
+	}
+	stop := l.heartbeatStop
+	done := l.heartbeatDone
+	l.heartbeatStop = nil
+	l.heartbeatMu.Unlock()
+
+	close(stop)
+	<-done
+}
+
 // Release removes the lock, allowing others to acquire it.
 func (l *Lock) Release() error {
 	if l == nil || l.conn == nil || l.conn.Client == nil {
 		return nil // Nothing to release
 	}
 
+	l.StopHeartbeat()
 	return forceRemove(l.conn.Client, l.Dir)
 }
 
@@ -424,8 +502,12 @@ func LockDir(cfg config.LockConfig) string {
 //
 // Stale detection prevents orphaned locks from permanently blocking the remote.
 // If a process crashes or loses network before releasing, the lock would persist
-// forever without this mechanism. We use the timestamp in info.json rather than
-// file mtime because mtime can be affected by file copies and NFS quirks.
+// forever without this mechanism.
+//
+// Primary check: file mtime via stat. With heartbeat enabled, the holder
+// touches info.json every 30s, so mtime reflects when the holder was last
+// alive. Falls back to the Started timestamp in info.json for backwards
+// compatibility with locks created before heartbeat support.
 //
 // We err on the side of "not stale" when we can't read the file - better to
 // wait for a lock that might be legitimate than to break into an active one.
@@ -434,13 +516,31 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 		return false
 	}
 
-	// Read the info file and check the started time
+	// Try mtime-based check first (works with heartbeat)
+	statCmd := fmt.Sprintf(
+		`f=%q; if [ -f "$f" ]; then stat -c "%%Y" "$f" 2>/dev/null || stat -f "%%m" "$f" 2>/dev/null || echo 0; else echo 0; fi`,
+		infoFile,
+	)
+	stdout, _, exitCode, err := client.Exec(statCmd)
+	debugf("isLockStale: stat cmd exitCode=%d, err=%v, stdout=%q", exitCode, err, string(stdout))
+
+	if err == nil && exitCode == 0 {
+		mtimeStr := strings.TrimSpace(string(stdout))
+		if mtime, parseErr := strconv.ParseInt(mtimeStr, 10, 64); parseErr == nil && mtime > 0 {
+			age := time.Since(time.Unix(mtime, 0))
+			isStale := age > staleThreshold
+			debugf("isLockStale: mtime-based age=%s, threshold=%s, isStale=%v", age, staleThreshold, isStale)
+			return isStale
+		}
+	}
+
+	// Fallback: parse info.json and check Started timestamp
 	catCmd := fmt.Sprintf("cat %q", infoFile)
-	stdout, _, exitCode, err := client.Exec(catCmd)
-	debugf("isLockStale: cmd=%q, exitCode=%d, err=%v", catCmd, exitCode, err)
+	stdout, _, exitCode, err = client.Exec(catCmd)
+	debugf("isLockStale: fallback cat cmd=%q, exitCode=%d, err=%v", catCmd, exitCode, err)
 	if err != nil || exitCode != 0 {
 		debugf("isLockStale: cannot read info file, assuming not stale")
-		return false // Can't read, assume not stale
+		return false
 	}
 
 	info, err := ParseLockInfo(stdout)
@@ -450,7 +550,7 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 	}
 
 	isStale := info.Age() > staleThreshold
-	debugf("isLockStale: age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
+	debugf("isLockStale: fallback age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
 	return isStale
 }
 

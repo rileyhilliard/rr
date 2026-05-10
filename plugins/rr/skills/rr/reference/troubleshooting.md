@@ -64,20 +64,18 @@ require: [go, node, python3]
 
 **Cause:** Syncing large directories
 
-**Fix:** Add exclusions to `.rr.yaml`:
+**Fix:** rr now respects `.gitignore` by default (`respect_gitignore: true`), so most generated directories are already excluded. For additional exclusions, add to `.rr.yaml`:
 ```yaml
 sync:
   exclude:
-    - .git/
-    - node_modules/
-    - .venv/
-    - __pycache__/
     - target/          # Rust
     - build/           # Various
     - dist/
     - .next/           # Next.js
     - .turbo/          # Turborepo
 ```
+
+Default excludes already include `.git/`, `.claude/`, `.cursor/`, `.aider/`, `.copilot/`, `.venv/`, `node_modules/`, `__pycache__/`, and others.
 
 Test with dry-run:
 ```bash
@@ -88,7 +86,9 @@ rr sync --dry-run
 
 **Symptoms:** "Lock held by..." error
 
-**Fix:**
+Locks have a heartbeat mechanism and auto-expire after 3 minutes without a heartbeat update. If a lock is stuck (process crashed without cleanup), it will be automatically reclaimed after the stale timeout.
+
+**Manual fix:**
 ```bash
 rr unlock              # Default host
 rr unlock <hostname>   # Specific host

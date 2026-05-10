@@ -131,6 +131,9 @@ func TestFindSelectedHost(t *testing.T) {
 }
 
 func TestOutputStatusJSON(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	tests := []struct {
 		name     string
 		results  map[string]probeResult

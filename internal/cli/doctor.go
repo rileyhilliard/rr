@@ -95,7 +95,7 @@ func doctorCommand() error {
 	}
 
 	// Machine mode implies JSON output - run checks without progress display
-	if doctorJSON || machineMode {
+	if doctorJSON || MachineMode() {
 		results := doctor.RunAll(checks)
 		if doctorFix {
 			results = attemptFixes(checks, results)
@@ -249,7 +249,7 @@ func attemptFixes(checks []doctor.Check, results []doctor.CheckResult) []doctor.
 }
 
 // outputDoctorJSON outputs results in JSON format.
-// When machineMode is enabled, wraps output in the standard JSON envelope.
+// When MachineMode() is enabled, wraps output in the standard JSON envelope.
 func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error {
 	// Group by category
 	grouped := make(map[string][]doctor.CheckResult)
@@ -286,7 +286,7 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 	}
 
 	// Use envelope wrapper in machine mode
-	if machineMode {
+	if MachineMode() {
 		return WriteJSONSuccess(os.Stdout, output)
 	}
 

@@ -89,20 +89,23 @@ func run() int {
 			return handleUnknownCommand(err)
 		}
 
-		// Check if it's a structured error
+		// In structured mode, emit JSON error to stderr
+		if !PrettyMode() {
+			emitStructuredError(err)
+			return 1
+		}
+
+		// Pretty mode: print human-readable error
 		var rrErr *errors.Error
 		if ok := errors.IsCode(err, ""); !ok {
-			// Try to cast to our Error type
 			if e, ok := err.(*errors.Error); ok {
 				rrErr = e
 			}
 		}
 
 		if rrErr != nil {
-			// Print structured error format
 			fmt.Fprintln(os.Stderr, err.Error())
 		} else {
-			// Wrap unknown errors in our format
 			wrapped := errors.Wrap(err, err.Error())
 			fmt.Fprintln(os.Stderr, wrapped.Error())
 		}
@@ -259,8 +262,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
 	rootCmd.PersistentFlags().BoolVar(&noStrictHostKeyCheck, "no-strict-host-key-checking", false,
 		"disable SSH host key verification (insecure, for CI/automation only)")
+	rootCmd.PersistentFlags().BoolVarP(&prettyMode, "pretty", "p", false,
+		"human-readable output with spinners and colors (default is structured JSON)")
 	rootCmd.PersistentFlags().BoolVarP(&machineMode, "machine", "m", false,
-		"machine-readable JSON output (for LLM/CI integration)")
+		"machine-readable JSON output (default behavior, kept for compatibility)")
 
 	// Set up styled warning handler for sshutil package
 	sshutil.WarningHandler = ui.PrintWarning
@@ -268,8 +273,8 @@ func init() {
 	// Set up a pre-run hook to apply global flags
 	originalPreRun := rootCmd.PersistentPreRun
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		// Apply color setting - also disable in machine mode to suppress spinners
-		if noColor || machineMode {
+		// Disable colors when not in pretty mode or when explicitly disabled
+		if noColor || !prettyMode {
 			ui.DisableColors()
 		}
 		// Apply SSH host key checking setting
