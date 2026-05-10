@@ -114,15 +114,20 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Phase 4: Execute task
-	wf.PhaseDisplay.Divider()
+	wf.Reporter.Divider()
 
-	// Show task info
-	renderTaskHeader(wf.PhaseDisplay, opts.TaskName, task)
-	fmt.Println()
+	if PrettyMode() {
+		renderTaskHeader(wf.PhaseDisplay, opts.TaskName, task)
+		fmt.Println()
+	} else {
+		wf.Reporter.CommandPrompt(task.Run)
+	}
 
-	// Set up output streaming
+	// Set up output streaming - in structured mode, pass raw output
 	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
-	streamHandler.SetFormatter(output.NewGenericFormatter())
+	if PrettyMode() {
+		streamHandler.SetFormatter(output.NewGenericFormatter())
+	}
 
 	execStart := time.Now()
 
@@ -169,9 +174,12 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Pull files if task has pull config
 	ExecutePullPhase(wf, task.Pull, "")
 
-	// Show summary
-	wf.PhaseDisplay.ThinDivider()
-	renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+	if PrettyMode() {
+		wf.PhaseDisplay.ThinDivider()
+		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+	} else {
+		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+	}
 
 	return result.ExitCode, nil
 }
@@ -212,10 +220,12 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	setupCommands := config.GetMergedSetupCommands(wf.Resolved.Project, hostCfg)
 
 	// Phase 4: Execute with dependencies
-	wf.PhaseDisplay.Divider()
+	wf.Reporter.Divider()
 
-	// Show execution plan
-	renderExecutionPlan(plan, task, opts.Quiet)
+	// Show execution plan (pretty mode only)
+	if PrettyMode() {
+		renderExecutionPlan(plan, task, opts.Quiet)
+	}
 
 	// Set up output streaming
 	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
@@ -262,9 +272,12 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	// Pull files if task has pull config
 	ExecutePullPhase(wf, task.Pull, "")
 
-	// Show summary
-	wf.PhaseDisplay.ThinDivider()
-	renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+	if PrettyMode() {
+		wf.PhaseDisplay.ThinDivider()
+		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+	} else {
+		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+	}
 
 	return result.ExitCode(), nil
 }
@@ -470,7 +483,7 @@ func ListTasks() error {
 	// Find and load config
 	cfgPath, err := config.Find("")
 	if err != nil {
-		if tasksJSON || machineMode {
+		if tasksJSON || MachineMode() {
 			return WriteJSONFromError(os.Stdout, errors.WrapWithCode(err, errors.ErrConfig,
 				"Couldn't find a config file",
 				"Run 'rr init' to create one."))
@@ -482,14 +495,14 @@ func ListTasks() error {
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		if tasksJSON || machineMode {
+		if tasksJSON || MachineMode() {
 			return WriteJSONFromError(os.Stdout, err)
 		}
 		return err
 	}
 
 	// JSON/machine mode output
-	if tasksJSON || machineMode {
+	if tasksJSON || MachineMode() {
 		return outputTasksJSON(cfg)
 	}
 
@@ -536,8 +549,8 @@ func outputTasksJSON(cfg *config.Config) error {
 		output.Tasks = append(output.Tasks, info)
 	}
 
-	// Use envelope wrapper in machine mode, plain JSON for --json
-	if machineMode {
+	// Use envelope wrapper in structured mode, plain JSON for --json
+	if MachineMode() {
 		return WriteJSONSuccess(os.Stdout, output)
 	}
 

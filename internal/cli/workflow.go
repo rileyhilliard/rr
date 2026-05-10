@@ -41,6 +41,7 @@ type WorkflowContext struct {
 	Lock         *lock.Lock
 	WorkDir      string
 	PhaseDisplay *ui.PhaseDisplay
+	Reporter     PhaseReporter
 	StartTime    time.Time
 
 	// Internal state
@@ -80,6 +81,19 @@ func (w *WorkflowContext) setupSignalHandler() {
 
 		w.Close()
 	}()
+}
+
+// GetReporter returns the workflow's phase reporter, lazily initializing if needed.
+func (w *WorkflowContext) GetReporter() PhaseReporter {
+	if w.Reporter != nil {
+		return w.Reporter
+	}
+	if w.PhaseDisplay != nil {
+		w.Reporter = NewPhaseReporter(w.PhaseDisplay)
+		return w.Reporter
+	}
+	w.Reporter = &StructuredReporter{}
+	return w.Reporter
 }
 
 // Context returns the workflow's cancellable context. This context is cancelled
@@ -216,19 +230,27 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 
 // connectPhase handles the connection phase of the workflow.
 func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	connDisplay := ui.NewConnectionDisplay(os.Stdout)
-	connDisplay.SetQuiet(opts.Quiet)
-	connDisplay.Start()
+	connectStart := time.Now()
 
 	// Resolve preferred host using resolution order
 	preferredHost := opts.Host
 	if preferredHost == "" {
-		// Use config.ResolveHost to get the host following resolution order
 		hostName, _, err := config.ResolveHost(ctx.Resolved, "")
 		if err == nil {
 			preferredHost = hostName
 		}
 	}
+
+	if PrettyMode() {
+		return connectPhasePretty(ctx, opts, preferredHost, connectStart)
+	}
+	return connectPhaseStructured(ctx, opts, preferredHost, connectStart)
+}
+
+func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHost string, _ time.Time) error {
+	connDisplay := ui.NewConnectionDisplay(os.Stdout)
+	connDisplay.SetQuiet(opts.Quiet)
+	connDisplay.Start()
 
 	// Interactive host selection
 	var err error
@@ -237,10 +259,8 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return err
 	}
 
-	// Track connection status for output
 	var usedLocalFallback bool
 
-	// Set up event handler for connection progress
 	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
 		case host.EventFailed:
@@ -253,7 +273,6 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		}
 	})
 
-	// Connect - either by tag or by host/default
 	if opts.Tag != "" {
 		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)
 	} else {
@@ -264,7 +283,6 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return err
 	}
 
-	// Show connection result
 	if usedLocalFallback {
 		connDisplay.SuccessLocal()
 	} else {
@@ -274,23 +292,73 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	return nil
 }
 
+func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferredHost string, connectStart time.Time) error {
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("connect")
+
+	var err error
+	if opts.Tag != "" {
+		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)
+	} else {
+		ctx.Conn, err = ctx.selector.Select(preferredHost)
+	}
+	if err != nil {
+		reporter.PhaseFailed("connect", err)
+		return err
+	}
+
+	host := ctx.Conn.Name
+	if ctx.Conn.IsLocal {
+		host = "local"
+	}
+	reporter.PhaseComplete("connect", host, time.Since(connectStart))
+	return nil
+}
+
 // syncPhase handles the file sync phase of the workflow.
 func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
+	reporter := ctx.GetReporter()
+
 	if ctx.Conn.IsLocal {
-		ctx.PhaseDisplay.RenderSkipped("Sync", "local")
+		reporter.PhaseSkipped("sync", "local")
 		return nil
 	}
 	if opts.SkipSync {
-		ctx.PhaseDisplay.RenderSkipped("Sync", "skipped")
+		reporter.PhaseSkipped("sync", "skipped")
 		return nil
 	}
 
 	syncStart := time.Now()
 
+	if !PrettyMode() {
+		return syncStructured(ctx, syncStart)
+	}
 	if !opts.Quiet {
 		return syncWithProgress(ctx, syncStart)
 	}
 	return syncQuiet(ctx, syncStart)
+}
+
+// syncStructured syncs files without UI and emits structured events.
+func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("sync")
+
+	syncCfg := resolveSyncConfig(ctx)
+
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations); err != nil {
+		reporter.PhaseFailed("sync", err)
+		return err
+	}
+
+	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	if err != nil {
+		reporter.PhaseFailed("sync", err)
+		return err
+	}
+
+	reporter.PhaseComplete("sync", ctx.Conn.Name, time.Since(syncStart))
+	return nil
 }
 
 // resolveSyncConfig returns the sync config to use, falling back to defaults.
@@ -351,7 +419,6 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 
 // lockPhase handles the lock acquisition phase of the workflow.
 func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	// Use project lock config if available, otherwise use defaults
 	lockCfg := config.DefaultConfig().Lock
 	if ctx.Resolved.Project != nil {
 		lockCfg = ctx.Resolved.Project.Lock
@@ -362,18 +429,36 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	}
 
 	lockStart := time.Now()
-	lockSpinner := ui.NewSpinner("Acquiring lock")
-	lockSpinner.Start()
+
+	if PrettyMode() {
+		lockSpinner := ui.NewSpinner("Acquiring lock")
+		lockSpinner.Start()
+
+		var err error
+		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
+		if err != nil {
+			lockSpinner.Fail()
+			return err
+		}
+
+		ctx.Lock.StartHeartbeat()
+		lockSpinner.Success()
+		ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+		return nil
+	}
+
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("lock")
 
 	var err error
 	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
 	if err != nil {
-		lockSpinner.Fail()
+		reporter.PhaseFailed("lock", err)
 		return err
 	}
 
-	lockSpinner.Success()
-	ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+	ctx.Lock.StartHeartbeat()
+	reporter.PhaseComplete("lock", ctx.Conn.Name, time.Since(lockStart))
 	return nil
 }
 
@@ -394,9 +479,11 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 		return nil, err
 	}
 
+	pd := ui.NewPhaseDisplay(os.Stdout)
 	ctx := &WorkflowContext{
 		StartTime:    time.Now(),
-		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
+		PhaseDisplay: pd,
+		Reporter:     NewPhaseReporter(pd),
 	}
 
 	// Set up signal handler early to ensure cleanup on Ctrl+C
@@ -464,18 +551,29 @@ func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest str
 	}
 
 	pullStart := time.Now()
-	spinner := ui.NewSpinner("Pulling files")
-	spinner.Start()
-
 	pullOpts := rrsync.PullOptions{
 		Patterns:    pullItems,
 		DefaultDest: dest,
 	}
 
+	if !PrettyMode() {
+		reporter := wf.GetReporter()
+		reporter.PhaseStart("pull")
+		pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
+		if pullErr != nil {
+			reporter.PhaseFailed("pull", pullErr)
+		} else {
+			reporter.PhaseComplete("pull", wf.Conn.Name, time.Since(pullStart))
+		}
+		return
+	}
+
+	spinner := ui.NewSpinner("Pulling files")
+	spinner.Start()
+
 	pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
 	if pullErr != nil {
 		spinner.Fail()
-		// Don't fail the overall command for pull errors, just warn
 		fmt.Printf("\n%s Pull failed: %s\n", ui.SymbolFail, pullErr.Error())
 	} else {
 		spinner.Success()
@@ -517,7 +615,7 @@ func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	// Filter to missing requirements
 	missing := require.FilterMissing(results)
 	if len(missing) == 0 {
-		if !opts.Quiet {
+		if PrettyMode() && !opts.Quiet {
 			ctx.PhaseDisplay.RenderSuccess("Requirements verified", 0)
 		}
 		return nil

@@ -4,18 +4,53 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"io"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 )
 
-// Machine mode flag - when true, outputs JSON and suppresses human-friendly decorations
+// Machine mode flag - kept for backward compatibility (now a no-op since structured is default)
 var machineMode bool
 
-// MachineMode returns true if machine-readable output is enabled
+// prettyMode flag - when true, use human-readable output with spinners and colors
+var prettyMode bool
+
+// MachineMode returns true if machine-readable output is enabled.
+// With structured output as default, this is always true unless --pretty is set.
 func MachineMode() bool {
-	return machineMode
+	return !prettyMode
+}
+
+// PrettyMode returns true if pretty (human-readable) output is enabled
+func PrettyMode() bool {
+	return prettyMode
+}
+
+// PhaseEvent represents a structured event emitted during workflow execution.
+type PhaseEvent struct {
+	Type     string                 `json:"type"`
+	Phase    string                 `json:"phase,omitempty"`
+	Status   string                 `json:"status"`
+	Host     string                 `json:"host,omitempty"`
+	Duration float64                `json:"duration_s,omitempty"`
+	ExitCode *int                   `json:"exit_code,omitempty"`
+	Error    string                 `json:"error,omitempty"`
+	Details  map[string]interface{} `json:"details,omitempty"`
+	TS       string                 `json:"ts"`
+}
+
+// WritePhaseEvent writes a structured phase event to stderr as a JSON line.
+func WritePhaseEvent(event PhaseEvent) {
+	event.TS = time.Now().UTC().Format(time.RFC3339)
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	os.Stderr.Write(data)
+	os.Stderr.WriteString("\n")
 }
 
 // JSONEnvelope wraps command output in a consistent structure for machine parsing.

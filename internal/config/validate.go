@@ -379,9 +379,6 @@ func validateLock(lock LockConfig) error {
 	if lock.Stale < 0 {
 		return fmt.Errorf("lock.stale can't be negative - that doesn't make sense")
 	}
-	if lock.Enabled && lock.Timeout > 0 && lock.Stale > 0 && lock.Timeout > lock.Stale {
-		return fmt.Errorf("lock.timeout (%v) is longer than lock.stale (%v) - you'd timeout before the lock expires", lock.Timeout, lock.Stale)
-	}
 	return nil
 }
 

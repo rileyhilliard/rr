@@ -447,7 +447,7 @@ Examples:
 			Host:       provisionHostFlag,
 			CheckOnly:  provisionCheckOnly,
 			AutoYes:    provisionAutoYes,
-			MachineOut: machineMode,
+			MachineOut: MachineMode(),
 		})
 	},
 }

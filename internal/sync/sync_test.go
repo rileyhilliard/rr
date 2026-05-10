@@ -212,6 +212,73 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
+			name: "gitignore filter enabled by default",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: true,
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				assert.Contains(t, args, "--filter=:- .gitignore")
+			},
+		},
+		{
+			name: "gitignore filter disabled",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: false,
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				for _, arg := range args {
+					assert.NotContains(t, arg, ".gitignore", "should not contain gitignore filter")
+				}
+			},
+		},
+		{
+			name: "gitignore filter comes after excludes",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: true,
+				Exclude:          []string{".git/", "node_modules/"},
+				Flags:            []string{"--compress"},
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				gitignoreIdx := -1
+				lastExcludeIdx := -1
+				firstFlagIdx := -1
+				for i, arg := range args {
+					if arg == "--filter=:- .gitignore" {
+						gitignoreIdx = i
+					}
+					if strings.HasPrefix(arg, "--exclude=") {
+						lastExcludeIdx = i
+					}
+					if arg == "--compress" {
+						firstFlagIdx = i
+					}
+				}
+				require.Greater(t, gitignoreIdx, -1, "gitignore filter should be present")
+				require.Greater(t, lastExcludeIdx, -1, "exclude should be present")
+				require.Greater(t, firstFlagIdx, -1, "custom flag should be present")
+				assert.Greater(t, gitignoreIdx, lastExcludeIdx, "gitignore filter should come after excludes")
+				assert.Less(t, gitignoreIdx, firstFlagIdx, "gitignore filter should come before custom flags")
+			},
+		},
+		{
 			name:     "nil connection",
 			conn:     nil,
 			localDir: "/home/user/myapp",

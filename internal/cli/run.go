@@ -59,25 +59,24 @@ func Run(opts RunOptions) (int, error) {
 	defer wf.Close()
 
 	// Phase 4: Execute command
-	wf.PhaseDisplay.Divider()
+	wf.Reporter.Divider()
+	wf.Reporter.CommandPrompt(opts.Command)
+	if PrettyMode() {
+		fmt.Println()
+	}
 
-	// Show the command being run
-	wf.PhaseDisplay.CommandPrompt(opts.Command)
-	fmt.Println()
-
-	// Set up output streaming
+	// Set up output streaming - in structured mode, pass raw stdout/stderr
 	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
-	streamHandler.SetFormatter(output.NewGenericFormatter())
+	if PrettyMode() {
+		streamHandler.SetFormatter(output.NewGenericFormatter())
+	}
 
 	execStart := time.Now()
 	var exitCode int
 
 	if wf.Conn.IsLocal {
-		// Local execution
 		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
-		// Remote execution - build command with shell config, setup commands, and working directory
-		// Prepend project defaults setup to the command for consistency with task execution
 		cmd := opts.Command
 		if len(wf.Resolved.Project.Defaults.Setup) > 0 {
 			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
@@ -87,7 +86,6 @@ func Run(opts RunOptions) (int, error) {
 	}
 	execDuration := time.Since(execStart)
 
-	// If cancelled by signal, return standard Ctrl+C exit code
 	if wf.Context().Err() != nil {
 		return 130, nil
 	}
@@ -96,7 +94,7 @@ func Run(opts RunOptions) (int, error) {
 		return 1, err
 	}
 
-	// Release lock early if command completed (wf.Close() will also release, but early release is cleaner)
+	// Release lock early
 	if wf.Lock != nil {
 		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
@@ -110,44 +108,41 @@ func Run(opts RunOptions) (int, error) {
 		ExecutePullPhase(wf, pullItems, opts.PullDest)
 	}
 
-	// Check for command-not-found and other special exit codes
+	// In structured mode, emit result and return - no decorations
+	if !PrettyMode() {
+		wf.Reporter.CommandComplete(exitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+		return exitCode, nil
+	}
+
+	// Pretty mode: check for failures, test summaries, etc.
 	failureExplained := false
 	if exitCode != 0 {
-		// Check for command not found (exit code 127)
-		// Pass SSH client for PATH probing if available (remote execution only)
 		var sshClient exec.SSHExecer
 		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
 			sshClient = wf.Conn.Client
 		}
 
-		// Try to detect a missing tool error
 		missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
 		if missingTool != nil {
 			failureExplained = true
-			// Show the error message
 			fmt.Println()
 			fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
 			fmt.Println(missingTool.Suggestion)
 
-			// Offer interactive fix if we're on a remote host with SSH client
 			if !wf.Conn.IsLocal && wf.Conn.Client != nil {
-				// Get config path for potential updates
 				configPath, _ := config.Find(Config())
 				if configPath != "" {
 					fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
 					if fixResult != nil && fixResult.ShouldRetry {
-						// User wants to retry - show final status then indicate retry
 						wf.PhaseDisplay.ThinDivider()
 						renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 
-						// Close current workflow and retry
 						wf.Close()
 						return Run(opts)
 					}
 				}
 			}
 		} else if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
-			// Check for test failures and render summary if available
 			failures := provider.GetTestFailures()
 			if len(failures) > 0 {
 				failureExplained = true
@@ -175,11 +170,9 @@ func Run(opts RunOptions) (int, error) {
 		}
 	}
 
-	// Show final status
 	wf.PhaseDisplay.ThinDivider()
 	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 
-	// Show contextual help for unexplained failures
 	if exitCode != 0 && !failureExplained {
 		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
 	}

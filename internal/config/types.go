@@ -112,6 +112,10 @@ type LockfileInvalidation struct {
 
 // SyncConfig controls file synchronization behavior.
 type SyncConfig struct {
+	// RespectGitignore adds --filter=':- .gitignore' to rsync so that
+	// .gitignore patterns are applied as exclude rules during sync.
+	RespectGitignore bool `yaml:"respect_gitignore" mapstructure:"respect_gitignore"`
+
 	// Exclude patterns for files/dirs not sent to remote (rsync syntax).
 	Exclude []string `yaml:"exclude" mapstructure:"exclude"`
 
@@ -449,6 +453,7 @@ func DefaultConfig() *Config {
 		Version: CurrentConfigVersion,
 		Host:    "",
 		Sync: SyncConfig{
+			RespectGitignore: true,
 			Exclude: []string{
 				".git/",
 				".venv/",
@@ -460,6 +465,10 @@ func DefaultConfig() *Config {
 				".ruff_cache/",
 				".DS_Store",
 				"*.log",
+				".claude/",
+				".cursor/",
+				".aider/",
+				".copilot/",
 			},
 			Preserve: []string{
 				".venv/",
@@ -481,7 +490,7 @@ func DefaultConfig() *Config {
 			Enabled:     true,
 			Timeout:     5 * time.Minute,
 			WaitTimeout: 1 * time.Minute,
-			Stale:       10 * time.Minute,
+			Stale:       3 * time.Minute,
 			Dir:         "/tmp/rr-locks",
 		},
 		Tasks: make(map[string]TaskConfig),

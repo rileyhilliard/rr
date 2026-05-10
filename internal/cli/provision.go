@@ -75,7 +75,7 @@ func provisionCommand(opts ProvisionOptions) error {
 	}
 
 	if len(hostNames) == 0 {
-		if opts.MachineOut || machineMode {
+		if opts.MachineOut || MachineMode() {
 			return WriteJSONSuccess(os.Stdout, ProvisionOutput{
 				Hosts:   []ProvisionHostResult{},
 				Summary: ProvisionSummary{},
@@ -95,7 +95,7 @@ func provisionCommand(opts ProvisionOptions) error {
 	results := checkHosts(hostNames, hosts, projectReqs, opts)
 
 	// Output results
-	if opts.MachineOut || machineMode {
+	if opts.MachineOut || MachineMode() {
 		return outputProvisionJSON(results)
 	}
 
@@ -386,7 +386,7 @@ func outputProvisionJSON(results []hostCheckResult) error {
 		output.Summary.Installed += len(r.installed)
 	}
 
-	if machineMode {
+	if MachineMode() {
 		return WriteJSONSuccess(os.Stdout, output)
 	}
 

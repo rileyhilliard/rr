@@ -182,6 +182,12 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 		args = append(args, fmt.Sprintf("--exclude=%s", pattern))
 	}
 
+	// Respect .gitignore patterns as additional excludes. Placed after explicit
+	// preserves and excludes so .rr.yaml rules take precedence (rsync is first-match-wins).
+	if cfg.RespectGitignore {
+		args = append(args, "--filter=:- .gitignore")
+	}
+
 	// Add custom flags from config
 	args = append(args, cfg.Flags...)
 

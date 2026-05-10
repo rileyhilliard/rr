@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-05-10
+
+### Breaking Changes
+
+- **Structured output is now default** - `rr run`, `rr exec`, and all commands now emit structured JSON phase events to stderr and pass command stdout/stderr through undecorated. Human-readable output with spinners and colors is opt-in via `--pretty` / `-p`. The `--machine` / `-m` flag is kept for backward compatibility but is now a no-op (structured is already the default).
+- **Lock stale timeout reduced from 10m to 3m** - With the new heartbeat mechanism, active locks are continuously refreshed. A lock without a heartbeat update for 3 minutes is considered dead and will be automatically reclaimed. The `lock.timeout > lock.stale` validation has been removed since these are now independent concepts.
+
+### Added
+
+- **Lock heartbeat mechanism** - Locks are now refreshed every 30 seconds via a background goroutine that touches the lock file's mtime. Stale detection uses mtime instead of creation timestamp, allowing much faster detection of dead processes (crashed agents, killed sessions). If SSH fails 3 consecutive heartbeat attempts, the heartbeat stops gracefully.
+- **Respect .gitignore during sync** - New `respect_gitignore` config option (default: `true`) adds `--filter=':- .gitignore'` to rsync args. Patterns in `.gitignore` files are automatically applied as excludes, preventing accidental sync of large generated directories. Explicit `.rr.yaml` excludes take precedence (first-match-wins).
+- **Auto-exclude AI agent directories** - `.claude/`, `.cursor/`, `.aider/`, `.copilot/` are now excluded from sync by default. These directories contain agent-local state (worktrees, conversation history, memory) that should never be synced to remote execution hosts.
+- **`--pretty` flag** - New persistent flag (`-p`) opts into human-readable output with spinners, colors, and formatted summaries. Without it, output is structured for agent/CI consumption.
+- **PhaseReporter interface** - Internal abstraction for dual-mode output. `StructuredReporter` emits JSON events to stderr; `PrettyReporter` wraps existing spinner/lipgloss UI.
+
+### Changed
+
+- **Default output mode** - All commands default to structured JSON output. Phase events (connect, sync, lock, exec) are emitted as JSON lines to stderr. Command stdout/stderr passes through undecorated to stdout/stderr.
+- **`MachineMode()` semantics** - Now returns `true` by default (since structured is default). Commands that previously required `--machine` for JSON output now produce it without any flag.
+
 ## [0.19.2] - 2026-02-13
 
 ### Fixed

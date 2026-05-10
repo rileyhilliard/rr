@@ -1,15 +1,28 @@
 # Commands Reference
 
+For the most current flags and options, run `rr --help` or `rr <command> --help`.
+
+## Global Flags
+
+These work with any command:
+
+- `--pretty` / `-p` - Human-readable output with spinners and colors (default is structured JSON)
+- `--machine` / `-m` - Structured JSON output (default, kept for backward compatibility)
+- `--no-color` - Disable colored output
+- `-q` / `--quiet` - Suppress non-essential output
+- `-v` / `--verbose` - Verbose output
+
 ## Core Commands
 
 ### `rr run "cmd"`
 
-Sync files, then run command on remote host.
+Sync files, then run command on remote host. Emits JSON phase events to stderr by default; use `--pretty` for spinners.
 
 ```bash
 rr run "make test"
 rr run "npm run build"
 rr run --host mini "cargo test"
+rr run --pretty "make test"    # Human-readable output
 rr run --repeat 5 "pytest tests/"  # Run 5x across hosts for flake detection
 ```
 
@@ -166,6 +179,15 @@ rr init --non-interactive --host user@server
 - `--non-interactive` - Skip prompts
 - `--skip-probe` - Skip SSH testing
 
+### `rr pull`
+
+Pull files from remote host to local machine.
+
+```bash
+rr pull "build/output.bin"
+rr pull "logs/*.log" --dest ./local-logs
+```
+
 ### `rr setup <host>`
 
 Configure SSH keys and test connection.
@@ -177,7 +199,7 @@ rr setup user@192.168.1.100
 
 ### `rr unlock`
 
-Release stuck lock on remote host.
+Release stuck lock on remote host. Locks now have a heartbeat mechanism and auto-expire after 3 minutes without a heartbeat update.
 
 ```bash
 rr unlock              # Default host
