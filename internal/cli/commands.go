@@ -48,6 +48,9 @@ var (
 	provisionHostFlag        string
 	provisionCheckOnly       bool
 	provisionAutoYes         bool
+	cleanHostFlag            string
+	cleanDryRunFlag          bool
+	cleanProbeTimeoutFlag    string
 )
 
 // runCmd syncs code and executes a command on the remote host
@@ -411,6 +414,38 @@ Examples:
 	},
 }
 
+// cleanCmd removes stale per-branch directories from remote hosts
+var cleanCmd = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove stale per-branch directories from remote hosts",
+	Long: `Discover and remove remote directories for branches that no longer exist locally.
+
+When using per-branch directories (dir: ~/rr/${PROJECT}-${BRANCH}), stale directories
+accumulate as branches are merged or deleted. This command finds and removes them.
+
+Examples:
+  rr clean              # Interactive: discover and prompt for removal
+  rr clean --dry-run    # Show what would be removed without deleting
+  rr clean --host mini  # Clean only a specific host`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var probeTimeout time.Duration
+		if cleanProbeTimeoutFlag != "" {
+			parsed, err := time.ParseDuration(cleanProbeTimeoutFlag)
+			if err != nil {
+				return errors.WrapWithCode(err, errors.ErrConfig,
+					fmt.Sprintf("'%s' doesn't look like a valid timeout", cleanProbeTimeoutFlag),
+					"Try something like 2s, 5s, or 10s.")
+			}
+			probeTimeout = parsed
+		}
+		return cleanCommand(CleanOptions{
+			Host:         cleanHostFlag,
+			DryRun:       cleanDryRunFlag,
+			ProbeTimeout: probeTimeout,
+		})
+	},
+}
+
 // tasksCmd lists available tasks
 var tasksCmd = &cobra.Command{
 	Use:   "tasks",
@@ -511,6 +546,11 @@ func init() {
 	// unlock command flags
 	unlockCmd.Flags().BoolVarP(&unlockAllFlag, "all", "a", false, "unlock all configured hosts")
 
+	// clean command flags
+	cleanCmd.Flags().StringVar(&cleanHostFlag, "host", "", "clean only a specific host")
+	cleanCmd.Flags().BoolVar(&cleanDryRunFlag, "dry-run", false, "show what would be removed without deleting")
+	cleanCmd.Flags().StringVar(&cleanProbeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 10s)")
+
 	// tasks command flags
 	tasksCmd.Flags().BoolVar(&tasksJSON, "json", false, "output in JSON format")
 
@@ -537,6 +577,7 @@ func init() {
 	rootCmd.AddCommand(completionCmd)
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(unlockCmd)
+	rootCmd.AddCommand(cleanCmd)
 	rootCmd.AddCommand(tasksCmd)
 	rootCmd.AddCommand(provisionCmd)
 }
