@@ -1,13 +1,7 @@
 ---
 name: rr
 description: Sync code and run commands on remote machines. Use when running tests, builds, or commands remotely, syncing files to hosts, setting up remote development, or troubleshooting rr configuration.
-user-invocable: true
-allowed-tools:
-  - Bash
-  - Read
-  - Edit
-  - Grep
-  - Glob
+allowed-tools: Bash, Read, Edit, Grep, Glob
 ---
 
 # rr (Road Runner) CLI
