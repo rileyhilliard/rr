@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-06-22
+
+### Dependencies
+
+- Bumped `golang.org/x/crypto` v0.48.0 -> v0.53.0
+- Bumped `golang.org/x/term` v0.43.0 -> v0.44.0
+- Bumped `golang.org/x/sys` v0.45.0 -> v0.46.0
+- Bumped `golang.org/x/text` v0.37.0 -> v0.38.0
+- Bumped `golang.org/x/net` v0.54.0 -> v0.56.0
+- Bumped `actions/upload-artifact` v6 -> v7
+- Bumped `actions/download-artifact` v7 -> v8
+
 ## [0.21.0] - 2026-05-10
 
 ### Security
