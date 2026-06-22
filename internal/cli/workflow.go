@@ -463,8 +463,17 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter := ctx.GetReporter()
 	reporter.PhaseStart("lock")
 
+	stealWarn := func(msg string) {
+		WritePhaseEvent(PhaseEvent{
+			Type:    "phase",
+			Phase:   "lock",
+			Status:  "warn",
+			Details: map[string]interface{}{"message": msg},
+		})
+	}
+
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(stealWarn))
 	if err != nil {
 		reporter.PhaseFailed("lock", err)
 		return err

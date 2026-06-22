@@ -13,6 +13,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // ParallelTaskOptions configures parallel task execution.
@@ -241,7 +242,11 @@ func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flat
 					fmt.Sprintf("subtask '%s' uses steps and cannot accept forwarded args", subtaskName),
 					"remove forward_args from the parent task or convert the subtask to a single run command")
 			}
-			cmd = cmd + " " + strings.Join(args, " ")
+			quoted := make([]string, len(args))
+			for i, a := range args {
+				quoted[i] = util.ShellQuote(a)
+			}
+			cmd = cmd + " " + strings.Join(quoted, " ")
 		}
 
 		tasks = append(tasks, parallel.TaskInfo{

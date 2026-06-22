@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -734,6 +735,33 @@ func TestPull_WithTagFlag(t *testing.T) {
 		Tag:      "gpu",
 	})
 	require.Error(t, err)
+}
+
+// TestRemoteCWD_TraversalGuard verifies the path-prefix check that prevents
+// --cwd from escaping the remote project root via ../ sequences.
+// Mirrors the exact filepath.Join + strings.HasPrefix logic in run.go.
+func TestRemoteCWD_TraversalGuard(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteRoot string
+		cwd        string
+		wantEscape bool
+	}{
+		{"safe subdir", "/home/user/project", "backend", false},
+		{"nested subdir", "/home/user/project", "backend/api", false},
+		{"dotdot escapes", "/home/user/project", "../other", true},
+		{"dotdot full escape", "/home/user/project", "../../etc", true},
+		{"dotdot then descend into sibling", "/home/user/project", "../project2/src", true},
+		{"dotdot then back to same root", "/home/user/project", "../project/backend", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := path.Join(tt.remoteRoot, tt.cwd)
+			escaped := !strings.HasPrefix(resolved+"/", tt.remoteRoot+"/")
+			assert.Equal(t, tt.wantEscape, escaped, "cwd=%q resolved to %q", tt.cwd, resolved)
+		})
+	}
 }
 
 func TestPull_DryRunMode(t *testing.T) {

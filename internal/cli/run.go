@@ -84,10 +84,17 @@ func Run(opts RunOptions) (int, error) {
 		if len(wf.Resolved.Project.Defaults.Setup) > 0 {
 			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
 		}
-		// --cwd prepends a cd into a subdirectory of the remote project root
+		// --cwd prepends a cd into a subdirectory of the remote project root.
+		// Reject paths that escape the project root via ../ traversal.
 		if opts.RemoteCWD != "" {
 			remoteProjectDir := config.ExpandRemote(wf.Conn.Host.Dir)
-			subdir := util.ShellQuotePreserveTilde(filepath.Join(remoteProjectDir, opts.RemoteCWD))
+			resolved := filepath.Join(remoteProjectDir, opts.RemoteCWD)
+			if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
+				return 1, errors.New(errors.ErrConfig,
+					fmt.Sprintf("--cwd '%s' escapes the remote project root", opts.RemoteCWD),
+					"use a path relative to the project root without '..' components")
+			}
+			subdir := util.ShellQuotePreserveTilde(resolved)
 			cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
 		}
 		fullCmd := exec.BuildRemoteCommand(cmd, &wf.Conn.Host)

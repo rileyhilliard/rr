@@ -192,8 +192,8 @@ func TestBuildSubtaskInfos_ForwardArgsAppended(t *testing.T) {
 	infos, err := buildSubtaskInfos(proj, parentTask, []string{"sub-a", "sub-b"}, args)
 	require.NoError(t, err)
 	require.Len(t, infos, 2)
-	assert.Equal(t, "pytest tests/a -k bond -v", infos[0].Command)
-	assert.Equal(t, "pytest tests/b -k bond -v", infos[1].Command)
+	assert.Equal(t, "pytest tests/a '-k' 'bond' '-v'", infos[0].Command)
+	assert.Equal(t, "pytest tests/b '-k' 'bond' '-v'", infos[1].Command)
 }
 
 // TestBuildSubtaskInfos_ForwardArgsRejectsStepsSubtask verifies that forward_args
