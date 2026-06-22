@@ -266,6 +266,8 @@ func init() {
 		"human-readable output with spinners and colors (default is structured JSON)")
 	rootCmd.PersistentFlags().BoolVarP(&machineMode, "machine", "m", false,
 		"machine-readable JSON output (default behavior, kept for compatibility)")
+	rootCmd.PersistentFlags().BoolVar(&suppressPhases, "no-phases", false,
+		"suppress intermediate phase events on stderr (connect, sync, exec); final result event is still emitted")
 
 	// Set up styled warning handler for sshutil package
 	sshutil.WarningHandler = ui.PrintWarning

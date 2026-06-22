@@ -915,13 +915,13 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 	}
 
 	t.Run("skips nil connection", func(t *testing.T) {
-		err := InvalidateStaleDirectories(nil, localDir, invalidations)
+		err := InvalidateStaleDirectories(nil, localDir, invalidations, nil)
 		assert.NoError(t, err)
 	})
 
 	t.Run("skips local connection", func(t *testing.T) {
 		conn := &host.Connection{IsLocal: true}
-		err := InvalidateStaleDirectories(conn, localDir, invalidations)
+		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
 		assert.NoError(t, err)
 	})
 
@@ -933,7 +933,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Client: mock,
 			Host:   config.Host{Dir: "~/rr/myapp"},
 		}
-		err := InvalidateStaleDirectories(conn, localDir, nil)
+		err := InvalidateStaleDirectories(conn, localDir, nil, nil)
 		assert.NoError(t, err)
 	})
 
@@ -946,7 +946,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "~/rr/myapp"},
 		}
 		// No bun.lock in localDir - should be a no-op
-		err := InvalidateStaleDirectories(conn, localDir, invalidations)
+		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
 		assert.NoError(t, err)
 	})
 
@@ -975,7 +975,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, invalidations)
+		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
 		assert.NoError(t, err)
 	})
 
@@ -1017,7 +1017,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err = InvalidateStaleDirectories(conn, localDir, invalidations)
+		err = InvalidateStaleDirectories(conn, localDir, invalidations, nil)
 		assert.NoError(t, err)
 		// We can't easily assert rm was NOT called with MockClient's current API,
 		// but the function should succeed with no error.
@@ -1046,7 +1046,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, multiDirInvalidations)
+		err := InvalidateStaleDirectories(conn, localDir, multiDirInvalidations, nil)
 		assert.NoError(t, err)
 	})
 
@@ -1066,7 +1066,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations)
+		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil)
 		assert.NoError(t, err)
 	})
 }

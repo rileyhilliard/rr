@@ -386,3 +386,77 @@ func TestRenderTaskSummary_MultiStepFirstStepFails(t *testing.T) {
 	assert.Contains(t, output, "step 'setup'")
 	assert.Contains(t, output, ui.SymbolFail)
 }
+
+func TestCreateParallelTaskCommand_RejectsExtraArgs(t *testing.T) {
+	task := config.TaskConfig{
+		Description: "Run tests in parallel",
+		Parallel:    []string{"subtask-a", "subtask-b"},
+	}
+
+	cmd := createParallelTaskCommand("test-backend", task)
+
+	// Execute with extra args — should return a helpful error
+	cmd.SetArgs([]string{"extra", "arg"})
+	err := cmd.Execute()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parallel task 'test-backend' doesn't accept extra arguments")
+	assert.Contains(t, err.Error(), "extra arg")
+}
+
+func TestCreateParallelTaskCommand_AcceptsNoArgs(t *testing.T) {
+	task := config.TaskConfig{
+		Description: "Run tests in parallel",
+		Parallel:    []string{"subtask-a"},
+	}
+
+	cmd := createParallelTaskCommand("test-backend", task)
+
+	// RunE will fail because there's no real config, but the error should NOT
+	// be about argument rejection — args were accepted, config loading failed.
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+
+	// If there's an error it should be about config/hosts, not about argument rejection
+	if err != nil {
+		assert.NotContains(t, err.Error(), "doesn't accept extra arguments")
+	}
+}
+
+func TestCreateParallelTaskCommand_ForwardArgsAcceptsArgs(t *testing.T) {
+	task := config.TaskConfig{
+		Description: "Run tests in parallel",
+		Parallel:    []string{"subtask-a"},
+		ForwardArgs: true,
+	}
+
+	cmd := createParallelTaskCommand("test-backend", task)
+
+	// With forward_args, extra args should NOT produce the arg-rejection error.
+	// RunE may fail due to no config, but not due to arg rejection.
+	cmd.SetArgs([]string{"-k", "bond"})
+	err := cmd.Execute()
+
+	if err != nil {
+		assert.NotContains(t, err.Error(), "doesn't accept extra arguments",
+			"forward_args task should accept extra arguments")
+	}
+}
+
+func TestCreateParallelTaskCommand_ForwardArgsUseLine(t *testing.T) {
+	taskWithForward := config.TaskConfig{
+		Parallel:    []string{"sub"},
+		ForwardArgs: true,
+	}
+	taskWithoutForward := config.TaskConfig{
+		Parallel: []string{"sub"},
+	}
+
+	cmdWith := createParallelTaskCommand("test", taskWithForward)
+	cmdWithout := createParallelTaskCommand("test", taskWithoutForward)
+
+	assert.Contains(t, cmdWith.Use, "[args...]",
+		"forward_args task should show [args...] in Use string")
+	assert.NotContains(t, cmdWithout.Use, "[args...]",
+		"regular parallel task should not show [args...] in Use string")
+}

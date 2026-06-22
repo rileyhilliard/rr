@@ -346,7 +346,18 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 
 	syncCfg := resolveSyncConfig(ctx)
 
-	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations); err != nil {
+	invalidationNotify := func(dir, lockfile string) {
+		WritePhaseEvent(PhaseEvent{
+			Type:   "phase",
+			Phase:  "sync",
+			Status: "invalidated",
+			Details: map[string]interface{}{
+				"dir":      dir,
+				"lockfile": lockfile,
+			},
+		})
+	}
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, invalidationNotify); err != nil {
 		reporter.PhaseFailed("sync", err)
 		return err
 	}
@@ -374,7 +385,8 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	syncCfg := resolveSyncConfig(ctx)
 
 	// Delete stale remote directories when lockfiles have changed before syncing.
-	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations); err != nil {
+	// Pretty mode: nil notify falls back to fmt.Printf in sync package.
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, nil); err != nil {
 		return err
 	}
 
@@ -399,7 +411,8 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncCfg := resolveSyncConfig(ctx)
 
 	// Delete stale remote directories when lockfiles have changed before syncing.
-	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations); err != nil {
+	// Pretty mode: nil notify falls back to fmt.Printf in sync package.
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, nil); err != nil {
 		return err
 	}
 

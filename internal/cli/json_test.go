@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -526,4 +528,70 @@ func TestErrorCodes_Format(t *testing.T) {
 			}
 		}
 	}
+}
+
+// captureStderr captures os.Stderr output during fn execution.
+func captureStderr(fn func()) string {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	return buf.String()
+}
+
+func TestWritePhaseEvent_SuppressedWhenNoPhasesSet(t *testing.T) {
+	old := suppressPhases
+	defer func() { suppressPhases = old }()
+
+	suppressPhases = true
+
+	output := captureStderr(func() {
+		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "connect", Status: "started"})
+	})
+
+	assert.Empty(t, output, "phase event should be suppressed when --no-phases is set")
+}
+
+func TestWritePhaseEvent_SyncSuppressedWhenNoPhasesSet(t *testing.T) {
+	old := suppressPhases
+	defer func() { suppressPhases = old }()
+
+	suppressPhases = true
+
+	output := captureStderr(func() {
+		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "sync", Status: "started"})
+	})
+
+	assert.Empty(t, output, "sync phase event should be suppressed")
+}
+
+func TestWritePhaseEvent_ResultNotSuppressedWhenNoPhasesSet(t *testing.T) {
+	old := suppressPhases
+	defer func() { suppressPhases = old }()
+
+	suppressPhases = true
+
+	output := captureStderr(func() {
+		WritePhaseEvent(PhaseEvent{Type: "result", Status: "success"})
+	})
+
+	assert.NotEmpty(t, output, "result event must not be suppressed even with --no-phases")
+	assert.Contains(t, output, `"type":"result"`)
+}
+
+func TestWritePhaseEvent_EmittedWhenNoPhasesNotSet(t *testing.T) {
+	old := suppressPhases
+	defer func() { suppressPhases = old }()
+
+	suppressPhases = false
+
+	output := captureStderr(func() {
+		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "connect", Status: "started"})
+	})
+
+	assert.NotEmpty(t, output, "phase event should be emitted when suppressPhases is false")
 }

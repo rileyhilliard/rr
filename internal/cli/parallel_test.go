@@ -5,6 +5,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFilterHostsByTag(t *testing.T) {
@@ -133,4 +134,101 @@ func TestFilterHostsByTag_PreservesHostData(t *testing.T) {
 	assert.Equal(t, "/home/user/project", host.Dir)
 	assert.Equal(t, []string{"target", "other"}, host.Tags)
 	assert.Equal(t, "value", host.Env["KEY"])
+}
+
+// TestParallelTaskOptions_ArgsField verifies the Args field is present
+// and carries through as expected (struct-level coverage for forward_args plumbing).
+func TestParallelTaskOptions_ArgsField(t *testing.T) {
+	opts := ParallelTaskOptions{
+		TaskName: "test-backend",
+		Args:     []string{"-k", "bond", "-v"},
+	}
+	assert.Equal(t, []string{"-k", "bond", "-v"}, opts.Args)
+}
+
+// TestForwardArgs_ConfigFieldPresent verifies the ForwardArgs field is on TaskConfig.
+func TestForwardArgs_ConfigFieldPresent(t *testing.T) {
+	task := config.TaskConfig{
+		Parallel:    []string{"sub-a", "sub-b"},
+		ForwardArgs: true,
+	}
+	assert.True(t, task.ForwardArgs)
+
+	taskDefault := config.TaskConfig{
+		Parallel: []string{"sub-a"},
+	}
+	assert.False(t, taskDefault.ForwardArgs, "ForwardArgs should default to false")
+}
+
+// TestParallelTask_RejectsArgsViaCobra verifies that a parallel task without
+// forward_args rejects extra positional arguments with a descriptive error.
+func TestParallelTask_RejectsArgsViaCobra(t *testing.T) {
+	task := config.TaskConfig{
+		Parallel: []string{"sub"},
+	}
+	cmd := createParallelTaskCommand("my-task", task)
+	cmd.SetArgs([]string{"extra-arg"})
+	execErr := cmd.Execute()
+	require.Error(t, execErr)
+	assert.Contains(t, execErr.Error(), "doesn't accept extra arguments")
+	assert.Contains(t, execErr.Error(), "extra-arg")
+}
+
+// TestBuildSubtaskInfos_ForwardArgsAppended verifies that when forward_args is true
+// extra args are appended to each subtask's run command.
+func TestBuildSubtaskInfos_ForwardArgsAppended(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"sub-a": {Run: "pytest tests/a"},
+			"sub-b": {Run: "pytest tests/b"},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"sub-a", "sub-b"},
+		ForwardArgs: true,
+	}
+	args := []string{"-k", "bond", "-v"}
+
+	infos, err := buildSubtaskInfos(proj, parentTask, []string{"sub-a", "sub-b"}, args)
+	require.NoError(t, err)
+	require.Len(t, infos, 2)
+	assert.Equal(t, "pytest tests/a -k bond -v", infos[0].Command)
+	assert.Equal(t, "pytest tests/b -k bond -v", infos[1].Command)
+}
+
+// TestBuildSubtaskInfos_ForwardArgsRejectsStepsSubtask verifies that forward_args
+// produces a clear error when a subtask uses steps rather than a single run command.
+func TestBuildSubtaskInfos_ForwardArgsRejectsStepsSubtask(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"multi-step": {Steps: []config.TaskStep{{Run: "step1"}, {Run: "step2"}}},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"multi-step"},
+		ForwardArgs: true,
+	}
+
+	_, err := buildSubtaskInfos(proj, parentTask, []string{"multi-step"}, []string{"-k", "bond"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "uses steps and cannot accept forwarded args")
+}
+
+// TestBuildSubtaskInfos_NoForwardArgsIgnoresArgs verifies that when forward_args is
+// false, extra args are not appended (they should have been rejected earlier by cobra).
+func TestBuildSubtaskInfos_NoForwardArgsIgnoresArgs(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"sub-a": {Run: "pytest tests/a"},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"sub-a"},
+		ForwardArgs: false,
+	}
+
+	infos, err := buildSubtaskInfos(proj, parentTask, []string{"sub-a"}, []string{"-k", "bond"})
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "pytest tests/a", infos[0].Command, "args should not be appended when forward_args is false")
 }

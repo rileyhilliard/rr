@@ -697,11 +697,22 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 	var noLogsFlag bool
 	var dryRunFlag bool
 
+	useStr := name
+	if task.ForwardArgs {
+		useStr = name + " [args...]"
+	}
+
 	cmd := &cobra.Command{
-		Use:   name,
+		Use:   useStr,
 		Short: task.Description,
 		Long:  buildParallelTaskLongDescription(name, task),
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 && !task.ForwardArgs {
+				return errors.New(errors.ErrConfig,
+					fmt.Sprintf("parallel task '%s' doesn't accept extra arguments (got: %s)", name, strings.Join(args, " ")),
+					fmt.Sprintf("use 'rr run \"<command> %s\"' for ad-hoc runs with custom args", strings.Join(args, " ")))
+			}
 			return runParallelTaskCommand(name, ParallelTaskOptions{
 				TaskName:    name,
 				Host:        hostFlag,
@@ -714,6 +725,7 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 				NoLogs:      noLogsFlag,
 				DryRun:      dryRunFlag,
 				Local:       localFlag,
+				Args:        args,
 			})
 		},
 	}

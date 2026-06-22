@@ -208,6 +208,11 @@ type TaskConfig struct {
 	// Simple: pull: [coverage.xml, htmlcov/]
 	// With destinations: pull: [{src: dist/*.whl, dest: ./artifacts/}]
 	Pull []PullItem `yaml:"pull,omitempty" mapstructure:"pull"`
+
+	// ForwardArgs appends extra CLI arguments to each subtask's run command.
+	// Only valid for parallel tasks where all subtasks use a single run command (not steps).
+	// Enables: rr test-backend -k bond  (forwards "-k bond" to each subtask)
+	ForwardArgs bool `yaml:"forward_args" mapstructure:"forward_args"`
 }
 
 // DependencyItem represents a single dependency which can be either

@@ -110,6 +110,61 @@ Extra arguments append to single-command tasks: `rr test -k "test_login"`
 
 **See [tasks.md](reference/tasks.md) for parallel tasks, multi-step tasks, and advanced configuration.**
 
+## Task Types and Arguments
+
+Tasks come in three types. The type determines whether extra args work:
+
+| Type | Config field | Accepts args? | Example |
+|------|-------------|---------------|---------|
+| Single-command | `run:` | YES | `rr test -k "test_foo"` |
+| Multi-step | `steps:` | NO (errors) | `rr deploy` |
+| Parallel | `parallel:` | NO unless `forward_args: true` | `rr test-all` |
+
+**When you need custom args on a parallel task, bypass it:**
+```bash
+rr run "cd backend && uv run pytest tests/bond/ -v"
+```
+
+To check which type a task is: `rr <task> --help`
+
+To forward args to all subtasks in a parallel task, set `forward_args: true` in the task config:
+```yaml
+tasks:
+  test-backend:
+    parallel: [test-backend-api, test-backend-services]
+    forward_args: true   # rr test-backend -k bond works
+```
+
+## Choosing the Right Command
+
+```
+Need to run something remotely?
+├── Named task exists? → rr <task>
+│   ├── Single-command task → rr <task> <args>   (args forwarded)
+│   ├── Parallel task (forward_args: true) → rr <task> <args>
+│   └── Parallel task (default) → rr run "cd <dir> && <cmd> <args>"
+├── No task, files may have changed → rr run "<command>"   (syncs first)
+└── Files already synced → rr exec "<command>"   (faster, skips sync)
+```
+
+**Never nest rr inside rr exec** — rr may not be installed on the remote:
+```bash
+# Wrong:  rr exec "rr sync && pytest"
+# Right:  rr run "pytest"
+```
+
+## Reading rr Output
+
+rr sends phase events (connect, sync, exec) to stderr and command output to stdout.
+
+```bash
+rr test-opendata 2>/dev/null         # suppress all phase events
+rr test-opendata --no-phases         # suppress intermediate events, keep final result JSON
+rr test-opendata 2>&1                # capture everything (mixes phase JSON into output stream)
+```
+
+The final result is always a JSON line on stderr with `"type":"result"` containing exit code, host, and duration.
+
 ## Remote Environment Bootstrap
 
 Declare required tools with `require:` - rr verifies they exist before running commands:
@@ -281,6 +336,11 @@ Missing tools trigger actionable error messages. Tools with built-in installers 
 | "command not found" | Add `setup_commands` or check `require` config |
 | Sync slow | Add large dirs to `sync.exclude` |
 | Lock stuck | `rr unlock` |
+| Lock timeout after crash or cancel | `rr unlock --all` — stale locks from sessions that didn't exit cleanly |
+
+## Self-Documentation
+
+When you're unsure about a task's type, subtasks, or flags, run `rr <task> --help` before executing it. The help output shows whether the task is parallel (and lists subtasks), what flags it accepts, and whether it takes extra arguments. This is faster than reading `.rr.yaml` and avoids the silent-arg-drop problem.
 
 **See [troubleshooting.md](reference/troubleshooting.md) for detailed diagnostics.**
 

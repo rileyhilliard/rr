@@ -2,6 +2,7 @@ package lock
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -134,9 +135,11 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		// Check for stale lock
 		if isLockStale(conn.Client, infoFile, cfg.Stale) {
 			log.Debug("detected stale lock, attempting removal")
+			holder := readLockHolder(conn.Client, infoFile)
 			// Remove stale lock
 			if err := forceRemove(conn.Client, lockDir); err == nil {
-				log.Debug("stale lock removed successfully")
+				log.Warn("stale lock on %s stolen (holder: %s)", conn.Name, holder)
+				fmt.Fprintf(os.Stderr, "Warning: stealing stale lock on %s (holder: %s)\n", conn.Name, holder)
 				// Stale lock removed, try again immediately
 				continue
 			}

@@ -29,6 +29,7 @@ type ParallelTaskOptions struct {
 	DryRun      bool          // Show plan only, don't execute
 	Local       bool          // Force local execution
 	Timeout     time.Duration // Per-task timeout
+	Args        []string      // Extra args forwarded to subtasks when forward_args is true
 }
 
 // RunParallelTask executes a parallel task group.
@@ -65,26 +66,9 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	}
 
 	// Build TaskInfo for each flattened subtask
-	tasks := make([]parallel.TaskInfo, 0, len(flattenedNames))
-	for i, subtaskName := range flattenedNames {
-		subtask, err := config.GetTask(resolved.Project, subtaskName)
-		if err != nil {
-			return 1, err
-		}
-
-		// Build the command
-		cmd := subtask.Run
-		if cmd == "" && len(subtask.Steps) > 0 {
-			// For multi-step tasks, build a command that runs all steps
-			cmd = buildStepsCommand(subtask.Steps)
-		}
-
-		tasks = append(tasks, parallel.TaskInfo{
-			Name:    subtaskName,
-			Index:   i, // Unique index for duplicate name handling
-			Command: cmd,
-			Env:     subtask.Env,
-		})
+	tasks, err := buildSubtaskInfos(resolved.Project, task, flattenedNames, opts.Args)
+	if err != nil {
+		return 1, err
 	}
 
 	// Resolve hosts - hostOrder preserves priority from config
@@ -233,6 +217,41 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		return 1
 	}
 	return 0
+}
+
+// buildSubtaskInfos constructs the TaskInfo list for each flattened subtask name.
+// When forwardTask.ForwardArgs is true and args are provided, they are appended to
+// each subtask's run command. Multi-step subtasks cannot accept forwarded args.
+func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flattenedNames []string, args []string) ([]parallel.TaskInfo, error) {
+	tasks := make([]parallel.TaskInfo, 0, len(flattenedNames))
+	for i, subtaskName := range flattenedNames {
+		subtask, err := config.GetTask(proj, subtaskName)
+		if err != nil {
+			return nil, err
+		}
+
+		cmd := subtask.Run
+		if cmd == "" && len(subtask.Steps) > 0 {
+			cmd = buildStepsCommand(subtask.Steps)
+		}
+
+		if forwardTask.ForwardArgs && len(args) > 0 {
+			if len(subtask.Steps) > 0 {
+				return nil, errors.New(errors.ErrConfig,
+					fmt.Sprintf("subtask '%s' uses steps and cannot accept forwarded args", subtaskName),
+					"remove forward_args from the parent task or convert the subtask to a single run command")
+			}
+			cmd = cmd + " " + strings.Join(args, " ")
+		}
+
+		tasks = append(tasks, parallel.TaskInfo{
+			Name:    subtaskName,
+			Index:   i,
+			Command: cmd,
+			Env:     subtask.Env,
+		})
+	}
+	return tasks, nil
 }
 
 // writeTaskLogs writes task outputs to log files, warning on errors.

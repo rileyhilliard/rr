@@ -18,6 +18,9 @@ var machineMode bool
 // prettyMode flag - when true, use human-readable output with spinners and colors
 var prettyMode bool
 
+// suppressPhases - when true, intermediate phase events are suppressed (result events still emitted)
+var suppressPhases bool
+
 // MachineMode returns true if machine-readable output is enabled.
 // With structured output as default, this is always true unless --pretty is set.
 func MachineMode() bool {
@@ -43,7 +46,12 @@ type PhaseEvent struct {
 }
 
 // WritePhaseEvent writes a structured phase event to stderr as a JSON line.
+// Intermediate phase events (type "phase") are suppressed when --no-phases is set.
+// Result events (type "result") are always emitted.
 func WritePhaseEvent(event PhaseEvent) {
+	if suppressPhases && event.Type == "phase" {
+		return
+	}
 	event.TS = time.Now().UTC().Format(time.RFC3339)
 	data, err := json.Marshal(event)
 	if err != nil {

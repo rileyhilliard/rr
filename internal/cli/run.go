@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // RunOptions holds options for the run command.
@@ -31,6 +33,7 @@ type RunOptions struct {
 	SkipRequirements bool          // If true, skip requirement checks
 	DryRun           bool          // If true, show what would be done without doing it
 	WorkingDir       string        // Override local working directory
+	RemoteCWD        string        // Subdirectory to cd into on remote before running (relative to host.Dir)
 	Quiet            bool          // If true, minimize output (no individual connection attempts)
 	Local            bool          // If true, force local execution (skip remote hosts)
 	Pull             []string      // Patterns to pull from remote after command completes
@@ -80,6 +83,12 @@ func Run(opts RunOptions) (int, error) {
 		cmd := opts.Command
 		if len(wf.Resolved.Project.Defaults.Setup) > 0 {
 			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+		}
+		// --cwd prepends a cd into a subdirectory of the remote project root
+		if opts.RemoteCWD != "" {
+			remoteProjectDir := config.ExpandRemote(wf.Conn.Host.Dir)
+			subdir := util.ShellQuotePreserveTilde(filepath.Join(remoteProjectDir, opts.RemoteCWD))
+			cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
 		}
 		fullCmd := exec.BuildRemoteCommand(cmd, &wf.Conn.Host)
 		exitCode, err = wf.Conn.Client.ExecStreamContext(wf.Context(), fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
@@ -285,7 +294,7 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 }
 
 // runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int, pullPatterns []string, pullDest string) error {
+func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int, pullPatterns []string, pullDest, remoteCWD string) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
@@ -322,6 +331,7 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 		Local:            localFlag,
 		Pull:             pullPatterns,
 		PullDest:         pullDest,
+		RemoteCWD:        remoteCWD,
 	})
 
 	if err != nil {
