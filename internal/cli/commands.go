@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -228,6 +229,13 @@ Examples:
   rr monitor
   rr monitor --hosts mini,workstation
   rr monitor --interval 5s`,
+	PreRun: func(cmd *cobra.Command, args []string) {
+		// Monitor is always an interactive TUI, so force colors on
+		// even though the default output mode is machine-readable.
+		if !noColor {
+			ui.EnableColors()
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Parse interval
 		interval := 2 * time.Second
