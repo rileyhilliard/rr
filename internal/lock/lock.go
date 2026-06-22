@@ -2,6 +2,7 @@ package lock
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,13 +20,23 @@ import (
 type AcquireOption func(*acquireOptions)
 
 type acquireOptions struct {
-	logger logger.Logger
+	logger   logger.Logger
+	warnFunc func(msg string)
 }
 
 // WithLogger sets the logger for lock operations.
 func WithLogger(l logger.Logger) AcquireOption {
 	return func(o *acquireOptions) {
 		o.logger = l
+	}
+}
+
+// WithWarnFunc sets a callback for user-visible warnings during lock acquisition
+// (e.g. stale lock stolen). Callers in structured-output mode should emit a
+// phase event; callers in pretty mode can write to stderr directly.
+func WithWarnFunc(fn func(msg string)) AcquireOption {
+	return func(o *acquireOptions) {
+		o.warnFunc = fn
 	}
 }
 
@@ -134,9 +145,16 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		// Check for stale lock
 		if isLockStale(conn.Client, infoFile, cfg.Stale) {
 			log.Debug("detected stale lock, attempting removal")
+			holder := readLockHolder(conn.Client, infoFile)
 			// Remove stale lock
 			if err := forceRemove(conn.Client, lockDir); err == nil {
-				log.Debug("stale lock removed successfully")
+				log.Warn("stale lock on %s stolen (holder: %s)", conn.Name, holder)
+				msg := fmt.Sprintf("Warning: stealing stale lock on %s (holder: %s)", conn.Name, holder)
+				if options.warnFunc != nil {
+					options.warnFunc(msg)
+				} else {
+					fmt.Fprintln(os.Stderr, msg)
+				}
 				// Stale lock removed, try again immediately
 				continue
 			}

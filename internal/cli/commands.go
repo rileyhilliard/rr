@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -19,6 +20,7 @@ var (
 	runRepeatFlag            int
 	runPullFlags             []string
 	runPullDestFlag          string
+	runCwdFlag               string
 	execHostFlag             string
 	execTagFlag              string
 	execProbeTimeoutFlag     string
@@ -26,6 +28,7 @@ var (
 	execSkipRequirementsFlag bool
 	execPullFlags            []string
 	execPullDestFlag         string
+	execCwdFlag              string
 	syncHostFlag             string
 	syncTagFlag              string
 	syncProbeTimeoutFlag     string
@@ -70,7 +73,7 @@ Examples:
 				fmt.Sprintf("--repeat must be >= 0, got %d", runRepeatFlag),
 				"Use --repeat with a positive number like --repeat 5")
 		}
-		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag, runPullFlags, runPullDestFlag)
+		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag, runPullFlags, runPullDestFlag, runCwdFlag)
 	},
 }
 
@@ -88,7 +91,7 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag, execPullFlags, execPullDestFlag)
+		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag, execPullFlags, execPullDestFlag, execCwdFlag)
 	},
 }
 
@@ -228,6 +231,13 @@ Examples:
   rr monitor
   rr monitor --hosts mini,workstation
   rr monitor --interval 5s`,
+	PreRun: func(cmd *cobra.Command, args []string) {
+		// Monitor is always an interactive TUI, so force colors on
+		// even though the default output mode is machine-readable.
+		if !noColor {
+			ui.EnableColors()
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Parse interval
 		interval := 2 * time.Second
@@ -462,6 +472,7 @@ func init() {
 	runCmd.Flags().IntVar(&runRepeatFlag, "repeat", 0, "run command N times in parallel across available hosts (for flake detection)")
 	runCmd.Flags().StringArrayVar(&runPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
 	runCmd.Flags().StringVar(&runPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
+	runCmd.Flags().StringVar(&runCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
@@ -471,6 +482,7 @@ func init() {
 	execCmd.Flags().BoolVar(&execLocalFlag, "local", false, "force local execution (skip remote hosts)")
 	execCmd.Flags().StringArrayVar(&execPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
 	execCmd.Flags().StringVar(&execPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
+	execCmd.Flags().StringVar(&execCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
 
 	// sync command flags
 	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")

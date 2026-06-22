@@ -14,6 +14,12 @@ func DisableColors() {
 	lipgloss.SetColorProfile(termenv.Ascii)
 }
 
+// EnableColors re-enables color output by detecting the terminal's color profile.
+// Used by commands like 'monitor' that are always interactive TUI.
+func EnableColors() {
+	lipgloss.SetColorProfile(termenv.ColorProfile())
+}
+
 // Electric Synthwave color palette - Gen Z dopamine-inducing neons
 // Primary accent colors
 const (

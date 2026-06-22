@@ -314,7 +314,12 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 // preserves it.
 //
 // Skip silently if conn is nil, local, or invalidations is empty.
-func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation) error {
+// InvalidationNotifyFunc is called when a stale directory is about to be removed.
+// dir is the relative path (e.g. "node_modules/"), lockfile is the triggering lockfile.
+// When nil, a plain fmt.Printf line is written to stdout.
+type InvalidationNotifyFunc func(dir, lockfile string)
+
+func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc) error {
 	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
 		return nil
 	}
@@ -365,7 +370,11 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 			// If local lockfile is newer than remote dir (or remote dir is missing),
 			// delete the remote directory so the package manager reinstalls
 			if localMtime > remoteMtime {
-				fmt.Printf("Invalidating stale %s (%s changed)\n", dir, inv.Lockfile)
+				if notify != nil {
+					notify(dir, inv.Lockfile)
+				} else {
+					fmt.Printf("Invalidating stale %s (%s changed)\n", dir, inv.Lockfile)
+				}
 
 				rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(remotePath))
 				_, rmStderr, rmExit, rmErr := conn.Client.Exec(rmCmd)
