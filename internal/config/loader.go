@@ -478,7 +478,7 @@ func setDurationDefaults(v *viper.Viper) {
 	// Set defaults that will be merged
 	v.SetDefault("lock.enabled", true)
 	v.SetDefault("lock.timeout", "5m")
-	v.SetDefault("lock.stale", "3m")
+	v.SetDefault("lock.stale", "90s")
 	v.SetDefault("lock.dir", "/tmp/rr-locks")
 	v.SetDefault("output.color", "auto")
 	v.SetDefault("output.format", "auto")
