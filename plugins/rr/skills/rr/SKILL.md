@@ -122,6 +122,10 @@ Tasks come in three types. The type determines whether extra args work:
 
 **When you need custom args on a parallel task, bypass it:**
 ```bash
+# Preferred: use --cwd for subdirectory execution (path-traversal safe)
+rr run --cwd backend "uv run pytest tests/bond/ -v"
+
+# Fallback: manual cd pattern (avoid — quoting errors are common)
 rr run "cd backend && uv run pytest tests/bond/ -v"
 ```
 

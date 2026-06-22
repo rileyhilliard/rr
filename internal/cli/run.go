@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -88,7 +88,7 @@ func Run(opts RunOptions) (int, error) {
 		// Reject paths that escape the project root via ../ traversal.
 		if opts.RemoteCWD != "" {
 			remoteProjectDir := config.ExpandRemote(wf.Conn.Host.Dir)
-			resolved := filepath.Join(remoteProjectDir, opts.RemoteCWD)
+			resolved := path.Join(remoteProjectDir, opts.RemoteCWD)
 			if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
 				return 1, errors.New(errors.ErrConfig,
 					fmt.Sprintf("--cwd '%s' escapes the remote project root", opts.RemoteCWD),

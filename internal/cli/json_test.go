@@ -531,67 +531,77 @@ func TestErrorCodes_Format(t *testing.T) {
 }
 
 // captureStderr captures os.Stderr output during fn execution.
-func captureStderr(fn func()) string {
+// Uses defer to restore os.Stderr even if fn panics.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
 	old := os.Stderr
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	os.Stderr = w
+	defer func() {
+		os.Stderr = old
+		r.Close()
+	}()
 	fn()
 	w.Close()
-	os.Stderr = old
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
 	return buf.String()
 }
 
-func TestWritePhaseEvent_SuppressedWhenNoPhasesSet(t *testing.T) {
-	old := suppressPhases
-	defer func() { suppressPhases = old }()
+func TestWritePhaseEvent_SuppressPhasesBehavior(t *testing.T) {
+	tests := []struct {
+		name         string
+		suppress     bool
+		event        PhaseEvent
+		wantEmpty    bool
+		wantContains string
+	}{
+		{
+			name:      "phase event suppressed when flag set",
+			suppress:  true,
+			event:     PhaseEvent{Type: "phase", Phase: "connect", Status: "started"},
+			wantEmpty: true,
+		},
+		{
+			name:      "sync phase event suppressed when flag set",
+			suppress:  true,
+			event:     PhaseEvent{Type: "phase", Phase: "sync", Status: "started"},
+			wantEmpty: true,
+		},
+		{
+			name:         "result event not suppressed even when flag set",
+			suppress:     true,
+			event:        PhaseEvent{Type: "result", Status: "success"},
+			wantEmpty:    false,
+			wantContains: `"type":"result"`,
+		},
+		{
+			name:      "phase event emitted when flag not set",
+			suppress:  false,
+			event:     PhaseEvent{Type: "phase", Phase: "connect", Status: "started"},
+			wantEmpty: false,
+		},
+	}
 
-	suppressPhases = true
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := suppressPhases
+			defer func() { suppressPhases = old }()
+			suppressPhases = tt.suppress
 
-	output := captureStderr(func() {
-		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "connect", Status: "started"})
-	})
+			output := captureStderr(t, func() {
+				WritePhaseEvent(tt.event)
+			})
 
-	assert.Empty(t, output, "phase event should be suppressed when --no-phases is set")
-}
-
-func TestWritePhaseEvent_SyncSuppressedWhenNoPhasesSet(t *testing.T) {
-	old := suppressPhases
-	defer func() { suppressPhases = old }()
-
-	suppressPhases = true
-
-	output := captureStderr(func() {
-		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "sync", Status: "started"})
-	})
-
-	assert.Empty(t, output, "sync phase event should be suppressed")
-}
-
-func TestWritePhaseEvent_ResultNotSuppressedWhenNoPhasesSet(t *testing.T) {
-	old := suppressPhases
-	defer func() { suppressPhases = old }()
-
-	suppressPhases = true
-
-	output := captureStderr(func() {
-		WritePhaseEvent(PhaseEvent{Type: "result", Status: "success"})
-	})
-
-	assert.NotEmpty(t, output, "result event must not be suppressed even with --no-phases")
-	assert.Contains(t, output, `"type":"result"`)
-}
-
-func TestWritePhaseEvent_EmittedWhenNoPhasesNotSet(t *testing.T) {
-	old := suppressPhases
-	defer func() { suppressPhases = old }()
-
-	suppressPhases = false
-
-	output := captureStderr(func() {
-		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "connect", Status: "started"})
-	})
-
-	assert.NotEmpty(t, output, "phase event should be emitted when suppressPhases is false")
+			if tt.wantEmpty {
+				assert.Empty(t, output)
+			} else {
+				assert.NotEmpty(t, output)
+			}
+			if tt.wantContains != "" {
+				assert.Contains(t, output, tt.wantContains)
+			}
+		})
+	}
 }
