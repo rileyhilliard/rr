@@ -127,11 +127,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/go/bin/govulncheck
-          key: govulncheck-${{ runner.os }}-latest
+          key: govulncheck-${{ runner.os }}-v1.3.0
 
       - name: Run govulncheck
         run: |
-          [ -f ~/go/bin/govulncheck ] || go install golang.org/x/vuln/cmd/govulncheck@latest
+          [ -f ~/go/bin/govulncheck ] || go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
           govulncheck ./...
 
   integration:
