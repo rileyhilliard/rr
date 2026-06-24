@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-06-24
+
+### Fixed
+
+- **Machine-mode parallel results now include failure details** - Previously, failed parallel tasks only emitted pass/fail counts (`{"failed":2,"passed":1,"total":3}`), making it impossible for piped consumers to identify which tests failed. The result event now includes a `failures` array with per-task test names, file locations, and assertion messages (parsed via existing pytest/jest/go formatters), with a raw output tail fallback for non-test commands.
+
 ## [0.22.1] - 2026-06-22
 
 ### Dependencies
