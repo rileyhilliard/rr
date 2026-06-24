@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -231,4 +235,256 @@ func TestBuildSubtaskInfos_NoForwardArgsIgnoresArgs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, infos, 1)
 	assert.Equal(t, "pytest tests/a", infos[0].Command, "args should not be appended when forward_args is false")
+}
+
+// pytestFailureOutput returns realistic pytest output containing a failure.
+func pytestFailureOutput(testName, file string, line int, message string) []byte {
+	return []byte(fmt.Sprintf(`=================================== FAILURES ===================================
+_________________________________ %s _________________________________
+
+    def %s():
+>       assert False
+E       %s
+
+%s:%d: AssertionError
+=========================== short test summary info ============================
+FAILED %s::%s - %s
+============================== 1 failed, 2 passed ==============================
+`, testName, testName, message, file, line, file, testName, message))
+}
+
+func TestExtractTaskFailures_PytestFailures(t *testing.T) {
+	result := &parallel.Result{
+		Passed: 1,
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{
+			{
+				TaskName: "test-backend-api",
+				Host:     "m1-linux",
+				ExitCode: 0,
+				Command:  "pytest tests/api",
+				Output:   []byte("all passed"),
+			},
+			{
+				TaskName: "test-backend-services",
+				Host:     "m1-linux",
+				ExitCode: 1,
+				Command:  "cd backend && uv run pytest tests/services -qq --tb=short",
+				Output:   pytestFailureOutput("test_reject_request", "tests/services/test_requests.py", 42, "AssertionError: expected 403, got 200"),
+			},
+		},
+	}
+
+	failures := extractTaskFailures(result)
+	require.Len(t, failures, 1)
+
+	f := failures[0]
+	assert.Equal(t, "test-backend-services", f["task"])
+	assert.Equal(t, "m1-linux", f["host"])
+	assert.Equal(t, 1, f["exit_code"])
+
+	tests, ok := f["tests"].([]map[string]string)
+	require.True(t, ok, "failures should contain structured test info")
+	require.NotEmpty(t, tests)
+	assert.Equal(t, "test_reject_request", tests[0]["name"])
+	assert.Contains(t, tests[0]["file"], "tests/services/test_requests.py")
+	assert.Contains(t, tests[0]["message"], "AssertionError")
+}
+
+func TestExtractTaskFailures_FallbackToOutputTail(t *testing.T) {
+	result := &parallel.Result{
+		Passed: 0,
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{
+			{
+				TaskName: "build-frontend",
+				Host:     "m4-mini",
+				ExitCode: 1,
+				Command:  "bun run build",
+				Output:   []byte("Compiling...\nError: Cannot find module 'foo'\n  at /app/src/index.ts:5:1"),
+			},
+		},
+	}
+
+	failures := extractTaskFailures(result)
+	require.Len(t, failures, 1)
+
+	f := failures[0]
+	assert.Equal(t, "build-frontend", f["task"])
+	_, hasTests := f["tests"]
+	assert.False(t, hasTests, "non-test output should not produce structured tests")
+
+	tail, ok := f["output_tail"].(string)
+	require.True(t, ok, "non-test failures should include output_tail")
+	assert.Contains(t, tail, "Cannot find module 'foo'")
+}
+
+func TestExtractTaskFailures_EmptyOutput(t *testing.T) {
+	result := &parallel.Result{
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{
+			{
+				TaskName: "timeout-task",
+				Host:     "m1-linux",
+				ExitCode: 1,
+				Command:  "sleep 999",
+				Output:   nil,
+				Error:    fmt.Errorf("task timed out after 5m"),
+			},
+		},
+	}
+
+	failures := extractTaskFailures(result)
+	require.Len(t, failures, 1)
+
+	f := failures[0]
+	assert.Equal(t, "timeout-task", f["task"])
+	assert.Equal(t, "task timed out after 5m", f["error"])
+	_, hasTests := f["tests"]
+	assert.False(t, hasTests)
+	_, hasTail := f["output_tail"]
+	assert.False(t, hasTail)
+}
+
+func TestExtractTaskFailures_SkipsPassingTasks(t *testing.T) {
+	result := &parallel.Result{
+		Passed: 2,
+		Failed: 0,
+		TaskResults: []parallel.TaskResult{
+			{TaskName: "test-a", ExitCode: 0, Command: "pytest"},
+			{TaskName: "test-b", ExitCode: 0, Command: "pytest"},
+		},
+	}
+
+	failures := extractTaskFailures(result)
+	assert.Empty(t, failures)
+}
+
+func TestExtractTaskFailures_TruncatesLongMessages(t *testing.T) {
+	longMessage := strings.Repeat("x", maxFailureMessageLen+100)
+
+	result := &parallel.Result{
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{
+			{
+				TaskName: "test-long",
+				Host:     "m1-linux",
+				ExitCode: 1,
+				Command:  "cd backend && uv run pytest tests -qq --tb=short",
+				Output:   pytestFailureOutput("test_long_output", "tests/test_long.py", 10, longMessage),
+			},
+		},
+	}
+
+	failures := extractTaskFailures(result)
+	require.Len(t, failures, 1)
+
+	tests, ok := failures[0]["tests"].([]map[string]string)
+	require.True(t, ok)
+	require.NotEmpty(t, tests)
+	assert.LessOrEqual(t, len(tests[0]["message"]), maxFailureMessageLen+3) // +3 for "..."
+	assert.True(t, strings.HasSuffix(tests[0]["message"], "..."))
+}
+
+func TestExtractTaskFailures_OutputTailCapped(t *testing.T) {
+	lines := make([]string, 100)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d: some build output", i)
+	}
+
+	result := &parallel.Result{
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{
+			{
+				TaskName: "build-fail",
+				Host:     "m4-mini",
+				ExitCode: 1,
+				Command:  "make build",
+				Output:   []byte(strings.Join(lines, "\n")),
+			},
+		},
+	}
+
+	failures := extractTaskFailures(result)
+	require.Len(t, failures, 1)
+
+	tail, ok := failures[0]["output_tail"].(string)
+	require.True(t, ok)
+	tailLines := strings.Split(tail, "\n")
+	assert.LessOrEqual(t, len(tailLines), maxOutputTailLines)
+	assert.Contains(t, tail, "line 99")
+	assert.NotContains(t, tail, "line 0:")
+}
+
+func TestRenderParallelResult_MachineMode_IncludesFailures(t *testing.T) {
+	oldPretty := prettyMode
+	defer func() { prettyMode = oldPretty }()
+	prettyMode = false
+
+	result := &parallel.Result{
+		Passed: 1,
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{
+			{TaskName: "test-pass", ExitCode: 0, Command: "pytest"},
+			{
+				TaskName: "test-fail",
+				Host:     "m1-linux",
+				ExitCode: 1,
+				Command:  "cd backend && uv run pytest tests -qq --tb=short",
+				Output:   pytestFailureOutput("test_broken", "tests/test_broken.py", 7, "assert 1 == 2"),
+			},
+		},
+	}
+
+	output := captureStderr(t, func() {
+		renderParallelResult(result, nil, "test")
+	})
+
+	var event PhaseEvent
+	err := json.Unmarshal([]byte(output), &event)
+	require.NoError(t, err, "machine-mode output should be valid JSON: %s", output)
+
+	assert.Equal(t, "result", event.Type)
+	assert.Equal(t, "failed", event.Status)
+
+	failuresRaw, ok := event.Details["failures"]
+	require.True(t, ok, "failed result must include 'failures' key in details")
+
+	failuresJSON, err := json.Marshal(failuresRaw)
+	require.NoError(t, err)
+
+	var failures []map[string]interface{}
+	err = json.Unmarshal(failuresJSON, &failures)
+	require.NoError(t, err)
+	require.Len(t, failures, 1)
+
+	assert.Equal(t, "test-fail", failures[0]["task"])
+	assert.Equal(t, "m1-linux", failures[0]["host"])
+}
+
+func TestRenderParallelResult_MachineMode_SuccessHasNoFailures(t *testing.T) {
+	oldPretty := prettyMode
+	defer func() { prettyMode = oldPretty }()
+	prettyMode = false
+
+	result := &parallel.Result{
+		Passed: 2,
+		Failed: 0,
+		TaskResults: []parallel.TaskResult{
+			{TaskName: "test-a", ExitCode: 0, Command: "pytest"},
+			{TaskName: "test-b", ExitCode: 0, Command: "pytest"},
+		},
+	}
+
+	output := captureStderr(t, func() {
+		renderParallelResult(result, nil, "test")
+	})
+
+	var event PhaseEvent
+	err := json.Unmarshal([]byte(output), &event)
+	require.NoError(t, err)
+
+	assert.Equal(t, "success", event.Status)
+	_, hasFailures := event.Details["failures"]
+	assert.False(t, hasFailures, "successful result should not include failures key")
 }
