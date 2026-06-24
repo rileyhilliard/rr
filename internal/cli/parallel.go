@@ -11,6 +11,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/util"
@@ -202,15 +203,19 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		if result.Failed > 0 {
 			exitCode = 1
 		}
+		details := map[string]interface{}{
+			"total":  result.Passed + result.Failed,
+			"passed": result.Passed,
+			"failed": result.Failed,
+		}
+		if result.Failed > 0 {
+			details["failures"] = extractTaskFailures(result)
+		}
 		WritePhaseEvent(PhaseEvent{
 			Type:     "result",
 			Status:   map[bool]string{true: "success", false: "failed"}[result.Failed == 0],
 			ExitCode: &exitCode,
-			Details: map[string]interface{}{
-				"total":  result.Passed + result.Failed,
-				"passed": result.Passed,
-				"failed": result.Failed,
-			},
+			Details:  details,
 		})
 	}
 
@@ -218,6 +223,61 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		return 1
 	}
 	return 0
+}
+
+const maxOutputTailLines = 20
+const maxFailureMessageLen = 500
+
+// extractTaskFailures builds structured failure info for machine-mode output.
+func extractTaskFailures(result *parallel.Result) []map[string]interface{} {
+	var failures []map[string]interface{}
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		if tr.Success() {
+			continue
+		}
+		entry := map[string]interface{}{
+			"task":      tr.TaskName,
+			"host":      tr.Host,
+			"exit_code": tr.ExitCode,
+		}
+		if tr.Error != nil {
+			entry["error"] = tr.Error.Error()
+		}
+
+		parsed := formatters.ExtractFailures(tr.Command, tr.Output)
+		if len(parsed) > 0 {
+			tests := make([]map[string]string, 0, len(parsed))
+			for _, f := range parsed {
+				tf := map[string]string{"name": f.TestName}
+				if f.File != "" {
+					loc := f.File
+					if f.Line > 0 {
+						loc += ":" + util.Itoa(f.Line)
+					}
+					tf["file"] = loc
+				}
+				if f.Message != "" {
+					msg := f.Message
+					if len(msg) > maxFailureMessageLen {
+						msg = msg[:maxFailureMessageLen] + "..."
+					}
+					tf["message"] = msg
+				}
+				tests = append(tests, tf)
+			}
+			entry["tests"] = tests
+		} else if len(tr.Output) > 0 {
+			lines := strings.Split(strings.TrimSpace(string(tr.Output)), "\n")
+			start := 0
+			if len(lines) > maxOutputTailLines {
+				start = len(lines) - maxOutputTailLines
+			}
+			entry["output_tail"] = strings.Join(lines[start:], "\n")
+		}
+		failures = append(failures, entry)
+	}
+	return failures
 }
 
 // buildSubtaskInfos constructs the TaskInfo list for each flattened subtask name.
