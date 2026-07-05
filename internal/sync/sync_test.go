@@ -456,6 +456,34 @@ func TestBuildArgs_GitignoreTranslation(t *testing.T) {
 			"innermost negation must be live since every ancestor resolves not-excluded")
 	})
 
+	t.Run("unanchored bare directory exclude poisons a deeper ancestor by basename", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git (git check-ignore -v): a bare,
+		// unanchored "mocks/" rule matches ANY directory named "mocks"
+		// at any depth - including frontend/tests/mocks/ - per gitignore's
+		// own rule that a pattern with no interior slash is unanchored.
+		// It poisons the negation just like an exact "frontend/tests/mocks/"
+		// exclude would, even though the two pattern strings don't match
+		// textually. Regression test for a CodeRabbit-flagged gap where
+		// dirResolvesExcluded only compared ancestors by exact string
+		// equality and missed this case.
+		writeGitignore(t, dir,
+			"mocks/",
+			"!frontend/tests/mocks/data/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- mocks/")
+		assert.NotContains(t, args, "--filter=+ frontend/tests/mocks/data/",
+			"unanchored ancestor exclude must poison the negation, matching real git")
+		for _, a := range args {
+			assert.False(t, strings.HasPrefix(a, "--filter=+ "),
+				"no negation should survive when an unanchored ancestor exclude poisons it, got: %s", a)
+		}
+	})
+
 	t.Run("no .gitignore file means no filter rules and no error", func(t *testing.T) {
 		dir := t.TempDir() // empty, no .gitignore
 

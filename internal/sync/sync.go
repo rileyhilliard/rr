@@ -356,10 +356,20 @@ func anyAncestorPoisoned(pattern string, lines []string) bool {
 }
 
 // dirResolvesExcluded reports whether dirPattern (a directory-unit
-// pattern like "build/") is excluded per the LAST bare directory-unit
-// rule anywhere in the file that names that exact directory. Only exact,
-// non-wildcard matches count, since a wildcard exclude of a directory's
-// children (e.g. "build/*") can never poison the directory itself.
+// pattern like "build/" or "frontend/tests/mocks/") is excluded per the
+// LAST bare directory-unit rule anywhere in the file that names that
+// directory. Only bare directory patterns count, never wildcards, since
+// a wildcard exclude of a directory's children (e.g. "build/*") can
+// never poison the directory itself.
+//
+// Per gitignore's own matching rules, a pattern with no slash (besides a
+// possible trailing one) is UNANCHORED and matches at any depth by its
+// final path segment alone - e.g. "mocks/" matches
+// "frontend/tests/mocks/" the same way it matches a top-level "mocks/".
+// A pattern containing an interior slash is anchored to that exact path.
+// This mirrors real git: verified with git check-ignore that a bare
+// "mocks/" rule poisons a "!frontend/tests/mocks/data/" negation even
+// though the exclude pattern is never anchored to the full ancestor path.
 func dirResolvesExcluded(dirPattern string, lines []string) bool {
 	excluded := false
 	for _, line := range lines {
@@ -369,12 +379,30 @@ func dirResolvesExcluded(dirPattern string, lines []string) bool {
 			candidate = line[1:]
 		}
 		candidate = unescapeGitignorePattern(candidate)
-		if candidate != dirPattern {
+		if !dirPatternMatches(candidate, dirPattern) {
 			continue
 		}
 		excluded = !negated
 	}
 	return excluded
+}
+
+// dirPatternMatches reports whether gitignore directory pattern matches
+// ancestor (both normalized as "a/b/" style paths). An exact match always
+// counts. An unanchored pattern (no interior slash) additionally matches
+// by ancestor's final path segment, per gitignore's own rule that such a
+// pattern applies at any depth.
+func dirPatternMatches(pattern, ancestor string) bool {
+	if pattern == ancestor {
+		return true
+	}
+	interior := strings.TrimSuffix(pattern, "/")
+	if strings.Contains(interior, "/") {
+		return false // anchored to a specific path, already checked above
+	}
+	trimmedAncestor := strings.TrimSuffix(ancestor, "/")
+	segments := strings.Split(trimmedAncestor, "/")
+	return segments[len(segments)-1]+"/" == pattern
 }
 
 // ancestorDirs returns rsync directory-match patterns (each ending in "/")
