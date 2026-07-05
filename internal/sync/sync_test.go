@@ -212,21 +212,6 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "gitignore filter enabled by default",
-			conn: &host.Connection{
-				Name:  "test-host",
-				Alias: "test-alias",
-				Host:  config.Host{Dir: "~/projects/myapp"},
-			},
-			localDir: "/home/user/myapp",
-			cfg: config.SyncConfig{
-				RespectGitignore: true,
-			},
-			checkArgs: func(t *testing.T, args []string) {
-				assert.Contains(t, args, "--filter=:- .gitignore")
-			},
-		},
-		{
 			name: "gitignore filter disabled",
 			conn: &host.Connection{
 				Name:  "test-host",
@@ -240,42 +225,28 @@ func TestBuildArgs(t *testing.T) {
 			checkArgs: func(t *testing.T, args []string) {
 				for _, arg := range args {
 					assert.NotContains(t, arg, ".gitignore", "should not contain gitignore filter")
+					assert.False(t, strings.HasPrefix(arg, "--filter=+ "), "should not include any gitignore-derived include rule")
 				}
 			},
 		},
 		{
-			name: "gitignore filter comes after excludes",
+			name: "gitignore filter enabled but no .gitignore present",
 			conn: &host.Connection{
 				Name:  "test-host",
 				Alias: "test-alias",
 				Host:  config.Host{Dir: "~/projects/myapp"},
 			},
+			// Nonexistent path: BuildArgs should treat a missing .gitignore
+			// as "nothing to add", not an error.
 			localDir: "/home/user/myapp",
 			cfg: config.SyncConfig{
 				RespectGitignore: true,
-				Exclude:          []string{".git/", "node_modules/"},
-				Flags:            []string{"--compress"},
 			},
 			checkArgs: func(t *testing.T, args []string) {
-				gitignoreIdx := -1
-				lastExcludeIdx := -1
-				firstFlagIdx := -1
-				for i, arg := range args {
-					if arg == "--filter=:- .gitignore" {
-						gitignoreIdx = i
-					}
-					if strings.HasPrefix(arg, "--exclude=") {
-						lastExcludeIdx = i
-					}
-					if arg == "--compress" {
-						firstFlagIdx = i
-					}
+				for _, arg := range args {
+					assert.False(t, strings.HasPrefix(arg, "--filter=+ ") || strings.HasPrefix(arg, "--filter=- "),
+						"no .gitignore present, should not emit any gitignore-derived filter rule")
 				}
-				require.Greater(t, gitignoreIdx, -1, "gitignore filter should be present")
-				require.Greater(t, lastExcludeIdx, -1, "exclude should be present")
-				require.Greater(t, firstFlagIdx, -1, "custom flag should be present")
-				assert.Greater(t, gitignoreIdx, lastExcludeIdx, "gitignore filter should come after excludes")
-				assert.Less(t, gitignoreIdx, firstFlagIdx, "gitignore filter should come before custom flags")
 			},
 		},
 		{
@@ -301,6 +272,228 @@ func TestBuildArgs(t *testing.T) {
 			tt.checkArgs(t, args)
 		})
 	}
+}
+
+// writeGitignore writes the given lines (in order) to a .gitignore in dir.
+func writeGitignore(t *testing.T, dir string, lines ...string) {
+	t.Helper()
+	content := strings.Join(lines, "\n") + "\n"
+	err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(content), 0o644)
+	require.NoError(t, err)
+}
+
+// indexOf returns the index of the first arg equal to target, or -1.
+func indexOf(args []string, target string) int {
+	for i, a := range args {
+		if a == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestBuildArgs_GitignoreTranslation covers translating .gitignore into rsync
+// filter rules, in particular the "!negation" case that rsync's own
+// '--filter=:- .gitignore' cannot express (rsync's merge-file syntax has no
+// per-pattern negation; a bare "!" there means "clear all rules read so
+// far", not "re-include this path"). Regression coverage for the bug where
+// `data/` + `!frontend/tests/mocks/data/` in .gitignore silently dropped
+// that directory from every rr sync, even though git itself correctly
+// treated the path as not ignored.
+func TestBuildArgs_GitignoreTranslation(t *testing.T) {
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"},
+	}
+
+	t.Run("simple excludes with no negation", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir, "node_modules/", "*.log", "# a comment", "", ".DS_Store")
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- node_modules/")
+		assert.Contains(t, args, "--filter=- *.log")
+		assert.Contains(t, args, "--filter=- .DS_Store")
+		// Comments and blank lines must not turn into rules.
+		for _, a := range args {
+			assert.NotContains(t, a, "# a comment")
+		}
+	})
+
+	t.Run("negated pattern becomes an include, not silently dropped", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir,
+			"data/",
+			"!frontend/tests/mocks/data/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=+ frontend/tests/mocks/data/",
+			"negated pattern must become an rsync include rule")
+		assert.Contains(t, args, "--filter=- data/",
+			"the exclude that the negation carves an exception out of must still be present")
+	})
+
+	t.Run("negated pattern includes ancestor directories so rsync can descend", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir,
+			"data/",
+			"!frontend/tests/mocks/data/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		// Without these, rsync would never look inside frontend/, frontend/tests/,
+		// or frontend/tests/mocks/ in the first place - an exclude on an ancestor
+		// stops descent regardless of rules that come later.
+		assert.Contains(t, args, "--filter=+ frontend/")
+		assert.Contains(t, args, "--filter=+ frontend/tests/")
+		assert.Contains(t, args, "--filter=+ frontend/tests/mocks/")
+	})
+
+	t.Run("wildcard exclude of children lets a specific child negation live, regardless of order", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git (git status --ignored --porcelain):
+		// "build/*" excludes each ENTRY inside build/ individually, but
+		// never build/ itself, so "!build/keep-me/" can still resurrect
+		// that one child. This is the standard "ignore everything in a
+		// dir except X" idiom - unlike a bare "build/" exclude (covered
+		// below), which always kills negations underneath it.
+		writeGitignore(t, dir,
+			"build/*",
+			"!build/keep-me/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		keepIdx := indexOf(args, "--filter=+ build/keep-me/")
+		excludeIdx := indexOf(args, "--filter=- build/*")
+		require.NotEqual(t, -1, keepIdx, "include rule for build/keep-me/ must be present")
+		require.NotEqual(t, -1, excludeIdx, "exclude rule for build/* must be present")
+		// Rsync is first-match-wins, so to reproduce git's last-match-wins
+		// result the include must be emitted BEFORE the exclude, even
+		// though it appeared AFTER it in the source .gitignore.
+		assert.Less(t, keepIdx, excludeIdx,
+			"include for the more specific negated path must come before the broader exclude")
+	})
+
+	t.Run("a bare directory exclude always kills negations underneath it, regardless of order", func(t *testing.T) {
+		dir := t.TempDir()
+		// Per `git help gitignore`: "It is not possible to re-include a
+		// file if a parent directory of that file is excluded." Unlike
+		// "build/*" above, a bare "build/" exclude covers the directory
+		// itself as a unit, so no negation of a path underneath it can
+		// ever be live unless "build/" is itself re-included first -
+		// verified with real git for BOTH line orderings.
+		writeGitignore(t, dir,
+			"!build/keep-me/",
+			"build/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- build/")
+		assert.NotContains(t, args, "--filter=+ build/keep-me/",
+			"dead negation (ancestor excluded by a bare dir pattern) must not produce an include rule")
+		assert.NotContains(t, args, "--filter=+ build/",
+			"dead negation must not produce ancestor include rules either")
+	})
+
+	t.Run("nested alternating negations are all dead if the top-level exclude is never itself re-included", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git (git status --ignored --porcelain):
+		// with "a/" excluded and never re-included by an earlier negation,
+		// every deeper "!a/b/" / "!a/b/c/" negation is unreachable - git
+		// reports a/file.txt, a/b/file.txt, and a/b/c/file.txt as ALL
+		// ignored, matched by the "a/" rule alone.
+		writeGitignore(t, dir,
+			"a/",
+			"!a/b/",
+			"a/b/*",
+			"!a/b/c/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- a/")
+		for _, a := range args {
+			assert.False(t, strings.HasPrefix(a, "--filter=+ "),
+				"every negation under a dead top-level exclude must be dropped, got: %s", a)
+		}
+	})
+
+	t.Run("re-including each ancestor in turn resurrects a deeply nested negation", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git: p/ excluded then re-included via
+		// !p/, p/c/ excluded then re-included via !p/c/, p/c/g/ excluded
+		// then re-included via !p/c/g/ - every ancestor independently
+		// resolves NOT ignored, so p/c/g/file.txt is not ignored either
+		// (git check-ignore exits 1 / no match). Unlike the dead case
+		// above, each directory here gets its own explicit re-include
+		// before the next level is excluded.
+		writeGitignore(t, dir,
+			"p/",
+			"!p/",
+			"p/c/",
+			"!p/c/",
+			"p/c/g/",
+			"!p/c/g/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=+ p/c/g/",
+			"innermost negation must be live since every ancestor resolves not-excluded")
+	})
+
+	t.Run("no .gitignore file means no filter rules and no error", func(t *testing.T) {
+		dir := t.TempDir() // empty, no .gitignore
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		for _, a := range args {
+			assert.False(t, strings.HasPrefix(a, "--filter=+ ") || strings.HasPrefix(a, "--filter=- "),
+				"no .gitignore present, should not emit any gitignore-derived filter rule")
+		}
+	})
+
+	t.Run("gitignore rules come after explicit excludes and before custom flags", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir, "build/")
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{
+			RespectGitignore: true,
+			Exclude:          []string{".git/", "node_modules/"},
+			Flags:            []string{"--compress"},
+		})
+		require.NoError(t, err)
+
+		gitignoreIdx := indexOf(args, "--filter=- build/")
+		lastExcludeIdx := -1
+		for i, a := range args {
+			if strings.HasPrefix(a, "--exclude=") {
+				lastExcludeIdx = i
+			}
+		}
+		firstFlagIdx := indexOf(args, "--compress")
+
+		require.NotEqual(t, -1, gitignoreIdx, "gitignore filter rule should be present")
+		require.NotEqual(t, -1, lastExcludeIdx, "exclude should be present")
+		require.NotEqual(t, -1, firstFlagIdx, "custom flag should be present")
+		assert.Greater(t, gitignoreIdx, lastExcludeIdx, "gitignore rules should come after explicit excludes")
+		assert.Less(t, gitignoreIdx, firstFlagIdx, "gitignore rules should come before custom flags")
+	})
 }
 
 // TestBuildArgs_SSHBatchMode verifies that BatchMode=yes is included in the SSH command.
