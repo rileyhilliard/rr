@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.3] - 2026-07-05
+
+### Fixed
+
+- **`.gitignore` negation now translates correctly into rsync filter rules** - `respect_gitignore` previously passed `--filter=':- .gitignore'` straight to rsync, but rsync's merge-file syntax has no per-pattern "!negation" - a bare "!" there means "clear every rule read so far," not "re-include this path." Any `.gitignore` using the common "ignore broadly, carve out an exception" idiom (e.g. `data/` + `!frontend/tests/mocks/data/`) silently dropped the excepted path from every sync, even though git itself correctly reported it as not ignored. `gitignoreFilterArgs()` now reads `.gitignore` directly and emits explicit rsync +/- filter rules, matching git's real negation semantics - including the case where an unanchored ancestor pattern (e.g. `mocks/`) poisons a deeper negated path regardless of the literal path used in the exception.
+
+### Security
+
+- Bumped Go toolchain to 1.25.11 to resolve stdlib CVEs
+
 ## [0.22.2] - 2026-06-24
 
 ### Fixed
