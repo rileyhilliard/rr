@@ -1,10 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // ExpandTilde replaces ~ or ~/path with the user's home directory.
@@ -41,6 +43,7 @@ func ExpandTilde(path string) string {
 //   - ${PROJECT} - git repo name or directory name
 //   - ${USER}    - current username
 //   - ${HOME}    - user's home directory (LOCAL - use ExpandRemote for remote paths)
+//   - ${BRANCH}  - current git branch (sanitized for filesystem safety)
 //
 // Note: Does NOT expand ~ - use ExpandTilde for local paths if needed.
 // For remote paths (like host.Dir), use ExpandRemote instead.
@@ -64,6 +67,10 @@ func Expand(s string) string {
 		result = strings.ReplaceAll(result, "${HOME}", getHome())
 	}
 
+	if strings.Contains(result, "${BRANCH}") {
+		result = strings.ReplaceAll(result, "${BRANCH}", getBranch())
+	}
+
 	return result
 }
 
@@ -73,6 +80,7 @@ func Expand(s string) string {
 //   - ${PROJECT} - git repo name or directory name (from local context)
 //   - ${USER}    - current username (from local context)
 //   - ${HOME}    - expands to ~ (for remote shell to expand)
+//   - ${BRANCH}  - current git branch, sanitized for filesystem safety (from local context)
 //   - ~          - kept as ~ (for remote shell to expand)
 func ExpandRemote(s string) string {
 	if s == "" {
@@ -92,6 +100,10 @@ func ExpandRemote(s string) string {
 	// For remote paths, ${HOME} becomes ~ so the remote shell expands it
 	if strings.Contains(result, "${HOME}") {
 		result = strings.ReplaceAll(result, "${HOME}", "~")
+	}
+
+	if strings.Contains(result, "${BRANCH}") {
+		result = strings.ReplaceAll(result, "${BRANCH}", getBranch())
 	}
 
 	return result
@@ -194,4 +206,193 @@ func getHome() string {
 	}
 
 	return "~"
+}
+
+var (
+	branchOnce  sync.Once
+	branchCache string
+)
+
+// getBranch returns the current git branch name, sanitized for filesystem safety.
+// Falls back to "HEAD" when in detached HEAD state or outside a git repo.
+// The result is cached for the lifetime of the process since the branch
+// won't change mid-execution.
+func getBranch() string {
+	branchOnce.Do(func() {
+		cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		out, err := cmd.Output()
+		if err != nil {
+			branchCache = "HEAD"
+			return
+		}
+		branch := strings.TrimSpace(string(out))
+		if branch == "" {
+			branchCache = "HEAD"
+			return
+		}
+		branchCache = sanitizeBranch(branch)
+	})
+	return branchCache
+}
+
+// ExpandRemoteGlob expands variables in a remote path template, but replaces
+// ${BRANCH} with a shell glob wildcard (*) instead of the current branch.
+// Returns the glob pattern and whether ${BRANCH} was present in the template.
+func ExpandRemoteGlob(s string) (pattern string, hasBranch bool) {
+	if s == "" {
+		return s, false
+	}
+
+	hasBranch = strings.Contains(s, "${BRANCH}")
+	result := s
+
+	if strings.Contains(result, "${PROJECT}") {
+		result = strings.ReplaceAll(result, "${PROJECT}", getProject())
+	}
+
+	if strings.Contains(result, "${USER}") {
+		result = strings.ReplaceAll(result, "${USER}", getUser())
+	}
+
+	// For remote paths, ${HOME} becomes ~ so the remote shell expands it
+	if strings.Contains(result, "${HOME}") {
+		result = strings.ReplaceAll(result, "${HOME}", "~")
+	}
+
+	if hasBranch {
+		result = strings.ReplaceAll(result, "${BRANCH}", "*")
+	}
+
+	return result, hasBranch
+}
+
+// ExtractBranchFromPath extracts the branch segment from a fully-expanded
+// remote directory path, given the original dir template.
+// Returns empty string if the template has no ${BRANCH}, has multiple ${BRANCH}
+// occurrences, or the path doesn't match.
+func ExtractBranchFromPath(template, expandedPath string) string {
+	if expandedPath == "" {
+		return ""
+	}
+
+	glob, hasBranch := ExpandRemoteGlob(template)
+	if !hasBranch {
+		return ""
+	}
+
+	// Only support templates with exactly one ${BRANCH} (one wildcard in glob)
+	if strings.Count(glob, "*") != 1 {
+		return ""
+	}
+
+	// Split on the wildcard to get prefix and suffix
+	parts := strings.SplitN(glob, "*", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	prefix := parts[0]
+	suffix := parts[1]
+
+	// Verify the path matches the prefix and suffix.
+	// When the template uses ~/, ls -d returns absolute paths with the home
+	// directory expanded. Try matching both the tilde prefix and the path
+	// as-is so that ~/rr/proj-* matches /Users/someone/rr/proj-feat.
+	if !strings.HasPrefix(expandedPath, prefix) {
+		if strings.HasPrefix(prefix, "~/") {
+			// Infer the home directory from the expanded path:
+			// glob prefix "~/rr/proj-" -> relative "rr/proj-"
+			// then find this relative suffix in the expanded path.
+			relPrefix := prefix[2:] // strip "~/"
+			idx := strings.Index(expandedPath, relPrefix)
+			if idx < 0 {
+				return ""
+			}
+			// Rewrite prefix to use the resolved home dir
+			prefix = expandedPath[:idx] + relPrefix
+		} else {
+			return ""
+		}
+	}
+	if suffix != "" && !strings.HasSuffix(expandedPath, suffix) {
+		return ""
+	}
+
+	// Extract the branch segment
+	result := expandedPath[len(prefix):]
+	if suffix != "" {
+		result = result[:len(result)-len(suffix)]
+	}
+	return result
+}
+
+// ListLocalBranches returns the sanitized names of all local git branches.
+// Each branch name is passed through sanitizeBranch to match the format
+// used in directory names created by ${BRANCH} expansion.
+func ListLocalBranches() ([]string, error) {
+	cmd := exec.Command("git", "branch", "--format=%(refname:short)")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list local git branches: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	branches := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		branches = append(branches, sanitizeBranch(line))
+	}
+	return branches, nil
+}
+
+// sanitizeBranch encodes a git branch name for filesystem safety using
+// underscore-prefixed escape sequences to guarantee no collisions:
+//   - '_' -> '__' (escape literal underscore)
+//   - '/' -> '_s' (slash, the only common unsafe char git allows)
+//   - other unsafe chars (\:*?"<>|) -> '-' (git forbids these, collision impossible)
+//
+// This is a one-to-one mapping: different branch names always produce different
+// sanitized output. Use UnsanitizeBranch to reverse.
+func sanitizeBranch(branch string) string {
+	var b strings.Builder
+	b.Grow(len(branch) + 4) // slight over-allocation for escape sequences
+	for _, r := range branch {
+		switch r {
+		case '_':
+			b.WriteString("__")
+		case '/':
+			b.WriteString("_s")
+		case '\\', ':', '*', '?', '"', '<', '>', '|':
+			b.WriteByte('-')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// UnsanitizeBranch reverses sanitizeBranch, recovering the original git branch name.
+// Decodes '__' -> '_' and '_s' -> '/'. Characters replaced with '-' (which git
+// forbids in branch names anyway) cannot be reversed.
+func UnsanitizeBranch(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '_' && i+1 < len(s) {
+			switch s[i+1] {
+			case '_':
+				b.WriteByte('_')
+				i++ // skip next char
+			case 's':
+				b.WriteByte('/')
+				i++ // skip next char
+			default:
+				b.WriteByte(s[i])
+			}
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }

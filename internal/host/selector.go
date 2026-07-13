@@ -345,8 +345,9 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 	// Filter hosts to those with the matching tag
 	matchingHosts := make(map[string]config.Host)
 	for name := range s.hosts {
-		if hasTag(s.hosts[name].Tags, tag) {
-			matchingHosts[name] = s.hosts[name]
+		h := s.hosts[name]
+		if hasTag(h.Tags, tag) {
+			matchingHosts[name] = h
 		}
 	}
 
@@ -525,11 +526,12 @@ func (s *Selector) HostInfo() []HostInfoItem {
 
 	items := make([]HostInfoItem, 0, len(s.hosts))
 	for name := range s.hosts {
+		h := s.hosts[name]
 		items = append(items, HostInfoItem{
 			Name: name,
-			SSH:  s.hosts[name].SSH,
-			Dir:  s.hosts[name].Dir,
-			Tags: s.hosts[name].Tags,
+			SSH:  h.SSH,
+			Dir:  h.Dir,
+			Tags: h.Tags,
 		})
 	}
 

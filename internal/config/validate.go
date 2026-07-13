@@ -25,6 +25,7 @@ var ReservedTaskNames = map[string]bool{
 	"host":       true,
 	"unlock":     true,
 	"tasks":      true,
+	"clean":      true,
 }
 
 // ValidationOption controls validation behavior.
@@ -251,16 +252,12 @@ func validateHost(name string, host Host) error {
 
 // validateRemotePath checks for common remote path configuration mistakes.
 // Note: Tilde (~) is ALLOWED in remote paths - the remote shell expands it.
-// Only ${VAR} variables should be expanded locally before sending to remote.
+// This runs AFTER variable expansion (${PROJECT}, ${USER}, ${HOME}, ${BRANCH})
+// in parseGlobalConfig, so any remaining ${} indicates an unknown variable.
 func validateRemotePath(hostName, fieldName, path string) error {
-	// Check for unexpanded variables (these should be expanded locally)
 	if strings.Contains(path, "${") {
-		return fmt.Errorf("host '%s' has an unexpanded variable in %s: %s", hostName, fieldName, path)
+		return fmt.Errorf("host '%s' has an unrecognized variable in %s: %s (supported: ${PROJECT}, ${USER}, ${HOME}, ${BRANCH})", hostName, fieldName, path)
 	}
-
-	// Note: ~ and relative paths are allowed for remote paths
-	// The remote shell will handle tilde expansion
-	// Relative paths are relative to SSH user's home directory
 
 	return nil
 }
