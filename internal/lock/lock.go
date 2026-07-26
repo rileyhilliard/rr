@@ -147,7 +147,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		// waiting out the stale threshold.
 		if holderInfo, infoErr := readLockInfo(conn.Client, infoFile); infoErr == nil && holderInfo.IsDeadLocalHolder() {
 			log.Debug("detected dead local holder (pid %d), attempting removal", holderInfo.PID)
-			if err := forceRemove(conn.Client, lockDir); err == nil {
+			if stealDeadHolderLock(conn.Client, lockDir, infoFile, holderInfo) {
 				msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
 				log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
 				if options.warnFunc != nil {
@@ -294,10 +294,16 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 	// immediately instead of waiting out the stale threshold.
 	if holderInfo, infoErr := readLockInfo(conn.Client, infoFile); infoErr == nil && holderInfo.IsDeadLocalHolder() {
 		log.Debug("TryAcquire: detected dead local holder (pid %d), attempting removal", holderInfo.PID)
-		if err := forceRemove(conn.Client, lockDir); err != nil {
-			log.Debug("TryAcquire: failed to remove dead-holder lock: %v", err)
-		} else {
+		if stealDeadHolderLock(conn.Client, lockDir, infoFile, holderInfo) {
+			msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
 			log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
+			if options.warnFunc != nil {
+				options.warnFunc(msg)
+			} else {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+		} else {
+			log.Debug("TryAcquire: dead-holder lock not removed (holder changed or removal failed)")
 		}
 	}
 
@@ -656,6 +662,28 @@ func readLockHolder(client sshutil.SSHClient, infoFile string) string {
 	}
 
 	return info.String()
+}
+
+// stealDeadHolderLock removes a lock previously observed to be held by a
+// dead local process, re-reading the info file immediately before removal
+// and aborting if the holder changed in the meantime. This narrows the
+// window where the dead holder's lock is released and re-acquired by a live
+// process between the liveness check and the rm -rf, which would steal a
+// live lock. Returns true when the lock was removed.
+func stealDeadHolderLock(client sshutil.SSHClient, lockDir, infoFile string, prev *LockInfo) bool {
+	current, err := readLockInfo(client, infoFile)
+	if err != nil || !sameHolder(prev, current) || !current.IsDeadLocalHolder() {
+		return false
+	}
+	return forceRemove(client, lockDir) == nil
+}
+
+// sameHolder reports whether two lock info snapshots describe the same
+// holder.
+func sameHolder(a, b *LockInfo) bool {
+	return a.PID == b.PID && a.Started.Equal(b.Started) &&
+		a.MachineToken == b.MachineToken &&
+		a.Hostname == b.Hostname && a.User == b.User
 }
 
 // forceRemove removes a directory and all its contents.
