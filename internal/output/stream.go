@@ -74,6 +74,10 @@ type StreamHandler struct {
 	// errors are never fatal.
 	tee io.Writer
 
+	// writers tracks the streamWriters created from this handler so Flush
+	// can drain their partial-line buffers after execution.
+	writers []*streamWriter
+
 	// Broken-pipe state per stream: once a consumer closes its end (e.g.
 	// `rr run ... | head`), further writes to that stream are suppressed
 	// instead of failing the run. The tee keeps receiving output.
@@ -125,17 +129,41 @@ func isBrokenPipe(err error) bool {
 
 // Stdout returns a writer that processes lines for stdout.
 func (h *StreamHandler) Stdout() io.Writer {
-	return &streamWriter{
+	w := &streamWriter{
 		handler:  h,
 		isStderr: false,
 	}
+	h.trackWriter(w)
+	return w
 }
 
 // Stderr returns a writer that processes lines for stderr.
 func (h *StreamHandler) Stderr() io.Writer {
-	return &streamWriter{
+	w := &streamWriter{
 		handler:  h,
 		isStderr: true,
+	}
+	h.trackWriter(w)
+	return w
+}
+
+func (h *StreamHandler) trackWriter(w *streamWriter) {
+	h.mu.Lock()
+	h.writers = append(h.writers, w)
+	h.mu.Unlock()
+}
+
+// Flush drains any partial (newline-less) final line buffered in the
+// writers created from this handler, so it reaches the output and the tee
+// before the log file is read back. Call after command execution completes.
+func (h *StreamHandler) Flush() {
+	h.mu.Lock()
+	writers := make([]*streamWriter, len(h.writers))
+	copy(writers, h.writers)
+	h.mu.Unlock()
+
+	for _, w := range writers {
+		_ = w.Flush()
 	}
 }
 

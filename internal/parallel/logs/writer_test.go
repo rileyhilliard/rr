@@ -225,5 +225,6 @@ func TestOpenRunLog(t *testing.T) {
 }
 
 func TestTaskLogPath(t *testing.T) {
-	assert.Equal(t, "/logs/run-1/test-py_2.log", TaskLogPath("/logs/run-1", "test-py", 2))
+	runDir := filepath.Join("logs", "run-1")
+	assert.Equal(t, filepath.Join(runDir, "test-py_2.log"), TaskLogPath(runDir, "test-py", 2))
 }

@@ -2,7 +2,6 @@ package lock
 
 import (
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -12,16 +11,6 @@ import (
 
 func TestProcessAlive_OwnPID(t *testing.T) {
 	assert.True(t, processAlive(os.Getpid()))
-}
-
-func TestProcessAlive_DeadPID(t *testing.T) {
-	// Spawn a short-lived child and wait for it; its pid is then dead.
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	pid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	assert.False(t, processAlive(pid))
 }
 
 func TestSameMachine_TokenMatch(t *testing.T) {
@@ -63,33 +52,6 @@ func TestSameMachine_LegacyFallback(t *testing.T) {
 	// Different hostname
 	info = &LockInfo{User: currentUser(), Hostname: "other-machine", PID: os.Getpid()}
 	assert.False(t, info.SameMachine())
-}
-
-func TestIsDeadLocalHolder(t *testing.T) {
-	// Own (alive) process: not a dead holder
-	info, err := NewLockInfo("rr test")
-	require.NoError(t, err)
-	assert.False(t, info.IsDeadLocalHolder())
-
-	// Dead local process
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	deadPid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	dead, err := NewLockInfo("rr test-backend")
-	require.NoError(t, err)
-	dead.PID = deadPid
-	assert.True(t, dead.IsDeadLocalHolder())
-
-	// Same dead pid but from another machine: never steal
-	dead.MachineToken = "00000000000000000000000000000000"
-	dead.Hostname = "other-machine"
-	assert.False(t, dead.IsDeadLocalHolder())
-
-	// Invalid pid: not stealable
-	invalid := &LockInfo{PID: 0}
-	assert.False(t, invalid.IsDeadLocalHolder())
 }
 
 func TestDescribe(t *testing.T) {

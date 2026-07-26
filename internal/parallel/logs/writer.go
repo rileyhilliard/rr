@@ -59,7 +59,7 @@ func NewLogWriter(baseDir, taskName string) (*LogWriter, error) {
 		baseDir = filepath.Join(home, baseDir[1:])
 	}
 
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Can't create log directory "+baseDir,
 			"Check your permissions.")
@@ -72,7 +72,7 @@ func NewLogWriter(baseDir, taskName string) (*LogWriter, error) {
 	timestamp := time.Now().Format("20060102-150405")
 	taskDir := filepath.Join(baseDir, fmt.Sprintf("%s-%s", taskName, timestamp))
 	for suffix := 2; ; suffix++ {
-		err := os.Mkdir(taskDir, 0755)
+		err := os.Mkdir(taskDir, 0o700)
 		if err == nil {
 			break
 		}

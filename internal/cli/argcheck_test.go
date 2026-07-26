@@ -23,6 +23,7 @@ func withGlobalHosts(t *testing.T, hosts ...string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this on Windows
 	if len(hosts) == 0 {
 		return
 	}

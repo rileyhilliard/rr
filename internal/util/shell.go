@@ -51,7 +51,7 @@ func IsCompoundCommand(cmd string) bool {
 			inSingle = true
 		case c == '"':
 			inDouble = true
-		case c == '|' || c == ';' || c == '&' || c == '<' || c == '>' || c == '`':
+		case c == '|' || c == ';' || c == '&' || c == '<' || c == '>' || c == '`' || c == '\n':
 			return true
 		case c == '$':
 			if i+1 < len(cmd) && cmd[i+1] == '(' {

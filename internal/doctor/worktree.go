@@ -48,10 +48,16 @@ func (c *WorktreeMappingCheck) Run() CheckResult {
 	}
 
 	// A linked worktree sharing the main checkout's remote dir means
-	// cross-clobber between trees - warn when isolation is off.
-	if wt.IsLinked && len(mappings) > 0 && !strings.Contains(mappings[0], "@") {
-		result.Status = StatusWarn
-		result.Suggestion = "worktree isolation is disabled (sync.worktree_isolation: false): this worktree shares the main checkout's remote directory, so syncs from different trees will overwrite each other"
+	// cross-clobber between trees - warn when any host's dir lacks the
+	// worktree suffix, regardless of host ordering.
+	if wt.IsLinked {
+		for _, m := range mappings {
+			if !strings.Contains(m, "@") {
+				result.Status = StatusWarn
+				result.Suggestion = "worktree isolation is disabled (sync.worktree_isolation: false): this worktree shares the main checkout's remote directory, so syncs from different trees will overwrite each other"
+				break
+			}
+		}
 	}
 
 	return result

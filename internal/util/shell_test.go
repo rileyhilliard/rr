@@ -83,6 +83,8 @@ func TestIsCompoundCommand(t *testing.T) {
 		{"plain command", "pytest tests/", false},
 		{"flags only", "go test -v -run TestFoo ./...", false},
 		{"pipe", "pytest | grep -v PASS", true},
+		{"newline separated", "make build\nmake test", true},
+		{"newline inside single quotes", "echo 'a\nb'", false},
 		{"and chain", "cd app && pytest", true},
 		{"or chain", "pytest || true", true},
 		{"semicolon", "cd app; pytest", true},

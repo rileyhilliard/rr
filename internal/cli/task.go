@@ -176,6 +176,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Execute the task
 	result, err := exec.ExecuteTask(wf.Context(), wf.Conn, task, taskArgs, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr(), execOpts)
 	execDuration := time.Since(execStart)
+	streamHandler.Flush()
 
 	// If cancelled by signal, return standard Ctrl+C exit code
 	if wf.Context().Err() != nil {
@@ -301,6 +302,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 
 	result, err := executor.Execute(ctx, plan)
 	execDuration := time.Since(execStart)
+	streamHandler.Flush()
 
 	if err != nil {
 		return 1, err

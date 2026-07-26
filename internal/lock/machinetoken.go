@@ -13,10 +13,12 @@ import (
 var (
 	machineTokenOnce  sync.Once
 	machineTokenValue string
-	// machineTokenPath is a var so tests can redirect it. The filename is
-	// per-user: a fixed world-readable path in the shared temp dir would
-	// let any local user pre-create the file and control the token.
-	machineTokenPath = filepath.Join(os.TempDir(), fmt.Sprintf("rr-machine-token-%d", os.Getuid()))
+	// machineTokenDir/machineTokenPath are vars so tests can redirect
+	// them. The token lives in a per-user 0700 directory: a fixed path in
+	// the shared temp dir would let any local user pre-create the file
+	// (or a symlink) and control the token.
+	machineTokenDir  = filepath.Join(os.TempDir(), fmt.Sprintf("rr-%d", os.Getuid()))
+	machineTokenPath = filepath.Join(machineTokenDir, "machine-token")
 )
 
 // machineToken returns a random token shared by this user's rr processes on
@@ -27,6 +29,17 @@ var (
 // back to the hostname+user fallback, which is the conservative direction.
 func machineToken() string {
 	machineTokenOnce.Do(func() {
+		// The directory must be ours alone: refuse a symlink or anything
+		// group/other-accessible. An attacker-owned dir at this path just
+		// fails the reads/writes below, degrading to the hostname+user
+		// fallback.
+		if err := os.MkdirAll(machineTokenDir, 0o700); err != nil {
+			return
+		}
+		if fi, err := os.Lstat(machineTokenDir); err != nil || !fi.IsDir() ||
+			fi.Mode()&os.ModeSymlink != 0 || fi.Mode().Perm()&0o077 != 0 {
+			return
+		}
 		if data, err := os.ReadFile(machineTokenPath); err == nil {
 			tok := strings.TrimSpace(string(data))
 			if isHexToken(tok) {

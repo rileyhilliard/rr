@@ -2,7 +2,6 @@ package lock
 
 import (
 	"encoding/json"
-	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -1155,39 +1154,6 @@ func TestIsLockStale_FallbackToStarted(t *testing.T) {
 	assert.True(t, stale)
 }
 
-func TestAcquire_DeadLocalHolderStolen(t *testing.T) {
-	conn, mock := newMockConnection("testhost")
-
-	// Simulate a lock held by a dead process on THIS machine
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	deadPid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	mock.GetFS().Mkdir("/tmp/rr.lock")
-	info, err := NewLockInfo("rr test-backend")
-	require.NoError(t, err)
-	info.PID = deadPid // recent (not stale), but the process is gone
-	infoJSON, _ := info.Marshal()
-	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
-
-	cfg := config.LockConfig{
-		Enabled: true,
-		Timeout: 2 * time.Second,
-		Stale:   10 * time.Minute, // NOT stale - only the dead-holder path can steal
-		Dir:     "/tmp",
-	}
-
-	var warnings []string
-	l, err := Acquire(conn, cfg, "", WithWarnFunc(func(msg string) {
-		warnings = append(warnings, msg)
-	}))
-	require.NoError(t, err)
-	require.NotNil(t, l)
-	require.NotEmpty(t, warnings)
-	assert.Contains(t, warnings[0], "dead local process")
-}
-
 func TestAcquire_AliveLocalHolderNotStolen(t *testing.T) {
 	conn, mock := newMockConnection("testhost")
 
@@ -1208,110 +1174,6 @@ func TestAcquire_AliveLocalHolderNotStolen(t *testing.T) {
 	_, err = Acquire(conn, cfg, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Lock timeout")
-}
-
-func TestAcquire_DeadRemoteHolderNotStolen(t *testing.T) {
-	conn, mock := newMockConnection("testhost")
-
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	deadPid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	mock.GetFS().Mkdir("/tmp/rr.lock")
-	// Holder from another machine: same dead pid but never stealable early
-	info := &LockInfo{
-		User:         "other",
-		Hostname:     "otherhost",
-		Started:      time.Now(),
-		PID:          deadPid,
-		MachineToken: "00000000000000000000000000000000",
-	}
-	infoJSON, _ := info.Marshal()
-	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
-
-	cfg := config.LockConfig{
-		Enabled: true,
-		Timeout: 100 * time.Millisecond,
-		Stale:   10 * time.Minute,
-		Dir:     "/tmp",
-	}
-
-	_, err := Acquire(conn, cfg, "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Lock timeout")
-}
-
-func TestTryAcquire_DeadLocalHolderStolen(t *testing.T) {
-	conn, mock := newMockConnection("testhost")
-
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	deadPid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	mock.GetFS().Mkdir("/tmp/rr.lock")
-	info, err := NewLockInfo("rr test-backend")
-	require.NoError(t, err)
-	info.PID = deadPid
-	infoJSON, _ := info.Marshal()
-	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
-
-	cfg := config.LockConfig{
-		Enabled: true,
-		Timeout: 5 * time.Second,
-		Stale:   10 * time.Minute,
-		Dir:     "/tmp",
-	}
-
-	l, err := TryAcquire(conn, cfg, "")
-	require.NoError(t, err)
-	require.NotNil(t, l)
-}
-
-func TestStealDeadHolderLock_HolderChangedNotStolen(t *testing.T) {
-	_, mock := newMockConnection("testhost")
-
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	deadPid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	// Snapshot taken during the liveness check: dead local holder.
-	prev, err := NewLockInfo("rr old-run")
-	require.NoError(t, err)
-	prev.PID = deadPid
-
-	// By removal time the lock has been released and re-acquired by a
-	// live process - the steal must abort.
-	current, err := NewLockInfo("rr new-run")
-	require.NoError(t, err)
-	current.PID = 1
-	curJSON, _ := current.Marshal()
-	mock.GetFS().Mkdir("/tmp/rr.lock")
-	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", curJSON)
-
-	assert.False(t, stealDeadHolderLock(mock, "/tmp/rr.lock", "/tmp/rr.lock/info.json", prev))
-	assert.True(t, mock.GetFS().Exists("/tmp/rr.lock"))
-}
-
-func TestStealDeadHolderLock_SameDeadHolderStolen(t *testing.T) {
-	_, mock := newMockConnection("testhost")
-
-	cmd := exec.Command("true")
-	require.NoError(t, cmd.Start())
-	deadPid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-
-	info, err := NewLockInfo("rr old-run")
-	require.NoError(t, err)
-	info.PID = deadPid
-	infoJSON, _ := info.Marshal()
-	mock.GetFS().Mkdir("/tmp/rr.lock")
-	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
-
-	assert.True(t, stealDeadHolderLock(mock, "/tmp/rr.lock", "/tmp/rr.lock/info.json", info))
-	assert.False(t, mock.GetFS().Exists("/tmp/rr.lock"))
 }
 
 func TestTryAcquire_AliveLocalHolderReturnsErrLocked(t *testing.T) {

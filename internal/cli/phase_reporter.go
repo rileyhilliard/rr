@@ -20,9 +20,10 @@ type PhaseReporter interface {
 	ThinDivider()
 	CommandPrompt(command string)
 	// CommandComplete emits the final result. extra carries additional
-	// result details (fallback, log_file, summary, ...) merged into the
-	// structured envelope's details map; pretty mode ignores it (callers
-	// print their own warnings). Pass nil when there is nothing extra.
+	// result details (fallback, log_file, summary, ...): the structured
+	// reporter merges them into the envelope's details map, the pretty
+	// reporter re-prints the fallback warning from them. Pass nil when
+	// there is nothing extra.
 	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{})
 }
 

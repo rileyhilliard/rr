@@ -99,6 +99,7 @@ func Run(opts RunOptions) (int, error) {
 		exitCode, err = wf.Conn.Client.ExecStreamContext(wf.Context(), fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
+	streamHandler.Flush()
 
 	if wf.Context().Err() != nil {
 		return 130, nil
