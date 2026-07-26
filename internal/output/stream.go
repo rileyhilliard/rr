@@ -227,10 +227,14 @@ func (h *StreamHandler) GetStderrCapture() string {
 	return string(h.stderrCapture)
 }
 
-// streamWriter wraps the handler to implement io.Writer.
+// streamWriter wraps the handler to implement io.Writer. Writes are
+// serialized with a mutex: parallel dependency stages share one writer
+// across concurrently running tasks, and the line buffer must not be
+// mutated from two goroutines at once.
 type streamWriter struct {
 	handler    *StreamHandler
 	isStderr   bool
+	mu         sync.Mutex
 	lineBuffer LineBuffer
 }
 
@@ -239,7 +243,9 @@ type streamWriter struct {
 func (w *streamWriter) Write(p []byte) (n int, err error) {
 	n = len(p)
 
+	w.mu.Lock()
 	lines := w.lineBuffer.ProcessBytes(p)
+	w.mu.Unlock()
 	for _, line := range lines {
 		if w.isStderr {
 			if err := w.handler.WriteStderr(line); err != nil {
@@ -257,7 +263,10 @@ func (w *streamWriter) Write(p []byte) (n int, err error) {
 
 // Flush writes any remaining buffered content.
 func (w *streamWriter) Flush() error {
-	if line := w.lineBuffer.Flush(); line != "" {
+	w.mu.Lock()
+	line := w.lineBuffer.Flush()
+	w.mu.Unlock()
+	if line != "" {
 		if w.isStderr {
 			return w.handler.WriteStderr(line)
 		}

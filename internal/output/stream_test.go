@@ -312,3 +312,47 @@ type failingWriter struct{}
 func (w *failingWriter) Write(p []byte) (int, error) {
 	return 0, assert.AnError
 }
+
+// safeBuffer is a bytes.Buffer safe for concurrent writes.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Parallel dependency stages share one stream writer across concurrently
+// running tasks; concurrent writes must not corrupt the line buffer.
+func TestStreamWriterConcurrentWrites(t *testing.T) {
+	var out safeBuffer
+	h := NewStreamHandler(&out, &out)
+	w := h.Stdout()
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				// Split lines across writes to exercise buffering.
+				_, err := w.Write([]byte("partial-"))
+				assert.NoError(t, err)
+				_, err = w.Write([]byte("line\n"))
+				assert.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Contains(t, out.String(), "partial-line")
+}
