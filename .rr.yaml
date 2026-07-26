@@ -17,7 +17,7 @@ local_fallback: true
 sync:
   # Files/directories to exclude from sync (rsync patterns)
   exclude:
-    - .git/
+    - .git # bare pattern: .git is a file in linked worktrees
     - .DS_Store
     - "*.log"
     # Build artifacts

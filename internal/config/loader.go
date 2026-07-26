@@ -39,7 +39,19 @@ func Load(path string) (*Config, error) {
 			"Something's off with your .rr.yaml. Check that it's valid YAML.")
 	}
 
-	return parseConfig(v, path)
+	cfg, err := parseConfig(v, path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply the project's worktree-isolation preference so ${PROJECT}
+	// expansion reflects it from here on. Every entry point that loads a
+	// project config picks this up without extra wiring.
+	if cfg.Sync.WorktreeIsolation != nil {
+		SetWorktreeIsolation(*cfg.Sync.WorktreeIsolation)
+	}
+
+	return cfg, nil
 }
 
 // GlobalConfigPath returns the path to the global config file.
@@ -142,12 +154,10 @@ func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
-	// Expand variables in host directories
-	for name := range cfg.Hosts {
-		h := cfg.Hosts[name]
-		h.Dir = ExpandRemote(h.Dir)
-		cfg.Hosts[name] = h
-	}
+	// NOTE: host Dir values keep their ${PROJECT}/${HOME} variables here.
+	// Expansion happens at use sites (sync, exec, doctor, display) so that
+	// project-level settings loaded later - notably sync.worktree_isolation,
+	// which changes what ${PROJECT} expands to - are honored.
 
 	return cfg, nil
 }

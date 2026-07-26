@@ -493,12 +493,17 @@ func DefaultConfig() *Config {
 		Host:    "",
 		Sync: SyncConfig{
 			RespectGitignore: true,
+			// Bare patterns (no trailing slash) for .git, .venv, and
+			// node_modules: in git worktrees .git is a FILE and
+			// node_modules may be a symlink. Dir-only patterns miss those
+			// and rsync then fails replacing a remote dir with a file
+			// (partial transfer, exit 23).
 			Exclude: []string{
-				".git/",
-				".venv/",
+				".git",
+				".venv",
 				"__pycache__/",
 				"*.pyc",
-				"node_modules/",
+				"node_modules",
 				".mypy_cache/",
 				".pytest_cache/",
 				".ruff_cache/",

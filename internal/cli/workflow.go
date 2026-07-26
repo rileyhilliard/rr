@@ -226,7 +226,7 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 		uiHosts[i] = ui.HostInfo{
 			Name: h.Name,
 			SSH:  h.SSH,
-			Dir:  h.Dir,
+			Dir:  config.ExpandRemote(h.Dir),
 			Tags: h.Tags,
 		}
 	}
@@ -393,7 +393,7 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 		return err
 	}
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions())
 	if err != nil {
 		reporter.PhaseFailed("sync", err)
 		return err
@@ -401,6 +401,29 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 
 	reporter.PhaseComplete("sync", ctx.Conn.Name, time.Since(syncStart))
 	return nil
+}
+
+// structuredSyncOptions surfaces sync warnings as phase events.
+func structuredSyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			WritePhaseEvent(PhaseEvent{
+				Type:    "phase",
+				Phase:   "sync",
+				Status:  "warn",
+				Details: w.Details,
+			})
+		},
+	}
+}
+
+// prettySyncOptions surfaces sync warnings as printed warnings.
+func prettySyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			ui.PrintWarning(w.Message)
+		},
+	}
 }
 
 // resolveSyncConfig returns the sync config to use, falling back to defaults.
@@ -426,7 +449,7 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter, prettySyncOptions())
 	if err != nil {
 		syncProgress.Fail()
 		return err
@@ -450,7 +473,7 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, prettySyncOptions())
 	if err != nil {
 		syncSpinner.Fail()
 		return err
