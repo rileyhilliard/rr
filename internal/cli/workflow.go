@@ -309,6 +309,24 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 	reporter := ctx.GetReporter()
 	reporter.PhaseStart("connect")
 
+	// Local fallback (hosts unreachable) must be visible in structured
+	// output too, not just in the pretty connection display.
+	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
+		if event.Type == host.EventLocalFallback {
+			WritePhaseEvent(PhaseEvent{
+				Type:   "phase",
+				Phase:  "connect",
+				Status: "warn",
+				Host:   "local",
+				Details: map[string]interface{}{
+					"local_fallback": true,
+					"reason":         "hosts_unreachable",
+					"message":        event.Message,
+				},
+			})
+		}
+	})
+
 	var err error
 	if opts.Tag != "" {
 		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)

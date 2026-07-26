@@ -75,6 +75,16 @@ func (r *PrettyReporter) CommandPrompt(command string) {
 
 func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	renderFinalStatus(r.pd, exitCode, totalDuration, execDuration, host)
+
+	// Repeat the fallback warning after the status line - readers of the
+	// output tail must not mistake a local run for a remote one.
+	if fb, ok := extra["fallback"].(fallbackDetail); ok {
+		msg := "Ran LOCALLY - all remote hosts were locked"
+		if len(fb.Holders) > 0 {
+			msg += " (" + describeHolders(fb.Holders) + ")"
+		}
+		ui.PrintWarning(msg)
+	}
 }
 
 // StructuredReporter emits JSON events to stderr. stdout is left clean
