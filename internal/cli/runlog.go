@@ -50,12 +50,9 @@ func attachRunOutcome(wf *WorkflowContext, command, logPath string, exitCode int
 	if logPath == "" {
 		return
 	}
-	data, err := os.ReadFile(logPath)
-	if err != nil || len(data) == 0 {
+	data := readFileTail(logPath, maxLogReadBytes)
+	if len(data) == 0 {
 		return
-	}
-	if len(data) > maxLogReadBytes {
-		data = data[len(data)-maxLogReadBytes:]
 	}
 
 	if summary, ok := formatters.ExtractTestSummary(command, data); ok {
@@ -105,6 +102,21 @@ func printLogTail(logPath string, n int) {
 // tailLines returns the last n lines of the file at path, reading at most
 // maxTailReadBytes from the end.
 func tailLines(path string, n int) []string {
+	data := readFileTail(path, maxTailReadBytes)
+	if len(data) == 0 {
+		return nil
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+// readFileTail returns up to the last capBytes of the file at path without
+// reading the whole file into memory. Best-effort: any error returns nil.
+func readFileTail(path string, capBytes int64) []byte {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -115,19 +127,14 @@ func tailLines(path string, n int) []string {
 	if err != nil {
 		return nil
 	}
-	if st.Size() > maxTailReadBytes {
-		if _, err := f.Seek(-maxTailReadBytes, io.SeekEnd); err != nil {
+	if st.Size() > capBytes {
+		if _, err := f.Seek(-capBytes, io.SeekEnd); err != nil {
 			return nil
 		}
 	}
 	data, err := io.ReadAll(f)
-	if err != nil || len(data) == 0 {
+	if err != nil {
 		return nil
 	}
-
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return lines
+	return data
 }

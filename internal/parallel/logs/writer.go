@@ -59,15 +59,29 @@ func NewLogWriter(baseDir, taskName string) (*LogWriter, error) {
 		baseDir = filepath.Join(home, baseDir[1:])
 	}
 
-	// Create timestamp-based directory name
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't create log directory "+baseDir,
+			"Check your permissions.")
+	}
+
+	// Create timestamp-based directory name. The timestamp has one-second
+	// resolution, so two runs of the same task in the same second would
+	// share (and clobber) a directory - on collision, retry with a numeric
+	// suffix until an unused name is found.
 	timestamp := time.Now().Format("20060102-150405")
 	taskDir := filepath.Join(baseDir, fmt.Sprintf("%s-%s", taskName, timestamp))
-
-	// Create the directory
-	if err := os.MkdirAll(taskDir, 0755); err != nil {
-		return nil, errors.WrapWithCode(err, errors.ErrConfig,
-			"Can't create log directory "+taskDir,
-			"Check your permissions for "+baseDir+".")
+	for suffix := 2; ; suffix++ {
+		err := os.Mkdir(taskDir, 0755)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) || suffix > 1000 {
+			return nil, errors.WrapWithCode(err, errors.ErrConfig,
+				"Can't create log directory "+taskDir,
+				"Check your permissions for "+baseDir+".")
+		}
+		taskDir = filepath.Join(baseDir, fmt.Sprintf("%s-%s.%d", taskName, timestamp, suffix))
 	}
 
 	return &LogWriter{

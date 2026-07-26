@@ -27,6 +27,19 @@ func TestNewLogWriter(t *testing.T) {
 	assert.True(t, strings.HasPrefix(writer.Dir(), tmpDir))
 }
 
+func TestNewLogWriter_SameSecondRunsGetDistinctDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	a, err := NewLogWriter(tmpDir, "test-task")
+	require.NoError(t, err)
+	b, err := NewLogWriter(tmpDir, "test-task")
+	require.NoError(t, err)
+
+	assert.NotEqual(t, a.Dir(), b.Dir())
+	assert.DirExists(t, a.Dir())
+	assert.DirExists(t, b.Dir())
+}
+
 func TestNewLogWriter_TildeExpansion(t *testing.T) {
 	// Skip if HOME not set
 	home := os.Getenv("HOME")
