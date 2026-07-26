@@ -33,6 +33,7 @@ var (
 type HostListOutput struct {
 	Hosts       []HostConfigInfo `json:"hosts"`
 	DefaultHost string           `json:"default_host,omitempty"`
+	Config      string           `json:"config,omitempty"`
 }
 
 // HostConfigInfo represents a single host in JSON output.
@@ -348,7 +349,7 @@ func hostList() error {
 
 	// JSON/machine mode output
 	if hostListJSON || MachineMode() {
-		return outputHostListJSON(cfg, hostOrder)
+		return outputHostListJSON(cfg, hostOrder, globalPath)
 	}
 
 	// Human-readable output
@@ -358,9 +359,10 @@ func hostList() error {
 // outputHostListJSON outputs hosts in JSON format with envelope.
 // hostOrder specifies the priority order from project config (if available).
 // The default host is the first valid host from hostOrder, falling back to alphabetical.
-func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string) error {
+func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string, globalPath string) error {
 	output := HostListOutput{
-		Hosts: make([]HostConfigInfo, 0, len(cfg.Hosts)),
+		Hosts:  make([]HostConfigInfo, 0, len(cfg.Hosts)),
+		Config: globalPath,
 	}
 
 	// Sort host names for consistent output
