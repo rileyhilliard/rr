@@ -114,6 +114,13 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your task dependencies in .rr.yaml.")
 	}
 
+	// Validate local_fallback mode when set
+	if cfg.LocalFallback != nil && !cfg.LocalFallback.Valid() {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Invalid local_fallback value '%s'", *cfg.LocalFallback),
+			"Use never, on-unreachable, always, or a boolean (true = always, false = never).")
+	}
+
 	return nil
 }
 
@@ -153,6 +160,13 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 		if err := validateHost(name, cfg.Hosts[name]); err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
 		}
+	}
+
+	// Validate local_fallback mode when set (empty means "use default")
+	if cfg.Defaults.LocalFallback != "" && !cfg.Defaults.LocalFallback.Valid() {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Invalid defaults.local_fallback value '%s'", cfg.Defaults.LocalFallback),
+			"Use never, on-unreachable, always, or a boolean (true = always, false = never).")
 	}
 
 	return nil

@@ -120,7 +120,7 @@ func TestSetupHostSelector_WithConfig(t *testing.T) {
 					"dev": {SSH: []string{"dev.example.com"}},
 				},
 				Defaults: config.GlobalDefaults{
-					LocalFallback: true,
+					LocalFallback: config.LocalFallbackAlways,
 					ProbeTimeout:  5 * time.Second,
 				},
 			},
@@ -500,7 +500,7 @@ func TestSetupHostSelector_LocalFallbackEnabled(t *testing.T) {
 					"dev": {SSH: []string{"dev.example.com"}},
 				},
 				Defaults: config.GlobalDefaults{
-					LocalFallback: true,
+					LocalFallback: config.LocalFallbackAlways,
 				},
 			},
 		},
@@ -521,7 +521,7 @@ func TestSetupHostSelector_LocalFallbackDisabled(t *testing.T) {
 					"dev": {SSH: []string{"dev.example.com"}},
 				},
 				Defaults: config.GlobalDefaults{
-					LocalFallback: false,
+					LocalFallback: config.LocalFallbackNever,
 				},
 			},
 		},
@@ -1258,7 +1258,7 @@ func TestSetupHostSelector_FullConfiguration(t *testing.T) {
 					},
 				},
 				Defaults: config.GlobalDefaults{
-					LocalFallback: true,
+					LocalFallback: config.LocalFallbackAlways,
 					ProbeTimeout:  10 * time.Second,
 				},
 			},
@@ -1294,7 +1294,7 @@ func TestWorkflowContext_FullLifecycle(t *testing.T) {
 					"test": {SSH: []string{"test.example.com"}},
 				},
 				Defaults: config.GlobalDefaults{
-					LocalFallback: true,
+					LocalFallback: config.LocalFallbackAlways,
 				},
 			},
 			Project: &config.Config{},

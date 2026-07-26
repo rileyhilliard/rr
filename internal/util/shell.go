@@ -11,6 +11,57 @@ func ShellQuote(s string) string {
 	return "'" + escaped + "'"
 }
 
+// ShellQuoteJoin quotes each argument and joins them with single spaces.
+func ShellQuoteJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = ShellQuote(a)
+	}
+	return strings.Join(quoted, " ")
+}
+
+// IsCompoundCommand reports whether cmd contains shell control operators or
+// substitutions (pipes, ;, &, redirections, $(), backticks) outside single
+// quotes. Appending arguments to a compound command is ambiguous: they would
+// bind to the last command in the pipeline, not the intended one.
+func IsCompoundCommand(cmd string) bool {
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+		case c == '\\':
+			i++ // skip escaped character
+		case inDouble:
+			switch c {
+			case '"':
+				inDouble = false
+			case '`':
+				return true // command substitution runs inside double quotes
+			case '$':
+				if i+1 < len(cmd) && cmd[i+1] == '(' {
+					return true
+				}
+			}
+		case c == '\'':
+			inSingle = true
+		case c == '"':
+			inDouble = true
+		case c == '|' || c == ';' || c == '&' || c == '<' || c == '>' || c == '`':
+			return true
+		case c == '$':
+			if i+1 < len(cmd) && cmd[i+1] == '(' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ShellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
 // For paths starting with ~/, the tilde is kept unquoted and the rest is single-quoted.
 // For other paths, the entire path is single-quoted.

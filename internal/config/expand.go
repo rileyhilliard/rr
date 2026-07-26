@@ -4,7 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // ExpandTilde replaces ~ or ~/path with the user's home directory.
@@ -95,6 +98,41 @@ func ExpandRemote(s string) string {
 	}
 
 	return result
+}
+
+// argsPlaceholderRe matches {{args}} (escaped literal), {args}, and
+// {args:-default}. Defaults cannot contain '}' - the match stops at the
+// first closing brace.
+var argsPlaceholderRe = regexp.MustCompile(`\{\{args\}\}|\{args(:-([^}]*))?\}`)
+
+// ExpandArgs substitutes {args} / {args:-default} placeholders in a task run
+// string. Extra args are shell-quoted before substitution. With no args,
+// {args} becomes empty and {args:-default} inserts the default verbatim
+// (author-controlled, not quoted). {{args}} escapes to the literal {args}.
+// The second return value reports whether any (unescaped) placeholder was
+// found, so callers can decide between substitution and legacy append.
+func ExpandArgs(run string, args []string) (string, bool) {
+	if !strings.Contains(run, "{args") && !strings.Contains(run, "{{args}}") {
+		return run, false
+	}
+
+	found := false
+	quoted := util.ShellQuoteJoin(args)
+	result := argsPlaceholderRe.ReplaceAllStringFunc(run, func(m string) string {
+		if m == "{{args}}" {
+			return "{args}"
+		}
+		found = true
+		if len(args) > 0 {
+			return quoted
+		}
+		sub := argsPlaceholderRe.FindStringSubmatch(m)
+		if len(sub) > 2 {
+			return sub[2] // default value (empty for bare {args})
+		}
+		return ""
+	})
+	return result, found
 }
 
 // ExpandHost expands variables in a Host configuration.

@@ -24,13 +24,42 @@ type GlobalConfig struct {
 	Logs     LogsConfig      `yaml:"logs" mapstructure:"logs"`
 }
 
+// LocalFallbackMode controls when rr falls back to local execution.
+type LocalFallbackMode string
+
+const (
+	// LocalFallbackNever disables local fallback entirely.
+	LocalFallbackNever LocalFallbackMode = "never"
+	// LocalFallbackOnUnreachable falls back only when hosts are down or
+	// unconfigured; hosts that are merely busy (locked) cause a wait/error.
+	LocalFallbackOnUnreachable LocalFallbackMode = "on-unreachable"
+	// LocalFallbackAlways falls back when hosts are unreachable OR all locked.
+	LocalFallbackAlways LocalFallbackMode = "always"
+)
+
+// Enabled reports whether any form of local fallback is allowed.
+func (m LocalFallbackMode) Enabled() bool {
+	return m == LocalFallbackOnUnreachable || m == LocalFallbackAlways
+}
+
+// Valid reports whether the mode is one of the recognized values.
+func (m LocalFallbackMode) Valid() bool {
+	switch m {
+	case LocalFallbackNever, LocalFallbackOnUnreachable, LocalFallbackAlways:
+		return true
+	}
+	return false
+}
+
 // GlobalDefaults contains default settings for host selection and connection.
 type GlobalDefaults struct {
 	// ProbeTimeout is how long to wait when probing SSH hosts.
 	ProbeTimeout time.Duration `yaml:"probe_timeout" mapstructure:"probe_timeout"`
 
-	// LocalFallback allows falling back to local execution when no hosts are available.
-	LocalFallback bool `yaml:"local_fallback" mapstructure:"local_fallback"`
+	// LocalFallback controls falling back to local execution: never,
+	// on-unreachable, or always. Booleans are accepted for backwards
+	// compatibility (true = always, false = never).
+	LocalFallback LocalFallbackMode `yaml:"local_fallback" mapstructure:"local_fallback"`
 }
 
 // ProjectDefaults contains default settings applied to all tasks in a project.
@@ -52,7 +81,7 @@ type Config struct {
 	Version       int                   `yaml:"version" mapstructure:"version"`
 	Host          string                `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
 	Hosts         []string              `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
-	LocalFallback *bool                 `yaml:"local_fallback,omitempty" mapstructure:"local_fallback"`
+	LocalFallback *LocalFallbackMode    `yaml:"local_fallback,omitempty" mapstructure:"local_fallback"`
 	Defaults      ProjectDefaults       `yaml:"defaults" mapstructure:"defaults"`
 	Sync          SyncConfig            `yaml:"sync" mapstructure:"sync"`
 	Lock          LockConfig            `yaml:"lock" mapstructure:"lock"`
@@ -129,6 +158,11 @@ type SyncConfig struct {
 	// lockfile changes. Prevents stale install directories (node_modules, .venv,
 	// etc.) from being used after a lockfile update.
 	Invalidations []LockfileInvalidation `yaml:"invalidations" mapstructure:"invalidations"`
+
+	// WorktreeIsolation gives each linked git worktree its own remote
+	// directory (${PROJECT} becomes "<repo>@<worktree>"). Defaults to true;
+	// set false to share the main checkout's remote directory.
+	WorktreeIsolation *bool `yaml:"worktree_isolation,omitempty" mapstructure:"worktree_isolation"`
 }
 
 // LockConfig controls the distributed lock behavior to prevent concurrent executions.
@@ -443,7 +477,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Hosts:   make(map[string]Host),
 		Defaults: GlobalDefaults{
 			ProbeTimeout:  2 * time.Second,
-			LocalFallback: false,
+			LocalFallback: LocalFallbackNever,
 		},
 		Logs: LogsConfig{
 			Dir:      "~/.rr/logs",

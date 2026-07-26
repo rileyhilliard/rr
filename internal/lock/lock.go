@@ -380,6 +380,26 @@ func GetLockHolder(conn *host.Connection, cfg config.LockConfig) string {
 	return readLockHolder(conn.Client, infoFile)
 }
 
+// GetLockInfo returns structured information about the current lock holder.
+// Returns nil if no lock is held or the info file is unreadable.
+func GetLockInfo(conn *host.Connection, cfg config.LockConfig) *LockInfo {
+	if !IsLocked(conn, cfg) {
+		return nil
+	}
+
+	baseDir := cfg.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	infoFile := filepath.Join(baseDir, "rr.lock", "info.json")
+
+	info, err := readLockInfo(conn.Client, infoFile)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
 // StartHeartbeat spawns a goroutine that touches the info.json file every 30
 // seconds to prove the lock holder is still alive. Stale detection uses the
 // file's mtime, so regular touches keep the lock from being stolen.
@@ -570,6 +590,18 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 	isStale := info.Age() > staleThreshold
 	debugf("isLockStale: fallback age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
 	return isStale
+}
+
+// readLockInfo reads and parses the lock info file.
+func readLockInfo(client sshutil.SSHClient, infoFile string) (*LockInfo, error) {
+	stdout, _, exitCode, err := client.Exec(fmt.Sprintf("cat %q 2>/dev/null", infoFile))
+	if err != nil {
+		return nil, err
+	}
+	if exitCode != 0 {
+		return nil, errors.New(errors.ErrLock, "lock info file not readable", "")
+	}
+	return ParseLockInfo(stdout)
 }
 
 // readLockHolder reads the lock info file and returns a description of the holder.

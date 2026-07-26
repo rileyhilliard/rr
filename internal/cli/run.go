@@ -126,7 +126,7 @@ func Run(opts RunOptions) (int, error) {
 
 	// In structured mode, emit result and return - no decorations
 	if !PrettyMode() {
-		wf.Reporter.CommandComplete(exitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+		wf.Reporter.CommandComplete(exitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 		return exitCode, nil
 	}
 

@@ -68,3 +68,92 @@ func TestExpand_vs_ExpandRemote(t *testing.T) {
 	expandRemoteResult := ExpandRemote("${HOME}/test")
 	assert.Equal(t, "~/test", expandRemoteResult)
 }
+
+func TestExpandArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		run       string
+		args      []string
+		expected  string
+		hasHolder bool
+	}{
+		{
+			name:      "no placeholder no args",
+			run:       "pytest tests/",
+			args:      nil,
+			expected:  "pytest tests/",
+			hasHolder: false,
+		},
+		{
+			name:      "no placeholder with args returns unchanged",
+			run:       "pytest tests/",
+			args:      []string{"-k", "foo"},
+			expected:  "pytest tests/",
+			hasHolder: false,
+		},
+		{
+			name:      "placeholder mid pipeline",
+			run:       "pytest {args} -n 4 | grep -v PASS",
+			args:      []string{"tests/foo.py"},
+			expected:  "pytest 'tests/foo.py' -n 4 | grep -v PASS",
+			hasHolder: true,
+		},
+		{
+			name:      "bare placeholder empty args",
+			run:       "pytest {args} -n 4",
+			args:      nil,
+			expected:  "pytest  -n 4",
+			hasHolder: true,
+		},
+		{
+			name:      "default used when no args",
+			run:       "pytest {args:-.} -n 4",
+			args:      nil,
+			expected:  "pytest . -n 4",
+			hasHolder: true,
+		},
+		{
+			name:      "default overridden by args",
+			run:       "pytest {args:-.} -n 4",
+			args:      []string{"tests/a.py", "tests/b.py"},
+			expected:  "pytest 'tests/a.py' 'tests/b.py' -n 4",
+			hasHolder: true,
+		},
+		{
+			name:      "args are shell quoted",
+			run:       "pytest {args}",
+			args:      []string{"-k", "a b", "it's"},
+			expected:  `pytest '-k' 'a b' 'it'\''s'`,
+			hasHolder: true,
+		},
+		{
+			name:      "multiple placeholders",
+			run:       "echo {args} && pytest {args}",
+			args:      []string{"x"},
+			expected:  "echo 'x' && pytest 'x'",
+			hasHolder: true,
+		},
+		{
+			name:      "escaped placeholder stays literal",
+			run:       "jq '{{args}}' file.json",
+			args:      []string{"ignored"},
+			expected:  "jq '{args}' file.json",
+			hasHolder: false,
+		},
+		{
+			name:      "empty default",
+			run:       "pytest {args:-}",
+			args:      nil,
+			expected:  "pytest ",
+			hasHolder: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := ExpandArgs(tt.run, tt.args)
+			assert.Equal(t, tt.expected, got)
+			assert.Equal(t, tt.hasHolder, found)
+		})
+	}
+}

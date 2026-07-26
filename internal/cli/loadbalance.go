@@ -124,7 +124,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	// Phase 2: All hosts tried - handle "all locked" scenario
 	if len(lockedHosts) > 0 {
 		// If local_fallback is enabled, go local immediately
-		if ctx.Resolved.Global.Defaults.LocalFallback {
+		if ctx.Resolved.Global.Defaults.LocalFallback.Enabled() {
 			// Close all locked host connections
 			for _, a := range lockedHosts {
 				if a.conn != nil {

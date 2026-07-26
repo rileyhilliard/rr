@@ -19,7 +19,11 @@ type PhaseReporter interface {
 	Divider()
 	ThinDivider()
 	CommandPrompt(command string)
-	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration)
+	// CommandComplete emits the final result. extra carries additional
+	// result details (fallback, log_file, summary, ...) merged into the
+	// structured envelope's details map; pretty mode ignores it (callers
+	// print their own warnings). Pass nil when there is nothing extra.
+	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{})
 }
 
 // NewPhaseReporter returns a StructuredReporter (default) or PrettyReporter
@@ -69,7 +73,7 @@ func (r *PrettyReporter) CommandPrompt(command string) {
 	r.pd.CommandPrompt(command)
 }
 
-func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration) {
+func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	renderFinalStatus(r.pd, exitCode, totalDuration, execDuration, host)
 }
 
@@ -136,10 +140,16 @@ func (r *StructuredReporter) CommandPrompt(command string) {
 	})
 }
 
-func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration) {
+func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	status := "success"
 	if exitCode != 0 {
 		status = "failed"
+	}
+	details := map[string]interface{}{
+		"exec_duration_s": execDuration.Seconds(),
+	}
+	for k, v := range extra {
+		details[k] = v
 	}
 	WritePhaseEvent(PhaseEvent{
 		Type:     "result",
@@ -147,9 +157,7 @@ func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDur
 		ExitCode: &exitCode,
 		Host:     host,
 		Duration: totalDuration.Seconds(),
-		Details: map[string]interface{}{
-			"exec_duration_s": execDuration.Seconds(),
-		},
+		Details:  details,
 	})
 }
 

@@ -1,10 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -126,9 +128,15 @@ func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
 
 	// Set duration defaults for global config
 	v.SetDefault("defaults.probe_timeout", "2s")
-	v.SetDefault("defaults.local_fallback", false)
+	v.SetDefault("defaults.local_fallback", "never")
 
-	if err := v.Unmarshal(cfg); err != nil {
+	if err := v.Unmarshal(cfg, viper.DecodeHook(
+		mapstructure.ComposeDecodeHookFunc(
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.StringToSliceHookFunc(","),
+			localFallbackModeDecodeHook(),
+		),
+	)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Global config has some issues",
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
@@ -345,7 +353,7 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	// This allows users to set local_fallback: true with no hosts to force local execution
 	// Only triggers when PROJECT config has local_fallback (not just global), so existing
 	// setups that rely on global hosts + global local_fallback continue to work.
-	projectSetsLocalFallback := resolved.Project != nil && resolved.Project.LocalFallback != nil && *resolved.Project.LocalFallback
+	projectSetsLocalFallback := resolved.Project != nil && resolved.Project.LocalFallback != nil && resolved.Project.LocalFallback.Enabled()
 	if len(hostNames) == 0 && projectSetsLocalFallback && !projectSpecifiesHosts {
 		return []string{}, make(map[string]Host), nil
 	}
@@ -396,18 +404,25 @@ func ResolveHost(resolved *ResolvedConfig, preferred string) (string, *Host, err
 	return names[0], &host, nil
 }
 
-// ResolveLocalFallback determines whether local fallback is enabled.
+// ResolveLocalFallbackMode determines the local fallback mode.
 // Project config overrides global config when explicitly set.
-func ResolveLocalFallback(resolved *ResolvedConfig) bool {
+func ResolveLocalFallbackMode(resolved *ResolvedConfig) LocalFallbackMode {
 	// Project config takes precedence when explicitly set
-	if resolved.Project != nil && resolved.Project.LocalFallback != nil {
+	if resolved.Project != nil && resolved.Project.LocalFallback != nil && resolved.Project.LocalFallback.Valid() {
 		return *resolved.Project.LocalFallback
 	}
 	// Fall back to global config
-	if resolved.Global != nil {
+	if resolved.Global != nil && resolved.Global.Defaults.LocalFallback.Valid() {
 		return resolved.Global.Defaults.LocalFallback
 	}
-	return false
+	return LocalFallbackNever
+}
+
+// ResolveLocalFallback determines whether any local fallback is enabled.
+// Kept for call sites that only need the boolean (e.g. the host selector's
+// unreachable-hosts fallback, which applies in both non-never modes).
+func ResolveLocalFallback(resolved *ResolvedConfig) bool {
+	return ResolveLocalFallbackMode(resolved).Enabled()
 }
 
 // parseConfig converts viper config to our Config struct with defaults merged in.
@@ -424,6 +439,7 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 			mapstructure.StringToTimeDurationHookFunc(),
 			dependencyItemDecodeHook(),
 			pullItemDecodeHook(),
+			localFallbackModeDecodeHook(),
 		),
 	)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
@@ -446,6 +462,40 @@ func dependencyItemDecodeHook() mapstructure.DecodeHookFunc {
 		// Delegate to the shared conversion function for supported types
 		if from.Kind() == reflect.String || from.Kind() == reflect.Map {
 			return DependencyItemFromInterface(data)
+		}
+
+		return data, nil
+	}
+}
+
+// localFallbackModeDecodeHook returns a decode hook that converts booleans
+// and boolean-looking strings to LocalFallbackMode for backwards
+// compatibility (true -> always, false -> never) and validates mode strings.
+func localFallbackModeDecodeHook() mapstructure.DecodeHookFunc {
+	return func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+		if to != reflect.TypeOf(LocalFallbackMode("")) {
+			return data, nil
+		}
+
+		switch v := data.(type) {
+		case bool:
+			if v {
+				return LocalFallbackAlways, nil
+			}
+			return LocalFallbackNever, nil
+		case string:
+			s := strings.ToLower(strings.TrimSpace(v))
+			switch s {
+			case "true", "yes", "on":
+				return LocalFallbackAlways, nil
+			case "false", "no", "off":
+				return LocalFallbackNever, nil
+			}
+			mode := LocalFallbackMode(s)
+			if !mode.Valid() {
+				return nil, fmt.Errorf("invalid local_fallback value %q: use never, on-unreachable, always, or a boolean", v)
+			}
+			return mode, nil
 		}
 
 		return data, nil
@@ -478,6 +528,7 @@ func setDurationDefaults(v *viper.Viper) {
 	// Set defaults that will be merged
 	v.SetDefault("lock.enabled", true)
 	v.SetDefault("lock.timeout", "5m")
+	v.SetDefault("lock.wait_timeout", "1m")
 	v.SetDefault("lock.stale", "90s")
 	v.SetDefault("lock.dir", "/tmp/rr-locks")
 	v.SetDefault("output.color", "auto")

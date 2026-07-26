@@ -42,7 +42,7 @@ func TestDefaultGlobalConfig(t *testing.T) {
 	assert.NotNil(t, cfg.Hosts)
 	assert.Empty(t, cfg.Hosts)
 	assert.Equal(t, 2*time.Second, cfg.Defaults.ProbeTimeout)
-	assert.False(t, cfg.Defaults.LocalFallback)
+	assert.Equal(t, LocalFallbackNever, cfg.Defaults.LocalFallback)
 }
 
 func TestGlobalConfigPath(t *testing.T) {
@@ -125,7 +125,7 @@ defaults:
 	assert.Contains(t, cfg.Hosts, "dev")
 	assert.Equal(t, []string{"dev-lan", "dev-vpn"}, cfg.Hosts["dev"].SSH)
 	assert.Equal(t, 5*time.Second, cfg.Defaults.ProbeTimeout)
-	assert.True(t, cfg.Defaults.LocalFallback)
+	assert.True(t, cfg.Defaults.LocalFallback.Enabled())
 }
 
 func TestResolveHost(t *testing.T) {
@@ -1771,4 +1771,93 @@ func TestPullItemUnmarshalYAML_Direct(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalFallbackMode_Decode(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		expected LocalFallbackMode
+	}{
+		{"bool true", "local_fallback: true", LocalFallbackAlways},
+		{"bool false", "local_fallback: false", LocalFallbackNever},
+		{"string true", `local_fallback: "true"`, LocalFallbackAlways},
+		{"string false", `local_fallback: "false"`, LocalFallbackNever},
+		{"never", "local_fallback: never", LocalFallbackNever},
+		{"on-unreachable", "local_fallback: on-unreachable", LocalFallbackOnUnreachable},
+		{"always", "local_fallback: always", LocalFallbackAlways},
+		{"mixed case", "local_fallback: Always", LocalFallbackAlways},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ".rr.yaml")
+			content := "version: 1\n" + tt.yaml + "\n"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+			cfg, err := Load(path)
+			require.NoError(t, err)
+			require.NotNil(t, cfg.LocalFallback)
+			assert.Equal(t, tt.expected, *cfg.LocalFallback)
+		})
+	}
+}
+
+func TestLocalFallbackMode_DecodeInvalid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".rr.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\nlocal_fallback: sometimes\n"), 0o644))
+
+	_, err := Load(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local_fallback")
+}
+
+func TestLocalFallbackMode_UnsetIsNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".rr.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\n"), 0o644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Nil(t, cfg.LocalFallback)
+}
+
+func TestResolveLocalFallbackMode_Precedence(t *testing.T) {
+	always := LocalFallbackAlways
+	never := LocalFallbackNever
+
+	tests := []struct {
+		name     string
+		global   LocalFallbackMode
+		project  *LocalFallbackMode
+		expected LocalFallbackMode
+	}{
+		{"project overrides global", LocalFallbackNever, &always, LocalFallbackAlways},
+		{"project never overrides global always", LocalFallbackAlways, &never, LocalFallbackNever},
+		{"global used when project nil", LocalFallbackOnUnreachable, nil, LocalFallbackOnUnreachable},
+		{"defaults to never", "", nil, LocalFallbackNever},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := &ResolvedConfig{
+				Global:  &GlobalConfig{Defaults: GlobalDefaults{LocalFallback: tt.global}},
+				Project: &Config{LocalFallback: tt.project},
+			}
+			assert.Equal(t, tt.expected, ResolveLocalFallbackMode(resolved))
+			assert.Equal(t, tt.expected.Enabled(), ResolveLocalFallback(resolved))
+		})
+	}
+}
+
+func TestLockWaitTimeout_ViperDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".rr.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\n"), 0o644))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, cfg.Lock.WaitTimeout)
 }

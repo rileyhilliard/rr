@@ -44,12 +44,25 @@ type WorkflowContext struct {
 	Reporter     PhaseReporter
 	StartTime    time.Time
 
+	// ResultDetails accumulates extra keys (fallback, log_file, summary,
+	// hint, path_rewrites, ...) merged into the final result envelope's
+	// details map. Use AddResultDetail; nil until first write.
+	ResultDetails map[string]interface{}
+
 	// Internal state
 	selector   *host.Selector
 	signalChan chan os.Signal
 	ctx        context.Context
 	cancel     context.CancelFunc
 	closeOnce  sync.Once
+}
+
+// AddResultDetail records an extra key for the final result envelope.
+func (w *WorkflowContext) AddResultDetail(key string, value interface{}) {
+	if w.ResultDetails == nil {
+		w.ResultDetails = make(map[string]interface{})
+	}
+	w.ResultDetails[key] = value
 }
 
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.

@@ -178,7 +178,7 @@ func RunTask(opts TaskOptions) (int, error) {
 		wf.PhaseDisplay.ThinDivider()
 		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 	} else {
-		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}
 
 	return result.ExitCode, nil
@@ -276,7 +276,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 		wf.PhaseDisplay.ThinDivider()
 		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 	} else {
-		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}
 
 	return result.ExitCode(), nil
