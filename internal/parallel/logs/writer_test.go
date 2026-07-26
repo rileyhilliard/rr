@@ -193,3 +193,24 @@ func TestTaskLogFilename(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenRunLog(t *testing.T) {
+	base := t.TempDir()
+
+	f, path, err := OpenRunLog(base, "run")
+	require.NoError(t, err)
+	defer f.Close()
+
+	_, err = f.WriteString("hello\n")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hello\n", string(data))
+	assert.Equal(t, "output.log", filepath.Base(path))
+	assert.Contains(t, filepath.Dir(path), "run-")
+}
+
+func TestTaskLogPath(t *testing.T) {
+	assert.Equal(t, "/logs/run-1/test-py_2.log", TaskLogPath("/logs/run-1", "test-py", 2))
+}

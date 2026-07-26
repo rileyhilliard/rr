@@ -2,8 +2,10 @@ package output
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"sync"
+	"syscall"
 )
 
 // LineBuffer provides line-buffering for streaming data.
@@ -67,6 +69,16 @@ type StreamHandler struct {
 	// Limited to prevent memory issues with large output.
 	stderrCapture []byte
 	maxCapture    int
+
+	// tee receives raw (unformatted) copies of both streams. Tee write
+	// errors are never fatal.
+	tee io.Writer
+
+	// Broken-pipe state per stream: once a consumer closes its end (e.g.
+	// `rr run ... | head`), further writes to that stream are suppressed
+	// instead of failing the run. The tee keeps receiving output.
+	stdoutBroken bool
+	stderrBroken bool
 }
 
 // NewStreamHandler creates a handler that writes to the given stdout/stderr.
@@ -83,6 +95,32 @@ func (h *StreamHandler) SetFormatter(f Formatter) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.formatter = f
+}
+
+// SetTee directs raw copies of both streams to w (typically a log file).
+func (h *StreamHandler) SetTee(w io.Writer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tee = w
+}
+
+// BrokenPipe reports whether a consumer closed stdout or stderr mid-run.
+func (h *StreamHandler) BrokenPipe() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stdoutBroken || h.stderrBroken
+}
+
+// teeLine writes a raw line to the tee, ignoring errors. Caller holds mu.
+func (h *StreamHandler) teeLine(line string) {
+	if h.tee != nil {
+		_, _ = h.tee.Write([]byte(line + "\n"))
+	}
+}
+
+// isBrokenPipe reports whether err means the consumer closed its end.
+func isBrokenPipe(err error) bool {
+	return err != nil && (errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe))
 }
 
 // Stdout returns a writer that processes lines for stdout.
@@ -128,6 +166,11 @@ func (h *StreamHandler) WriteStdout(line string) error {
 	defer h.mu.Unlock()
 
 	h.stdoutLines++
+	h.teeLine(line)
+
+	if h.stdoutBroken {
+		return nil
+	}
 
 	processedLine := line
 	if h.formatter != nil {
@@ -135,6 +178,10 @@ func (h *StreamHandler) WriteStdout(line string) error {
 	}
 
 	_, err := h.stdout.Write([]byte(processedLine + "\n"))
+	if isBrokenPipe(err) {
+		h.stdoutBroken = true
+		return nil
+	}
 	return err
 }
 
@@ -144,6 +191,7 @@ func (h *StreamHandler) WriteStderr(line string) error {
 	defer h.mu.Unlock()
 
 	h.stderrLines++
+	h.teeLine(line)
 
 	// Capture stderr content for post-execution analysis (limited)
 	if len(h.stderrCapture) < h.maxCapture {
@@ -155,12 +203,20 @@ func (h *StreamHandler) WriteStderr(line string) error {
 		h.stderrCapture = append(h.stderrCapture, lineBytes...)
 	}
 
+	if h.stderrBroken {
+		return nil
+	}
+
 	processedLine := line
 	if h.formatter != nil {
 		processedLine = h.formatter.ProcessLine(line)
 	}
 
 	_, err := h.stderr.Write([]byte(processedLine + "\n"))
+	if isBrokenPipe(err) {
+		h.stderrBroken = true
+		return nil
+	}
 	return err
 }
 

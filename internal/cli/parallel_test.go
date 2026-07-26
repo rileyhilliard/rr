@@ -275,7 +275,7 @@ func TestExtractTaskFailures_PytestFailures(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -306,7 +306,7 @@ func TestExtractTaskFailures_FallbackToOutputTail(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -334,7 +334,7 @@ func TestExtractTaskFailures_EmptyOutput(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -356,7 +356,7 @@ func TestExtractTaskFailures_SkipsPassingTasks(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	assert.Empty(t, failures)
 }
 
@@ -376,7 +376,7 @@ func TestExtractTaskFailures_TruncatesLongMessages(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	tests, ok := failures[0]["tests"].([]map[string]string)
@@ -405,7 +405,7 @@ func TestExtractTaskFailures_OutputTailCapped(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	tail, ok := failures[0]["output_tail"].(string)

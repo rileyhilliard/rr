@@ -29,6 +29,8 @@ var (
 	execPullFlags            []string
 	execPullDestFlag         string
 	execCwdFlag              string
+	runTailFlag              int
+	execTailFlag             int
 	syncHostFlag             string
 	syncTagFlag              string
 	syncProbeTimeoutFlag     string
@@ -73,7 +75,19 @@ Examples:
 				fmt.Sprintf("--repeat must be >= 0, got %d", runRepeatFlag),
 				"Use --repeat with a positive number like --repeat 5")
 		}
-		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag, runPullFlags, runPullDestFlag, runCwdFlag)
+		return runCommand(args, runCmdFlags{
+			Verb:             "run",
+			Host:             runHostFlag,
+			Tag:              runTagFlag,
+			ProbeTimeout:     runProbeTimeoutFlag,
+			Local:            runLocalFlag,
+			SkipRequirements: runSkipRequirementsFlag,
+			Repeat:           runRepeatFlag,
+			Pull:             runPullFlags,
+			PullDest:         runPullDestFlag,
+			RemoteCWD:        runCwdFlag,
+			Tail:             runTailFlag,
+		})
 	},
 }
 
@@ -91,7 +105,19 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag, execPullFlags, execPullDestFlag, execCwdFlag)
+		return runCommand(args, runCmdFlags{
+			Verb:             "exec",
+			Host:             execHostFlag,
+			Tag:              execTagFlag,
+			ProbeTimeout:     execProbeTimeoutFlag,
+			Local:            execLocalFlag,
+			SkipRequirements: execSkipRequirementsFlag,
+			SkipSync:         true, // Key difference from run
+			Pull:             execPullFlags,
+			PullDest:         execPullDestFlag,
+			RemoteCWD:        execCwdFlag,
+			Tail:             execTailFlag,
+		})
 	},
 }
 
@@ -473,6 +499,7 @@ func init() {
 	runCmd.Flags().StringArrayVar(&runPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
 	runCmd.Flags().StringVar(&runPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 	runCmd.Flags().StringVar(&runCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
+	runCmd.Flags().IntVar(&runTailFlag, "tail", 0, "print the last N lines of the run log after completion")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
@@ -483,6 +510,7 @@ func init() {
 	execCmd.Flags().StringArrayVar(&execPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
 	execCmd.Flags().StringVar(&execPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 	execCmd.Flags().StringVar(&execCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
+	execCmd.Flags().IntVar(&execTailFlag, "tail", 0, "print the last N lines of the run log after completion")
 
 	// sync command flags
 	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")

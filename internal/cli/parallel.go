@@ -195,11 +195,12 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		writeTaskLogs(logWriter, result, taskName)
 	}
 
+	logDir := ""
+	if logWriter != nil {
+		logDir = logWriter.Dir()
+	}
+
 	if PrettyMode() {
-		logDir := ""
-		if logWriter != nil {
-			logDir = logWriter.Dir()
-		}
 		parallel.RenderSummary(result, logDir)
 	} else {
 		exitCode := 0
@@ -211,8 +212,11 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 			"passed": result.Passed,
 			"failed": result.Failed,
 		}
+		if logDir != "" {
+			details["log_dir"] = logDir
+		}
 		if result.Failed > 0 {
-			details["failures"] = extractTaskFailures(result)
+			details["failures"] = extractTaskFailures(result, logDir)
 		}
 		WritePhaseEvent(PhaseEvent{
 			Type:     "result",
@@ -232,7 +236,8 @@ const maxOutputTailLines = 20
 const maxFailureMessageLen = 500
 
 // extractTaskFailures builds structured failure info for machine-mode output.
-func extractTaskFailures(result *parallel.Result) []map[string]interface{} {
+// When logDir is non-empty, each failure carries the path of its saved log.
+func extractTaskFailures(result *parallel.Result, logDir string) []map[string]interface{} {
 	var failures []map[string]interface{}
 	for i := range result.TaskResults {
 		tr := &result.TaskResults[i]
@@ -246,6 +251,9 @@ func extractTaskFailures(result *parallel.Result) []map[string]interface{} {
 		}
 		if tr.Error != nil {
 			entry["error"] = tr.Error.Error()
+		}
+		if logDir != "" {
+			entry["log_file"] = logs.TaskLogPath(logDir, tr.TaskName, tr.TaskIndex)
 		}
 
 		parsed := formatters.ExtractFailures(tr.Command, tr.Output)

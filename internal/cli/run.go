@@ -38,6 +38,8 @@ type RunOptions struct {
 	Local            bool          // If true, force local execution (skip remote hosts)
 	Pull             []string      // Patterns to pull from remote after command completes
 	PullDest         string        // Destination directory for pulled files
+	Tail             int           // Print the last N lines of the run log after completion
+	LogName          string        // Run log directory prefix (defaults to "run")
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -73,6 +75,14 @@ func Run(opts RunOptions) (int, error) {
 	if PrettyMode() {
 		streamHandler.SetFormatter(output.NewGenericFormatter())
 	}
+
+	// Tee raw output into a per-run log file (best-effort).
+	logName := opts.LogName
+	if logName == "" {
+		logName = "run"
+	}
+	logPath, closeLog := setupRunLog(wf, logName, streamHandler)
+	defer closeLog()
 
 	execStart := time.Now()
 	var exitCode int
@@ -122,66 +132,24 @@ func Run(opts RunOptions) (int, error) {
 		}
 	}
 
+	// Record test summary/failures from the run log and note broken pipes.
+	attachRunOutcome(wf, opts.Command, logPath, exitCode)
+	if streamHandler.BrokenPipe() {
+		wf.AddResultDetail("broken_pipe", true)
+	}
+
 	// In structured mode, emit result and return - no decorations
 	if !PrettyMode() {
 		wf.Reporter.CommandComplete(exitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
+		printLogTail(logPath, opts.Tail)
 		return exitCode, nil
 	}
 
 	// Pretty mode: check for failures, test summaries, etc.
-	failureExplained := false
-	if exitCode != 0 {
-		var sshClient exec.SSHExecer
-		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
-			sshClient = wf.Conn.Client
-		}
-
-		missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
-		if missingTool != nil {
-			failureExplained = true
-			fmt.Println()
-			fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
-			fmt.Println(missingTool.Suggestion)
-
-			if !wf.Conn.IsLocal && wf.Conn.Client != nil {
-				configPath, _ := config.Find(Config())
-				if configPath != "" {
-					fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
-					if fixResult != nil && fixResult.ShouldRetry {
-						wf.PhaseDisplay.ThinDivider()
-						renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
-
-						wf.Close()
-						return Run(opts)
-					}
-				}
-			}
-		} else if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
-			failures := provider.GetTestFailures()
-			if len(failures) > 0 {
-				failureExplained = true
-				passed, failed, skipped, errors := provider.GetTestCounts()
-				summary := &ui.TestSummary{
-					Passed:   passed,
-					Failed:   failed,
-					Skipped:  skipped,
-					Errors:   errors,
-					Failures: make([]ui.TestFailure, len(failures)),
-				}
-				for i, f := range failures {
-					summary.Failures[i] = ui.TestFailure{
-						TestName: f.TestName,
-						File:     f.File,
-						Line:     f.Line,
-						Message:  f.Message,
-					}
-				}
-				fmt.Println()
-				fmt.Print(ui.FormatDivider(ui.DividerWidth))
-				fmt.Println()
-				fmt.Print(ui.RenderSummary(summary, exitCode))
-			}
-		}
+	failureExplained, retry := explainRunFailure(wf, opts, streamHandler, exitCode, execDuration)
+	if retry {
+		wf.Close()
+		return Run(opts)
 	}
 
 	wf.PhaseDisplay.ThinDivider()
@@ -193,7 +161,73 @@ func Run(opts RunOptions) (int, error) {
 		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
 	}
 
+	printLogTail(logPath, opts.Tail)
+
 	return exitCode, nil
+}
+
+// explainRunFailure renders pretty-mode failure explanations: missing-tool
+// detection (with optional auto-fix) and parsed test summaries. Returns
+// whether the failure was explained and whether the caller should retry the
+// whole run after a successful tool fix.
+func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *output.StreamHandler, exitCode int, execDuration time.Duration) (explained, retry bool) {
+	if exitCode == 0 {
+		return false, false
+	}
+
+	var sshClient exec.SSHExecer
+	if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+		sshClient = wf.Conn.Client
+	}
+
+	missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
+	if missingTool != nil {
+		fmt.Println()
+		fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
+		fmt.Println(missingTool.Suggestion)
+
+		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+			configPath, _ := config.Find(Config())
+			if configPath != "" {
+				fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
+				if fixResult != nil && fixResult.ShouldRetry {
+					wf.PhaseDisplay.ThinDivider()
+					renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
+					return true, true
+				}
+			}
+		}
+		return true, false
+	}
+
+	if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
+		failures := provider.GetTestFailures()
+		if len(failures) > 0 {
+			passed, failed, skipped, errors := provider.GetTestCounts()
+			summary := &ui.TestSummary{
+				Passed:   passed,
+				Failed:   failed,
+				Skipped:  skipped,
+				Errors:   errors,
+				Failures: make([]ui.TestFailure, len(failures)),
+			}
+			for i, f := range failures {
+				summary.Failures[i] = ui.TestFailure{
+					TestName: f.TestName,
+					File:     f.File,
+					Line:     f.Line,
+					Message:  f.Message,
+				}
+			}
+			fmt.Println()
+			fmt.Print(ui.FormatDivider(ui.DividerWidth))
+			fmt.Println()
+			fmt.Print(ui.RenderSummary(summary, exitCode))
+			return true, false
+		}
+	}
+
+	return false, false
 }
 
 // buildRemoteRunCommand prepares a command for remote execution: local path
@@ -338,19 +372,36 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 	return ui.StatusFailed
 }
 
-// runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int, pullPatterns []string, pullDest, remoteCWD string) error {
+// runCmdFlags carries the cobra flag values for run/exec into the shared
+// command implementation.
+type runCmdFlags struct {
+	Verb             string // "run" or "exec" - used in messages and validation
+	Host             string
+	Tag              string
+	ProbeTimeout     string
+	Local            bool
+	SkipRequirements bool
+	SkipSync         bool // exec: don't sync before running
+	Repeat           int
+	Pull             []string
+	PullDest         string
+	RemoteCWD        string
+	Tail             int
+}
+
+// runCommand is the shared implementation behind 'rr run' and 'rr exec'.
+func runCommand(args []string, f runCmdFlags) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
-			"Usage: rr run <command>  (e.g., rr run \"make test\")")
+			fmt.Sprintf("Usage: rr %s <command>  (e.g., rr %s \"make test\")", f.Verb, f.Verb))
 	}
 
-	if err := validateLeadingArg(args, "run"); err != nil {
+	if err := validateLeadingArg(args, f.Verb); err != nil {
 		return err
 	}
 
-	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
+	probeTimeout, err := ParseProbeTimeout(f.ProbeTimeout)
 	if err != nil {
 		return err
 	}
@@ -359,8 +410,8 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 	cmd := strings.Join(args, " ")
 
 	// If --repeat is specified, use parallel execution
-	if repeatCount > 1 {
-		exitCode, err := runRepeated(cmd, repeatCount, hostFlag, tagFlag, localFlag)
+	if f.Repeat > 1 {
+		exitCode, err := runRepeated(cmd, f.Repeat, f.Host, f.Tag, f.Local)
 		if err != nil {
 			return err
 		}
@@ -372,15 +423,18 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 
 	exitCode, err := Run(RunOptions{
 		Command:          cmd,
-		Host:             hostFlag,
-		Tag:              tagFlag,
+		Host:             f.Host,
+		Tag:              f.Tag,
 		ProbeTimeout:     probeTimeout,
-		SkipRequirements: skipRequirementsFlag,
+		SkipSync:         f.SkipSync,
+		SkipRequirements: f.SkipRequirements,
 		Quiet:            Quiet(),
-		Local:            localFlag,
-		Pull:             pullPatterns,
-		PullDest:         pullDest,
-		RemoteCWD:        remoteCWD,
+		Local:            f.Local,
+		Pull:             f.Pull,
+		PullDest:         f.PullDest,
+		RemoteCWD:        f.RemoteCWD,
+		Tail:             f.Tail,
+		LogName:          f.Verb,
 	})
 
 	if err != nil {

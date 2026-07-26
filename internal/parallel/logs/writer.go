@@ -102,6 +102,28 @@ func taskLogFilename(taskName string, taskIndex int) string {
 	return fmt.Sprintf("%s_%d.log", sanitizeFilename(taskName), taskIndex)
 }
 
+// TaskLogPath returns the full path of a task's log inside a run directory.
+func TaskLogPath(runDir, taskName string, taskIndex int) string {
+	return filepath.Join(runDir, taskLogFilename(taskName, taskIndex))
+}
+
+// OpenRunLog creates a run directory under baseDir (same layout and
+// retention as parallel runs) and returns an open output.log for streaming
+// a single run's raw output, plus its path. The caller owns closing the
+// file.
+func OpenRunLog(baseDir, name string) (*os.File, string, error) {
+	w, err := NewLogWriter(baseDir, name)
+	if err != nil {
+		return nil, "", err
+	}
+	path := filepath.Join(w.Dir(), "output.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, path, nil
+}
+
 // WriteSummary writes summary.json with all results.
 func (w *LogWriter) WriteSummary(result *parallel.Result, taskName string) error {
 	if w.closed {

@@ -58,6 +58,7 @@ type TaskOptions struct {
 	Local        bool          // If true, force local execution (skip remote hosts)
 	SkipDeps     bool          // If true, skip dependencies and run only this task
 	From         string        // If set, start from this task in the dependency chain
+	Tail         int           // Print the last N lines of the run log after completion
 }
 
 // RunTask executes a named task from the configuration.
@@ -129,6 +130,10 @@ func RunTask(opts TaskOptions) (int, error) {
 		streamHandler.SetFormatter(output.NewGenericFormatter())
 	}
 
+	// Tee raw output into a per-run log file (best-effort).
+	logPath, closeLog := setupRunLog(wf, opts.TaskName, streamHandler)
+	defer closeLog()
+
 	execStart := time.Now()
 
 	// Get remote directory for task execution
@@ -199,6 +204,12 @@ func RunTask(opts TaskOptions) (int, error) {
 		}
 	}
 
+	// Record test summary/failures from the run log and note broken pipes.
+	attachRunOutcome(wf, task.Run, logPath, result.ExitCode)
+	if streamHandler.BrokenPipe() {
+		wf.AddResultDetail("broken_pipe", true)
+	}
+
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
 		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
@@ -208,6 +219,8 @@ func RunTask(opts TaskOptions) (int, error) {
 	} else {
 		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}
+
+	printLogTail(logPath, opts.Tail)
 
 	return result.ExitCode, nil
 }
@@ -681,13 +694,14 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	var skipDepsFlag bool
 	var fromFlag string
 	var repeatFlag int
+	var tailFlag int
 
 	cmd := &cobra.Command{
 		Use:   name + " [args...]",
 		Short: task.Description,
 		Long:  buildTaskLongDescription(name, task),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag, repeatFlag)
+			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag, repeatFlag, tailFlag)
 		},
 	}
 
@@ -702,6 +716,7 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	cmd.Flags().StringVar(&probeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
 	cmd.Flags().IntVar(&repeatFlag, "repeat", 0, "run task N times in parallel across available hosts (for flake detection)")
+	cmd.Flags().IntVar(&tailFlag, "tail", 0, "print the last N lines of the run log after completion")
 
 	// Add dependency flags if task has dependencies
 	if config.HasDependencies(&task) {
@@ -880,7 +895,7 @@ func buildParallelTaskLongDescription(name string, task config.TaskConfig) strin
 }
 
 // runTaskCommand is the implementation for task commands.
-func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string, repeatCount int) error {
+func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string, repeatCount, tailCount int) error {
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
@@ -913,6 +928,7 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 		Local:        localFlag,
 		SkipDeps:     skipDepsFlag,
 		From:         fromFlag,
+		Tail:         tailCount,
 	})
 
 	if err != nil {

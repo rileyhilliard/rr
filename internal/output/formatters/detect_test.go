@@ -135,3 +135,46 @@ FAILED tests/test_example.py::test_e
 	// Should indicate more failures exist
 	assert.Contains(t, summary, "and 2 more failures")
 }
+
+func TestExtractTestSummary_Pytest(t *testing.T) {
+	command := "pytest tests/"
+	output := []byte(`
+============================= test session starts ==============================
+collected 3 items
+
+tests/test_example.py::test_pass PASSED [33%]
+tests/test_example.py::test_fail FAILED [66%]
+tests/test_example.py::test_skip SKIPPED [100%]
+========================= 1 failed, 1 passed, 1 skipped in 0.03s ==========================
+`)
+
+	summary, ok := ExtractTestSummary(command, output)
+	assert.True(t, ok)
+	assert.Equal(t, 1, summary.Passed)
+	assert.Equal(t, 1, summary.Failed)
+	assert.Equal(t, 1, summary.Skipped)
+}
+
+func TestExtractTestSummary_GoTest(t *testing.T) {
+	command := "go test ./..."
+	output := []byte(`
+=== RUN   TestExample
+--- PASS: TestExample (0.00s)
+=== RUN   TestFail
+    example_test.go:15: Expected 1, got 2
+--- FAIL: TestFail (0.00s)
+FAIL
+exit status 1
+FAIL	example	0.005s
+`)
+
+	summary, ok := ExtractTestSummary(command, output)
+	assert.True(t, ok)
+	assert.Equal(t, 1, summary.Passed)
+	assert.Equal(t, 1, summary.Failed)
+}
+
+func TestExtractTestSummary_UnknownFormat(t *testing.T) {
+	_, ok := ExtractTestSummary("make build", []byte("compiling...\ndone\n"))
+	assert.False(t, ok)
+}
