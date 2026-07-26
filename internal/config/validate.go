@@ -243,8 +243,10 @@ func validateHost(name string, host Host) error {
 		return fmt.Errorf("host '%s' needs a 'dir' - that's where your code will sync to", name)
 	}
 
-	// Validate remote path (allows ~ for remote shell expansion)
-	if err := validateRemotePath(name, "dir", host.Dir); err != nil {
+	// Validate remote path (allows ~ for remote shell expansion). Host dirs
+	// keep ${PROJECT}-style variables until use sites expand them, so
+	// validate the expanded form; variables rr can't expand still surface.
+	if err := validateRemotePath(name, "dir", ExpandRemote(host.Dir)); err != nil {
 		return err
 	}
 

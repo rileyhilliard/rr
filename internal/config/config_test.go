@@ -966,8 +966,13 @@ func TestValidateHost(t *testing.T) {
 			wantErr: false, // Tilde is allowed - remote shell expands it
 		},
 		{
-			name:    "unexpanded variable in path",
+			name:    "expandable variable in path is allowed",
 			host:    Host{SSH: []string{"mini"}, Dir: "/home/${USER}/projects"},
+			wantErr: false, // ${USER} expands at use sites
+		},
+		{
+			name:    "unknown variable in path",
+			host:    Host{SSH: []string{"mini"}, Dir: "/home/${BOGUS_VAR}/projects"},
 			wantErr: true,
 		},
 		{
