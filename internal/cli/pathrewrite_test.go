@@ -22,13 +22,13 @@ func TestRewriteLocalPaths(t *testing.T) {
 		{
 			name:      "subpath rewritten",
 			cmd:       "pytest /Users/r/app/tests/foo.py -v",
-			want:      "pytest ~/rr/app/tests/foo.py -v",
+			want:      "pytest $HOME/rr/app/tests/foo.py -v",
 			wantCount: 1,
 		},
 		{
 			name:      "exact root at end of command",
 			cmd:       "cd /Users/r/app",
-			want:      "cd ~/rr/app",
+			want:      "cd $HOME/rr/app",
 			wantCount: 1,
 		},
 		{
@@ -44,27 +44,47 @@ func TestRewriteLocalPaths(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name:      "inside single quotes",
+			// $HOME can't expand inside single quotes, so the match is
+			// left alone rather than rewritten into a broken literal.
+			name:      "inside single quotes skipped for tilde remote",
 			cmd:       "cd '/Users/r/app/sub dir'",
-			want:      "cd '~/rr/app/sub dir'",
+			want:      "cd '/Users/r/app/sub dir'",
+			wantCount: 0,
+		},
+		{
+			name:      "inside double quotes rewritten",
+			cmd:       `cd "/Users/r/app/sub dir"`,
+			want:      `cd "$HOME/rr/app/sub dir"`,
+			wantCount: 1,
+		},
+		{
+			name:      "after equals sign rewritten",
+			cmd:       "pytest --junitxml=/Users/r/app/out.xml",
+			want:      "pytest --junitxml=$HOME/rr/app/out.xml",
 			wantCount: 1,
 		},
 		{
 			name:      "multiple occurrences",
 			cmd:       "cp /Users/r/app/a.txt /Users/r/app/b.txt",
-			want:      "cp ~/rr/app/a.txt ~/rr/app/b.txt",
+			want:      "cp $HOME/rr/app/a.txt $HOME/rr/app/b.txt",
 			wantCount: 2,
+		},
+		{
+			name:      "mixed quoting rewrites only expandable match",
+			cmd:       "cp '/Users/r/app/a.txt' /Users/r/app/b.txt",
+			want:      "cp '/Users/r/app/a.txt' $HOME/rr/app/b.txt",
+			wantCount: 1,
 		},
 		{
 			name:      "colon suffix is a boundary",
 			cmd:       "vim /Users/r/app:12",
-			want:      "vim ~/rr/app:12",
+			want:      "vim $HOME/rr/app:12",
 			wantCount: 1,
 		},
 		{
 			name:      "pytest node id keeps selector",
 			cmd:       "pytest /Users/r/app/tests/foo.py::test_x",
-			want:      "pytest ~/rr/app/tests/foo.py::test_x",
+			want:      "pytest $HOME/rr/app/tests/foo.py::test_x",
 			wantCount: 1,
 		},
 	}
@@ -100,7 +120,15 @@ func TestRewriteLocalPaths_SymlinkedRoot(t *testing.T) {
 	require.NoError(t, err)
 
 	got, n := RewriteLocalPaths("cat "+resolved+"/f.txt", link, "~/rr/app")
-	assert.Equal(t, "cat ~/rr/app/f.txt", got)
+	assert.Equal(t, "cat $HOME/rr/app/f.txt", got)
+	assert.Equal(t, 1, n)
+}
+
+func TestRewriteLocalPaths_AbsoluteRemote(t *testing.T) {
+	// Absolute remote dirs need no shell expansion, so single-quoted
+	// matches are rewritten too.
+	got, n := RewriteLocalPaths("cd '/Users/r/app/sub dir'", "/Users/r/app", "/home/rr/app")
+	assert.Equal(t, "cd '/home/rr/app/sub dir'", got)
 	assert.Equal(t, 1, n)
 }
 

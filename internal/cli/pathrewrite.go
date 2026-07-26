@@ -29,13 +29,34 @@ func RewriteLocalPaths(cmd, localRoot, remoteDir string) (string, int) {
 	if cmd == "" || localRoot == "" || remoteDir == "" {
 		return cmd, 0
 	}
+	replacement, skipSingleQuoted := remoteReplacement(remoteDir)
 	total := 0
 	for _, root := range localRootForms(localRoot) {
 		var n int
-		cmd, n = replacePathPrefix(cmd, root, remoteDir)
+		cmd, n = replacePathPrefix(cmd, root, replacement, skipSingleQuoted)
 		total += n
 	}
 	return cmd, total
+}
+
+// remoteReplacement returns the string substituted for localRoot and whether
+// matches inside single quotes must be left alone. A remote dir like
+// ~/rr/app only tilde-expands as a bare word at the start of a token -
+// inside quotes or after '=' (e.g. --junitxml=~/rr/out.xml) the remote
+// shell keeps the literal '~' and the command targets a directory literally
+// named "~". $HOME expands in every context except single quotes, so
+// tilde dirs are rewritten to their $HOME form and single-quoted matches
+// are skipped rather than silently broken.
+func remoteReplacement(remoteDir string) (string, bool) {
+	if remoteDir == "~" || strings.HasPrefix(remoteDir, "~/") {
+		return "$HOME" + remoteDir[1:], true
+	}
+	if strings.HasPrefix(remoteDir, "~") {
+		// ~user form: no portable variable equivalent, so keep the tilde
+		// but stay out of single quotes where it can't expand.
+		return remoteDir, true
+	}
+	return remoteDir, false
 }
 
 // RewriteArgsToRelative converts args that reference absolute paths under
@@ -71,24 +92,30 @@ func localRootForms(localRoot string) []string {
 }
 
 // replacePathPrefix replaces boundary-delimited occurrences of prefix in s
-// with replacement.
-func replacePathPrefix(s, prefix, replacement string) (string, int) {
+// with replacement. When skipSingleQuoted is set, occurrences inside
+// single-quoted regions are left untouched (the replacement needs shell
+// expansion, which single quotes suppress).
+func replacePathPrefix(s, prefix, replacement string, skipSingleQuoted bool) (string, int) {
 	var b strings.Builder
 	count := 0
 	i := 0
+	var qs quoteState
 	for i < len(s) {
 		j := strings.Index(s[i:], prefix)
 		if j < 0 {
 			break
 		}
 		j += i
-		if isPathStart(s, j) && isPathEnd(s, j+len(prefix)) {
+		qs.advance(s[i:j])
+		if isPathStart(s, j) && isPathEnd(s, j+len(prefix)) && (!skipSingleQuoted || !qs.inSingle) {
 			b.WriteString(s[i:j])
 			b.WriteString(replacement)
 			count++
+			qs.advance(s[j : j+len(prefix)])
 			i = j + len(prefix)
 		} else {
 			b.WriteString(s[i : j+1])
+			qs.advance(s[j : j+1])
 			i = j + 1
 		}
 	}
@@ -97,6 +124,25 @@ func replacePathPrefix(s, prefix, replacement string) (string, int) {
 	}
 	b.WriteString(s[i:])
 	return b.String(), count
+}
+
+// quoteState tracks shell quoting while scanning a command left to right.
+type quoteState struct {
+	inSingle, inDouble bool
+}
+
+// advance updates the state across segment seg.
+func (q *quoteState) advance(seg string) {
+	for i := 0; i < len(seg); i++ {
+		switch {
+		case seg[i] == '\\' && !q.inSingle:
+			i++ // backslash escapes the next char outside single quotes
+		case seg[i] == '\'' && !q.inDouble:
+			q.inSingle = !q.inSingle
+		case seg[i] == '"' && !q.inSingle:
+			q.inDouble = !q.inDouble
+		}
+	}
 }
 
 // isPathStart reports whether position idx begins a fresh path token: the
