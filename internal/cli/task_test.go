@@ -460,3 +460,23 @@ func TestCreateParallelTaskCommand_ForwardArgsUseLine(t *testing.T) {
 	assert.NotContains(t, cmdWithout.Use, "[args...]",
 		"regular parallel task should not show [args...] in Use string")
 }
+
+// TestTaskCommand_UnknownFlagHint verifies that flag-looking task args get
+// a hint about the '--' separator instead of a bare cobra parse error.
+func TestTaskCommand_UnknownFlagHint(t *testing.T) {
+	task := config.TaskConfig{Run: "pytest {args}"}
+	cmd := createTaskCommand("my-task", task)
+	cmd.SetArgs([]string{"-k", "foo"})
+	execErr := cmd.Execute()
+	require.Error(t, execErr)
+	assert.Contains(t, execErr.Error(), "unknown shorthand flag")
+	assert.Contains(t, execErr.Error(), "rr my-task -- <args>")
+}
+
+// TestTaskCommand_KnownFlagsStillParse verifies the flag error hint doesn't
+// interfere with rr's own flags.
+func TestTaskCommand_KnownFlagsStillParse(t *testing.T) {
+	task := config.TaskConfig{Run: "pytest {args}"}
+	cmd := createTaskCommand("my-task", task)
+	require.NoError(t, cmd.Flags().Parse([]string{"--local", "--tail", "5"}))
+}

@@ -525,8 +525,15 @@ func renderTaskSummary(_ *ui.PhaseDisplay, result *exec.TaskResult, taskName str
 
 // ListTasks displays all available tasks from the configuration.
 func ListTasks() error {
-	// Find and load config
-	cfgPath, err := config.Find("")
+	// Find and load config, honoring an explicit --config flag: a bad
+	// explicit path must error rather than silently falling back to a
+	// discovered .rr.yaml.
+	cfgPath, err := config.Find(Config())
+	if err == nil && cfgPath == "" {
+		err = errors.New(errors.ErrConfig,
+			"No .rr.yaml found in this directory or parent directories",
+			"Run 'rr init' to create one, or check you're in the right directory.")
+	}
 	if err != nil {
 		if tasksJSON || MachineMode() {
 			return WriteJSONFromError(os.Stdout, errors.WrapWithCode(err, errors.ErrConfig,
@@ -685,6 +692,21 @@ func RegisterTaskCommands(cfg *config.Config) {
 }
 
 // createTaskCommand creates a cobra command for a task.
+// taskFlagErrorFunc turns cobra's unknown-flag errors on generated task
+// commands into a hint about the '--' separator: flag-looking task args
+// (pytest's -k, -x, ...) hit rr's own flag parser first and die with
+// "unknown shorthand flag" unless they come after '--'.
+func taskFlagErrorFunc(name string) func(*cobra.Command, error) error {
+	return func(_ *cobra.Command, err error) error {
+		if err == nil || !strings.Contains(err.Error(), "unknown") {
+			return err
+		}
+		return errors.New(errors.ErrConfig,
+			err.Error()+" (rr parses flags before the task sees them)",
+			fmt.Sprintf("Put task flags after '--' so they pass through: rr %s -- <args>", name))
+	}
+}
+
 func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	// Check if this is a parallel task
 	if config.IsParallelTask(&task) {
@@ -727,6 +749,8 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 		cmd.Flags().BoolVar(&skipDepsFlag, "skip-deps", false, "skip dependencies, run only this task")
 		cmd.Flags().StringVar(&fromFlag, "from", "", "start from this task in the dependency chain")
 	}
+
+	cmd.SetFlagErrorFunc(taskFlagErrorFunc(name))
 
 	return cmd
 }
@@ -797,6 +821,10 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 	cmd.Flags().IntVar(&maxParallelFlag, "max-parallel", 0, "limit concurrent task execution (0 = unlimited)")
 	cmd.Flags().BoolVar(&noLogsFlag, "no-logs", false, "don't save output to log files")
 	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show execution plan without running")
+
+	if task.ForwardArgs {
+		cmd.SetFlagErrorFunc(taskFlagErrorFunc(name))
+	}
 
 	return cmd
 }

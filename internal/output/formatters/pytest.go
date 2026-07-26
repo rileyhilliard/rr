@@ -108,6 +108,13 @@ var (
 	// Matches summary line: 1 failed, 1 passed, 1 skipped in 0.03s
 	pytestSummaryPattern = regexp.MustCompile(`=+\s*(\d+\s+\w+(?:,\s*\d+\s+\w+)*)\s+in\s+[\d.]+s\s*=+`)
 
+	// Quiet mode (-q/-qq) drops the ==== decoration and prints the bare
+	// summary alone on a line: "5 passed in 4.20s".
+	pytestBareSummaryPattern = regexp.MustCompile(`^\d+\s+\w+(?:,\s*\d+\s+\w+)*\s+in\s+[\d.]+s$`)
+
+	// Extracts "<count> <word>" pairs from a summary line.
+	pytestCountPairPattern = regexp.MustCompile(`(\d+)\s+(\w+)`)
+
 	// Matches the failures section header
 	pytestFailuresSectionStart = regexp.MustCompile(`^=+\s*FAILURES\s*=+$`)
 	pytestFailuresSectionEnd   = regexp.MustCompile(`^=+\s*short test summary`)
@@ -166,8 +173,8 @@ func (f *PytestFormatter) ProcessLine(line string) string {
 		}
 	}
 
-	// Check for summary line
-	if pytestSummaryPattern.MatchString(trimmed) {
+	// Check for summary line (decorated, or bare in -q/-qq mode)
+	if pytestSummaryPattern.MatchString(trimmed) || pytestBareSummaryPattern.MatchString(trimmed) {
 		f.summaryLine = trimmed
 	}
 
@@ -349,7 +356,9 @@ func (f *PytestFormatter) GetTestFailures() []output.TestFailure {
 }
 
 // GetTestCounts implements output.TestSummaryProvider.
-// Returns (passed, failed, skipped, errors) counts.
+// Returns (passed, failed, skipped, errors) counts. Quiet runs (-q/-qq)
+// emit no per-test result lines, so when none were seen the counts come
+// from the final summary line instead.
 func (f *PytestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
 	for _, r := range f.results {
 		switch r.Status {
@@ -361,6 +370,32 @@ func (f *PytestFormatter) GetTestCounts() (passed, failed, skipped, errors int) 
 			skipped++
 		case "ERROR":
 			errors++
+		}
+	}
+	if passed == 0 && failed == 0 && skipped == 0 && errors == 0 && f.summaryLine != "" {
+		return parseSummaryCounts(f.summaryLine)
+	}
+	return
+}
+
+// parseSummaryCounts extracts test counts from a pytest summary line like
+// "2 failed, 3 passed, 1 skipped in 1.10s". Unknown categories (xfailed,
+// deselected, warnings, ...) are ignored.
+func parseSummaryCounts(line string) (passed, failed, skipped, errors int) {
+	for _, m := range pytestCountPairPattern.FindAllStringSubmatch(line, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		switch m[2] {
+		case "passed":
+			passed += n
+		case "failed":
+			failed += n
+		case "skipped":
+			skipped += n
+		case "error", "errors":
+			errors += n
 		}
 	}
 	return

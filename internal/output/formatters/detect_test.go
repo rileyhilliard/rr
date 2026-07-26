@@ -155,6 +155,25 @@ tests/test_example.py::test_skip SKIPPED [100%]
 	assert.Equal(t, 1, summary.Skipped)
 }
 
+func TestExtractTestSummary_PytestQuiet(t *testing.T) {
+	// -q/-qq emit no per-test lines and an undecorated summary; counts
+	// must come from the bare summary line.
+	command := "bash -c 'cd opendata && uv run pytest \"$@\" -n 4 --no-cov -qq --tb=short' rr tests/foo.py"
+	output := []byte("bringing up nodes...\n5 passed in 4.20s\n")
+
+	summary, ok := ExtractTestSummary(command, output)
+	assert.True(t, ok)
+	assert.Equal(t, 5, summary.Passed)
+	assert.Zero(t, summary.Failed)
+
+	output = []byte("bringing up nodes...\n2 failed, 3 passed, 1 skipped in 1.10s\n")
+	summary, ok = ExtractTestSummary(command, output)
+	assert.True(t, ok)
+	assert.Equal(t, 3, summary.Passed)
+	assert.Equal(t, 2, summary.Failed)
+	assert.Equal(t, 1, summary.Skipped)
+}
+
 func TestExtractTestSummary_GoTest(t *testing.T) {
 	command := "go test ./..."
 	output := []byte(`

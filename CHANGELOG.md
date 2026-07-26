@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Test summaries extract from quiet pytest output** - `details.summary` now parses the bare `5 passed in 4.20s` line that pytest `-q`/`-qq` emits (and filtered pipelines pass through); previously only the `==== ... ====` decorated summary was recognized, so quiet runs got no summary in the result envelope.
+- **Bad explicit `--config` no longer falls back silently** - `rr --config /bad/path.yaml tasks` errored from an empty directory but silently listed tasks from a discovered `.rr.yaml` when one existed; it now fails either way.
+- **Unknown task flags suggest `--`** - `rr test-opendata -k foo` died with a bare cobra "unknown shorthand flag" error; it now explains that rr parses flags first and suggests `rr <task> -- <args>` to pass flags through to the task.
+
 ## [0.23.0] - 2026-07-26
 
 ### Breaking Changes
