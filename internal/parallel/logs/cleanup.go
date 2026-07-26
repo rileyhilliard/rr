@@ -284,6 +284,12 @@ func extractTaskName(dirName string) string {
 		lastPart := parts[len(parts)-1]
 		secondLast := parts[len(parts)-2]
 
+		// Same-second runs get a ".N" collision suffix after the seconds
+		// (e.g. "143022.2") - strip it before the digit check.
+		if dot := strings.IndexByte(lastPart, '.'); dot != -1 {
+			lastPart = lastPart[:dot]
+		}
+
 		// If last part is 6 digits and second-to-last is 8 digits, it's a timestamp
 		if len(lastPart) == 6 && len(secondLast) == 8 && isDigits(lastPart) && isDigits(secondLast) {
 			return strings.Join(parts[:len(parts)-2], "-")

@@ -44,12 +44,25 @@ type WorkflowContext struct {
 	Reporter     PhaseReporter
 	StartTime    time.Time
 
+	// ResultDetails accumulates extra keys (fallback, log_file, summary,
+	// hint, path_rewrites, ...) merged into the final result envelope's
+	// details map. Use AddResultDetail; nil until first write.
+	ResultDetails map[string]interface{}
+
 	// Internal state
 	selector   *host.Selector
 	signalChan chan os.Signal
 	ctx        context.Context
 	cancel     context.CancelFunc
 	closeOnce  sync.Once
+}
+
+// AddResultDetail records an extra key for the final result envelope.
+func (w *WorkflowContext) AddResultDetail(key string, value interface{}) {
+	if w.ResultDetails == nil {
+		w.ResultDetails = make(map[string]interface{})
+	}
+	w.ResultDetails[key] = value
 }
 
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
@@ -213,7 +226,7 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 		uiHosts[i] = ui.HostInfo{
 			Name: h.Name,
 			SSH:  h.SSH,
-			Dir:  h.Dir,
+			Dir:  config.ExpandRemote(h.Dir),
 			Tags: h.Tags,
 		}
 	}
@@ -296,6 +309,24 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 	reporter := ctx.GetReporter()
 	reporter.PhaseStart("connect")
 
+	// Local fallback (hosts unreachable) must be visible in structured
+	// output too, not just in the pretty connection display.
+	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
+		if event.Type == host.EventLocalFallback {
+			WritePhaseEvent(PhaseEvent{
+				Type:   "phase",
+				Phase:  "connect",
+				Status: "warn",
+				Host:   "local",
+				Details: map[string]interface{}{
+					"local_fallback": true,
+					"reason":         "hosts_unreachable",
+					"message":        event.Message,
+				},
+			})
+		}
+	})
+
 	var err error
 	if opts.Tag != "" {
 		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)
@@ -362,7 +393,7 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 		return err
 	}
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions())
 	if err != nil {
 		reporter.PhaseFailed("sync", err)
 		return err
@@ -370,6 +401,29 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 
 	reporter.PhaseComplete("sync", ctx.Conn.Name, time.Since(syncStart))
 	return nil
+}
+
+// structuredSyncOptions surfaces sync warnings as phase events.
+func structuredSyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			WritePhaseEvent(PhaseEvent{
+				Type:    "phase",
+				Phase:   "sync",
+				Status:  "warn",
+				Details: w.Details,
+			})
+		},
+	}
+}
+
+// prettySyncOptions surfaces sync warnings as printed warnings.
+func prettySyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			ui.PrintWarning(w.Message)
+		},
+	}
 }
 
 // resolveSyncConfig returns the sync config to use, falling back to defaults.
@@ -395,7 +449,7 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter, prettySyncOptions())
 	if err != nil {
 		syncProgress.Fail()
 		return err
@@ -419,7 +473,7 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, prettySyncOptions())
 	if err != nil {
 		syncSpinner.Fail()
 		return err

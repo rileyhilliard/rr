@@ -391,3 +391,94 @@ func TestBuildRemoteCommand_SetupCommands(t *testing.T) {
 	assert.Contains(t, result, "export PATH=/opt/go/bin:\\$PATH")
 	assert.Contains(t, result, "go test")
 }
+
+func TestApplyTaskArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		run      string
+		args     []string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "no args returns run unchanged",
+			run:      "pytest | grep -v PASS",
+			args:     nil,
+			expected: "pytest | grep -v PASS",
+		},
+		{
+			name:     "simple command appends quoted",
+			run:      "pytest tests/",
+			args:     []string{"-k", "a b"},
+			expected: "pytest tests/ '-k' 'a b'",
+		},
+		{
+			name:     "placeholder in pipeline",
+			run:      "pytest {args:-.} -n 4 | grep -v PASS",
+			args:     []string{"tests/foo.py"},
+			expected: "pytest 'tests/foo.py' -n 4 | grep -v PASS",
+		},
+		{
+			name:     "placeholder default without args",
+			run:      "pytest {args:-.} -n 4 | grep -v PASS",
+			args:     nil,
+			expected: "pytest . -n 4 | grep -v PASS",
+		},
+		{
+			name:    "compound without placeholder errors",
+			run:     "pytest | grep -v PASS",
+			args:    []string{"tests/foo.py"},
+			wantErr: true,
+		},
+		{
+			name:    "redirection without placeholder errors",
+			run:     "pytest --tb=short 2>&1",
+			args:    []string{"tests/foo.py"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ApplyTaskArgs(tt.run, tt.args)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "{args}")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestExecuteTask_ArgsPlaceholder(t *testing.T) {
+	conn := createLocalConn()
+	task := &config.TaskConfig{
+		Run: "echo start {args:-default} end",
+	}
+
+	var stdout, stderr bytes.Buffer
+	result, err := ExecuteTask(context.Background(), conn, task, []string{"middle"}, nil, "", &stdout, &stderr, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, stdout.String(), "start middle end")
+
+	stdout.Reset()
+	result, err = ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, stdout.String(), "start default end")
+}
+
+func TestExecuteTask_CompoundCommandRejectsArgs(t *testing.T) {
+	conn := createLocalConn()
+	task := &config.TaskConfig{
+		Run: "echo a | grep a",
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := ExecuteTask(context.Background(), conn, task, []string{"extra"}, nil, "", &stdout, &stderr, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compound command")
+}

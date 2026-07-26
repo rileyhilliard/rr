@@ -528,7 +528,7 @@ func (s *Selector) HostInfo() []HostInfoItem {
 		items = append(items, HostInfoItem{
 			Name: name,
 			SSH:  s.hosts[name].SSH,
-			Dir:  s.hosts[name].Dir,
+			Dir:  config.ExpandRemote(s.hosts[name].Dir),
 			Tags: s.hosts[name].Tags,
 		})
 	}

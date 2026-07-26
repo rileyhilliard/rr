@@ -19,7 +19,12 @@ type PhaseReporter interface {
 	Divider()
 	ThinDivider()
 	CommandPrompt(command string)
-	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration)
+	// CommandComplete emits the final result. extra carries additional
+	// result details (fallback, log_file, summary, ...): the structured
+	// reporter merges them into the envelope's details map, the pretty
+	// reporter re-prints the fallback warning from them. Pass nil when
+	// there is nothing extra.
+	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{})
 }
 
 // NewPhaseReporter returns a StructuredReporter (default) or PrettyReporter
@@ -69,8 +74,24 @@ func (r *PrettyReporter) CommandPrompt(command string) {
 	r.pd.CommandPrompt(command)
 }
 
-func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration) {
+func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	renderFinalStatus(r.pd, exitCode, totalDuration, execDuration, host)
+	repeatFallbackWarning(extra)
+}
+
+// repeatFallbackWarning re-prints the local-fallback warning after the final
+// status line - readers of the output tail must not mistake a local run for
+// a remote one. No-op when the run didn't fall back.
+func repeatFallbackWarning(details map[string]interface{}) {
+	fb, ok := details["fallback"].(fallbackDetail)
+	if !ok {
+		return
+	}
+	msg := "Ran LOCALLY - all remote hosts were locked"
+	if len(fb.Holders) > 0 {
+		msg += " (" + describeHolders(fb.Holders) + ")"
+	}
+	ui.PrintWarning(msg)
 }
 
 // StructuredReporter emits JSON events to stderr. stdout is left clean
@@ -136,10 +157,16 @@ func (r *StructuredReporter) CommandPrompt(command string) {
 	})
 }
 
-func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration) {
+func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	status := "success"
 	if exitCode != 0 {
 		status = "failed"
+	}
+	details := map[string]interface{}{
+		"exec_duration_s": execDuration.Seconds(),
+	}
+	for k, v := range extra {
+		details[k] = v
 	}
 	WritePhaseEvent(PhaseEvent{
 		Type:     "result",
@@ -147,9 +174,7 @@ func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDur
 		ExitCode: &exitCode,
 		Host:     host,
 		Duration: totalDuration.Seconds(),
-		Details: map[string]interface{}{
-			"exec_duration_s": execDuration.Seconds(),
-		},
+		Details:  details,
 	})
 }
 

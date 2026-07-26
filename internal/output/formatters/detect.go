@@ -35,6 +35,38 @@ func ExtractFailures(command string, rawOutput []byte) []output.TestFailure {
 	return nil
 }
 
+// TestSummary holds aggregate test counts extracted from raw output.
+type TestSummary struct {
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Skipped int `json:"skipped"`
+	Errors  int `json:"errors"`
+}
+
+// ExtractTestSummary detects the test framework from command/output and
+// returns aggregate counts. ok is false when no framework matched or the
+// output contained no recognizable test results.
+func ExtractTestSummary(command string, rawOutput []byte) (TestSummary, bool) {
+	formatter := detectFormatter(command, rawOutput)
+	if formatter == nil {
+		return TestSummary{}, false
+	}
+
+	for _, line := range strings.Split(string(rawOutput), "\n") {
+		formatter.ProcessLine(line)
+	}
+
+	provider, ok := formatter.(output.TestSummaryProvider)
+	if !ok {
+		return TestSummary{}, false
+	}
+	passed, failed, skipped, errs := provider.GetTestCounts()
+	if passed+failed+skipped+errs == 0 {
+		return TestSummary{}, false
+	}
+	return TestSummary{Passed: passed, Failed: failed, Skipped: skipped, Errors: errs}, true
+}
+
 // detectorFormatter is a formatter that also implements detection.
 type detectorFormatter interface {
 	output.Formatter

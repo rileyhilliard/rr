@@ -8,11 +8,12 @@ import (
 
 // LockInfo contains metadata about who holds a lock.
 type LockInfo struct {
-	User     string    `json:"user"`
-	Hostname string    `json:"hostname"`
-	Started  time.Time `json:"started"`
-	PID      int       `json:"pid"`
-	Command  string    `json:"command,omitempty"`
+	User         string    `json:"user"`
+	Hostname     string    `json:"hostname"`
+	Started      time.Time `json:"started"`
+	PID          int       `json:"pid"`
+	Command      string    `json:"command,omitempty"`
+	MachineToken string    `json:"machine_token,omitempty"`
 }
 
 // NewLockInfo creates a LockInfo with the current user, hostname, time, PID, and command.
@@ -22,23 +23,74 @@ func NewLockInfo(command string) (*LockInfo, error) {
 		hostname = "unknown"
 	}
 
+	return &LockInfo{
+		User:         currentUser(),
+		Hostname:     hostname,
+		Started:      time.Now(),
+		PID:          os.Getpid(),
+		Command:      command,
+		MachineToken: machineToken(),
+	}, nil
+}
+
+func currentUser() string {
 	user := os.Getenv("USER")
 	if user == "" {
 		user = "unknown"
 	}
-
-	return &LockInfo{
-		User:     user,
-		Hostname: hostname,
-		Started:  time.Now(),
-		PID:      os.Getpid(),
-		Command:  command,
-	}, nil
+	return user
 }
 
 // Age returns how long ago the lock was acquired.
 func (i *LockInfo) Age() time.Duration {
 	return time.Since(i.Started)
+}
+
+// SameMachine reports whether the lock was acquired from this machine.
+// Machine tokens are compared when both sides have one; otherwise it falls
+// back to matching hostname AND user, since default hostnames (e.g.
+// "MacBook-Pro.local") collide across machines.
+func (i *LockInfo) SameMachine() bool {
+	if i.MachineToken != "" {
+		if tok := machineToken(); tok != "" {
+			return i.MachineToken == tok
+		}
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return false
+	}
+	return i.Hostname == hostname && i.User == currentUser()
+}
+
+// IsDeadLocalHolder reports whether the lock is held by a process on this
+// machine that is no longer running. Such locks are safe to remove
+// immediately instead of waiting for the staleness threshold.
+func (i *LockInfo) IsDeadLocalHolder() bool {
+	if i.PID <= 0 || i.PID == os.Getpid() {
+		return false
+	}
+	if !i.SameMachine() {
+		return false
+	}
+	return !processAlive(i.PID)
+}
+
+// Describe returns a human-readable description with command, holder, age,
+// and whether the holder is on this machine.
+func (i *LockInfo) Describe() string {
+	desc := ""
+	if i.Command != "" {
+		desc = "'" + i.Command + "' held by "
+	}
+	desc += i.User + "@" + i.Hostname + " (pid " + itoa(i.PID)
+	if !i.Started.IsZero() {
+		desc += ", started " + i.Age().Truncate(time.Second).String() + " ago"
+	}
+	if i.SameMachine() {
+		desc += ", this machine"
+	}
+	return desc + ")"
 }
 
 // Marshal serializes the LockInfo to JSON.

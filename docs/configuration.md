@@ -62,7 +62,7 @@ hosts:
       - linux
 
 defaults:
-  local_fallback: false
+  local_fallback: never
   probe_timeout: 2s
 ```
 
@@ -72,8 +72,9 @@ defaults:
 |-------|------|---------|-------------|
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
 | `hosts` | map | `{}` | Remote host definitions (see below). |
-| `defaults.local_fallback` | bool | `false` | Run locally if no hosts are reachable. |
+| `defaults.local_fallback` | string | `never` | When to run locally: `never`, `on-unreachable` (hosts down or unconfigured), or `always` (also when every host is locked). Booleans still work: `true` = `always`, `false` = `never`. |
 | `defaults.probe_timeout` | duration | `2s` | How long to wait when testing SSH connectivity. |
+| `defaults.rewrite_paths` | bool | `true` | Rewrite local absolute paths in commands and task args to their remote equivalents before running. |
 
 ### Host fields
 
@@ -134,6 +135,13 @@ dir: ~/projects/${PROJECT}
 # Expands to: ~/projects/myapp
 ```
 
+**Git worktrees:** in a linked worktree, `${PROJECT}` expands to
+`<repo>@<worktree-name>` (e.g. `myapp@myapp-featurex`), so each worktree
+syncs to its own remote directory instead of clobbering the main checkout's
+mirror. The main checkout keeps its plain name. Expect a cold first sync per
+worktree, and remember `preserve`d directories (like `.venv`) start empty in
+the new remote dir. Disable per project with `sync.worktree_isolation: false`.
+
 ## Project config (.rr.yaml)
 
 The project config lives in your project root and contains settings that can be shared with your team.
@@ -162,11 +170,11 @@ hosts:
 
 sync:
   exclude:
-    - .git/
-    - .venv/
+    - .git # bare pattern: .git is a file in linked worktrees
+    - .venv
     - __pycache__/
     - "*.pyc"
-    - node_modules/
+    - node_modules
     - .mypy_cache/
     - .pytest_cache/
     - .DS_Store
@@ -228,6 +236,9 @@ monitor:
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
 | `host` | string | - | Single host reference (from global config). |
 | `hosts` | list | all global hosts | List of host references for load balancing. |
+| `local_fallback` | string | global setting | Overrides `defaults.local_fallback`: `never`, `on-unreachable`, or `always`. |
+| `rewrite_paths` | bool | global setting | Overrides `defaults.rewrite_paths`. |
+| `defaults` | object | - | Project defaults applied to every task (see below). |
 | `require` | list | `[]` | Tools that must exist on remote hosts. |
 | `sync` | object | see below | File synchronization settings. |
 | `lock` | object | see below | Distributed lock settings. |
@@ -236,6 +247,23 @@ monitor:
 | `monitor` | object | see below | Resource monitoring dashboard settings. |
 
 **Note:** Use either `host` (singular) or `hosts` (plural), not both. If neither is specified, all hosts from your global config are available for load balancing.
+
+### Project defaults
+
+Settings under `defaults` apply to everything the project runs:
+
+```yaml
+defaults:
+  setup:
+    - source ~/rr-env.sh
+  env:
+    CI: "1"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `defaults.setup` | list | `[]` | Commands prepended (with `&&`) before every remote command. Applies to tasks **and** ad-hoc `rr run` / `rr exec` on remote hosts. Not applied to local runs. |
+| `defaults.env` | map | `{}` | Environment variables for all tasks. Overrides host env; overridden by task env. |
 
 ## Host resolution order
 
@@ -280,6 +308,7 @@ sync:
 | `exclude` | list | see below | Patterns for files not sent to remote. |
 | `preserve` | list | see below | Patterns for files not deleted on remote. |
 | `flags` | list | `[]` | Extra flags passed to rsync. |
+| `worktree_isolation` | bool | `true` | Give each linked git worktree its own remote directory (`${PROJECT}` becomes `repo@worktree`). |
 
 ### Default excludes
 
@@ -287,17 +316,26 @@ If you don't specify `exclude`, these patterns are used:
 
 ```yaml
 exclude:
-  - .git/
-  - .venv/
-  - __pycache__/
+  - .git # bare patterns for .git/.venv/node_modules: in linked
+  - .venv # worktrees .git is a file, and node_modules may be a
+  - __pycache__/ # symlink - dir-only patterns miss those (rsync exit 23)
   - "*.pyc"
-  - node_modules/
+  - node_modules
   - .mypy_cache/
   - .pytest_cache/
   - .ruff_cache/
   - .DS_Store
   - "*.log"
+  - .claude/
+  - .cursor/
+  - .aider/
+  - .copilot/
 ```
+
+**Your `exclude` list replaces the defaults** - it isn't merged. If you
+maintain your own list, prefer the bare `.git` / `.venv` / `node_modules`
+patterns so linked worktrees sync cleanly. Note a bare pattern also matches
+files with that name at any depth (e.g. a vendored fixture named `.git`).
 
 ### Default preserves
 
@@ -357,8 +395,9 @@ When multiple hosts are configured, `rr` distributes work automatically:
 
 1. Tries each host with a non-blocking lock check
 2. If a host is locked, immediately tries the next host
-3. If all hosts are locked and `local_fallback: true`, runs locally immediately
-4. If all hosts are locked and `local_fallback: false`, round-robins through hosts until one becomes available (up to `wait_timeout`)
+3. Locks held by dead processes on this machine are reclaimed automatically
+4. If all hosts are locked, `rr` waits up to `wait_timeout` for one to free up
+5. When the wait runs out: `local_fallback: always` runs locally with a loud warning (and `details.fallback` in structured output); other modes fail with the lock holders listed
 
 ```yaml
 lock:
@@ -389,6 +428,26 @@ tasks:
 ```
 
 Run with: `rr test`
+
+### Passing extra arguments
+
+Extra CLI args flow into single-command tasks. Use an `{args}` placeholder
+to control where they land - essential for pipelines, where appended args
+would bind to the last command instead of the one you mean:
+
+```yaml
+tasks:
+  test:
+    run: pytest {args:-tests/} -n 4 | tail -20
+```
+
+- `rr test tests/foo.py -k bond` runs `pytest 'tests/foo.py' '-k' 'bond' -n 4 | tail -20`
+- `rr test` with no args uses the `{args:-default}` default: `pytest tests/ -n 4 | tail -20`
+- Args are shell-quoted before substitution
+- Without a placeholder, args are appended (quoted) to simple commands;
+  compound commands (pipes, `&&`, redirections, `$()`) reject extra args
+  and tell you where to add `{args}`
+- Write `{{args}}` for a literal `{args}` in the command
 
 ### Multi-step task
 

@@ -64,6 +64,7 @@ Get started:
 
 // Execute runs the root command and handles errors with structured output.
 func Execute() {
+	ignoreSigpipe()
 	code := run()
 	sshutil.CloseAgent()
 	if code != 0 {

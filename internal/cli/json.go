@@ -117,14 +117,18 @@ func WriteJSONError(w io.Writer, code, message, suggestion string, details inter
 	return writeJSONEnvelope(w, env)
 }
 
-// WriteJSONFromError converts a Go error to a JSON error response.
+// WriteJSONFromError converts a Go error to a JSON error response. The
+// returned error is always an ExitError(1): the envelope already reported
+// the failure, so callers returning it up to Execute() get a non-zero exit
+// without a duplicate error message.
 func WriteJSONFromError(w io.Writer, err error) error {
 	jsonErr := ErrorToJSON(err)
 	env := JSONEnvelope{
 		Success: false,
 		Error:   jsonErr,
 	}
-	return writeJSONEnvelope(w, env)
+	_ = writeJSONEnvelope(w, env)
+	return errors.NewExitError(1)
 }
 
 // writeJSONEnvelope writes the envelope with consistent formatting.

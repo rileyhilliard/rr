@@ -202,7 +202,7 @@ test_status_command() {
 
     run_test "status" 0 "$RR_BIN" status
     run_test "status --machine" 0 "$RR_BIN" status --machine
-    run_test_contains "status shows HOST" "HOST" 0 "$RR_BIN" status
+    run_test_contains "status shows hosts" '"hosts"' 0 "$RR_BIN" status --machine
 }
 
 # Test host command
@@ -214,7 +214,7 @@ test_host_command() {
 
     run_test "host list" 0 "$RR_BIN" host list
     run_test "host list --machine" 0 "$RR_BIN" host list --machine
-    run_test_contains "host list shows config path" "Config:" 0 "$RR_BIN" host list
+    run_test_contains "host list shows config path" '"config":' 0 "$RR_BIN" host list --machine
 }
 
 # Test logs command
