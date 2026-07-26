@@ -105,7 +105,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	if len(opts.Args) > 0 && len(task.Steps) > 0 {
 		return 1, errors.New(errors.ErrConfig,
 			"Can't pass arguments to multi-step tasks",
-			"Arguments are only supported for tasks with a single 'run' command.")
+			"Arguments (and {args} placeholders) are only supported for tasks with a single 'run' command.")
 	}
 
 	// If task has dependencies and we're not skipping them, use dependency executor

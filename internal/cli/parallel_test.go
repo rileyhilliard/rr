@@ -488,3 +488,53 @@ func TestRenderParallelResult_MachineMode_SuccessHasNoFailures(t *testing.T) {
 	_, hasFailures := event.Details["failures"]
 	assert.False(t, hasFailures, "successful result should not include failures key")
 }
+
+func TestBuildSubtaskInfos_PlaceholderSubstitution(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"test-py": {Run: "pytest {args:-.} -n 4 | grep -v PASS"},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"test-py"},
+		ForwardArgs: true,
+	}
+
+	infos, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, []string{"tests/foo.py"})
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "pytest 'tests/foo.py' -n 4 | grep -v PASS", infos[0].Command)
+}
+
+func TestBuildSubtaskInfos_PlaceholderDefaultWithoutArgs(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"test-py": {Run: "pytest {args:-.} -n 4"},
+		},
+	}
+	// forward_args not even set: defaults still apply
+	parentTask := &config.TaskConfig{
+		Parallel: []string{"test-py"},
+	}
+
+	infos, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, nil)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "pytest . -n 4", infos[0].Command)
+}
+
+func TestBuildSubtaskInfos_CompoundSubtaskWithoutPlaceholderErrors(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"test-py": {Run: "pytest -n 4 | grep -v PASS"},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"test-py"},
+		ForwardArgs: true,
+	}
+
+	_, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, []string{"tests/foo.py"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "{args} placeholder")
+}

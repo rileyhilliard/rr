@@ -11,6 +11,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
@@ -281,8 +282,10 @@ func extractTaskFailures(result *parallel.Result) []map[string]interface{} {
 }
 
 // buildSubtaskInfos constructs the TaskInfo list for each flattened subtask name.
-// When forwardTask.ForwardArgs is true and args are provided, they are appended to
-// each subtask's run command. Multi-step subtasks cannot accept forwarded args.
+// When forwardTask.ForwardArgs is true, args are substituted into each
+// subtask's {args} placeholder or appended (shell-quoted) to simple commands.
+// {args:-default} defaults apply even when no args are forwarded.
+// Multi-step subtasks cannot accept forwarded args.
 func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flattenedNames []string, args []string) ([]parallel.TaskInfo, error) {
 	tasks := make([]parallel.TaskInfo, 0, len(flattenedNames))
 	for i, subtaskName := range flattenedNames {
@@ -296,17 +299,23 @@ func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flat
 			cmd = buildStepsCommand(subtask.Steps)
 		}
 
-		if forwardTask.ForwardArgs && len(args) > 0 {
-			if len(subtask.Steps) > 0 {
+		if forwardTask.ForwardArgs && len(args) > 0 && len(subtask.Steps) > 0 {
+			return nil, errors.New(errors.ErrConfig,
+				fmt.Sprintf("subtask '%s' uses steps and cannot accept forwarded args", subtaskName),
+				"remove forward_args from the parent task or convert the subtask to a single run command")
+		}
+
+		if subtask.Run != "" {
+			forwarded := args
+			if !forwardTask.ForwardArgs {
+				forwarded = nil // still expands {args:-default} placeholders
+			}
+			cmd, err = exec.ApplyTaskArgs(subtask.Run, forwarded)
+			if err != nil {
 				return nil, errors.New(errors.ErrConfig,
-					fmt.Sprintf("subtask '%s' uses steps and cannot accept forwarded args", subtaskName),
-					"remove forward_args from the parent task or convert the subtask to a single run command")
+					fmt.Sprintf("subtask '%s' is a compound command and has no {args} placeholder for forwarded args", subtaskName),
+					"Add an {args} placeholder to the subtask's run command where the arguments belong.")
 			}
-			quoted := make([]string, len(args))
-			for i, a := range args {
-				quoted[i] = util.ShellQuote(a)
-			}
-			cmd = cmd + " " + strings.Join(quoted, " ")
 		}
 
 		tasks = append(tasks, parallel.TaskInfo{

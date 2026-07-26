@@ -50,15 +50,15 @@ lock:
 tasks:
   test:
     description: Run all unit tests
-    run: go test ./...
+    run: go test {args:-./...}
 
   test-v:
     description: Run tests with verbose output
-    run: go test -v ./...
+    run: go test -v {args:-./...}
 
   test-race:
     description: Run tests with race detector
-    run: go test -race ./...
+    run: go test -race {args:-./...}
 
   test-integration:
     description: Run integration tests (requires SSH)
