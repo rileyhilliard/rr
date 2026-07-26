@@ -113,6 +113,22 @@ func describeHolders(holders []lockHolderDetail) string {
 	return strings.Join(parts, "; ")
 }
 
+// lockStealWarn surfaces lock-steal warnings from TryAcquire in the active
+// output mode, so steals during load-balanced host selection are as visible
+// as those from blocking Acquire.
+func lockStealWarn(msg string) {
+	if PrettyMode() {
+		ui.PrintWarning(msg)
+		return
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:    "phase",
+		Phase:   "connect",
+		Status:  "warn",
+		Details: map[string]interface{}{"message": msg},
+	})
+}
+
 // emitFallbackWarning makes a local fallback unmissable in both output modes.
 func emitFallbackWarning(holders []lockHolderDetail, waited time.Duration) {
 	if PrettyMode() {
@@ -207,7 +223,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Try non-blocking lock acquisition
-		lck, err := lock.TryAcquire(conn, lockCfg, opts.Command)
+		lck, err := lock.TryAcquire(conn, lockCfg, opts.Command, lock.WithWarnFunc(lockStealWarn))
 		if err == nil {
 			// Got the lock
 			lck.StartHeartbeat()
@@ -344,7 +360,7 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 				continue
 			}
 
-			lck, err := lock.TryAcquire(attempt.conn, lockCfg, command)
+			lck, err := lock.TryAcquire(attempt.conn, lockCfg, command, lock.WithWarnFunc(lockStealWarn))
 			if err == nil {
 				lck.StartHeartbeat()
 				if spinner != nil {

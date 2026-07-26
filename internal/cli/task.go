@@ -213,6 +213,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
 		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		repeatFallbackWarning(wf.ResultDetails)
 		if failureHint != "" {
 			fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
 		}
@@ -316,6 +317,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
 		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		repeatFallbackWarning(wf.ResultDetails)
 	} else {
 		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}
