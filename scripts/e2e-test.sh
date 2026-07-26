@@ -416,6 +416,11 @@ EOF
     run_test "config: invalid path (should fail)" 1 \
         env -C "$empty_dir" "$RR_BIN" --config "/nonexistent/path.yaml" tasks
     rm -rf "$empty_dir"
+
+    # A bad explicit --config must fail even when the cwd has a valid
+    # .rr.yaml - silently falling back to it hides the typo.
+    run_test "config: invalid path ignores local .rr.yaml (should fail)" 1 \
+        env -C "$test_dir" "$RR_BIN" --config "/nonexistent/path.yaml" tasks
 }
 
 # Test --local flag with tasks
