@@ -346,6 +346,10 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 			"Usage: rr run <command>  (e.g., rr run \"make test\")")
 	}
 
+	if err := validateLeadingArg(args, "run"); err != nil {
+		return err
+	}
+
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err

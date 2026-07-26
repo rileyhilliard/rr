@@ -15,6 +15,10 @@ func execCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, loca
 			"Usage: rr exec <command>  (e.g., rr exec \"ls -la\")")
 	}
 
+	if err := validateLeadingArg(args, "exec"); err != nil {
+		return err
+	}
+
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
