@@ -530,9 +530,13 @@ func ListTasks() error {
 	// discovered .rr.yaml.
 	cfgPath, err := config.Find(Config())
 	if err == nil && cfgPath == "" {
-		err = errors.New(errors.ErrConfig,
+		notFound := errors.New(errors.ErrConfig,
 			"No .rr.yaml found in this directory or parent directories",
 			"Run 'rr init' to create one, or check you're in the right directory.")
+		if tasksJSON || MachineMode() {
+			return WriteJSONFromError(os.Stdout, notFound)
+		}
+		return notFound
 	}
 	if err != nil {
 		if tasksJSON || MachineMode() {
@@ -701,8 +705,8 @@ func taskFlagErrorFunc(name string) func(*cobra.Command, error) error {
 		if err == nil || !strings.Contains(err.Error(), "unknown") {
 			return err
 		}
-		return errors.New(errors.ErrConfig,
-			err.Error()+" (rr parses flags before the task sees them)",
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"rr parses flags before the task sees them",
 			fmt.Sprintf("Put task flags after '--' so they pass through: rr %s -- <args>", name))
 	}
 }
