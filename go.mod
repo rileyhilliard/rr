@@ -1,6 +1,6 @@
 module github.com/rileyhilliard/rr
 
-go 1.25.11
+go 1.25.12
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
