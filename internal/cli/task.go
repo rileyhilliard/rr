@@ -754,7 +754,9 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 			if len(args) > 0 && !task.ForwardArgs {
 				return errors.New(errors.ErrConfig,
 					fmt.Sprintf("parallel task '%s' doesn't accept extra arguments (got: %s)", name, strings.Join(args, " ")),
-					fmt.Sprintf("use 'rr run \"<command> %s\"' for ad-hoc runs with custom args", strings.Join(args, " ")))
+					fmt.Sprintf("Set 'forward_args: true' on the task and add {args} placeholders to subtask commands where the arguments belong. "+
+						"Note: forwarded test filters may leave some subtasks with zero matching tests (pytest exits 4/5). "+
+						"For a one-off, use 'rr run \"<command> %s\"'.", strings.Join(args, " ")))
 			}
 			return runParallelTaskCommand(name, ParallelTaskOptions{
 				TaskName:    name,

@@ -176,6 +176,7 @@ func TestParallelTask_RejectsArgsViaCobra(t *testing.T) {
 	require.Error(t, execErr)
 	assert.Contains(t, execErr.Error(), "doesn't accept extra arguments")
 	assert.Contains(t, execErr.Error(), "extra-arg")
+	assert.Contains(t, execErr.Error(), "forward_args: true")
 }
 
 // TestBuildSubtaskInfos_ForwardArgsAppended verifies that when forward_args is true

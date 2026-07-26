@@ -269,7 +269,7 @@ hosts: [mini] # Optional: defaults to all hosts
 require: [go, golangci-lint]  # Project-level requirements
 
 sync:
-    exclude: [.git/, node_modules/, .venv/]
+    exclude: [.git, node_modules, .venv] # bare patterns: .git is a file in linked worktrees
 
 tasks:
     build:
@@ -277,7 +277,7 @@ tasks:
         require: [cargo]  # Task-specific requirement
 ```
 
-`${PROJECT}` expands to your local directory name. See [configuration docs](docs/configuration.md) for all options.
+`${PROJECT}` expands to your local directory name. In a linked git worktree it expands to `repo@worktree-name`, so each worktree gets its own remote directory (disable with `sync.worktree_isolation: false`). See [configuration docs](docs/configuration.md) for all options.
 
 ## How It Works
 
@@ -298,7 +298,7 @@ hosts:
 | Coffee shop   | LAN times out → uses Tailscale |
 | gpu-box busy  | Skips to `backup-gpu`          |
 
-**File sync:** Wraps rsync with smart defaults. Excludes build artifacts, preserves remote-only directories (like `.venv` installed on the remote).
+**File sync:** Wraps rsync with smart defaults. Excludes build artifacts, preserves remote-only directories (like `.venv` installed on the remote). Each sync writes a `.rr-source` marker on the remote recording where the tree came from; syncing over a mirror owned by a different source directory or machine warns instead of silently clobbering it.
 
 **Locking:** Creates a lock before running commands. If a host is locked, `rr` tries the next host. If all hosts are locked, it round-robins until one frees up.
 

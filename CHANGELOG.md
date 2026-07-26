@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **Task args are now shell-quoted** - Extra args appended to single-command tasks are quoted before hitting the remote shell, so `rr test "-k foo bar"` arrives as one argument. Remote glob/variable expansion of appended args no longer happens; put globs in the task's `run` string if you need them.
+- **Compound task commands reject blind arg appends** - A task whose `run` contains pipes, `&&`, redirections, `$()`, or backticks now errors when given extra args without an `{args}` placeholder. Previously the args silently landed on the last command in the pipeline (e.g. `grep` instead of `pytest`) and could produce false-green results. Add `{args}` (or `{args:-default}`) where the args belong.
+- **Worktree remote dirs move on upgrade** - `${PROJECT}` in a linked git worktree now expands to `repo@worktree-name` instead of colliding with the main checkout. First sync from an existing worktree is a cold sync into the new directory; the old shared mirror is left behind (clean it up manually, e.g. `rr run "rm -rf ~/rr/<old>"` semantics apply). Opt out with `sync.worktree_isolation: false`.
+- **Default excludes use bare patterns** - `.git/`, `.venv/`, `node_modules/` became `.git`, `.venv`, `node_modules` so linked worktrees (where `.git` is a file) and symlinked module dirs sync cleanly instead of failing with rsync exit 23. Bare patterns also match files with those names at any depth (e.g. a vendored fixture named `.git`). Custom `exclude` lists replace the defaults, so update yours too.
+- **`local_fallback: always` waits before falling back** - When all hosts are locked by live processes, rr now waits up to `lock.wait_timeout` for a host to free up before running locally (previously it fell back instantly and silently). Slower in that corner case, but honest.
+
+### Added
+
+- **`{args}` placeholders in tasks** - `run: pytest {args:-.} -n 4 | tail -20` substitutes shell-quoted CLI args exactly where you want them; `{args:-default}` supplies a default when no args are given; `{{args}}` escapes to a literal.
+- **Local path rewriting (on by default)** - `rr run`/`rr exec` rewrite absolute paths under the sync root to the remote project dir; task args (including `forward_args` parallel tasks) rewrite to project-relative form. Rewrites are reported (`details.path_rewrites`); absolute paths outside the project draw a warning, and a leading `cd` into a local-only directory is rejected. Disable with `rewrite_paths: false` (global `defaults` or project).
+- **Failure hints** - A failed remote command whose stderr shows `No such file or directory` with a local-looking path, or `not a git repository`, gets an explanation of the local-to-remote mapping (pretty: after the status line; structured: `details.hint`).
+- **Run logs for single commands** - Every `rr run`/`rr exec`/task execution tees raw output to `~/.rr/logs/<name>-<timestamp>/output.log` (same retention as parallel logs) and reports `details.log_file`. Test summary (`details.summary`) and structured failures (`details.failures`) are extracted from the log - including in default structured mode.
+- **`--tail N`** on run/exec and task commands reprints the last N log lines after the result envelope.
+- **Broken-pipe tolerance** - SIGPIPE is ignored; when a consumer closes the pipe (`rr run ... | head`), rr stops writing to that stream instead of dying with exit 141, keeps logging, and notes `details.broken_pipe`.
+- **Dead-lock reclaim** - Locks held by dead processes on the same machine (verified via a per-machine token, never hostname alone) are stolen automatically with a warning instead of forcing manual `rr unlock` forensics.
+- **Loud local fallback** - Falling back to local execution because hosts are locked now emits a warning event plus `details.fallback` (reason, wait time, per-host holders with pid/command/age) and repeats the warning after the pretty status line.
+- **Leading-arg validation** - `rr run m4-mini make test` and `rr run test-backend -k foo` now error with the correct invocation instead of shipping a nonsense command string to the remote.
+- **Sync provenance marker** - Each sync writes `.rr-source` (source path, hostname, branch, HEAD) on the remote and warns when a sync would overwrite a mirror owned by a different source tree or machine.
+- **Worktree visibility** - `rr status` shows which remote directory the current tree syncs to per host; `rr doctor` warns when a linked worktree shares the main checkout's remote dir.
+- **`local_fallback` modes** - `never` / `on-unreachable` / `always` replace the boolean (booleans still accepted: `true` = `always`, `false` = `never`); the project-level override now works on the all-hosts-locked path too.
+- **Richer lock errors and `rr unlock --all`** - Lock conflicts show holder, pid, command, and age; `rr unlock --all` scopes to project hosts, probes in parallel, and supports structured output.
+
+### Fixed
+
+- **Parallel-task arg rejection now points at `forward_args`** - The error for passing args to a non-forwarding parallel task explains `forward_args: true` + `{args}` placeholders and warns that forwarded filters can leave subtasks with zero collected tests (pytest exits 4/5).
+- **`lock.wait_timeout` default** was missing from config parsing; it now defaults to `1m`.
+- **Lock timeout errors** no longer suggest the nonexistent `--force-unlock` flag.
+
+### Documentation
+
+- `defaults.setup` is documented: it prepends to task commands **and** ad-hoc remote `rr run`/`rr exec` (it already behaved that way for run).
+- Worktree isolation, `{args}` placeholders, path rewriting, fallback modes, and the bare exclude patterns are covered in `docs/configuration.md` and the README.
+
 ## [0.22.3] - 2026-07-05
 
 ### Fixed
