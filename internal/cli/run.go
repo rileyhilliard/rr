@@ -76,28 +76,16 @@ func Run(opts RunOptions) (int, error) {
 
 	execStart := time.Now()
 	var exitCode int
+	remoteProjectDir := ""
 
 	if wf.Conn.IsLocal {
 		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
-		cmd := opts.Command
-		if len(wf.Resolved.Project.Defaults.Setup) > 0 {
-			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
+		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
+		if cmdErr != nil {
+			return 1, cmdErr
 		}
-		// --cwd prepends a cd into a subdirectory of the remote project root.
-		// Reject paths that escape the project root via ../ traversal.
-		if opts.RemoteCWD != "" {
-			remoteProjectDir := config.ExpandRemote(wf.Conn.Host.Dir)
-			resolved := path.Join(remoteProjectDir, opts.RemoteCWD)
-			if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
-				return 1, errors.New(errors.ErrConfig,
-					fmt.Sprintf("--cwd '%s' escapes the remote project root", opts.RemoteCWD),
-					"use a path relative to the project root without '..' components")
-			}
-			subdir := util.ShellQuotePreserveTilde(resolved)
-			cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
-		}
-		fullCmd := exec.BuildRemoteCommand(cmd, &wf.Conn.Host)
 		exitCode, err = wf.Conn.Client.ExecStreamContext(wf.Context(), fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
@@ -122,6 +110,16 @@ func Run(opts RunOptions) (int, error) {
 			pullItems[i] = config.PullItem{Src: p}
 		}
 		ExecutePullPhase(wf, pullItems, opts.PullDest)
+	}
+
+	// Post-failure hint: detect local-machine assumptions (paths that only
+	// exist here, git commands against the synced snapshot).
+	failureHint := ""
+	if exitCode != 0 && !wf.Conn.IsLocal {
+		failureHint = buildFailureHint(opts.Command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteProjectDir, wf.Conn.Name)
+		if failureHint != "" {
+			wf.AddResultDetail("hint", failureHint)
+		}
 	}
 
 	// In structured mode, emit result and return - no decorations
@@ -189,11 +187,51 @@ func Run(opts RunOptions) (int, error) {
 	wf.PhaseDisplay.ThinDivider()
 	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 
-	if exitCode != 0 && !failureExplained {
+	if failureHint != "" {
+		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
+	} else if exitCode != 0 && !failureExplained {
 		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
 	}
 
 	return exitCode, nil
+}
+
+// buildRemoteRunCommand prepares a command for remote execution: local path
+// rewriting, foreign-path checks, project setup prepends, and --cwd handling.
+func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDir string) (string, error) {
+	cmd := opts.Command
+
+	// Rewrite local absolute paths to their remote equivalents so commands
+	// authored against the local checkout work on the mirror.
+	if config.ResolveRewritePaths(wf.Resolved) {
+		rewritten, n := RewriteLocalPaths(cmd, wf.WorkDir, remoteProjectDir)
+		if n > 0 {
+			cmd = rewritten
+			reportPathRewrites(wf, n, wf.WorkDir, remoteProjectDir)
+		}
+		if err := checkForeignPaths(wf, cmd, remoteProjectDir); err != nil {
+			return "", err
+		}
+	}
+
+	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
+		cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+	}
+
+	// --cwd prepends a cd into a subdirectory of the remote project root.
+	// Reject paths that escape the project root via ../ traversal.
+	if opts.RemoteCWD != "" {
+		resolved := path.Join(remoteProjectDir, opts.RemoteCWD)
+		if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' escapes the remote project root", opts.RemoteCWD),
+				"use a path relative to the project root without '..' components")
+		}
+		subdir := util.ShellQuotePreserveTilde(resolved)
+		cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
+	}
+
+	return exec.BuildRemoteCommand(cmd, &wf.Conn.Host), nil
 }
 
 // renderFinalStatus displays the final execution status line.

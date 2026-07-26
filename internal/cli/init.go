@@ -538,6 +538,11 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	sb.WriteString("# Set to true to fall back to local execution instead of failing\n")
 	sb.WriteString("# local_fallback: false\n\n")
 
+	// Path rewriting
+	sb.WriteString("# rr rewrites local absolute paths in commands/args to their remote\n")
+	sb.WriteString("# equivalents before running. Set to false to disable.\n")
+	sb.WriteString("# rewrite_paths: true\n\n")
+
 	// Sync section
 	sb.WriteString("# File sync settings (uses rsync under the hood)\n")
 	sb.WriteString("sync:\n")

@@ -60,6 +60,11 @@ type GlobalDefaults struct {
 	// on-unreachable, or always. Booleans are accepted for backwards
 	// compatibility (true = always, false = never).
 	LocalFallback LocalFallbackMode `yaml:"local_fallback" mapstructure:"local_fallback"`
+
+	// RewritePaths controls rewriting local absolute paths in commands and
+	// task args to their remote equivalents before execution. Unset means
+	// enabled; set to false to pass paths through untouched.
+	RewritePaths *bool `yaml:"rewrite_paths,omitempty" mapstructure:"rewrite_paths"`
 }
 
 // ProjectDefaults contains default settings applied to all tasks in a project.
@@ -78,16 +83,18 @@ type ProjectDefaults struct {
 // Config represents the project-level .rr.yaml configuration file.
 // This is shareable with the team and doesn't contain host connection details.
 type Config struct {
-	Version       int                   `yaml:"version" mapstructure:"version"`
-	Host          string                `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
-	Hosts         []string              `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
-	LocalFallback *LocalFallbackMode    `yaml:"local_fallback,omitempty" mapstructure:"local_fallback"`
-	Defaults      ProjectDefaults       `yaml:"defaults" mapstructure:"defaults"`
-	Sync          SyncConfig            `yaml:"sync" mapstructure:"sync"`
-	Lock          LockConfig            `yaml:"lock" mapstructure:"lock"`
-	Tasks         map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
-	Output        OutputConfig          `yaml:"output" mapstructure:"output"`
-	Monitor       MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
+	Version       int                `yaml:"version" mapstructure:"version"`
+	Host          string             `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
+	Hosts         []string           `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
+	LocalFallback *LocalFallbackMode `yaml:"local_fallback,omitempty" mapstructure:"local_fallback"`
+	RewritePaths  *bool              `yaml:"rewrite_paths,omitempty" mapstructure:"rewrite_paths"` // overrides defaults.rewrite_paths
+
+	Defaults ProjectDefaults       `yaml:"defaults" mapstructure:"defaults"`
+	Sync     SyncConfig            `yaml:"sync" mapstructure:"sync"`
+	Lock     LockConfig            `yaml:"lock" mapstructure:"lock"`
+	Tasks    map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
+	Output   OutputConfig          `yaml:"output" mapstructure:"output"`
+	Monitor  MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
 
 	// Require lists tools that must be available on remote hosts.
 	// Checked before sync; uses built-in installers when available.

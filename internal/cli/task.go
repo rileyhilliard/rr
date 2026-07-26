@@ -137,6 +137,21 @@ func RunTask(opts TaskOptions) (int, error) {
 		remoteDir = config.ExpandRemote(wf.Conn.Host.Dir)
 	}
 
+	// Rewrite local absolute paths in args to project-relative form; task
+	// execution cds into the remote project dir, so relative paths resolve
+	// there. Remaining local-only paths get a warning.
+	taskArgs := opts.Args
+	if !wf.Conn.IsLocal && len(taskArgs) > 0 && config.ResolveRewritePaths(wf.Resolved) {
+		rewritten, n := RewriteArgsToRelative(taskArgs, wf.WorkDir)
+		if n > 0 {
+			taskArgs = rewritten
+			reportPathRewrites(wf, n, wf.WorkDir, ".")
+		}
+		if err := checkForeignPaths(wf, strings.Join(taskArgs, " "), remoteDir); err != nil {
+			return 1, err
+		}
+	}
+
 	// Get merged setup commands (host + project defaults)
 	setupCommands := config.GetMergedSetupCommands(wf.Resolved.Project, hostCfg)
 
@@ -154,7 +169,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Execute the task
-	result, err := exec.ExecuteTask(wf.Context(), wf.Conn, task, opts.Args, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr(), execOpts)
+	result, err := exec.ExecuteTask(wf.Context(), wf.Conn, task, taskArgs, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr(), execOpts)
 	execDuration := time.Since(execStart)
 
 	// If cancelled by signal, return standard Ctrl+C exit code
@@ -174,9 +189,22 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Pull files if task has pull config
 	ExecutePullPhase(wf, task.Pull, "")
 
+	// Post-failure hint: detect local-machine assumptions (paths that only
+	// exist here, git commands against the synced snapshot).
+	failureHint := ""
+	if result.ExitCode != 0 && !wf.Conn.IsLocal {
+		failureHint = buildFailureHint(task.Run, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
+		if failureHint != "" {
+			wf.AddResultDetail("hint", failureHint)
+		}
+	}
+
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
 		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		if failureHint != "" {
+			fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
+		}
 	} else {
 		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}

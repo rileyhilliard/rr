@@ -68,6 +68,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 			"Check for circular references or missing tasks.")
 	}
 
+	rewriteForwardArgs(resolved, task, &opts)
+
 	// Build TaskInfo for each flattened subtask
 	tasks, err := buildSubtaskInfos(resolved.Project, task, flattenedNames, opts.Args)
 	if err != nil {
@@ -279,6 +281,21 @@ func extractTaskFailures(result *parallel.Result) []map[string]interface{} {
 		failures = append(failures, entry)
 	}
 	return failures
+}
+
+// rewriteForwardArgs rewrites local absolute path args to project-relative
+// form so they resolve after each worker cds into its host's project dir.
+// Skipped for --local runs, where local paths are already correct.
+func rewriteForwardArgs(resolved *config.ResolvedConfig, task *config.TaskConfig, opts *ParallelTaskOptions) {
+	if !task.ForwardArgs || len(opts.Args) == 0 || opts.Local ||
+		resolved.ProjectRoot == "" || !config.ResolveRewritePaths(resolved) {
+		return
+	}
+	rewritten, n := RewriteArgsToRelative(opts.Args, resolved.ProjectRoot)
+	if n > 0 {
+		opts.Args = rewritten
+		announcePathRewrites(n, resolved.ProjectRoot, ".")
+	}
 }
 
 // buildSubtaskInfos constructs the TaskInfo list for each flattened subtask name.

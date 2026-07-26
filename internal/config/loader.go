@@ -435,6 +435,18 @@ func ResolveLocalFallback(resolved *ResolvedConfig) bool {
 	return ResolveLocalFallbackMode(resolved).Enabled()
 }
 
+// ResolveRewritePaths reports whether local-to-remote path rewriting is
+// enabled. Project config overrides global config; the default is on.
+func ResolveRewritePaths(resolved *ResolvedConfig) bool {
+	if resolved.Project != nil && resolved.Project.RewritePaths != nil {
+		return *resolved.Project.RewritePaths
+	}
+	if resolved.Global != nil && resolved.Global.Defaults.RewritePaths != nil {
+		return *resolved.Global.Defaults.RewritePaths
+	}
+	return true
+}
+
 // parseConfig converts viper config to our Config struct with defaults merged in.
 func parseConfig(v *viper.Viper, path string) (*Config, error) {
 	// Start with defaults

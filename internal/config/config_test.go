@@ -1852,6 +1852,49 @@ func TestResolveLocalFallbackMode_Precedence(t *testing.T) {
 	}
 }
 
+func TestResolveRewritePaths_Precedence(t *testing.T) {
+	yes := true
+	no := false
+
+	tests := []struct {
+		name     string
+		global   *bool
+		project  *bool
+		expected bool
+	}{
+		{"defaults to on", nil, nil, true},
+		{"global off", &no, nil, false},
+		{"project on overrides global off", &no, &yes, true},
+		{"project off", nil, &no, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := &ResolvedConfig{
+				Global:  &GlobalConfig{Defaults: GlobalDefaults{RewritePaths: tt.global}},
+				Project: &Config{RewritePaths: tt.project},
+			}
+			assert.Equal(t, tt.expected, ResolveRewritePaths(resolved))
+		})
+	}
+}
+
+func TestRewritePaths_Load(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".rr.yaml")
+
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\n"), 0o644))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Nil(t, cfg.RewritePaths)
+
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\nrewrite_paths: false\n"), 0o644))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.RewritePaths)
+	assert.False(t, *cfg.RewritePaths)
+}
+
 func TestLockWaitTimeout_ViperDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".rr.yaml")
