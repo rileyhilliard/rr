@@ -267,7 +267,7 @@ func buildAllHostsLockedError(lockedHosts []hostAttempt, timeout time.Duration) 
 
 	return rrerrors.New(rrerrors.ErrLock,
 		fmt.Sprintf("All hosts are locked - timed out after %s", timeout),
-		fmt.Sprintf("Locked hosts: %v. Wait for them to finish or use --force-unlock if stale.", holders))
+		fmt.Sprintf("Locked hosts: %v. Wait for them to finish, or run 'rr unlock --all' if they're stuck.", holders))
 }
 
 // setupWorkflowLoadBalanced performs workflow setup with load balancing.

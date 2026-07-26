@@ -135,11 +135,28 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		elapsed := time.Since(startTime)
 		if elapsed > cfg.Timeout {
 			// Try to read who holds the lock for a better error message
-			holder := readLockHolder(conn.Client, infoFile)
+			holder := describeLockHolder(conn.Client, infoFile)
 			log.Debug("timeout after %d iterations, elapsed=%s, holder=%s", iteration, elapsed, holder)
 			return nil, errors.New(errors.ErrLock,
 				fmt.Sprintf("Lock timeout after %s - someone else is using this remote", cfg.Timeout),
-				fmt.Sprintf("Held by: %s. Wait for them to finish or use --force-unlock if it's stale.", holder))
+				fmt.Sprintf("Lock holder: %s. Wait for it to finish or run 'rr unlock %s' if it's stuck.", holder, conn.Name))
+		}
+
+		// Fast path: lock held by a process on this machine that is no
+		// longer running (killed rr run) - steal immediately instead of
+		// waiting out the stale threshold.
+		if holderInfo, infoErr := readLockInfo(conn.Client, infoFile); infoErr == nil && holderInfo.IsDeadLocalHolder() {
+			log.Debug("detected dead local holder (pid %d), attempting removal", holderInfo.PID)
+			if err := forceRemove(conn.Client, lockDir); err == nil {
+				msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
+				log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
+				if options.warnFunc != nil {
+					options.warnFunc(msg)
+				} else {
+					fmt.Fprintln(os.Stderr, msg)
+				}
+				continue
+			}
 		}
 
 		// Check for stale lock
@@ -270,6 +287,17 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 			return nil, errors.New(errors.ErrLock,
 				fmt.Sprintf("Couldn't create lock directory at %s", baseDir),
 				fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(stderr))))
+		}
+	}
+
+	// Fast path: lock held by a dead process on this machine - remove it
+	// immediately instead of waiting out the stale threshold.
+	if holderInfo, infoErr := readLockInfo(conn.Client, infoFile); infoErr == nil && holderInfo.IsDeadLocalHolder() {
+		log.Debug("TryAcquire: detected dead local holder (pid %d), attempting removal", holderInfo.PID)
+		if err := forceRemove(conn.Client, lockDir); err != nil {
+			log.Debug("TryAcquire: failed to remove dead-holder lock: %v", err)
+		} else {
+			log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
 		}
 	}
 
@@ -602,6 +630,16 @@ func readLockInfo(client sshutil.SSHClient, infoFile string) (*LockInfo, error) 
 		return nil, errors.New(errors.ErrLock, "lock info file not readable", "")
 	}
 	return ParseLockInfo(stdout)
+}
+
+// describeLockHolder returns a rich holder description (command, age,
+// same-machine) when the info file parses, falling back to the basic
+// user@host string otherwise.
+func describeLockHolder(client sshutil.SSHClient, infoFile string) string {
+	if info, err := readLockInfo(client, infoFile); err == nil {
+		return info.Describe()
+	}
+	return readLockHolder(client, infoFile)
 }
 
 // readLockHolder reads the lock info file and returns a description of the holder.
