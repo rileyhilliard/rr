@@ -62,6 +62,14 @@ func attachRunOutcome(wf *WorkflowContext, command, logPath string, exitCode int
 			// we only report counts, so call it out explicitly. Reported, not
 			// fatal: the exit code stays whatever the runner returned.
 			wf.AddResultDetail("no_tests", true)
+			// Note when a pipe is why exitCode can't be trusted: the shell
+			// reports the last stage's status, so a runner that failed upstream
+			// still exits 0. rr won't rewrite the command's semantics (a
+			// deliberate `cmd | grep -q` tolerates upstream failure), but the
+			// caveat belongs in the report.
+			if util.HasPipe(command) {
+				wf.AddResultDetail("piped_exit_code", true)
+			}
 		}
 	}
 

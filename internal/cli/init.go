@@ -534,9 +534,12 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	}
 
 	// Local fallback
-	sb.WriteString("# Run locally when all remote hosts fail or are unreachable\n")
-	sb.WriteString("# Set to true to fall back to local execution instead of failing\n")
-	sb.WriteString("# local_fallback: false\n\n")
+	sb.WriteString("# Run locally when remote hosts are unavailable, instead of failing\n")
+	sb.WriteString("#   never          - always require a remote host (default)\n")
+	sb.WriteString("#   on-unreachable - fall back only when no host answers\n")
+	sb.WriteString("#   always         - always run locally\n")
+	sb.WriteString("# Booleans are accepted too: false = never, true = always\n")
+	sb.WriteString("# local_fallback: never\n\n")
 
 	// Path rewriting
 	sb.WriteString("# rr rewrites local absolute paths in commands/args to their remote\n")

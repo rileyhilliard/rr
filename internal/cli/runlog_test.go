@@ -88,3 +88,57 @@ func TestAttachRunOutcomeNoTests(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachRunOutcomePipedExitCode pins the caveat that explains why the exit
+// code can't be trusted on a zero-test run: a pipe means the shell reported the
+// last stage's status, not the runner's. The flag is advisory only - rr does not
+// rewrite the command, since `cmd | grep -q` tolerates upstream failure on
+// purpose.
+func TestAttachRunOutcomePipedExitCode(t *testing.T) {
+	const noTestsLog = "collected 0 items\n\n===== no tests ran in 0.05s =====\n"
+
+	tests := []struct {
+		name      string
+		command   string
+		log       string
+		wantPiped bool
+	}{
+		{
+			name:      "piped zero-test run",
+			command:   "uv run pytest -k classify | tail -8",
+			log:       noTestsLog,
+			wantPiped: true,
+		},
+		{
+			name:      "unpiped zero-test run",
+			command:   "uv run pytest -k classify",
+			log:       noTestsLog,
+			wantPiped: false,
+		},
+		{
+			name:      "pipe but tests actually ran",
+			command:   "uv run pytest tests/ | tail -8",
+			log:       "collected 2 items\n\n===== 2 passed in 0.10s =====\n",
+			wantPiped: false,
+		},
+		{
+			name:      "logical or is not a pipe",
+			command:   "uv run pytest -k classify || true",
+			log:       noTestsLog,
+			wantPiped: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "output.log")
+			require.NoError(t, os.WriteFile(logPath, []byte(tt.log), 0o600))
+
+			wf := &WorkflowContext{}
+			attachRunOutcome(wf, tt.command, logPath, 0)
+
+			piped, present := wf.ResultDetails["piped_exit_code"].(bool)
+			assert.Equal(t, tt.wantPiped, present && piped)
+		})
+	}
+}

@@ -87,8 +87,15 @@ func warnNoTests(details map[string]interface{}) {
 	if noTests, ok := details["no_tests"].(bool); !ok || !noTests {
 		return
 	}
-	ui.PrintWarning("No tests ran - the runner collected zero tests. " +
-		"Check the path or filter you passed; relative paths resolve from the project root on the remote.")
+	msg := "No tests ran - the runner collected zero tests. " +
+		"Check the path or filter you passed; relative paths resolve from the project root on the remote."
+	// A pipe is why the exit code can't be trusted here: the shell reports the
+	// last stage's status, so a runner that failed upstream still exits 0.
+	if piped, ok := details["piped_exit_code"].(bool); ok && piped {
+		msg += " The command pipes its output, so the exit code came from the last stage, not the runner - " +
+			"set shell: \"bash -o pipefail\" on the host to propagate it."
+	}
+	ui.PrintWarning(msg)
 }
 
 // repeatFallbackWarning re-prints the local-fallback warning after the final
