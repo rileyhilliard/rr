@@ -445,7 +445,9 @@ func (c *Collector) Hosts() []string {
 	return aliases
 }
 
-// Inline parsing functions to avoid import cycle with parsers package
+// Parsers for the batched metrics command output. Delta-based parsers hang off
+// the Collector so they can reach the previous sample; the rest are free
+// functions.
 
 // parseLinuxCPUWithDelta calculates CPU usage from delta between two readings.
 // This gives instantaneous CPU usage rather than average-since-boot.

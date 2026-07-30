@@ -1146,13 +1146,17 @@ rr/
 │   ├── doctor/                  # Diagnostics
 │   │   └── checks.go
 │   ├── monitor/                 # Host monitoring dashboard
-│   │   ├── monitor.go           # Main TUI program
-│   │   ├── metrics.go           # Metric collection
-│   │   ├── collector.go         # Parallel SSH fetcher
-│   │   └── parsers/
-│   │       ├── linux.go
-│   │       ├── darwin.go
-│   │       └── gpu.go
+│   │   ├── model.go             # Bubble Tea model and state
+│   │   ├── view.go              # List view, header, help overlay
+│   │   ├── card.go              # Host card rendering
+│   │   ├── detail.go            # Expanded single-host view
+│   │   ├── collector.go         # Parallel SSH fetcher + parsers
+│   │   ├── command.go           # Batched remote metric commands
+│   │   ├── snapshot.go          # One-shot (--once) collection
+│   │   ├── pool.go              # Persistent SSH connection pool
+│   │   ├── alerts.go            # Threshold alert state machine
+│   │   ├── history.go           # Ring buffers for sparklines
+│   │   └── graphs.go            # Braille sparkline rendering
 │   ├── output/                  # Output formatting
 │   │   ├── stream.go
 │   │   ├── formatter.go
@@ -1389,6 +1393,8 @@ rr monitor [flags]
 FLAGS
       --hosts string      Filter to specific hosts (comma-separated)
       --interval string   Refresh interval (default: 1s)
+      --once              Print a single fleet snapshot and exit (no TUI)
+      --json              Output the snapshot as JSON (requires --once)
 ```
 
 **Examples:**
@@ -1403,459 +1409,284 @@ rr monitor --hosts=mini,gpu-box
 # Faster refresh for real-time watching
 rr monitor --interval=500ms
 
-# Skip GPU detection (useful if nvidia-smi hangs)
-rr monitor --no-gpu
+# One-shot snapshot for scripts and agents
+rr monitor --once
+rr monitor --once --json
+rr monitor --once --json --hosts=gpu-box
 ```
 
-### Visual Design Philosophy
+`--json` without `--once` is rejected: the live dashboard is a TUI with nothing to serialize. The interval floor is 500ms for both the flag and the config value, so a typo can't turn the dashboard into an SSH hammer.
 
-**Design direction: Precision & Density** with elements of **Data & Analysis**. This is a power-user tool for developers who live in their terminals. Think Linear meets btop: information-dense, technically sophisticated, zero decoration for decoration's sake.
-
-**Personality:**
-- Cool tones (slate, blue-gray) for the technical/trustworthy feel
-- Monospace everything (data-forward)
-- Borders over shadows (flat but structured)
-- Color only for meaning (status, thresholds, alerts)
-- Generous use of Unicode box-drawing and Braille characters for graphs
-
-### Color Palette
-
-```
-Background:     #0d1117 (deep navy-black)
-Surface:        #161b22 (elevated panels)
-Border:         #30363d (subtle structure)
-Border-focus:   #58a6ff (blue accent when selected)
-
-Text:
-  Primary:      #e6edf3 (high contrast)
-  Secondary:    #8b949e (labels, metadata)
-  Muted:        #484f58 (disabled, dividers)
-
-Semantic:
-  Healthy:      #3fb950 (green - under threshold)
-  Warning:      #d29922 (amber - approaching limit)
-  Critical:     #f85149 (red - over threshold)
-  Accent:       #58a6ff (blue - interactive, selected)
-
-Graph fills:
-  CPU:          #a371f7 (purple gradient low→high)
-  RAM:          #58a6ff (blue)
-  GPU:          #3fb950 (green)
-  Network:      #8b949e (gray, secondary)
-```
-
-### Dashboard Layout: Default View
-
-Full-width, information-dense layout optimized for wide terminals (120+ cols):
-
-```
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│  rr monitor                                                           3 hosts │ ● 3 online │ ↻ 2s ago  │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                                          │
-│  ╭─ mini ─────────────────────────────────────────────────────────────────────────────────────────────╮  │
-│  │ ● mini-local (12ms)                                                          macOS arm64 │ M2 Pro │  │
-│  │                                                                                                    │  │
-│  │   CPU ▁▂▃▅▆▇▆▅▄▃▂▂▃▄▅▆▇█▇▆▅▄▃▂▁▁▂▃▄▅▆▆▅▄▃▂▁▁▂▃▄▅   78%  ██████████████████░░░░░░  8/8 cores      │  │
-│  │   RAM ▄▄▄▄▄▄▄▄▄▄▄▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅   39%  █████████░░░░░░░░░░░░░░░  6.2/16 GB      │  │
-│  │   NET ▁▁▁▂▃▅▇▇▅▃▂▁▁▂▃▅▇█▇▅▃▂▁▁▁▁▁▂▃▅▇▇▅▃▂▁▁▁▁▁▁   ↓ 12 MB/s  ↑ 2.4 MB/s                         │  │
-│  │                                                                                                    │  │
-│  │   load  4.21  4.08  3.92      uptime  12d 4h 22m      processes  412                              │  │
-│  ╰────────────────────────────────────────────────────────────────────────────────────────────────────╯  │
-│                                                                                                          │
-│  ╭─ gpu-box ──────────────────────────────────────────────────────────────────────────────────────────╮  │
-│  │ ● tailscale (48ms)                                                      Linux x86_64 │ RTX 4090  │  │
-│  │                                                                                                    │  │
-│  │   CPU ▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▂▂▁▁▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▁▁▁▁▁▁▁   18%  ████░░░░░░░░░░░░░░░░░░░░  2/32 cores     │  │
-│  │   RAM ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃   25%  ██████░░░░░░░░░░░░░░░░░░  32/128 GB      │  │
-│  │   GPU ▇▇▇▇▇▇▇▇██████████████▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇   82%  ████████████████████░░░░  20/24 GB VRAM  │  │
-│  │   NET ▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅▅   ↓ 45 MB/s  ↑ 1.2 MB/s                         │  │
-│  │                                                                                                    │  │
-│  │   load  0.82  0.91  0.87      uptime  3d 14h 8m       gpu-temp  72°C  gpu-power  285W            │  │
-│  ╰────────────────────────────────────────────────────────────────────────────────────────────────────╯  │
-│                                                                                                          │
-│  ╭─ build-srv ────────────────────────────────────────────────────────────────────────────────────────╮  │
-│  │ ○ unreachable                                                         last seen 2h ago │ Linux   │  │
-│  │                                                                                                    │  │
-│  │   CPU ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    -   ░░░░░░░░░░░░░░░░░░░░░░░░  -/16 cores      │  │
-│  │   RAM ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    -   ░░░░░░░░░░░░░░░░░░░░░░░░  -/64 GB         │  │
-│  │   GPU ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    -   ░░░░░░░░░░░░░░░░░░░░░░░░  -/- VRAM        │  │
-│  │   NET ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    -              -                              │  │
-│  │                                                                                                    │  │
-│  │   Reconnecting in 28s...                                                                          │  │
-│  ╰────────────────────────────────────────────────────────────────────────────────────────────────────╯  │
-│                                                                                                          │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  q quit   s sort   / filter   ↑↓ select   Enter ssh   Tab expand   ? help                                │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-```
-
-### Dashboard Layout: Compact View
-
-For narrower terminals (80-120 cols), collapse to essential metrics:
-
-```
-╭────────────────────────────────────────────────────────────────────────────────╮
-│  rr monitor                                      3 hosts │ ● 3 online │ ↻ 2s  │
-├────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                │
-│  ● mini         CPU ██████████████░░░░░░  78%   RAM █████████░░░░░░░░░  39%   │
-│    mini-local   ▁▂▃▅▆▇▆▅▄▃▂▂▃▄▅▆▇█▇▆▅   8/8    ▄▄▄▄▄▄▄▄▄▄▄▅▅▅▅▅▅▅▅  6/16G   │
-│                                                                                │
-│  ● gpu-box      CPU ████░░░░░░░░░░░░░░░░  18%   RAM ██████░░░░░░░░░░░░  25%   │
-│    tailscale    ▁▁▁▁▁▁▁▁▁▁▂▂▂▂▂▂▂▁▁▁▁   2/32   ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃  32/128G  │
-│                 GPU ████████████████████  82%   20/24 GB  72°C                 │
-│                                                                                │
-│  ○ build-srv    CPU ░░░░░░░░░░░░░░░░░░░░   -    RAM ░░░░░░░░░░░░░░░░░░░   -    │
-│    unreachable  last seen 2h ago                                               │
-│                                                                                │
-├────────────────────────────────────────────────────────────────────────────────┤
-│  q quit   s sort   ↑↓ select   Enter ssh   ? help                              │
-╰────────────────────────────────────────────────────────────────────────────────╯
-```
-
-### Dashboard Layout: Expanded Host Detail
-
-Press `Tab` or `Enter` on a host to expand into a detailed single-host view:
-
-```
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│  rr monitor › gpu-box                                              ● online │ tailscale (48ms) │ ↻ 1s  │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                                          │
-│   ╭─ CPU ─────────────────────────────────────────────────────────────────────────────────────────────╮  │
-│   │                                                                                                   │  │
-│   │   100% ┤                                                                                          │  │
-│   │        │              ╭─╮                                        ╭╮                               │  │
-│   │    75% ┤    ╭────╮   ╭╯ ╰╮          ╭────╮              ╭──╮    ╭╯│                               │  │
-│   │        │   ╭╯    ╰╮ ╭╯   ╰╮        ╭╯    ╰╮   ╭────╮  ╭╯  ╰╮  ╭╯ │                               │  │
-│   │    50% ┤ ╭─╯      ╰─╯     ╰──────╮╭╯      ╰╮ ╭╯    ╰╮╭╯    ╰──╯  │╭────────╮                     │  │
-│   │        │╭╯                       ╰╯        ╰─╯      ╰╯           ╰╯        ╰─────                 │  │
-│   │    25% ┤│                                                                                         │  │
-│   │        ││                                                                                         │  │
-│   │     0% ┼┴────────────────────────────────────────────────────────────────────────────────────────│  │
-│   │         -60s                        -30s                          now                             │  │
-│   │                                                                                                   │  │
-│   │   Current: 18%      Avg (1m): 22%      Peak (1m): 78%      Cores: 32 x86_64                      │  │
-│   ╰───────────────────────────────────────────────────────────────────────────────────────────────────╯  │
-│                                                                                                          │
-│   ╭─ Memory ───────────────────────────────────╮  ╭─ GPU: RTX 4090 ─────────────────────────────────╮  │
-│   │                                            │  │                                                  │  │
-│   │   RAM     ██████░░░░░░░░░░░░░░  32/128 GB  │  │   Compute  ████████████████████░░░░  82%        │  │
-│   │   Swap    ░░░░░░░░░░░░░░░░░░░░   0/8 GB    │  │   VRAM     █████████████████░░░░░░░  20/24 GB   │  │
-│   │   Cached  ███████████░░░░░░░░░  48 GB      │  │   Temp     ████████████████░░░░░░░░  72°C       │  │
-│   │                                            │  │   Power    █████████████████████░░░  285/350W   │  │
-│   │   Used: 32 GB  Buffers: 2.1 GB             │  │                                                  │  │
-│   │   Available: 94 GB                         │  │   Driver: 545.29.06  CUDA: 12.3                 │  │
-│   ╰────────────────────────────────────────────╯  ╰──────────────────────────────────────────────────╯  │
-│                                                                                                          │
-│   ╭─ Network ─────────────────────────────────────────────────────────────────────────────────────────╮  │
-│   │   eth0       ↓ 45.2 MB/s ▅▆▇▇█▇▆▅▄▃▂▂▃▄▅▆▇█▇▆▅▄    ↑ 1.2 MB/s ▁▁▁▂▂▂▂▁▁▁▁▁▁▂▂▂▂▁▁▁▁            │  │
-│   │   tailscale  ↓ 102 KB/s ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁    ↑ 48 KB/s  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁            │  │
-│   ╰───────────────────────────────────────────────────────────────────────────────────────────────────╯  │
-│                                                                                                          │
-│   ╭─ System ──────────────────────────────────────────────────────────────────────────────────────────╮  │
-│   │   Load: 0.82, 0.91, 0.87    Uptime: 3d 14h 8m    Processes: 847    Users: 2                      │  │
-│   │   OS: Ubuntu 22.04 LTS      Kernel: 6.5.0-44-generic                                             │  │
-│   ╰───────────────────────────────────────────────────────────────────────────────────────────────────╯  │
-│                                                                                                          │
-├──────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│  Esc back   p processes   l logs   t run task   c connect   ? help                                       │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-```
-
-### Visual Elements
-
-**Progress Bars:**
-Use block characters for smooth gradients. The bar fills left-to-right with color based on threshold:
-
-```
-0-60%:   Green   ████████████░░░░░░░░░░░░
-60-80%:  Amber   ██████████████████░░░░░░
-80-100%: Red     ██████████████████████░░
-```
-
-**Sparklines:**
-Use Braille characters (U+2800-U+28FF) for high-resolution mini-graphs. Each character encodes 2x4 dots, giving smooth curves in minimal space:
-
-```
-▁▂▃▄▅▆▇█  - Block elements (8 levels)
-⣀⣤⣶⣿     - Braille (finer resolution)
-```
-
-For the 60-second history graphs, sample every 1s, display last 40 points in ~20 character width using Braille combining.
-
-**Box Drawing:**
-Use rounded corners (`╭╮╯╰`) for the modern aesthetic. Single-line borders throughout for clean hierarchy.
-
-```
-╭──────╮  Rounded corners
-│      │  Single-line sides
-╰──────╯
-```
-
-**State Indicators:**
-```
-●  Connected (green)     Filled circle
-◐  Connecting (blue)     Half-filled, animated rotation
-○  Disconnected (red)    Empty circle
-◌  Unknown (gray)        Dotted circle
-```
-
-### Typography Hierarchy
-
-All text is monospace. Hierarchy through weight and color only:
-
-| Element | Style | Color |
-|---------|-------|-------|
-| Section headers | CAPS | Secondary (#8b949e) |
-| Host names | Bold | Primary (#e6edf3) |
-| Metrics labels | Normal | Secondary (#8b949e) |
-| Metric values | Bold, tabular | Primary (#e6edf3) |
-| Status text | Normal | Semantic (green/amber/red) |
-| Help text | Dim | Muted (#484f58) |
-
-### Animation & Motion
-
-**Subtle, purposeful animations only:**
-
-1. **Spinner for connecting hosts**: 4-frame rotation at 150ms (`◐ ◓ ◑ ◒`)
-2. **Metric update pulse**: Brief highlight flash (100ms) when value changes significantly
-3. **Graph scroll**: Smooth left-shift animation as new data arrives
-4. **Panel transitions**: 150ms ease-out when expanding/collapsing views
-
-**No spring physics, no bouncing, no decorative motion.**
-
-### Responsive Behavior
-
-The UI adapts to terminal width:
-
-| Width | Layout |
-|-------|--------|
-| <80 cols | Single column, metrics only (no graphs) |
-| 80-120 cols | Compact view (graphs inline, abbreviated labels) |
-| 120+ cols | Full view (expanded cards, detailed graphs) |
-| 160+ cols | Side-by-side host cards (2 columns) |
-
-Height adapts similarly:
-- <24 rows: Header + metrics only, no footer help
-- 24-40 rows: Standard layout
-- 40+ rows: Taller graphs, more history visible
-
-### Threshold Configuration
-
-Visual thresholds are configurable per metric:
-
-```yaml
-monitor:
-  thresholds:
-    cpu:
-      warning: 70    # Amber above 70%
-      critical: 90   # Red above 90%
-    ram:
-      warning: 80
-      critical: 95
-    gpu:
-      warning: 85
-      critical: 95
-    gpu_temp:
-      warning: 75    # Celsius
-      critical: 85
-```
-
-### Accessibility
-
-- All colors meet WCAG AA contrast on dark background
-- State never communicated by color alone (icons + color)
-- Keyboard-only navigation (no mouse required)
-- Screen reader: Alt text via ARIA-like descriptions in help overlay
-
-### Metrics Collected
-
-| Metric | Source Command | Fallback |
-|--------|----------------|----------|
-| CPU % | `/proc/stat` or `top -l 1` (macOS) | `uptime` load average |
-| CPU cores | `nproc` or `sysctl hw.ncpu` | Parse `/proc/cpuinfo` |
-| RAM used/total | `free -b` or `vm_stat` (macOS) | Parse `/proc/meminfo` |
-| GPU % | `nvidia-smi --query-gpu=...` | Skip if unavailable |
-| GPU memory | `nvidia-smi --query-gpu=...` | Skip if unavailable |
-| Network throughput | `/proc/net/dev` delta or `netstat -ib` | `ifstat` if available |
-
-**GPU support:**
-- NVIDIA: `nvidia-smi` (most common)
-- AMD: `rocm-smi` (if available)
-- Apple Silicon: `powermetrics` (requires sudo, so optional)
-- Intel: Skip (not typically used for compute)
-
-### Architecture
+### Collection Architecture
 
 ```mermaid
 flowchart TB
     subgraph tui["TUI Layer (Bubble Tea)"]
-        model[Model<br/>Host metrics state]
-        view[View<br/>Dashboard renderer]
-        update[Update<br/>Event handler]
+        model["Model<br/>internal/monitor/model.go"]
+        view["View<br/>card.go / detail.go / view.go"]
+        alerts["Alert tracker<br/>alerts.go"]
     end
 
-    subgraph collector["Metrics Collector"]
-        scheduler[Scheduler<br/>Tick every interval]
-        pool[Connection Pool<br/>Persistent SSH]
-        parser[Metric Parsers<br/>Linux/macOS/GPU]
+    subgraph collect["Collector (internal/monitor)"]
+        collector["Collector<br/>collector.go"]
+        pool["Pool<br/>pool.go (persistent SSH)"]
+        command["Batched command<br/>command.go"]
+        history["History ring buffers<br/>history.go"]
     end
 
     subgraph transport["Transport"]
-        ssh[SSH Sessions<br/>One per host]
-        cmd[Remote Commands<br/>Batched queries]
+        dial["host.DialAliases<br/>internal/host/dial.go"]
+        ssh["SSH sessions<br/>2 per host per tick"]
     end
 
-    scheduler --> pool
-    pool --> ssh
-    ssh --> cmd
-    cmd --> parser
-    parser --> model
-    model --> view
-    view --> update
-    update --> scheduler
-
-    style tui fill:#4a5568,stroke:#a0aec0,stroke-width:2px,color:#e2e8f0
-    style collector fill:#2d3748,stroke:#718096,stroke-width:2px,color:#e2e8f0
-    style transport fill:#1a202c,stroke:#4a5568,stroke-width:2px,color:#e2e8f0
+    model -->|tick| collector
+    collector --> pool
+    pool --> dial
+    dial --> ssh
+    collector --> command
+    command --> ssh
+    ssh -->|streamed HostResult| model
+    model --> history
+    model --> alerts
+    history --> view
+    alerts --> view
 ```
 
-### Data Collection Strategy
+**Per tick, per host: two SSH sessions on one connection.**
 
-**Challenge:** Running multiple SSH commands per host per refresh is slow and creates overhead.
+1. **Latency probe** (`echo 1`) measures real network round-trip. Keeping it separate means the reported latency is network time, not collection time.
+2. **Batched metrics command** collects everything else in a single exec: CPU, load, memory, network counters, GPU, process list, disk usage, disk I/O counters, CPU temperature, system info, and the rr lock's `info.json`. The lock check is the final section of the same command rather than a separate round trip.
 
-**Solution:** Batch metrics collection into a single SSH exec per refresh:
+**Connection pool** (`pool.go`): connections stay open between refreshes. When a host has multiple SSH aliases, the pool dials all of them in parallel through `host.DialAliases` and keeps the winner, with a short preference grace period so an earlier-listed alias (LAN) can beat a later one (VPN) that answered first. That dial path is shared with `rr run`/`rr exec` host selection, so failover behaves identically in both.
 
-```bash
-# Single command that outputs all metrics as JSON
-cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null; \
-nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader 2>/dev/null || true
+**Streaming results:** `Collector.CollectStreaming` returns a channel. The model consumes one `hostResultMsg` at a time and re-renders, so a fast host shows up immediately instead of waiting on the slowest host in the fleet.
+
+**Backoff:** after 3 consecutive failures a host enters a 30s backoff and is skipped by the next collection passes. The card shows the countdown. A single success clears it.
+
+**Platform detection** happens once per connection (`uname -s`) and selects the Linux or macOS variant of the batched command.
+
+### Snapshot Mode (`--once`)
+
+`rr monitor --once` is the mode for scripts and agents: no TUI, no alt screen, single exit.
+
+The design problem is that CPU percent, per-core usage, disk I/O and network throughput are all *rates*, computed from the delta between two counter readings. The dashboard gets its second reading for free on the next tick. A one-shot run has no next tick, so a naive snapshot reports zeros.
+
+`BuildSnapshotCommand` solves this without a second round trip: it emits a priming read of the delta sources, sleeps 1s on the remote, then emits exactly the sections `BuildMetricsCommand` produces. The parsers apply unchanged after dropping the prime prefix. Linux primes `/proc/stat`, `/proc/net/dev` and `/proc/diskstats`; macOS only primes `netstat -ib`, since `top -l 1` is not delta-based. Snapshot mode uses the same two-session shape as a tick (latency probe plus the batched command); the remote sleep is what buys the second sample, so the per-host timeout is extended by it.
+
+Output is a human-readable table by default (HOST, STATUS, CPU, RAM, GPU, DISK, LATENCY, LOCK) and a snake_case JSON document with `--json`. The command exits non-zero only when *every* host failed: a partially reachable fleet is still a useful answer.
+
+### Dashboard Layout
+
+The list view stacks host cards in a scrollable viewport with a header (host counts, refresh age, sort order, alert badge) and a footer with key hints. Pressing `Enter` opens the detail view for the selected host: full-size CPU/GPU/RAM/latency/network graphs, a per-core heat strip, a disk section, a process table, and system info.
+
+**Card contents (online host):** host name and connection alias, CPU with braille sparkline and load averages, GPU section when detected, latency sparkline, RAM sparkline, top processes by CPU, network rates, and a DISK line with root filesystem usage.
+
+### Responsive Behavior
+
+Width drives the layout mode:
+
+| Width | Mode | Layout |
+|-------|------|--------|
+| <80 cols | Minimal | Single column, compact metric lines |
+| 80-120 cols | Compact | Single column, single-row inline graphs |
+| 120-160 cols | Standard | Full cards, multi-column grid |
+| 160+ cols | Wide | Full cards, multi-column grid |
+
+In Standard and Wide, the column count is computed rather than fixed: `width / (minCardWidth + perCardOverhead)`, where `minCardWidth` is 55 and the overhead is 3 (borders plus margin). Columns are added only while every card keeps at least 55 columns of content, and the count is capped at 4 so an ultrawide terminal doesn't degrade into a wall of unreadable slivers.
+
+Height drives detail density:
+
+- `<24` rows: no footer
+- `24-39` rows: standard cards, 2-row braille graphs, 1 top process
+- `>=40` rows: 4-row braille graphs and the top 3 processes per card
+
+### Color Palette
+
+The dashboard uses the shared Electric Synthwave palette from `internal/ui/colors.go`, with its own severity mapping defined in the monitor theme block there and re-exported by `internal/monitor/styles.go`.
+
+```
+Background:     #0A0A0F (deep void)
+Surface:        #12121A (card backgrounds)
+Border:         #2A2A4A (glass border, purple tint)
+
+Text:
+  Primary:      #FFFFFF
+  Secondary:    #B4B4D0 (lavender gray)
+  Muted:        #6B6B8D (purple-gray)
+
+Metric severity (monitor-specific):
+  Healthy:      #00FFFF (neon cyan)
+  Warning:      #BF40FF (neon purple)
+  Critical:     #FF2E97 (neon pink)
+
+Accents:
+  Primary:      #FF2E97 (neon pink, selection)
+  Secondary:    #BF40FF (neon purple)
+  Graphs:       #00FFFF (neon cyan)
 ```
 
-The parser handles the combined output and extracts metrics. This keeps SSH round-trips to one per host per interval.
+The severity ramp is deliberately *not* the CLI's green/amber/red. Success/warning/error semantics belong to command output; the dashboard maps intensity instead, so a hot host reads as hot without implying something is broken.
 
-**Connection pooling:** Keep SSH connections open between refreshes. Reconnect on failure with exponential backoff.
+### Metrics Collected
 
-### Metric Collection Flow
+| Metric | Linux source | macOS source | Notes |
+|--------|--------------|--------------|-------|
+| CPU % | `/proc/stat` delta | `top -l 1` | Linux is delta-based, so the first sample has no baseline |
+| Per-core CPU % | `/proc/stat` per-cpu lines | not collected | Drives the detail-view heat strip |
+| CPU temperature | `/sys/class/hwmon/*/temp1_input` | not collected | Shown in the detail CPU header |
+| Load average | `/proc/loadavg` | `top -l 1` | 1m/5m/15m |
+| CPU cores | `/proc/stat` cpu lines | `sysctl -n hw.ncpu` | |
+| RAM used/total | `/proc/meminfo` | `vm_stat` + `sysctl hw.memsize` | |
+| GPU | `nvidia-smi --query-gpu=...` | `ioreg -r -c AGXAccelerator` | Absent GPU tooling fails silently; the section is skipped |
+| Network throughput | `/proc/net/dev` delta | `netstat -ib` delta | Aggregated across non-loopback interfaces |
+| Disk usage | `df -P -k /` | `df -P -k /` | Root filesystem only |
+| Disk I/O rates | `/proc/diskstats` delta | not collected | |
+| Processes | `ps aux --sort=-%cpu` | `ps aux -r` | Top 16 collected; cards show 1-3, detail shows 10 |
+| System info | `/proc/uptime` + `uname -r` | `sysctl kern.boottime` + `uname -r` | Uptime, kernel, OS |
+| Lock status | `cat <lockdir>/info.json` | same | Final section of the batched command |
 
-```mermaid
-sequenceDiagram
-    participant TUI
-    participant Scheduler
-    participant Pool as Connection Pool
-    participant Host as Remote Host
+**First-sample handling:** Linux CPU percent has no meaning without a previous `/proc/stat` reading. Rather than report a fake `0.0%`, the collector sets `FirstSample` and the UI renders a dim "warming up" until the second tick. The same flag surfaces in `--once --json` as `cpu.percent_unavailable`.
 
-    TUI->>Scheduler: Start monitoring
+### Configuration
 
-    loop Every refresh interval
-        Scheduler->>Pool: Request connections
+All monitor settings live in the project config (`.rr.yaml`), not the global host file.
 
-        par Parallel collection
-            Pool->>Host: SSH exec (mini)
-            Host-->>Pool: Metrics blob
-        and
-            Pool->>Host: SSH exec (gpu-box)
-            Host-->>Pool: Metrics blob
-        end
+```yaml
+monitor:
+  # Refresh interval. --interval overrides this. Minimum 500ms.
+  interval: 1s
 
-        Pool->>Pool: Parse metrics
-        Pool-->>TUI: Update model
-        TUI->>TUI: Re-render
-    end
+  # Per-host connect + collect timeout.
+  timeout: 8s
 
-    TUI->>Pool: User quit
-    Pool->>Host: Close connections
+  # Severity coloring for headers, bars and graphs.
+  thresholds:
+    cpu:
+      warning: 70
+      critical: 90
+    ram:
+      warning: 70
+      critical: 90
+    gpu:
+      warning: 70
+      critical: 90
+
+  # Hosts to hide from the dashboard. Still usable for run/sync.
+  # A host named explicitly via --hosts wins over this list.
+  exclude:
+    - staging-server
+
+  # Threshold alerting.
+  alerts:
+    enabled: false
+    bell: true
+    flash: true
+    cooldown: 60s
+    on_alert: ""
 ```
+
+**Interval precedence:** `--interval` flag > `monitor.interval` > 1s.
+
+**Thresholds** drive both the numeric header colors and the sparkline/bar coloring. Unset values fall back to 70/90. Disk uses a fixed 80/95 pair instead, because `df` capacity sits high in normal operation and would otherwise alarm constantly.
+
+**Exclusion** is applied after `--hosts` filtering, and `--hosts` wins: `rr monitor --hosts=staging-server` shows an excluded host on demand. If exclusion empties the list, the command errors with a pointer at the config.
+
+### Alerting
+
+Alerting is off by default. When `monitor.alerts.enabled` is true, each host+metric pair (CPU, RAM, GPU) runs a small state machine:
+
+1. **Fire** when the value crosses the metric's *critical* threshold.
+2. **Hold** while it stays above *warning*. A firing metric does not re-fire.
+3. **Re-arm** only once it drops back below *warning*.
+
+The hysteresis matters: a host hovering at exactly the critical line would otherwise fire on every sample. The cooldown adds a second guard, suppressing re-fires for the same host+metric within the window (default 60s) while still marking the metric as firing so the card keeps flashing.
+
+Effects, all individually gated:
+
+| Setting | Effect |
+|---------|--------|
+| `bell: true` | Writes BEL to stderr, once per batch of alerts |
+| `flash: true` | Renders the alerting host's card border in the critical color |
+| `on_alert: "<cmd>"` | Runs the command locally via `sh -c` |
+
+The header always shows an alert-count badge while anything is firing, independent of `flash`.
+
+`on_alert` runs on the machine running `rr`, not the remote host, and receives:
+
+| Variable | Value |
+|----------|-------|
+| `RR_HOST` | Host name that alerted |
+| `RR_METRIC` | `cpu`, `ram`, or `gpu` |
+| `RR_VALUE` | The metric value, one decimal place |
+
+Hook failures are swallowed on purpose. There is no safe place to print inside the alt screen, and a broken hook must never take down the dashboard. The bell and the hook both run as Bubble Tea commands rather than from `View`, because the framework diffs frames: a BEL embedded in rendered output would be dropped on unchanged frames and repeated on changed ones.
+
+Alert state is cleared when a host goes unreachable, so a stale card stops flashing and recovery fires cleanly.
 
 ### Host State Indicators
 
 | State | Display | Meaning |
 |-------|---------|---------|
-| Connected | Green hostname | Metrics flowing |
-| Slow | Yellow hostname | Response >1s |
-| Unreachable | Red hostname + "(unreachable)" | Connection failed |
-| Reconnecting | Dim hostname + spinner | Attempting reconnect |
+| Online | Filled indicator, host name in accent | Metrics flowing |
+| Connecting | Spinner | First connection in flight |
+| Unreachable | Dim card, error line, suggestion | Connection or collection failed |
+| Backing off | "Reconnecting in Ns..." | 3+ failures, retry scheduled |
 
 ### Keyboard Controls
+
+Bindings live in `internal/monitor/keybindings.go`.
 
 | Key | Action |
 |-----|--------|
 | `q` / `Ctrl+C` | Quit |
 | `r` | Force refresh now |
-| `s` | Cycle sort order (name, CPU, RAM, GPU) |
-| `↑` / `↓` | Select host (for future drill-down) |
-| `Enter` | SSH into selected host (opens new terminal) |
+| `s` | Cycle sort order (default, name, CPU, RAM, GPU) |
+| `↑` / `←` / `k` / `h` | Select previous host |
+| `↓` / `→` / `j` / `l` | Select next host |
+| `Home` / `End` | Select first / last host |
+| `Enter` | Open detail view for the selected host |
+| `Esc` | Back to the list (or close the help overlay) |
+| `p` | Cycle the process table sort in detail view (CPU / MEM) |
+| `PgUp` / `Ctrl+U` | Scroll up |
+| `PgDn` / `Ctrl+D` | Scroll down |
 | `?` | Toggle help overlay |
 
-### Configuration
+Mouse wheel scrolling works too; the program runs with `tea.WithMouseCellMotion()`.
 
-Add to `.rr.yaml`:
+### Rendering Performance
 
-```yaml
-monitor:
-  # Default refresh interval
-  interval: 2s
+The dashboard re-renders on every result, so rendering cost is in the hot path.
 
-  # Metrics to collect (all enabled by default)
-  metrics:
-    cpu: true
-    ram: true
-    gpu: true      # Set false to skip GPU detection entirely
-    network: true
-
-  # Hosts to exclude from monitoring (still usable for run/sync)
-  exclude: []
-
-  # GPU detection timeout (nvidia-smi can hang on misconfigured systems)
-  gpu_timeout: 5s
-```
+- **Style caching:** braille graph cell styles are cached by foreground color, along with their pre-rendered ANSI prefix/suffix, so repeated cells skip Lip Gloss's style resolution.
+- **Run-length merging:** consecutive graph cells sharing a color are emitted under one ANSI sequence instead of one per cell.
+- **Card body caching:** the expensive part of a card (graphs and metric sections) is cached per host and invalidated on new results or a resize. Resize clears the whole cache, since graph rows and process counts depend on terminal height.
 
 ### Error Handling
 
-**Host unreachable:**
-- Show last known metrics (if any) with timestamp
-- Gray out the row
-- Continue monitoring other hosts
-- Retry connection every 30s in background
+**Host unreachable:** the card shows the error and a suggestion, other hosts keep updating, and the host enters backoff after 3 consecutive failures.
 
-**Command timeout:**
-- Use cached value from previous refresh
-- Mark metric as stale (dim color)
-- Don't block other metrics
+**Collection timeout:** bounded by `monitor.timeout` (default 8s) per host. `--once` extends its context by the snapshot's remote sleep on top of that.
 
-**GPU detection failure:**
-- Log once, then skip GPU for that host
-- Don't retry every refresh (it's slow)
+**Missing GPU tooling:** the GPU section of the batched command is `|| true` guarded, so a host without `nvidia-smi` just has no GPU section. Same for hwmon, diskstats and `df`.
+
+**No lock held:** `cat info.json` fails, which is why the lock section carries `|| true`. Without it a nonzero exit would abort the whole batched command.
 
 ### Platform Support
 
-| Platform | CPU | RAM | GPU | Network |
-|----------|-----|-----|-----|---------|
-| Linux | Full | Full | NVIDIA, AMD | Full |
-| macOS | Full | Full | Apple (limited) | Full |
-| Windows (WSL) | Full | Full | NVIDIA | Partial |
-| FreeBSD | Partial | Full | No | Partial |
+| Platform | CPU | Per-core | Temp | RAM | GPU | Disk usage | Disk I/O | Network | System info |
+|----------|-----|----------|------|-----|-----|------------|----------|---------|-------------|
+| Linux | Full | Full | hwmon | Full | NVIDIA | Full | Full | Full | Full |
+| macOS | Full | No | No | Full | Apple Silicon | Full | No | Full | Full |
+
+Anything else falls back to the Linux command path, which degrades to whatever sections the host can produce.
 
 ### Implementation Notes
 
-**TUI framework:** [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the reactive model, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling. The monitor is a full-screen Bubble Tea program that takes over the terminal.
+**TUI framework:** [Bubble Tea](https://github.com/charmbracelet/bubbletea) for the model/update/view loop, [Lip Gloss](https://github.com/charmbracelet/lipgloss) for styling, [Bubbles](https://github.com/charmbracelet/bubbles) viewport for scrolling. Full-screen alt-screen program.
 
-**Sparkline rendering:** Use [asciigraph](https://github.com/guptarohit/asciigraph) or custom Braille rendering for high-resolution mini-graphs. Keep last 60 data points per metric in memory.
+**Sparklines:** custom braille rendering (`graphs.go`), 2x4 dots per cell. History is a ring buffer of 600 samples per metric per host (10 minutes at the 1s default).
 
-**Responsive layout:** Detect terminal size on startup and resize events. Use Lip Gloss's `Place()` and `JoinHorizontal()`/`JoinVertical()` for fluid layouts.
-
-**Border gradients:** Lip Gloss v2 supports `BorderForegroundBlend()` for gradient borders on the focused host card (subtle accent effect).
-
-### Future Enhancements (Not in V1)
-
-- **Process list:** Drill down into running processes on selected host
-- **Alerts:** Notify when CPU/RAM exceeds threshold
-- **History persistence:** Write metrics to local SQLite for historical view
-- **Web UI:** Optional browser-based dashboard for headless scenarios
-- **Lock status:** Show which hosts have active rr locks and who holds them
-- **Job queue view:** If multi-host parallel is added, show queued/running jobs
+**Responsive layout:** width and height come from `tea.WindowSizeMsg`; layout mode, column count, graph rows and process counts are all derived from them.
 
 ---
 

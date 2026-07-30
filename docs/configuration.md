@@ -944,49 +944,67 @@ output:
 
 ## Monitor
 
-Controls the resource monitoring dashboard (`rr monitor`).
+Controls the resource monitoring dashboard (`rr monitor`). Monitor settings live in the project config (`.rr.yaml`), not in `~/.rr/config.yaml`.
 
 ```yaml
 monitor:
-  interval: 2s
+  interval: 1s
+  timeout: 8s
   thresholds:
     cpu:
       warning: 70
       critical: 90
     ram:
-      warning: 80
-      critical: 95
+      warning: 70
+      critical: 90
     gpu:
       warning: 70
       critical: 90
   exclude:
     - slow-host
+  alerts:
+    enabled: false
+    bell: true
+    flash: true
+    cooldown: 60s
+    on_alert: ""
 ```
 
 ### Monitor fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `interval` | duration | `1s` | Time between metric updates. |
-| `thresholds` | object | see below | Threshold settings for metric coloring. |
-| `exclude` | list | `[]` | Host names to exclude from the monitor. |
+| `interval` | duration | `1s` | Time between metric updates. Minimum `500ms`. |
+| `timeout` | duration | `8s` | Per-host connect and collect timeout. |
+| `thresholds` | object | see below | Warning and critical percentages for metric coloring. |
+| `exclude` | list | `[]` | Host names to hide from the dashboard. |
+| `alerts` | object | see below | Threshold alerting (bell, card flash, hook). |
+
+**Interval precedence:** the `--interval` flag wins over `monitor.interval`, which wins over the `1s` default. An invalid or sub-500ms value in config is an error, not a silent fallback.
+
+```bash
+rr monitor                    # uses monitor.interval, or 1s if unset
+rr monitor --interval=2s      # flag wins regardless of config
+```
 
 ### Thresholds
 
-Each metric type (CPU, RAM, GPU) has warning and critical thresholds that control the color coding in the dashboard:
+Each metric type (CPU, RAM, GPU) has warning and critical percentages. They drive both the numeric readouts and the sparkline/bar coloring in the dashboard, plus the colored cells in `rr monitor --once`:
 
-- Below warning: Green (healthy)
-- Warning to critical: Yellow (warning)
-- Above critical: Red (critical)
+- Below warning: healthy
+- Warning to critical: warning
+- At or above critical: critical
 
 | Threshold | Default | Description |
 |-----------|---------|-------------|
-| `cpu.warning` | `70` | CPU percentage for yellow color. |
-| `cpu.critical` | `90` | CPU percentage for red color. |
-| `ram.warning` | `70` | RAM percentage for yellow color. |
-| `ram.critical` | `90` | RAM percentage for red color. |
-| `gpu.warning` | `70` | GPU percentage for yellow color. |
-| `gpu.critical` | `90` | GPU percentage for red color. |
+| `cpu.warning` | `70` | CPU percentage that turns the value warning-colored. |
+| `cpu.critical` | `90` | CPU percentage that turns the value critical-colored. |
+| `ram.warning` | `70` | RAM percentage for warning color. |
+| `ram.critical` | `90` | RAM percentage for critical color. |
+| `gpu.warning` | `70` | GPU percentage for warning color. |
+| `gpu.critical` | `90` | GPU percentage for critical color. |
+
+Unset (or zero) values fall back to 70/90. Disk usage is not configurable: it uses a fixed 80/95 pair, since `df` capacity normally sits high and the shared defaults would flag every healthy host.
 
 ### Excluding hosts
 
@@ -1002,6 +1020,51 @@ monitor:
     - dev-machine
     - staging-server
 ```
+
+Excluded hosts stay fully usable for `rr run`, `rr exec` and `rr sync`. Exclusion applies after `--hosts` filtering, and `--hosts` wins, so you can still pull up an excluded host on demand:
+
+```bash
+rr monitor                          # staging-server hidden
+rr monitor --hosts=staging-server   # staging-server shown
+```
+
+If the exclude list empties the host set, the command errors instead of opening an empty dashboard.
+
+### Alerts
+
+Alerting is off by default. Turn it on to get notified when a host crosses its critical threshold.
+
+```yaml
+monitor:
+  alerts:
+    enabled: true
+    bell: true
+    flash: true
+    cooldown: 5m
+    on_alert: 'terminal-notifier -title "rr" -message "$RR_HOST $RR_METRIC at $RR_VALUE%"'
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Turns threshold alerting on. |
+| `bell` | bool | `true` | Rings the terminal bell when an alert fires. |
+| `flash` | bool | `true` | Draws the alerting host's card border in the critical color. |
+| `cooldown` | duration | `60s` | Minimum time between re-fires for the same host and metric. Use `0s` to fire on every crossing. |
+| `on_alert` | string | `""` | Shell command run locally when an alert fires. |
+
+**When an alert fires:** a metric fires once when it crosses its `critical` threshold, and does not fire again until it drops back below `warning`. That hysteresis keeps a host hovering at the critical line from alerting on every sample. The cooldown is a second guard on top of it.
+
+The header shows a count of active alerts whenever anything is firing, regardless of the `bell` and `flash` settings.
+
+**`on_alert` hook:** runs on your machine (the one running `rr`), not the remote host, via `sh -c`. `rr` sets these variables in the hook's environment (note that `RR_HOST` here is the alerting host, unrelated to the `RR_HOST` input `rr init` reads):
+
+| Variable | Value |
+|----------|-------|
+| `RR_HOST` | Name of the host that alerted |
+| `RR_METRIC` | `cpu`, `ram`, or `gpu` |
+| `RR_VALUE` | The metric value, to one decimal place |
+
+Hook failures are ignored. There's nowhere safe to print an error inside a full-screen TUI, and a broken hook shouldn't take down the dashboard, so test your command outside `rr monitor` first.
 
 ## Environment variables
 
