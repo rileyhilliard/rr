@@ -389,7 +389,7 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 
 	// Header line: "CPU" label + right-aligned percentage and load
 	label := LabelStyle.Render("CPU")
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
+	pctText := thresholdStyle(cpu.Percent, m.thresholds.CPU).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
 	loadText := LabelStyle.Render(fmt.Sprintf("1m:%.1f", cpu.LoadAvg[0]))
 
 	// Right side content
@@ -413,14 +413,14 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 	// Braille graph
 	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(cpuHistory) > 0 {
-		graph := RenderBrailleSparkline(cpuHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(cpuHistory, graphWidth, cardGraphHeight, ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
 		}
 	} else {
 		// Show gradient bar while collecting history
-		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, cpu.Percent, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -439,7 +439,7 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 
 	// Header line: "RAM" label + right-aligned percentage
 	label := LabelStyle.Render("RAM")
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	pctText := thresholdStyle(percent, m.thresholds.RAM).Render(fmt.Sprintf("%5.1f%%", percent))
 
 	// Calculate padding for right alignment
 	rightWidth := lipgloss.Width(pctText)
@@ -459,14 +459,14 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 	// Braille graph
 	ramHistory := m.history.GetRAMHistory(host, DefaultHistorySize)
 	if len(ramHistory) > 0 {
-		graph := RenderBrailleSparkline(ramHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(ramHistory, graphWidth, cardGraphHeight, ColorGraph, thresholdColorFunc(m.thresholds.RAM))
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
 		}
 	} else {
 		// Show gradient bar while collecting history
-		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, percent, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -481,7 +481,7 @@ func (m Model) renderCardGPUSection(host string, gpu *GPUMetrics, lineWidth int)
 
 	// Header line: "GPU" label + right-aligned percentage + temperature
 	label := LabelStyle.Render("GPU")
-	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
+	pctText := thresholdStyle(gpu.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
 
 	// Add temperature if available
 	var rightContent string
@@ -510,14 +510,14 @@ func (m Model) renderCardGPUSection(host string, gpu *GPUMetrics, lineWidth int)
 	// Braille graph
 	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
 	if len(gpuHistory) > 0 {
-		graph := RenderBrailleSparkline(gpuHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(gpuHistory, graphWidth, cardGraphHeight, ColorGraph, thresholdColorFunc(m.thresholds.GPU))
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
 		}
 	} else {
 		// Show gradient bar while collecting history
-		bar := RenderGradientBar(graphWidth, gpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, gpu.Percent, thresholdColorFunc(m.thresholds.GPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -625,7 +625,7 @@ func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
 	}
 
 	// Format percentage with color
-	pctColor := MetricColor(proc.CPU)
+	pctColor := MetricColorWithThresholds(proc.CPU, m.thresholds.CPU.Warning, m.thresholds.CPU.Critical)
 	pctText := lipgloss.NewStyle().Foreground(pctColor).Render(fmt.Sprintf("%.0f%%", proc.CPU))
 
 	// Truncate command if needed (leave room for label + padding + cmd(pct))
@@ -778,7 +778,7 @@ func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth in
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("CPU")
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
+	pctText := thresholdStyle(cpu.Percent, m.thresholds.CPU).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
 
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
@@ -797,10 +797,10 @@ func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth in
 
 	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(cpuHistory) > 0 {
-		graph := RenderBrailleSparkline(cpuHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(cpuHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, cpu.Percent, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -818,7 +818,7 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 	}
 
 	label := LabelStyle.Render("RAM")
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	pctText := thresholdStyle(percent, m.thresholds.RAM).Render(fmt.Sprintf("%5.1f%%", percent))
 
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
@@ -837,10 +837,10 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 
 	ramHistory := m.history.GetRAMHistory(host, DefaultHistorySize)
 	if len(ramHistory) > 0 {
-		graph := RenderBrailleSparkline(ramHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(ramHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, percent, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -853,7 +853,7 @@ func (m Model) renderCompactGPUSection(host string, gpu *GPUMetrics, lineWidth i
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("GPU")
-	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
+	pctText := thresholdStyle(gpu.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
 
 	// Right-aligned percentage (no temp in compact mode for space)
 	rightWidth := lipgloss.Width(pctText)
@@ -872,10 +872,10 @@ func (m Model) renderCompactGPUSection(host string, gpu *GPUMetrics, lineWidth i
 
 	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
 	if len(gpuHistory) > 0 {
-		graph := RenderBrailleSparkline(gpuHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(gpuHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.GPU))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, gpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, gpu.Percent, thresholdColorFunc(m.thresholds.GPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -932,7 +932,7 @@ func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth in
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("CPU:")
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%3.0f%%", cpu.Percent))
+	pctText := thresholdStyle(cpu.Percent, m.thresholds.CPU).Render(fmt.Sprintf("%3.0f%%", cpu.Percent))
 
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
@@ -951,10 +951,10 @@ func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth in
 
 	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(cpuHistory) > 0 {
-		graph := RenderBrailleSparkline(cpuHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(cpuHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, cpu.Percent, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -1051,14 +1051,14 @@ func (m Model) renderMinimalMetricsLine(metrics *HostMetrics, width int) string 
 		ramPct = float64(metrics.RAM.UsedBytes) / float64(metrics.RAM.TotalBytes) * 100
 	}
 
-	cpuText := MetricStyle(cpuPct).Render(fmt.Sprintf("%.0f%%", cpuPct))
-	ramText := MetricStyle(ramPct).Render(fmt.Sprintf("%.0f%%", ramPct))
+	cpuText := thresholdStyle(cpuPct, m.thresholds.CPU).Render(fmt.Sprintf("%.0f%%", cpuPct))
+	ramText := thresholdStyle(ramPct, m.thresholds.RAM).Render(fmt.Sprintf("%.0f%%", ramPct))
 
 	// Include GPU if available
 	hasGPU := metrics.GPU != nil
 	var gpuText string
 	if hasGPU {
-		gpuText = MetricStyle(metrics.GPU.Percent).Render(fmt.Sprintf("%.0f%%", metrics.GPU.Percent))
+		gpuText = thresholdStyle(metrics.GPU.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%.0f%%", metrics.GPU.Percent))
 	}
 
 	// Choose format based on available width and GPU presence

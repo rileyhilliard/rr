@@ -92,7 +92,7 @@ func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) st
 	// Request full history (300 points = ~10 min at 2s interval) for longer time window
 	history := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(history) > 0 {
-		graph := RenderBrailleSparkline(history, graphWidth, 8, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(history, graphWidth, 8, ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		for _, line := range strings.Split(graph, "\n") {
 			lines = append(lines, SectionContentLine(line, width))
 		}
@@ -298,13 +298,13 @@ func (m Model) renderDetailRAMSection(host string, ram RAMMetrics, width int) st
 	// Request full history for ~10 min time window
 	history := m.history.GetRAMHistory(host, DefaultHistorySize)
 	if len(history) > 0 {
-		graph := RenderBrailleSparkline(history, barWidth, 6, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(history, barWidth, 6, ColorGraph, thresholdColorFunc(m.thresholds.RAM))
 		for _, line := range strings.Split(graph, "\n") {
 			lines = append(lines, SectionContentLine(line, width))
 		}
 	} else {
 		// Show current value as a solid bar while collecting history
-		bar := RenderGradientBar(barWidth, percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(barWidth, percent, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, SectionContentLine(bar, width))
 	}
 
@@ -333,7 +333,7 @@ func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) s
 	if gpu.Name != "" {
 		title = fmt.Sprintf("GPU (%s)", gpu.Name)
 	}
-	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%.1f%%", gpu.Percent))
+	pctText := thresholdStyle(gpu.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%.1f%%", gpu.Percent))
 	lines = append(lines, SectionHeader(title, pctText, width))
 
 	// Content area (width - 4 for borders and padding)
@@ -345,7 +345,7 @@ func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) s
 	// 8-row braille graph to match CPU section
 	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
 	if len(gpuHistory) > 0 {
-		graph := RenderBrailleSparkline(gpuHistory, graphWidth, 8, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(gpuHistory, graphWidth, 8, ColorGraph, thresholdColorFunc(m.thresholds.GPU))
 		for _, line := range strings.Split(graph, "\n") {
 			lines = append(lines, SectionContentLine(line, width))
 		}
@@ -525,9 +525,9 @@ func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string
 			cmd = cmd[:cmdWidth-3] + "..."
 		}
 
-		// Color CPU and MEM based on thresholds
-		cpuColor := MetricColor(proc.CPU)
-		memColor := MetricColor(proc.Memory)
+		// Color CPU and MEM based on configured thresholds
+		cpuColor := MetricColorWithThresholds(proc.CPU, m.thresholds.CPU.Warning, m.thresholds.CPU.Critical)
+		memColor := MetricColorWithThresholds(proc.Memory, m.thresholds.RAM.Warning, m.thresholds.RAM.Critical)
 		cpuStyle := lipgloss.NewStyle().Foreground(cpuColor)
 		memStyle := lipgloss.NewStyle().Foreground(memColor)
 
