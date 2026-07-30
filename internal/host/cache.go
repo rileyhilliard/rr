@@ -97,18 +97,19 @@ func (c *ConnectionCache) Hosts() []string {
 }
 
 // isAlive checks if a connection is still usable.
+//
+// Uses SSH's "keepalive@openssh.com" request instead of creating a new session
+// because NewSession() adds 100-200ms of overhead per check. The keepalive
+// request is just a single packet exchange on the existing connection, making
+// it fast enough to call on every Get() without noticeable delay.
 func (c *ConnectionCache) isAlive(conn *Connection) bool {
 	if conn == nil || conn.Client == nil {
 		return false
 	}
 
-	// Try to create a session as a quick health check
-	session, err := conn.Client.NewSession()
-	if err != nil {
-		return false
-	}
-	_ = session.Close()
-	return true
+	// wantReply=true ensures we get a response confirming the connection works.
+	_, _, err := conn.Client.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
 }
 
 // Global connection cache for use across the application.
