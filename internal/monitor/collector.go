@@ -1287,6 +1287,13 @@ func parseProcesses(output string) ([]ProcessInfo, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Skip the shell running our own metrics batch; it carries a marker
+		// for exactly this purpose and isn't a process the user cares about.
+		if strings.Contains(line, selfProcessMarker) {
+			continue
+		}
+
 		fields := strings.Fields(line)
 		if len(fields) < 11 {
 			continue

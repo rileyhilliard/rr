@@ -398,6 +398,34 @@ func TestModel_renderHeader(t *testing.T) {
 	result := m.renderHeader()
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, "rr monitor")
+	assert.Contains(t, result, "2 hosts")
+}
+
+func TestModel_renderHeader_SingularHost(t *testing.T) {
+	collector := NewCollector(map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	})
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+	m.height = 40
+
+	result := m.renderHeader()
+	assert.Contains(t, result, "1 host ")
+	assert.NotContains(t, result, "1 hosts")
+}
+
+func TestModel_processCPUColor_ScalesByCores(t *testing.T) {
+	collector := NewCollector(map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	})
+	m := NewModel(collector, time.Second, 0, nil)
+
+	// 155% of one core on a 10-core host is ~15.5% of the machine: healthy.
+	assert.Equal(t, ColorHealthy, m.processCPUColor(155, 10))
+	// The same figure with unknown core count is classified as-is: critical.
+	assert.Equal(t, ColorCritical, m.processCPUColor(155, 0))
+	// A process eating most of the machine is critical regardless of cores.
+	assert.Equal(t, ColorCritical, m.processCPUColor(950, 10))
 }
 
 func TestModel_renderHeader_LayoutModes(t *testing.T) {

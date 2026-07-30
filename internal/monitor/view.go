@@ -101,9 +101,13 @@ func (m Model) renderHeader() string {
 			Render(fmt.Sprintf(" | %d/%d online | %s |%s", onlineHosts, totalHosts, updateText, sortIndicator))
 	default:
 		// Full stats for standard and wide
+		hostsWord := "hosts"
+		if totalHosts == 1 {
+			hostsWord = "host"
+		}
 		stats = lipgloss.NewStyle().
 			Foreground(ColorTextSecondary).
-			Render(fmt.Sprintf(" | %d hosts | %d online | last update %s |%s", totalHosts, onlineHosts, updateText, sortIndicator))
+			Render(fmt.Sprintf(" | %d %s | %d online | last update %s |%s", totalHosts, hostsWord, onlineHosts, updateText, sortIndicator))
 	}
 
 	return HeaderStyle.Render(title + stats + m.renderAlertBadge())

@@ -290,7 +290,7 @@ func TestModel_renderDetailProcessSection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := m.renderDetailProcessSection(tt.procs, tt.width)
+			result := m.renderDetailProcessSection(tt.procs, 0, tt.width)
 			assert.NotEmpty(t, result)
 			assert.Contains(t, result, "Processes")
 		})
@@ -516,12 +516,12 @@ func TestModel_renderDetailProcessSection_SortOrder(t *testing.T) {
 	}
 
 	// Header reflects the active sort, and ordering follows it
-	byCPU := m.renderDetailProcessSection(procs, 100)
+	byCPU := m.renderDetailProcessSection(procs, 0, 100)
 	assert.Contains(t, byCPU, "by CPU")
 	assert.Less(t, strings.Index(byCPU, "cpuhog"), strings.Index(byCPU, "memhog"))
 
 	m.procSortOrder = ProcSortByMemory
-	byMem := m.renderDetailProcessSection(procs, 100)
+	byMem := m.renderDetailProcessSection(procs, 0, 100)
 	assert.Contains(t, byMem, "by MEM")
 	assert.Less(t, strings.Index(byMem, "memhog"), strings.Index(byMem, "cpuhog"))
 }
@@ -540,7 +540,7 @@ func TestModel_renderDetailProcessSection_ShowsTenProcesses(t *testing.T) {
 		procs[i] = ProcessInfo{PID: i + 1, User: "root", CPU: float64(15 - i), Command: fmt.Sprintf("proc%d", i)}
 	}
 
-	result := m.renderDetailProcessSection(procs, 100)
+	result := m.renderDetailProcessSection(procs, 0, 100)
 	for i := 0; i < detailProcessLimit; i++ {
 		assert.Contains(t, result, fmt.Sprintf("proc%d", i))
 	}

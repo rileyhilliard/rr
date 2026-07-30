@@ -389,7 +389,7 @@ func (m Model) renderCardBody(host string, metrics *HostMetrics, innerWidth int)
 	// Top processes (with divider if present)
 	if len(metrics.Processes) > 0 {
 		lines = append(lines, renderCardDivider(innerWidth))
-		for _, procLine := range m.renderCardTopProcesses(metrics.Processes, innerWidth) {
+		for _, procLine := range m.renderCardTopProcesses(metrics.Processes, metrics.CPU.Cores, innerWidth) {
 			lines = append(lines, renderCardLine(procLine, innerWidth))
 		}
 	}
@@ -721,10 +721,22 @@ func (m Model) renderCardDiskLine(disk DiskMetrics, lineWidth int) string {
 	return label + padding + rightContent
 }
 
+// processCPUColor colors a per-process CPU percentage. ps sums across cores,
+// so a multithreaded process can legitimately exceed 100%; classify against
+// the host's total capacity instead, so one busy core on a big box doesn't
+// read as a critical host condition.
+func (m Model) processCPUColor(procCPU float64, cores int) lipgloss.Color {
+	share := procCPU
+	if cores > 1 {
+		share = procCPU / float64(cores)
+	}
+	return MetricColorWithThresholds(share, m.thresholds.CPU.Warning, m.thresholds.CPU.Critical)
+}
+
 // renderCardTopProcesses renders the top processes by CPU, one per line. The
 // count comes from cardProcessCount (tall terminals show more). Only the first
 // line carries the "TOP" label; the rest are indented under it.
-func (m Model) renderCardTopProcesses(procs []ProcessInfo, maxWidth int) []string {
+func (m Model) renderCardTopProcesses(procs []ProcessInfo, cores, maxWidth int) []string {
 	count := m.cardProcessCount()
 	if count > len(procs) {
 		count = len(procs)
@@ -732,14 +744,14 @@ func (m Model) renderCardTopProcesses(procs []ProcessInfo, maxWidth int) []strin
 
 	lines := make([]string, 0, count)
 	for i := 0; i < count; i++ {
-		lines = append(lines, m.renderCardProcessLine(procs[i], i, maxWidth))
+		lines = append(lines, m.renderCardProcessLine(procs[i], cores, i, maxWidth))
 	}
 	return lines
 }
 
 // renderCardProcessLine renders one process row. rank 0 gets the "TOP" label;
 // later ranks are blank-labelled so they read as a continuation of the list.
-func (m Model) renderCardProcessLine(proc ProcessInfo, rank, maxWidth int) string {
+func (m Model) renderCardProcessLine(proc ProcessInfo, cores, rank, maxWidth int) string {
 	contentWidth := maxWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	labelText := "TOP"
@@ -757,8 +769,8 @@ func (m Model) renderCardProcessLine(proc ProcessInfo, rank, maxWidth int) strin
 		cmd = cmd[:idx]
 	}
 
-	// Format percentage with color
-	pctColor := MetricColorWithThresholds(proc.CPU, m.thresholds.CPU.Warning, m.thresholds.CPU.Critical)
+	// Format percentage with color scaled to host capacity
+	pctColor := m.processCPUColor(proc.CPU, cores)
 	pctText := lipgloss.NewStyle().Foreground(pctColor).Render(fmt.Sprintf("%.0f%%", proc.CPU))
 
 	// Truncate command if needed (leave room for label + padding + cmd(pct))

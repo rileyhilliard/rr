@@ -17,6 +17,11 @@ const (
 // Separator used to split batched command output.
 const OutputSeparator = "---"
 
+// selfProcessMarker tags the batched metrics command so its own shell process
+// can be filtered out of the collected `ps` listing. The `:` no-op keeps it
+// side-effect free while still appearing in the process's command line.
+const selfProcessMarker = "rr-metrics-batch"
+
 // Section indices for the lock payload appended by BuildMetricsCommand.
 // The lock section is always last on both platforms.
 const (
@@ -74,7 +79,7 @@ func buildLockSection(lockDir string) string {
 // 9. /proc/uptime + uname -r - System info
 // 10. Lock info.json - rr lock status (empty if unlocked)
 func buildLinuxCommand(lockDir string) string {
-	return `cat /proc/stat; echo "---"; cat /proc/loadavg; echo "---"; cat /proc/meminfo; echo "---"; cat /proc/net/dev; echo "---"; nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null || true; echo "---"; ps aux --sort=-%cpu 2>/dev/null | head -16 || ps aux 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; cat /proc/diskstats 2>/dev/null || true; echo "---"; for d in /sys/class/hwmon/hwmon*; do [ -f "$d/name" ] && echo "$(cat $d/name):$(cat $d/temp1_input 2>/dev/null || echo)"; done 2>/dev/null || true; echo "---"; cat /proc/uptime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
+	return `: ` + selfProcessMarker + `; cat /proc/stat; echo "---"; cat /proc/loadavg; echo "---"; cat /proc/meminfo; echo "---"; cat /proc/net/dev; echo "---"; nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null || true; echo "---"; ps aux --sort=-%cpu 2>/dev/null | head -16 || ps aux 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; cat /proc/diskstats 2>/dev/null || true; echo "---"; for d in /sys/class/hwmon/hwmon*; do [ -f "$d/name" ] && echo "$(cat $d/name):$(cat $d/temp1_input 2>/dev/null || echo)"; done 2>/dev/null || true; echo "---"; cat /proc/uptime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
 }
 
 // buildDarwinCommand returns the batched metrics command for macOS hosts.
@@ -89,7 +94,7 @@ func buildLinuxCommand(lockDir string) string {
 // 7. sysctl -n kern.boottime + uname -r - System info
 // 8. Lock info.json - rr lock status (empty if unlocked)
 func buildDarwinCommand(lockDir string) string {
-	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ioreg -r -c AGXAccelerator 2>/dev/null | grep -E '"(model|gpu-core-count|PerformanceStatistics)"' || true; echo "---"; ps aux -r 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; sysctl -n hw.ncpu 2>/dev/null || true; echo "---"; sysctl -n kern.boottime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
+	return `: ` + selfProcessMarker + `; top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ioreg -r -c AGXAccelerator 2>/dev/null | grep -E '"(model|gpu-core-count|PerformanceStatistics)"' || true; echo "---"; ps aux -r 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; sysctl -n hw.ncpu 2>/dev/null || true; echo "---"; sysctl -n kern.boottime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
 }
 
 // BuildSnapshotCommand returns a batched command that collects everything

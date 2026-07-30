@@ -501,6 +501,13 @@ user      5678 50.0  5.0 345678 34567 pts/1    R+   10:30   2:30 /very/long/comm
 			wantCount: 3,
 		},
 		{
+			name: "own metrics batch is filtered out",
+			output: `USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+user      4242  3.0  0.1 123456 12345 ?        Ss   10:00   0:01 zsh -c : rr-metrics-batch; cat /proc/stat; echo "---"
+root         1  0.5  0.1 123456 12345 ?        Ss   Jan01   1:23 /sbin/init`,
+			wantCount: 1,
+		},
+		{
 			name:      "header only",
 			output:    "USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND",
 			wantCount: 0,

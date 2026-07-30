@@ -390,7 +390,7 @@ func TestModel_renderCardTopProcesses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := m.renderCardTopProcesses(tt.procs, tt.maxWidth)
+			result := m.renderCardTopProcesses(tt.procs, 0, tt.maxWidth)
 			if len(tt.procs) == 0 {
 				assert.Empty(t, result)
 			} else {
@@ -419,11 +419,11 @@ func TestModel_renderCardTopProcesses_Extended(t *testing.T) {
 
 	m.height = HeightStandard - 1
 	require.False(t, m.CanShowExtendedInfo())
-	assert.Len(t, m.renderCardTopProcesses(procs, 60), cardTopProcs)
+	assert.Len(t, m.renderCardTopProcesses(procs, 0, 60), cardTopProcs)
 
 	m.height = HeightStandard
 	require.True(t, m.CanShowExtendedInfo())
-	assert.Len(t, m.renderCardTopProcesses(procs, 60), cardTopProcsExtended)
+	assert.Len(t, m.renderCardTopProcesses(procs, 0, 60), cardTopProcsExtended)
 }
 
 // TestModel_cardGraphRows verifies the card graph grows on tall terminals.

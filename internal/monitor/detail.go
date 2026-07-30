@@ -620,7 +620,7 @@ func (m Model) renderDetailNetworkSection(host string, width int) string {
 }
 
 // renderDetailProcessSection renders the process table with consistent styling.
-func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string {
+func (m Model) renderDetailProcessSection(procs []ProcessInfo, cores, width int) string {
 	var lines []string
 
 	// Section header shows the active sort (cycled with 'p')
@@ -668,8 +668,8 @@ func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string
 			cmd = cmd[:cmdWidth-3] + "..."
 		}
 
-		// Color CPU and MEM based on configured thresholds
-		cpuColor := MetricColorWithThresholds(proc.CPU, m.thresholds.CPU.Warning, m.thresholds.CPU.Critical)
+		// Color CPU (scaled to host capacity) and MEM by configured thresholds
+		cpuColor := m.processCPUColor(proc.CPU, cores)
 		memColor := MetricColorWithThresholds(proc.Memory, m.thresholds.RAM.Warning, m.thresholds.RAM.Critical)
 		cpuStyle := lipgloss.NewStyle().Foreground(cpuColor)
 		memStyle := lipgloss.NewStyle().Foreground(memColor)
@@ -749,14 +749,14 @@ func (m Model) generateDetailContent() string {
 	if contentWidth >= 80 {
 		procSection := ""
 		if len(metrics.Processes) > 0 {
-			procSection = m.renderDetailProcessSection(metrics.Processes, halfWidth)
+			procSection = m.renderDetailProcessSection(metrics.Processes, metrics.CPU.Cores, halfWidth)
 		}
 		latSection := m.renderDetailLatencySection(host, halfWidth)
 		content.WriteString(joinSideBySide(procSection, latSection, halfWidth))
 	} else {
 		// Single column for narrow terminals
 		if len(metrics.Processes) > 0 {
-			procSection := m.renderDetailProcessSection(metrics.Processes, contentWidth)
+			procSection := m.renderDetailProcessSection(metrics.Processes, metrics.CPU.Cores, contentWidth)
 			content.WriteString(procSection)
 			content.WriteString("\n")
 		}
