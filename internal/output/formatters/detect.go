@@ -60,11 +60,19 @@ var intentionalZeroFlags = []string{
 }
 
 // hasIntentionalZeroFlag reports whether the command opted into a zero-test run.
+//
+// Matches whole tokens, not substrings: "--co" is a prefix of "--cov",
+// "--color", "--config", and "--continue-on-collection-errors", so a substring
+// check would silently disable no-tests detection for `pytest --cov=app -k typo`
+// and most other real CI commands. A flag written as "--flag=value" still
+// matches, since only the part before "=" is compared.
 func hasIntentionalZeroFlag(command string) bool {
-	lower := strings.ToLower(command)
-	for _, flag := range intentionalZeroFlags {
-		if strings.Contains(lower, flag) {
-			return true
+	for _, field := range strings.Fields(strings.ToLower(command)) {
+		name, _, _ := strings.Cut(field, "=")
+		for _, flag := range intentionalZeroFlags {
+			if name == flag {
+				return true
+			}
 		}
 	}
 	return false

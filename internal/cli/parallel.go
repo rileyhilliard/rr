@@ -202,6 +202,12 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 
 	if PrettyMode() {
 		parallel.RenderSummary(result, logDir)
+		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+			warnNoTests(map[string]interface{}{
+				"no_tests":       true,
+				"no_tests_tasks": noTests,
+			})
+		}
 	} else {
 		exitCode := 0
 		if result.Failed > 0 {
@@ -218,8 +224,12 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		if result.Failed > 0 {
 			details["failures"] = extractTaskFailures(result, logDir)
 		}
+		// no_tests stays a bool here as it is for single runs - one key, one
+		// type, so consumers can branch on it without sniffing. The subtask
+		// names go in their own field.
 		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
-			details["no_tests"] = noTests
+			details["no_tests"] = true
+			details["no_tests_tasks"] = noTests
 		}
 		WritePhaseEvent(PhaseEvent{
 			Type:     "result",

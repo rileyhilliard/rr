@@ -303,7 +303,9 @@ rr run --cwd backend "pytest tests/"   # explicit, ignores where you are
 
 **Named tasks do not get an offset.** `rr test` means the same thing from every directory, since task commands are project-scoped and often embed their own `cd` (see [Tasks](#tasks)).
 
-When a relative path fails because it resolved differently than you expected, `rr` says so in the result `hint`, naming both directories and the fix.
+This changed in the release noted in the CHANGELOG: ad-hoc commands used to run at the project root no matter where you were. If you relied on that, `--cwd .` restores it.
+
+When a relative path fails because it resolved differently than you expected, `rr` says so in the result `hint`, naming the directory it ran in and the fix. The hint needs the failing path to appear in stderr, so tools that report a missing file without naming it (`make` says only "no makefile found") fail without one.
 
 ## Exit codes and pipes
 

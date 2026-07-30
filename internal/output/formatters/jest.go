@@ -51,7 +51,8 @@ type JestFormatter struct {
 	testsTotal   int
 	duration     string
 
-	// noTestsRan is set by vitest's explicit "Tests  no tests" summary.
+	// noTestsRan is set by an explicit zero-collection message: vitest's
+	// "Tests  no tests" summary, or jest's / vitest's "No tests found".
 	noTestsRan bool
 }
 
@@ -92,8 +93,11 @@ var (
 	// Vitest prints a colon-less summary and, when nothing was collected,
 	// the literal "no tests" where a count would be: "Tests  no tests".
 	// Neither summary pattern above matches that form.
-	jestNoTestsPattern     = regexp.MustCompile(`^\s*Tests\s+no tests\s*$`)
-	jestTimeSummaryPattern = regexp.MustCompile(`Time:\s+(.+)`)
+	jestNoTestsPattern = regexp.MustCompile(`^\s*Tests\s+no tests\s*$`)
+	// jest prints no summary at all when it matches nothing, so its only
+	// signal is this message; vitest emits the "No test files found" variant.
+	jestNoTestsFoundPattern = regexp.MustCompile(`(?i)^\s*No test(?:s| files) found`)
+	jestTimeSummaryPattern  = regexp.MustCompile(`Time:\s+(.+)`)
 
 	// Stack trace indicator (line starting with "at ")
 	jestStackTracePattern = regexp.MustCompile(`^\s+at\s+`)
@@ -112,8 +116,9 @@ func (f *JestFormatter) ProcessLine(line string) string {
 		}
 	}
 
-	// Vitest's explicit zero-collection summary.
-	if jestNoTestsPattern.MatchString(line) {
+	// Explicit zero-collection: vitest's summary line, or the "No tests found"
+	// message that is jest's only signal (it prints no summary in that case).
+	if jestNoTestsPattern.MatchString(line) || jestNoTestsFoundPattern.MatchString(line) {
 		f.noTestsRan = true
 	}
 
@@ -371,9 +376,10 @@ func (f *JestFormatter) Reset() {
 
 // RanNothing implements output.NoTestsReporter.
 //
-// True only when the reporter explicitly said no tests ran (vitest's
-// "Tests  no tests") or a summary line reported a zero total. An absent
-// summary is not evidence - plenty of non-test output scores as jest.
+// True only when the reporter explicitly said no tests ran - vitest's
+// "Tests  no tests", or jest's / vitest's "No tests found". A zero or absent
+// summary is not evidence on its own: plenty of non-test output scores as jest,
+// and jest prints no summary at all when it finds nothing.
 func (f *JestFormatter) RanNothing() bool {
 	if len(f.tests) > 0 {
 		return false

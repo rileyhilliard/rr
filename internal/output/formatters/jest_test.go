@@ -718,3 +718,55 @@ func TestExtractTestSummaryJest(t *testing.T) {
 	assert.Equal(t, 5, summary.Passed)
 	assert.Zero(t, summary.Failed)
 }
+
+// TestJestRanNothingRealOutput covers the messages jest and vitest actually
+// print. jest emits no summary block at all when it matches nothing, so
+// "No tests found" is the only signal available.
+func TestJestRanNothingRealOutput(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  bool
+	}{
+		{
+			name:  "jest no tests found",
+			lines: []string{"No tests found, exiting with code 1"},
+			want:  true,
+		},
+		{
+			name:  "vitest no test files found",
+			lines: []string{"No test files found, exiting with code 1"},
+			want:  true,
+		},
+		{
+			name:  "vitest colon-less summary",
+			lines: []string{" Test Files  no tests", " Tests  no tests"},
+			want:  true,
+		},
+		{
+			name:  "passing run is not zero-test",
+			lines: []string{"Tests:       3 passed, 3 total"},
+			want:  false,
+		},
+		{
+			name:  "unrelated output is not evidence",
+			lines: []string{"building bundle...", "done"},
+			want:  false,
+		},
+		{
+			name:  "phrase inside a test name is not a signal",
+			lines: []string{"  ✓ warns when No tests found in the directory"},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewJestFormatter()
+			for _, line := range tt.lines {
+				f.ProcessLine(line)
+			}
+			assert.Equal(t, tt.want, f.RanNothing())
+		})
+	}
+}

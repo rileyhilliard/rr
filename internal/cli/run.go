@@ -90,6 +90,12 @@ func Run(opts RunOptions) (int, error) {
 	remoteProjectDir := ""
 
 	if wf.Conn.IsLocal {
+		// Report the offset here too: a local (or fallback) run applies the same
+		// subdirectory, and a consumer can't tell which directory was used
+		// otherwise.
+		if offset := effectiveRunOffset(wf, opts); offset != "" {
+			reportAutoCWD(wf, offset)
+		}
 		exitCode, err = exec.ExecuteLocal(opts.Command, localRunDir(wf, opts), streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
@@ -167,6 +173,7 @@ func Run(opts RunOptions) (int, error) {
 	wf.PhaseDisplay.ThinDivider()
 	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 	repeatFallbackWarning(wf.ResultDetails)
+	warnNoTests(wf.ResultDetails)
 
 	if failureHint != "" {
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
@@ -280,13 +287,27 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 		// No explicit --cwd: mirror the caller's subdirectory so relative paths
 		// in the command mean what they meant locally. rr executes at the
 		// project root, which silently changes every relative path otherwise.
-		//
+		resolved := path.Join(remoteProjectDir, offset)
+		// Same guard the explicit --cwd branch applies. subdirOffset already
+		// rejects ".." escapes, but two paths reach this cd and only validating
+		// one of them is how the next refactor introduces a hole.
+		if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("subdirectory '%s' escapes the remote project root", offset),
+				"run rr from inside the project, or pass --cwd with a path under the project root")
+		}
+		subdir := util.ShellQuotePreserveTilde(resolved)
 		// Soft cd: the offset may not exist remotely (excluded from sync), and
 		// this is implicit, so it must never turn a working command into a
 		// failure. An explicit --cwd above still hard-fails.
-		resolved := path.Join(remoteProjectDir, offset)
-		subdir := util.ShellQuotePreserveTilde(resolved)
-		cmd = fmt.Sprintf("cd %s 2>/dev/null || true; %s", subdir, cmd)
+		//
+		// The braces and the trailing && both matter. BuildRemoteCommand joins
+		// setup commands and the mandatory `cd <project dir>` with &&, and `||`
+		// binds looser than `&&`, so a bare `cd X || true` would swallow the
+		// failure of everything to its left - running the command in $HOME with
+		// a half-built environment and calling it success. Grouping confines
+		// `|| true` to this cd, and joining with && keeps the earlier chain fatal.
+		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", subdir, cmd)
 		reportAutoCWD(wf, offset)
 	}
 

@@ -347,22 +347,24 @@ var missingPathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
 }
 
-// buildRelativePathHint explains a failure caused by a relative path that
-// resolves from the directory the user typed the command in, but not from the
-// directory rr actually ran it in.
+// buildRelativePathHint explains a relative path that failed because it was
+// written against a different directory than the one rr ran the command in.
 //
-// rr runs at the project root (or an explicit --cwd), so a relative path
-// written elsewhere means something different. That asymmetry is checkable
-// locally for free: both candidate paths are on this machine. Returns "" unless
-// the path exists under invocationDir and not under runDir - a path missing
-// from both is an ordinary typo, and inventing an offset explanation for it
+// rr runs commands in the caller's subdirectory (or an explicit --cwd), so a
+// path is only wrong relative to *somewhere*. The asymmetry is checkable
+// locally for free: every candidate is on this machine. It tries each directory
+// the user plausibly meant - the project root, and the directory they invoked
+// from - and reports the first that resolves.
+//
+// Returns "" unless the path exists somewhere else and not under runDir. A path
+// missing everywhere is an ordinary typo, and inventing a directory story for it
 // would mislead.
 //
 // invocationDir and runDir are project-root-relative ("" means the root).
 func buildRelativePathHint(stderr, projectRoot, invocationDir, runDir string) string {
 	invocationDir = normalizeOffset(invocationDir)
 	runDir = normalizeOffset(runDir)
-	if projectRoot == "" || invocationDir == runDir {
+	if projectRoot == "" {
 		return ""
 	}
 
@@ -374,27 +376,52 @@ func buildRelativePathHint(stderr, projectRoot, invocationDir, runDir string) st
 	resolve := func(base string) string {
 		return filepath.Join(projectRoot, filepath.FromSlash(base), filepath.FromSlash(rel))
 	}
-	if _, err := os.Stat(resolve(invocationDir)); err != nil {
-		return ""
-	}
+	// Resolving where it ran means the failure is something else entirely.
 	if _, err := os.Stat(resolve(runDir)); err == nil {
 		return ""
 	}
 
-	ranIn := "the project root"
-	if runDir != "" {
-		ranIn = runDir
+	// Candidates in the order a user is most likely to have meant them.
+	for _, cand := range []string{"", invocationDir} {
+		if cand == runDir {
+			continue
+		}
+		if _, err := os.Stat(resolve(cand)); err != nil {
+			continue
+		}
+		return fmt.Sprintf("'%s' doesn't exist in %s, where rr ran the command, but it does in %s. Use '%s', or run with %s",
+			rel, describeOffset(runDir), describeOffset(cand),
+			relFromRunDir(cand, rel, runDir), describeCWDFix(cand))
 	}
-	from := "the project root"
-	fix := fmt.Sprintf("drop --cwd %s", runDir)
-	if invocationDir != "" {
-		from = invocationDir
-		fix = fmt.Sprintf("pass --cwd %s", invocationDir)
-	}
+	return ""
+}
 
-	return fmt.Sprintf("'%s' exists relative to %s (where you ran rr) but not relative to %s, where rr executed the command. "+
-		"Use '%s', or %s.",
-		rel, from, ranIn, path.Join(invocationDir, rel), fix)
+// describeOffset names a project-root-relative directory for a human.
+func describeOffset(offset string) string {
+	if offset == "" {
+		return "the project root"
+	}
+	return offset + "/"
+}
+
+// describeCWDFix names the --cwd change that would make the path resolve.
+// Ends without a period: the value is the last thing on the line, and a
+// trailing period reads as part of the path ("--cwd ..").
+func describeCWDFix(target string) string {
+	if target == "" {
+		return "'--cwd .'"
+	}
+	return "'--cwd " + target + "'"
+}
+
+// relFromRunDir rewrites rel so it resolves from runDir instead of target,
+// giving the user a path they can paste as-is.
+func relFromRunDir(target, rel, runDir string) string {
+	fixed, err := filepath.Rel(filepath.FromSlash(runDir), filepath.FromSlash(path.Join(target, rel)))
+	if err != nil {
+		return path.Join(target, rel)
+	}
+	return filepath.ToSlash(fixed)
 }
 
 // normalizeOffset reduces a project-root-relative directory to a canonical

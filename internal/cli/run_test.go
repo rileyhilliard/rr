@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"fmt"
 	"os"
+	osexec "os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -868,9 +870,51 @@ func TestBuildRemoteRunCommand_AutoCWDIsSoft(t *testing.T) {
 	got, err := buildRemoteRunCommand(wf, RunOptions{Command: "make build"}, "/home/u/rr/app")
 	require.NoError(t, err)
 
-	assert.Contains(t, got, "2>/dev/null || true;",
-		"implicit cd must tolerate a missing directory")
+	assert.Contains(t, got, "|| true; } &&",
+		"implicit cd must tolerate a missing directory, grouped so || binds only to it")
 	assert.Contains(t, got, "make build")
+}
+
+// TestAutoCWDSoftCdShellSemantics runs the emitted soft cd through a real shell.
+//
+// This is the regression guard for a precedence bug that a substring assertion
+// cannot catch: BuildRemoteCommand joins setup commands and the mandatory
+// `cd <project dir>` with &&, and `||` binds looser than `&&`, so an ungrouped
+// `cd X || true` swallowed the failure of the entire chain to its left. The
+// command then ran in $HOME with a half-built environment and reported success -
+// the exact false-green this branch exists to prevent.
+func TestAutoCWDSoftCdShellSemantics(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+
+	// The soft cd as emitted, with a deliberately missing target.
+	const softCd = `{ cd /nonexistent/subdir 2>/dev/null || true; }`
+
+	t.Run("earlier failure in the && chain stays fatal", func(t *testing.T) {
+		script := "false && cd /tmp && " + softCd + " && echo RAN"
+		out, err := osexec.Command("bash", "-c", script).CombinedOutput()
+		require.Error(t, err, "a failed setup command must abort the run")
+		assert.NotContains(t, string(out), "RAN",
+			"the command must not run when an earlier && step failed")
+	})
+
+	t.Run("missing subdir falls back to the parent cwd", func(t *testing.T) {
+		script := "cd /tmp && " + softCd + " && pwd"
+		out, err := osexec.Command("bash", "-c", script).CombinedOutput()
+		require.NoError(t, err, "a missing subdirectory must not fail the run")
+		assert.Contains(t, string(out), "/tmp",
+			"command should run in the project dir when the offset is missing")
+	})
+
+	t.Run("existing subdir is entered", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+		script := fmt.Sprintf("cd %s && { cd %s/sub 2>/dev/null || true; } && pwd", root, root)
+		out, err := osexec.Command("bash", "-c", script).CombinedOutput()
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "sub")
+	})
 }
 
 // TestBuildRemoteRunCommand_ExplicitCWDStillHardFails - an explicit --cwd is a

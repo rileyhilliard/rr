@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/ui"
@@ -89,11 +90,15 @@ func warnNoTests(details map[string]interface{}) {
 	}
 	msg := "No tests ran - the runner collected zero tests. " +
 		"Check the path or filter you passed; relative paths resolve from the project root on the remote."
+	if tasks, ok := details["no_tests_tasks"].([]string); ok && len(tasks) > 0 {
+		msg = fmt.Sprintf("No tests ran in: %s. Check the path or filter passed to those subtasks.",
+			strings.Join(tasks, ", "))
+	}
 	// A pipe is why the exit code can't be trusted here: the shell reports the
 	// last stage's status, so a runner that failed upstream still exits 0.
 	if piped, ok := details["piped_exit_code"].(bool); ok && piped {
 		msg += " The command pipes its output, so the exit code came from the last stage, not the runner - " +
-			"set shell: \"bash -o pipefail\" on the host to propagate it."
+			"set shell: \"bash -o pipefail -c\" on the host to propagate it."
 	}
 	ui.PrintWarning(msg)
 }

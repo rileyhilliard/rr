@@ -278,8 +278,23 @@ func TestBuildRelativePathHint(t *testing.T) {
 		assert.Contains(t, hint, "tests/foo.py")
 		assert.Contains(t, hint, "sub")
 		assert.Contains(t, hint, "the project root")
-		assert.Contains(t, hint, "pass --cwd sub")
+		assert.Contains(t, hint, "'--cwd sub'")
 		assert.Contains(t, hint, "'sub/tests/foo.py'")
+	})
+
+	// The case auto-cwd made common and the first implementation missed
+	// entirely: the offset resolved, so rr ran in sub/, but the user typed a
+	// path relative to the project root. invocationDir == runDir here, which
+	// the original invocationDir != runDir gate rejected outright.
+	t.Run("auto-cwd active and path is root-relative", func(t *testing.T) {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "toplevel"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "toplevel", "f.txt"), []byte("x"), 0o644))
+
+		hint := buildRelativePathHint("cat: toplevel/f.txt: No such file or directory", root, "sub", "sub")
+		require.NotEmpty(t, hint, "must fire when rr ran in the caller's subdir")
+		assert.Contains(t, hint, "the project root")
+		assert.Contains(t, hint, "'--cwd .'")
+		assert.Contains(t, hint, "../toplevel/f.txt")
 	})
 
 	t.Run("generic shell form", func(t *testing.T) {
@@ -314,7 +329,7 @@ func TestBuildRelativePathHint(t *testing.T) {
 	t.Run("explicit cwd differing from invocation dir", func(t *testing.T) {
 		hint := buildRelativePathHint("cat: tests/foo.py: No such file or directory", root, "sub", ".")
 		require.NotEmpty(t, hint)
-		assert.Contains(t, hint, "pass --cwd sub")
+		assert.Contains(t, hint, "'--cwd sub'")
 	})
 
 	t.Run("explicit cwd from project root suggests dropping it", func(t *testing.T) {
@@ -323,7 +338,7 @@ func TestBuildRelativePathHint(t *testing.T) {
 
 		hint := buildRelativePathHint("cat: top/f.txt: No such file or directory", root, "", "sub")
 		require.NotEmpty(t, hint)
-		assert.Contains(t, hint, "drop --cwd sub")
+		assert.Contains(t, hint, "'--cwd .'", "suggest returning to the project root")
 	})
 
 	t.Run("truly missing path gives no hint", func(t *testing.T) {
@@ -346,10 +361,10 @@ func TestBuildRelativePathHint(t *testing.T) {
 		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", ""))
 	})
 
-	t.Run("no offset difference gives no hint", func(t *testing.T) {
+	t.Run("nothing resolves anywhere gives no hint", func(t *testing.T) {
 		stderr := "ERROR: file or directory not found: tests/foo.py"
+		// At the root with no offset, tests/foo.py exists nowhere reachable.
 		assert.Empty(t, buildRelativePathHint(stderr, root, "", ""))
-		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", "sub"))
 	})
 
 	t.Run("unrelated stderr gives no hint", func(t *testing.T) {
