@@ -426,6 +426,29 @@ func validateMonitorConfig(monitor MonitorConfig) error {
 		}
 	}
 
+	if err := validateAlerts(monitor.Alerts); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateAlerts checks the monitor alerts configuration.
+// on_alert is free-form (it runs through 'sh -c'), so only the cooldown is
+// checked for shape.
+func validateAlerts(alerts AlertsConfig) error {
+	if alerts.Cooldown == "" {
+		return nil
+	}
+
+	cooldown, err := time.ParseDuration(alerts.Cooldown)
+	if err != nil {
+		return fmt.Errorf("monitor.alerts.cooldown '%s' doesn't look like a valid duration - try something like '60s' or '5m'", alerts.Cooldown)
+	}
+	if cooldown < 0 {
+		return fmt.Errorf("monitor.alerts.cooldown can't be negative (got '%s') - use '0s' to re-fire on every crossing", alerts.Cooldown)
+	}
+
 	return nil
 }
 

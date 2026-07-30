@@ -440,6 +440,32 @@ type MonitorConfig struct {
 
 	// Exclude lists host names to exclude from the monitor dashboard.
 	Exclude []string `yaml:"exclude" mapstructure:"exclude"`
+
+	// Alerts controls threshold alerting (bell, card flash, command hook).
+	Alerts AlertsConfig `yaml:"alerts" mapstructure:"alerts"`
+}
+
+// AlertsConfig controls threshold alerting in the monitor dashboard.
+// An alert fires when a metric crosses its configured critical threshold and
+// re-arms only after the metric falls back below the warning threshold.
+type AlertsConfig struct {
+	// Enabled turns threshold alerting on. Default false.
+	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
+
+	// Bell rings the terminal bell when a new alert fires. Default true.
+	Bell bool `yaml:"bell" mapstructure:"bell"`
+
+	// Flash renders an alerting host's card border in the critical color.
+	// Default true.
+	Flash bool `yaml:"flash" mapstructure:"flash"`
+
+	// Cooldown is the minimum time between re-fires for the same host and
+	// metric (e.g., "60s", "5m"). Default "60s".
+	Cooldown string `yaml:"cooldown" mapstructure:"cooldown"`
+
+	// OnAlert is an optional local shell command run when an alert fires.
+	// It receives RR_HOST, RR_METRIC, and RR_VALUE in its environment.
+	OnAlert string `yaml:"on_alert" mapstructure:"on_alert"`
 }
 
 // ThresholdConfig defines warning and critical thresholds for metrics.
@@ -560,6 +586,12 @@ func DefaultConfig() *Config {
 				GPU: ThresholdValues{Warning: 70, Critical: 90},
 			},
 			Exclude: []string{},
+			Alerts: AlertsConfig{
+				Enabled:  false,
+				Bell:     true,
+				Flash:    true,
+				Cooldown: "60s",
+			},
 		},
 	}
 }

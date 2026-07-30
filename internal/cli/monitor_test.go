@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/monitor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -227,4 +228,66 @@ func TestResolveMonitorInterval(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestMonitorModelOptions(t *testing.T) {
+	t.Run("nil project leaves alerting off", func(t *testing.T) {
+		opts := monitorModelOptions(nil)
+
+		assert.False(t, opts.Alerts.Enabled)
+		assert.Equal(t, config.ThresholdConfig{}, opts.Thresholds)
+	})
+
+	t.Run("project alerts and thresholds are carried through", func(t *testing.T) {
+		project := config.DefaultConfig()
+		project.Monitor.Alerts.Enabled = true
+		project.Monitor.Alerts.Bell = false
+		project.Monitor.Alerts.Cooldown = "90s"
+		project.Monitor.Alerts.OnAlert = "echo hi"
+		project.Monitor.Thresholds.CPU = config.ThresholdValues{Warning: 50, Critical: 80}
+
+		opts := monitorModelOptions(project)
+
+		assert.True(t, opts.Alerts.Enabled)
+		assert.False(t, opts.Alerts.Bell)
+		assert.Equal(t, "90s", opts.Alerts.Cooldown)
+		assert.Equal(t, "echo hi", opts.Alerts.OnAlert)
+		assert.Equal(t, 80, opts.Thresholds.CPU.Critical)
+	})
+
+	t.Run("default project config keeps alerting opt-in", func(t *testing.T) {
+		opts := monitorModelOptions(config.DefaultConfig())
+
+		assert.False(t, opts.Alerts.Enabled, "alerts must stay off unless the user turns them on")
+		assert.True(t, opts.Alerts.Bell, "bell/flash defaults ride along for when it is enabled")
+		assert.True(t, opts.Alerts.Flash)
+	})
+}
+
+// TestMonitorModelOptions_ReachTheModel closes the wiring loop: the options
+// built from project config must produce a model that actually alerts, not one
+// that merely stored the settings.
+func TestMonitorModelOptions_ReachTheModel(t *testing.T) {
+	hosts := map[string]config.Host{"server1": {SSH: []string{"user@server1"}}}
+
+	build := func(project *config.Config) monitor.Model {
+		return monitor.NewModelWithOptions(monitor.NewCollector(hosts), time.Second, 0,
+			[]string{"server1"}, monitorModelOptions(project))
+	}
+
+	t.Run("alerts enabled in config make the model alert", func(t *testing.T) {
+		project := config.DefaultConfig()
+		project.Monitor.Alerts.Enabled = true
+
+		m := build(project)
+		assert.True(t, m.AlertsEnabled(), "monitor.alerts.enabled must reach the dashboard")
+	})
+
+	t.Run("default config produces a non-alerting model", func(t *testing.T) {
+		assert.False(t, build(config.DefaultConfig()).AlertsEnabled())
+	})
+
+	t.Run("nil project produces a non-alerting model", func(t *testing.T) {
+		assert.False(t, build(nil).AlertsEnabled())
+	})
 }

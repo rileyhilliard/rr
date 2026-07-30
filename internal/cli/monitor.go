@@ -91,15 +91,9 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 		collector.SetLockConfig(resolved.Project.Lock)
 	}
 
-	// Metric severity thresholds from project config (zero values fall back
-	// to the 70/90 defaults inside the model)
-	var thresholds config.ThresholdConfig
-	if resolved.Project != nil {
-		thresholds = resolved.Project.Monitor.Thresholds
-	}
-
 	// Create Bubble Tea model with host order for default sorting
-	model := monitor.NewModelWithThresholds(collector, interval, timeout, hostOrder, thresholds)
+	model := monitor.NewModelWithOptions(collector, interval, timeout, hostOrder,
+		monitorModelOptions(resolved.Project))
 
 	// Run the TUI program with mouse support for scrolling
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -109,6 +103,19 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 	collector.Close()
 
 	return err
+}
+
+// monitorModelOptions builds the dashboard options from project config.
+// A nil project (global-only setup) leaves everything at its zero value, which
+// the model reads as default thresholds and alerting turned off.
+func monitorModelOptions(project *config.Config) monitor.ModelOptions {
+	if project == nil {
+		return monitor.ModelOptions{}
+	}
+	return monitor.ModelOptions{
+		Thresholds: project.Monitor.Thresholds,
+		Alerts:     project.Monitor.Alerts,
+	}
 }
 
 // resolveMonitorInterval returns the effective refresh interval.
