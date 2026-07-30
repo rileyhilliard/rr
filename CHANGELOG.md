@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-07-30
+
+Full product/architecture/performance round on `rr monitor`. Net: three inert config keys made functional, a metrics gap vs comparable tools closed, a scriptable snapshot mode, threshold alerts, large render speedups, and ~2,300 lines of dead code removed.
+
+### Added
+
+- **`rr monitor --once [--json]`** - One-shot fleet snapshot for scripts and agents. Double-samples delta-based sources (CPU%, network and disk rates) in a single SSH session, so the numbers are real on the first shot. `--json` emits a stable machine-readable document; without it you get a readable table.
+- **New monitor metrics** - Disk usage (all platforms) and disk I/O rates (Linux), CPU temperature (Linux hwmon, package sensor preferred), per-core CPU heat strip (Linux), and uptime/OS/kernel in the detail header. macOS core count is no longer hardcoded to 0.
+- **Threshold alerts** (`monitor.alerts`) - A metric crossing its critical threshold flashes the card border, adds a header badge, and rings the terminal bell; hysteresis (re-arm below warning) plus a per-host/metric cooldown prevent flapping. An optional `on_alert` hook runs locally with `RR_HOST`/`RR_METRIC`/`RR_VALUE` env vars (bounded at 10s) for wiring desktop notifications.
+- **Visualization** - Up to 4 grid columns on wide terminals; terminals 40+ rows tall get taller card graphs and top-3 processes per card; Peak/Avg stats under detail CPU/GPU graphs; `p` cycles process sort (CPU/MEM/PID) in detail view; first Linux CPU sample shows "warming up" instead of a bogus 0%.
+
+### Changed
+
+- **Monitor render path is much faster** - Per-color style caching plus run-length merging of same-color spans: sparklines ~30x faster, gradient bars ~148x, full dashboard frame ~2.9x with ~10x fewer allocations. Card bodies are cached per host and only re-rendered when that host reports new data.
+- **Half the SSH traffic per tick** - The lock check is folded into the batched metrics command: 2 sessions per host per tick instead of 4.
+- **`rr run`/`exec` race SSH aliases in parallel** - The monitor pool's parallel dial-with-preference strategy moved to `internal/host/dial.go` and now backs the host selector too: aliases are tried concurrently (earlier entries preferred within a 500ms grace window) instead of stacking serial timeouts, and a total failure aggregates every alias error into one actionable message.
+- **Monitor default interval standardized at 1s** - This was already the effective default via the flag; the config default now matches.
+- Monitor docs (ARCHITECTURE.md, configuration.md, package docs) rewritten to match shipped behavior; documented-but-nonexistent flags/config removed (`--no-gpu`, `metrics:`, `gpu_timeout`, `gpu_temp`).
+
+### Fixed
+
+- **`monitor.interval`, `monitor.exclude`, and `monitor.thresholds` now work** - All three were documented and validated but never applied. Thresholds drive both header and graph coloring; `--hosts` wins over `exclude` on conflict. `monitor.timeout` parse errors now surface at config load instead of silently falling back.
+- **Context-cancel leak in the collection loop** - Overlapping refresh rounds (e.g. pressing `r` mid-collection) now cancel independently instead of orphaning the earlier round's timer.
+- Selection highlight no longer lags one data tick behind when moving between cards.
+- rr's own metrics batch no longer appears in the top-processes list; header says "1 host" when it means one; a process's CPU% color accounts for core count (155% on a 10-core box isn't "critical").
+
+### Removed
+
+- Dead `internal/monitor/parsers/` subpackage (~1,300 lines, zero importers, a diverged duplicate of the live inline parsers), the legacy non-streaming collect path, five unused sparkline renderers, and the vestigial "slow" host status.
+
 ## [0.24.0] - 2026-07-30
 
 ### Breaking Changes
