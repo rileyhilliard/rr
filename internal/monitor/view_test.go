@@ -486,8 +486,9 @@ func TestModel_layoutCards(t *testing.T) {
 			if len(tt.cards) == 0 {
 				assert.Empty(t, result)
 			} else {
-				// Just verify it doesn't panic
-				_ = result
+				for _, card := range tt.cards {
+					assert.Contains(t, result, card)
+				}
 			}
 		})
 	}

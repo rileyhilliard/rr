@@ -69,7 +69,7 @@ func TestBuildMetricsCommand_LockSection(t *testing.T) {
 			cmd := BuildMetricsCommand(tt.platform, tt.lockDir)
 
 			// The lock read must be the last section
-			lockSection := `cat "` + tt.lockDir + `/info.json" 2>/dev/null || true`
+			lockSection := `cat '` + tt.lockDir + `/info.json' 2>/dev/null || true`
 			assert.True(t, strings.HasSuffix(cmd, lockSection),
 				"lock section should be the final command, got: %s", cmd)
 

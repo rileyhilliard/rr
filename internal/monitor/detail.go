@@ -629,7 +629,9 @@ func (m Model) renderDetailProcessSection(procs []ProcessInfo, cores, width int)
 	// Sort by the active order
 	sorted := make([]ProcessInfo, len(procs))
 	copy(sorted, procs)
-	sort.Slice(sorted, func(i, j int) bool {
+	// Stable so rows tied on the sort key (lots of 0.0% CPU entries) don't
+	// shuffle between refreshes.
+	sort.SliceStable(sorted, func(i, j int) bool {
 		switch m.procSortOrder {
 		case ProcSortByMemory:
 			return sorted[i].Memory > sorted[j].Memory

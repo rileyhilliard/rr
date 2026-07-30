@@ -1,6 +1,9 @@
 package monitor
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Platform represents the operating system type of a remote host.
 type Platform string
@@ -58,11 +61,20 @@ func BuildMetricsCommand(platform Platform, lockDir string) string {
 	}
 }
 
+// shellQuote wraps s in single quotes for safe POSIX shell interpolation,
+// escaping any embedded single quotes. Go's %q escapes for Go string literals,
+// not the remote shell: inside double quotes the shell still expands `$` and
+// backticks, so a configured lock.dir like "${PROJECT}/locks" would be
+// interpreted remotely instead of read literally.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // buildLockSection returns the trailing lock-check fragment of the batched command.
 // The "|| true" guard is required: with no lock held, cat fails, and a nonzero
 // exit would abort the whole batched command.
 func buildLockSection(lockDir string) string {
-	return fmt.Sprintf(`cat %q 2>/dev/null || true`, lockDir+"/info.json")
+	return fmt.Sprintf(`cat %s 2>/dev/null || true`, shellQuote(lockDir+"/info.json"))
 }
 
 // buildLinuxCommand returns the batched metrics command for Linux hosts.

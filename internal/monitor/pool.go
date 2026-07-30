@@ -63,13 +63,7 @@ func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		p.mu.Lock()
-		p.connections[alias] = &poolEntry{
-			client:       client,
-			lastUsed:     time.Now(),
-			connectedVia: alias, // Used alias directly
-		}
-		p.mu.Unlock()
+		p.storeConnection(alias, client, alias)
 		return client, nil
 	}
 
@@ -79,13 +73,7 @@ func (p *Pool) Get(alias string) (*sshutil.Client, error) {
 		if err != nil {
 			return nil, err
 		}
-		p.mu.Lock()
-		p.connections[alias] = &poolEntry{
-			client:       client,
-			lastUsed:     time.Now(),
-			connectedVia: hostCfg.SSH[0],
-		}
-		p.mu.Unlock()
+		p.storeConnection(alias, client, hostCfg.SSH[0])
 		return client, nil
 	}
 

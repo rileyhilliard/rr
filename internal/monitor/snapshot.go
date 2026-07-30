@@ -84,6 +84,8 @@ func (c *Collector) snapshotOne(ctx context.Context, alias string) HostResult {
 
 	select {
 	case <-ctx.Done():
+		// Explicit close (despite the defer) is what unblocks the
+		// CombinedOutput goroutine when the context is cancelled mid-command.
 		_ = session.Close()
 		result.Error = ctx.Err()
 		return result

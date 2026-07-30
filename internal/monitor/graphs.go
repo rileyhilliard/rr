@@ -5,14 +5,23 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
-// surfaceStyleCache caches graph cell styles keyed by foreground color.
-// The color set is small and fixed (gradient palette, threshold colors, and
-// custom ColorFunc outputs), so caching avoids re-building a lipgloss.Style
-// and its ANSI sequences for every rendered cell. sync.Map keeps reads
-// lock-free on the hot path.
-var surfaceStyleCache sync.Map // lipgloss.Color -> cachedSurfaceStyle
+// surfaceStyleCache caches graph cell styles keyed by foreground color and
+// the active color profile. The color set is small and fixed (gradient
+// palette, threshold colors, and custom ColorFunc outputs), so caching avoids
+// re-building a lipgloss.Style and its ANSI sequences for every rendered
+// cell. sync.Map keeps reads lock-free on the hot path. The profile is part
+// of the key because the pre-rendered ANSI sequences differ per profile, and
+// tests (or a renderer swap) can change it after the cache is warm.
+var surfaceStyleCache sync.Map // surfaceStyleKey -> cachedSurfaceStyle
+
+// surfaceStyleKey identifies a cached style entry.
+type surfaceStyleKey struct {
+	profile termenv.Profile
+	color   lipgloss.Color
+}
 
 // cachedSurfaceStyle holds a graph cell style plus its pre-rendered ANSI
 // escape prefix/suffix, so styling a run of characters is plain string
@@ -31,7 +40,8 @@ const styleProbe = "\x00"
 // surfaceStyle returns the cached style entry for the given foreground color
 // on the standard graph surface background.
 func surfaceStyle(color lipgloss.Color) cachedSurfaceStyle {
-	if cached, ok := surfaceStyleCache.Load(color); ok {
+	key := surfaceStyleKey{profile: lipgloss.ColorProfile(), color: color}
+	if cached, ok := surfaceStyleCache.Load(key); ok {
 		return cached.(cachedSurfaceStyle)
 	}
 	style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
@@ -42,7 +52,7 @@ func surfaceStyle(color lipgloss.Color) cachedSurfaceStyle {
 		entry.suffix = rendered[idx+len(styleProbe):]
 		entry.sequenced = true
 	}
-	surfaceStyleCache.Store(color, entry)
+	surfaceStyleCache.Store(key, entry)
 	return entry
 }
 

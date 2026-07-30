@@ -989,6 +989,13 @@ func TestParseLinuxSystemInfo(t *testing.T) {
 			wantOS:     "Linux",
 		},
 		{
+			name:       "short two-component kernel release",
+			section:    "1520410.85 11421484.42\n6.8",
+			wantUptime: time.Duration(1520410.85 * float64(time.Second)),
+			wantKernel: "6.8",
+			wantOS:     "Linux",
+		},
+		{
 			name:    "empty section",
 			section: "",
 		},

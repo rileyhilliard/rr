@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strconv"
@@ -22,6 +23,11 @@ const (
 // defaultAlertCooldown is the minimum time between re-fires for the same
 // host+metric when monitor.alerts.cooldown isn't configured.
 const defaultAlertCooldown = 60 * time.Second
+
+// onAlertTimeout bounds each on_alert hook run. Without it, a hanging hook
+// (network call, `read`, `sleep 1d`) pins a goroutine plus a child process
+// per alert for the life of the TUI session.
+const onAlertTimeout = 10 * time.Second
 
 // alertState is the per-host+metric state machine.
 //
@@ -247,7 +253,14 @@ func bellCmd() tea.Msg {
 // down the dashboard, and there's no safe place to print inside the alt screen.
 func onAlertCmd(command string, ev alertEvent) tea.Cmd {
 	return func() tea.Msg {
-		cmd := exec.Command("sh", "-c", command)
+		ctx, cancel := context.WithTimeout(context.Background(), onAlertTimeout)
+		defer cancel()
+
+		// The command string is user-authored config (monitor.alerts.on_alert in
+		// the project-local .rr.yaml), same trust boundary as tasks and
+		// setup_commands. Event values go through cmd.Env, never into the string,
+		// so remote host data cannot inject into the shell.
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
 		cmd.Env = append(os.Environ(),
 			"RR_HOST="+ev.Host,
 			"RR_METRIC="+string(ev.Metric),

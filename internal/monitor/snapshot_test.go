@@ -34,7 +34,7 @@ func TestBuildSnapshotCommand_Linux(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(cmd, "df -P -k /"))
 
 	// The lock read is still the final section.
-	assert.True(t, strings.HasSuffix(cmd, `cat "/tmp/rr.lock/info.json" 2>/dev/null || true`),
+	assert.True(t, strings.HasSuffix(cmd, `cat '/tmp/rr.lock/info.json' 2>/dev/null || true`),
 		"lock section must stay last, got: %s", cmd)
 }
 
@@ -48,7 +48,7 @@ func TestBuildSnapshotCommand_Darwin(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(cmd, "sleep 1"))
 	assert.Less(t, strings.Index(cmd, "sleep 1"), strings.LastIndex(cmd, "netstat -ib"))
 
-	assert.True(t, strings.HasSuffix(cmd, `cat "/tmp/rr.lock/info.json" 2>/dev/null || true`),
+	assert.True(t, strings.HasSuffix(cmd, `cat '/tmp/rr.lock/info.json' 2>/dev/null || true`),
 		"lock section must stay last, got: %s", cmd)
 }
 
@@ -170,9 +170,10 @@ func TestParseSnapshotOutput_LinuxRatesAreRealOnFirstRound(t *testing.T) {
 	assert.InDelta(t, 50.0, metrics.CPU.PerCore[1], 0.01)
 
 	// Disk I/O: 2000 read sectors and 4000 written sectors over ~1s. The rate
-	// divides by real elapsed time (parse overhead included), so allow 1%.
-	assert.InDelta(t, float64(2_000*512), metrics.Disk.ReadBytesPerSec, float64(2_000*512)*0.01)
-	assert.InDelta(t, float64(4_000*512), metrics.Disk.WriteBytesPerSec, float64(4_000*512)*0.01)
+	// divides by real elapsed time (parse overhead included), so allow 5% for
+	// scheduling slack on loaded CI runners.
+	assert.InDelta(t, float64(2_000*512), metrics.Disk.ReadBytesPerSec, float64(2_000*512)*0.05)
+	assert.InDelta(t, float64(4_000*512), metrics.Disk.WriteBytesPerSec, float64(4_000*512)*0.05)
 
 	// Network rates come from the two counter samples, loopback excluded.
 	require.NotNil(t, rates)

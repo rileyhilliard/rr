@@ -22,17 +22,22 @@ func NewConnectionCache() *ConnectionCache {
 // Returns nil if no cached connection exists or if the cached connection is dead.
 func (c *ConnectionCache) Get(hostName string) *Connection {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	conn, ok := c.conns[hostName]
+	c.mu.Unlock()
 	if !ok {
 		return nil
 	}
 
-	// Verify connection is still alive
+	// The liveness check is a network round trip, so it runs outside the
+	// lock - a laggy host would otherwise serialize every other Get.
 	if !c.isAlive(conn) {
 		conn.Close()
-		delete(c.conns, hostName)
+		c.mu.Lock()
+		// Only delete our entry; it may have been replaced while unlocked.
+		if current, ok := c.conns[hostName]; ok && current == conn {
+			delete(c.conns, hostName)
+		}
+		c.mu.Unlock()
 		return nil
 	}
 

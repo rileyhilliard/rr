@@ -1504,7 +1504,7 @@ Height drives detail density:
 
 The dashboard uses the shared Electric Synthwave palette from `internal/ui/colors.go`, with its own severity mapping defined in the monitor theme block there and re-exported by `internal/monitor/styles.go`.
 
-```
+```text
 Background:     #0A0A0F (deep void)
 Surface:        #12121A (card backgrounds)
 Border:         #2A2A4A (glass border, purple tint)

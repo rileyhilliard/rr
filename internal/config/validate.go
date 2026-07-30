@@ -408,6 +408,13 @@ func validateMonitorConfig(monitor MonitorConfig) error {
 		}
 	}
 
+	// Validate timeout format if specified
+	if monitor.Timeout != "" {
+		if _, err := time.ParseDuration(monitor.Timeout); err != nil {
+			return fmt.Errorf("monitor.timeout '%s' doesn't look like a valid duration - try something like '8s' or '15s'", monitor.Timeout)
+		}
+	}
+
 	// Validate thresholds
 	if err := validateThresholds("cpu", monitor.Thresholds.CPU); err != nil {
 		return err

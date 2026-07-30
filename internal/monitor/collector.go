@@ -700,19 +700,21 @@ func parseHwmonTemps(output string) float64 {
 }
 
 // parseLinuxSystemInfo parses the combined /proc/uptime + uname -r section.
-// The uptime line starts with seconds-since-boot as a float; any other
-// non-empty line is the kernel release.
+// The command emits /proc/uptime first, so only the first non-empty line is
+// treated as the uptime: a float-sniffing heuristic would misread a short
+// kernel release like "6.8" as seconds-since-boot.
 func parseLinuxSystemInfo(section string) SystemInfo {
 	info := SystemInfo{}
 	scanner := bufio.NewScanner(strings.NewReader(section))
+	first := true
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		if info.Uptime == 0 {
-			if secs, err := strconv.ParseFloat(fields[0], 64); err == nil {
+		if first {
+			first = false
+			if secs, err := strconv.ParseFloat(strings.Fields(line)[0], 64); err == nil {
 				info.Uptime = time.Duration(secs * float64(time.Second))
 				continue
 			}

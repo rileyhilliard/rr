@@ -1221,6 +1221,19 @@ func TestValidateMonitor(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid timeout",
+			monitor: MonitorConfig{Interval: "2s", Timeout: "15s"},
+			hosts:   validHost,
+			wantErr: false,
+		},
+		{
+			name:    "invalid timeout format",
+			monitor: MonitorConfig{Interval: "2s", Timeout: "8 seconds"},
+			hosts:   validHost,
+			wantErr: true,
+			errMsg:  "monitor.timeout",
+		},
+		{
 			name: "exclude with empty entry",
 			monitor: MonitorConfig{
 				Interval: "2s",
