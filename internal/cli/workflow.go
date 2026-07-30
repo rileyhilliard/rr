@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -43,6 +45,13 @@ type WorkflowContext struct {
 	PhaseDisplay *ui.PhaseDisplay
 	Reporter     PhaseReporter
 	StartTime    time.Time
+
+	// SubdirOffset is the caller's directory relative to the project root
+	// ("backend", "backend/api"), empty when invoked from the root itself.
+	// WorkDir is the project root regardless - it's the right sync root and
+	// remote dir - but relative paths in a command were written against the
+	// caller's cwd, so ad-hoc run/exec cd into this offset first.
+	SubdirOffset string
 
 	// ResultDetails accumulates extra keys (fallback, log_file, summary,
 	// hint, path_rewrites, ...) merged into the final result envelope's
@@ -165,6 +174,7 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 		// Use project root if available, otherwise fall back to cwd
 		if ctx.Resolved != nil && ctx.Resolved.ProjectRoot != "" {
 			ctx.WorkDir = ctx.Resolved.ProjectRoot
+			ctx.SubdirOffset = subdirOffset(ctx.WorkDir)
 		} else {
 			var err error
 			ctx.WorkDir, err = os.Getwd()
@@ -176,6 +186,35 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 		}
 	}
 	return nil
+}
+
+// subdirOffset returns the current directory relative to projectRoot, or "" when
+// the caller is at the root, the offset can't be determined, or it escapes the
+// root. Both paths are symlink-resolved first: on macOS os.Getwd() reports
+// /private/var while a discovered project root may be /var, and a naive
+// filepath.Rel across that boundary yields a bogus "../../.." traversal.
+func subdirOffset(projectRoot string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Clean(r)
+		}
+		return filepath.Clean(p)
+	}
+
+	rel, err := filepath.Rel(resolve(projectRoot), resolve(cwd))
+	if err != nil || rel == "." || rel == "" {
+		return ""
+	}
+	// A ".." component means cwd isn't under the project root at all.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 // setupHostSelector creates and configures the host selector.

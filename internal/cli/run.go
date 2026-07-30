@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -89,7 +90,7 @@ func Run(opts RunOptions) (int, error) {
 	remoteProjectDir := ""
 
 	if wf.Conn.IsLocal {
-		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = exec.ExecuteLocal(opts.Command, localRunDir(wf, opts), streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
 		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
@@ -265,9 +266,75 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 		}
 		subdir := util.ShellQuotePreserveTilde(resolved)
 		cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
+	} else if offset := autoSubdirOffset(wf); offset != "" {
+		// No explicit --cwd: mirror the caller's subdirectory so relative paths
+		// in the command mean what they meant locally. rr executes at the
+		// project root, which silently changes every relative path otherwise.
+		//
+		// Soft cd: the offset may not exist remotely (excluded from sync), and
+		// this is implicit, so it must never turn a working command into a
+		// failure. An explicit --cwd above still hard-fails.
+		resolved := path.Join(remoteProjectDir, offset)
+		subdir := util.ShellQuotePreserveTilde(resolved)
+		cmd = fmt.Sprintf("cd %s 2>/dev/null || true; %s", subdir, cmd)
+		reportAutoCWD(wf, offset)
 	}
 
 	return exec.BuildRemoteCommand(cmd, &wf.Conn.Host), nil
+}
+
+// autoSubdirOffset returns the caller's subdirectory offset to apply to an
+// ad-hoc remote command, or "" when none should apply.
+//
+// Named tasks never reach here - they declare their own directories
+// (docs/configuration.md shows "run: cd backend && pytest"), so an offset would
+// double up, and their args are already rewritten relative to the project root.
+//
+// The offset may not exist remotely (e.g. invoked from inside node_modules/,
+// which sync excludes); the soft cd at the call site absorbs that rather than
+// re-deriving rsync's exclude semantics here.
+func autoSubdirOffset(wf *WorkflowContext) string {
+	return wf.SubdirOffset
+}
+
+// localRunDir picks the working directory for a local (--local or fallback) run.
+//
+// It applies the same subdirectory offset as the remote path, so a command means
+// the same thing either way. Without this, `local_fallback` would make identical
+// invocations behave differently depending on whether a host happened to answer.
+// Falls back to the project root when the offset doesn't resolve.
+func localRunDir(wf *WorkflowContext, opts RunOptions) string {
+	offset := opts.RemoteCWD
+	if offset == "" {
+		offset = autoSubdirOffset(wf)
+	}
+	if offset == "" {
+		return wf.WorkDir
+	}
+
+	dir := filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return wf.WorkDir
+	}
+	return dir
+}
+
+// reportAutoCWD records the implicit working directory so the behavior is
+// visible rather than magic, mirroring how path rewrites are reported.
+func reportAutoCWD(wf *WorkflowContext, offset string) {
+	wf.AddResultDetail("remote_cwd", offset)
+	if PrettyMode() {
+		return
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:   "phase",
+		Phase:  "exec",
+		Status: "info",
+		Details: map[string]interface{}{
+			"remote_cwd": offset,
+			"reason":     "matched_invocation_dir",
+		},
+	})
 }
 
 // renderFinalStatus displays the final execution status line.
