@@ -326,6 +326,20 @@ rr run "pytest tests/ | tail -20"    # exit code comes from tail, not pytest
 
   Note `bash`, not `sh`: `dash` (Debian/Ubuntu's `/bin/sh`) doesn't support `pipefail`.
 
+The same trap applies one level up, where no host config can reach it. Piping `rr` itself discards `rr`'s exit code:
+
+```bash
+rr test | tail -8          # exit code comes from tail; a failed suite reports 0
+set -o pipefail            # in your shell or script, before the pipe
+rr test | tail -8          # exit code comes from rr
+```
+
+Use `--tail N` instead of an external pager when you only want the end of the output; it prints after the result envelope and keeps the exit code intact:
+
+```bash
+rr test --tail 20
+```
+
 ## Sync
 
 Controls file synchronization behavior using rsync.

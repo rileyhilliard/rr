@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Zero-test runs are called out** - A test run that collected nothing no longer looks identical to a clean suite: `details.no_tests` is set in the result envelope and pretty mode prints a warning. Exit codes are unchanged, so legitimate zero-test commands (`pytest --collect-only`, `go test -run NoMatch`, `jest --passWithNoTests`) keep working. Requires positive evidence in the output (a matched `no tests ran` / `collected 0 items` / `Tests no tests` line), never inference from the command string alone. Covers `rr run`/`rr exec`/tasks; parallel runs set `details.no_tests` to the list of subtask names that collected nothing.
+- **Commands run from the subdirectory you invoked them in** - `cd backend && rr run "pytest tests/test_api.py"` now executes in `<remote dir>/backend`, so relative paths mean what they do locally. Reported as `details.remote_cwd`. Applies to local execution too, so `local_fallback` can't make one command mean two things. The `cd` is soft: a directory that wasn't synced falls back to the project root rather than failing. `--cwd` still overrides, and named tasks deliberately get no offset (`rr test` means the same thing from every directory).
+- **Relative-path failure hints** - When a relative path fails because it resolved from a different directory than you expected, the `hint` detail names both directories and the fix (the corrected path, or which `--cwd` to pass or drop). Only fires when the path actually exists in one location and not the other, so a genuine typo doesn't get an invented explanation.
+- **Pipe-swallowed exit codes are flagged** - A piped zero-test run sets `details.piped_exit_code` and the warning points at the cause: without `pipefail` the shell reports the last stage's status, so a failing runner exits 0. Enable propagation per host with `shell: "bash -o pipefail -c"` (bash, not sh: dash lacks `pipefail`). rr does not inject `pipefail` itself, since `cmd | grep -q pattern` tolerates upstream failure on purpose.
+
+### Fixed
+
+- **Jest/vitest runs get a test summary** - `JestFormatter` implemented neither `GetTestCounts` nor `GetTestFailures`, so `details.summary` was omitted for *every* JS/TS run, passing suites included. Now populated from the parsed counts.
+- **`rr init` documents `local_fallback` accurately** - The generated template described it as a boolean; it takes `never` / `on-unreachable` / `always` (booleans still accepted).
+
 ## [0.23.1] - 2026-07-26
 
 ### Fixed
