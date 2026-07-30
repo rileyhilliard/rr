@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestJestFormatterName(t *testing.T) {
@@ -616,4 +618,103 @@ Time:        1.234s
 	summary := f.Summary(1)
 	assert.Contains(t, summary, "1 test(s) failed")
 	assert.Contains(t, summary, "should multiply numbers")
+}
+
+// TestJestFormatterImplementsSummaryProvider pins that JestFormatter satisfies
+// output.TestSummaryProvider. Before this existed, ExtractTestSummary bailed for
+// every jest/vitest run - even a fully passing one - so the result envelope
+// carried no "summary" field at all for JS test suites.
+func TestJestFormatterImplementsSummaryProvider(t *testing.T) {
+	var _ output.TestSummaryProvider = NewJestFormatter()
+}
+
+func TestJestFormatterGetTestCounts(t *testing.T) {
+	tests := []struct {
+		name                              string
+		lines                             []string
+		passed, failed, skipped, errCount int
+	}{
+		{
+			name: "counts from summary line",
+			lines: []string{
+				"Test Suites: 1 passed, 1 total",
+				"Tests:       5 passed, 5 total",
+			},
+			passed: 5,
+		},
+		{
+			name: "failures from summary line",
+			lines: []string{
+				"Tests:       2 failed, 3 passed, 5 total",
+			},
+			passed: 3,
+			failed: 2,
+		},
+		{
+			name: "total larger than passed+failed counts as skipped",
+			lines: []string{
+				"Tests:       1 passed, 4 total",
+			},
+			passed:  1,
+			skipped: 3,
+		},
+		{
+			name: "falls back to per-test lines when no summary",
+			lines: []string{
+				" PASS  src/a.test.ts",
+				"   ✓ works (2ms)",
+				"   ✓ also works (1ms)",
+			},
+			passed: 2,
+		},
+		{
+			name:  "no output yields zeros",
+			lines: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewJestFormatter()
+			for _, line := range tt.lines {
+				f.ProcessLine(line)
+			}
+			passed, failed, skipped, errCount := f.GetTestCounts()
+			assert.Equal(t, tt.passed, passed, "passed")
+			assert.Equal(t, tt.failed, failed, "failed")
+			assert.Equal(t, tt.skipped, skipped, "skipped")
+			assert.Equal(t, tt.errCount, errCount, "errors")
+		})
+	}
+}
+
+func TestJestFormatterGetTestFailures(t *testing.T) {
+	f := NewJestFormatter()
+	lines := []string{
+		" FAIL  src/math.test.ts",
+		"   ✕ should multiply numbers (5ms)",
+		"  ● should multiply numbers",
+		"    expect(received).toBe(expected)",
+		"",
+		"Tests:       1 failed, 1 total",
+	}
+	for _, line := range lines {
+		f.ProcessLine(line)
+	}
+
+	failures := f.GetTestFailures()
+	require.Len(t, failures, 1)
+	assert.Contains(t, failures[0].TestName, "should multiply numbers")
+	assert.NotEmpty(t, failures[0].Message)
+}
+
+// TestExtractTestSummaryJest covers the end-to-end path that was broken: a
+// passing vitest run previously produced ok=false and no envelope summary.
+func TestExtractTestSummaryJest(t *testing.T) {
+	raw := " PASS  src/utils.test.ts\n   ✓ works (2ms)\n\nTest Suites: 1 passed, 1 total\nTests:       5 passed, 5 total\n"
+
+	summary, ok := ExtractTestSummary("bunx jest", []byte(raw))
+	require.True(t, ok, "jest output should yield a summary")
+	assert.Equal(t, 5, summary.Passed)
+	assert.Zero(t, summary.Failed)
 }

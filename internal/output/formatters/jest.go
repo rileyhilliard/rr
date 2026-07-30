@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -283,6 +284,59 @@ func (f *JestFormatter) GetFailures() []JestTestFailure {
 // GetTestResults returns all collected test results.
 func (f *JestFormatter) GetTestResults() []JestTestResult {
 	return f.tests
+}
+
+// GetTestFailures implements output.TestSummaryProvider.
+// Returns the list of test failures collected during processing.
+func (f *JestFormatter) GetTestFailures() []output.TestFailure {
+	if f.inFailure {
+		f.finishFailure()
+	}
+
+	failures := make([]output.TestFailure, 0, len(f.failures))
+	for _, fail := range f.failures {
+		name := fail.TestName
+		if fail.SuiteName != "" && name != "" {
+			name = fail.SuiteName + " > " + name
+		} else if name == "" {
+			name = fail.SuiteName
+		}
+
+		message := fail.ErrorMessage
+		if message == "" {
+			message = fail.StackTrace
+		}
+
+		failures = append(failures, output.TestFailure{
+			TestName: name,
+			File:     fail.SuiteName,
+			Message:  message,
+		})
+	}
+	return failures
+}
+
+// GetTestCounts implements output.TestSummaryProvider.
+// Counts come from the summary line when present; otherwise they are derived
+// from the individual test results seen in the stream (vitest's compact
+// reporter prints per-test lines but a summary rr can't parse).
+func (f *JestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
+	if f.testsTotal > 0 || f.testsPassed > 0 || f.testsFailed > 0 {
+		skipped = f.testsTotal - f.testsPassed - f.testsFailed
+		if skipped < 0 {
+			skipped = 0
+		}
+		return f.testsPassed, f.testsFailed, skipped, 0
+	}
+
+	for _, t := range f.tests {
+		if t.Passed {
+			passed++
+		} else {
+			failed++
+		}
+	}
+	return passed, failed, 0, 0
 }
 
 // Reset clears all accumulated state.
