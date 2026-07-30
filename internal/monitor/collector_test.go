@@ -1,10 +1,12 @@
 package monitor
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,8 +77,7 @@ Cached:          4567890 kB`
 
 	sections := []string{procStat, procLoadavg, procMeminfo, procNetDev, nvidiaSmi}
 
-	result, err := collector.parseLinuxOutput("test-host", metrics, sections)
-	require.NoError(t, err)
+	result := collector.parseLinuxOutput("test-host", metrics, sections)
 	require.NotNil(t, result)
 
 	// Verify CPU metrics were parsed
@@ -107,8 +108,7 @@ cpu0 500000 5000 100000 4000000 5000 0 2500 0 0 0`
 
 	sections := []string{procStat, procLoadavg}
 
-	result, err := collector.parseLinuxOutput("test-host", metrics, sections)
-	require.NoError(t, err)
+	result := collector.parseLinuxOutput("test-host", metrics, sections)
 	require.NotNil(t, result)
 
 	// CPU should be parsed
@@ -126,8 +126,7 @@ func TestParseLinuxOutput_EmptySections(t *testing.T) {
 
 	sections := []string{}
 
-	result, err := collector.parseLinuxOutput("test-host", metrics, sections)
-	require.NoError(t, err)
+	result := collector.parseLinuxOutput("test-host", metrics, sections)
 	require.NotNil(t, result)
 }
 
@@ -163,8 +162,7 @@ root                 1   0.0  0.1  5134736  21456   ??  Ss   Mon09AM  12:34.56 /
 
 	sections := []string{topOutput, vmStatOutput, netstatOutput, gpuOutput, psOutput}
 
-	result, err := collector.parseDarwinOutput(metrics, sections)
-	require.NoError(t, err)
+	result := collector.parseDarwinOutput(metrics, sections)
 	require.NotNil(t, result)
 
 	// Verify CPU metrics
@@ -206,8 +204,7 @@ root                 1   0.0  0.1  5134736  21456   ??  Ss   Mon09AM  12:34.56 /
 
 	sections := []string{topOutput, vmStatOutput, netstatOutput, gpuOutput, psOutput}
 
-	result, err := collector.parseDarwinOutput(metrics, sections)
-	require.NoError(t, err)
+	result := collector.parseDarwinOutput(metrics, sections)
 	require.NotNil(t, result)
 
 	// GPU should be nil when no data
@@ -223,8 +220,7 @@ CPU usage: 10.0% user, 20.0% sys, 70.0% idle`
 
 	sections := []string{topOutput}
 
-	result, err := collector.parseDarwinOutput(metrics, sections)
-	require.NoError(t, err)
+	result := collector.parseDarwinOutput(metrics, sections)
 	require.NotNil(t, result)
 
 	// CPU should be parsed
@@ -541,18 +537,143 @@ func TestCollector_parseOutput(t *testing.T) {
 
 	// Test Linux parsing
 	linuxOutput := "cpu data\n---\nloadavg data\n---\nmeminfo data\n---\nnet data\n---\ngpu data\n---\nps data"
-	result, err := c.parseOutput("test-host", PlatformLinux, linuxOutput)
-	require.NoError(t, err)
+	result, lockInfo := c.parseOutput("test-host", PlatformLinux, linuxOutput)
 	require.NotNil(t, result)
+	assert.Nil(t, lockInfo)
 
 	// Test Darwin parsing
 	darwinOutput := "top data\n---\nvm_stat data\n---\nnetstat data\n---\nps data"
-	result, err = c.parseOutput("test-host", PlatformDarwin, darwinOutput)
-	require.NoError(t, err)
+	result, lockInfo = c.parseOutput("test-host", PlatformDarwin, darwinOutput)
 	require.NotNil(t, result)
+	assert.Nil(t, lockInfo)
 
 	// Test unknown platform (defaults to Linux)
-	result, err = c.parseOutput("test-host", PlatformUnknown, linuxOutput)
-	require.NoError(t, err)
+	result, lockInfo = c.parseOutput("test-host", PlatformUnknown, linuxOutput)
 	require.NotNil(t, result)
+	assert.Nil(t, lockInfo)
+}
+
+// lockInfoJSON builds a lock info.json payload for tests.
+func lockInfoJSON(t *testing.T, started time.Time, command string) string {
+	t.Helper()
+	info := lock.LockInfo{
+		User:     "testuser",
+		Hostname: "testhost",
+		Started:  started,
+		PID:      1234,
+		Command:  command,
+	}
+	data, err := info.Marshal()
+	require.NoError(t, err)
+	return string(data)
+}
+
+func TestCollector_parseOutput_LockSection(t *testing.T) {
+	tests := []struct {
+		name       string
+		platform   Platform
+		lockAge    time.Duration // 0 = no lock payload (empty section)
+		wantLocked bool
+	}{
+		{
+			name:       "linux with lock payload",
+			platform:   PlatformLinux,
+			lockAge:    2 * time.Minute,
+			wantLocked: true,
+		},
+		{
+			name:       "darwin with lock payload",
+			platform:   PlatformDarwin,
+			lockAge:    2 * time.Minute,
+			wantLocked: true,
+		},
+		{
+			name:       "linux without lock payload",
+			platform:   PlatformLinux,
+			lockAge:    0, // empty section
+			wantLocked: false,
+		},
+		{
+			name:       "darwin without lock payload",
+			platform:   PlatformDarwin,
+			lockAge:    0, // empty section
+			wantLocked: false,
+		},
+		{
+			name:       "linux stale lock is ignored",
+			platform:   PlatformLinux,
+			lockAge:    45 * time.Minute, // beyond default 30m stale threshold
+			wantLocked: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewCollector(map[string]config.Host{})
+
+			lockPayload := ""
+			if tt.lockAge > 0 {
+				lockPayload = lockInfoJSON(t, time.Now().Add(-tt.lockAge), "rr test")
+			}
+
+			var sections []string
+			if tt.platform == PlatformDarwin {
+				sections = []string{"top data", "vm_stat data", "netstat data", "gpu data", "ps data", lockPayload}
+			} else {
+				sections = []string{"cpu data", "loadavg data", "meminfo data", "net data", "gpu data", "ps data", lockPayload}
+			}
+			output := strings.Join(sections, "\n---\n")
+
+			result, lockInfo := c.parseOutput("test-host", tt.platform, output)
+			require.NotNil(t, result)
+
+			if tt.wantLocked {
+				require.NotNil(t, lockInfo)
+				assert.True(t, lockInfo.IsLocked)
+				assert.Equal(t, "testuser@testhost (pid 1234)", lockInfo.Holder)
+				assert.Equal(t, "rr test", lockInfo.Command)
+				assert.WithinDuration(t, time.Now().Add(-tt.lockAge), lockInfo.Started, 5*time.Second)
+			} else {
+				assert.Nil(t, lockInfo)
+			}
+		})
+	}
+}
+
+func TestCollector_parseLockSection_StaleThresholdFromConfig(t *testing.T) {
+	c := NewCollector(map[string]config.Host{})
+	c.SetLockConfig(config.LockConfig{Stale: 5 * time.Minute})
+
+	// Lock aged 10 minutes: fresh under the 30m default, stale under the 5m config
+	payload := lockInfoJSON(t, time.Now().Add(-10*time.Minute), "rr build")
+	assert.Nil(t, c.parseLockSection(payload))
+
+	// Lock aged 2 minutes: within the configured threshold
+	payload = lockInfoJSON(t, time.Now().Add(-2*time.Minute), "rr build")
+	info := c.parseLockSection(payload)
+	require.NotNil(t, info)
+	assert.True(t, info.IsLocked)
+}
+
+func TestCollector_parseLockSection_InvalidPayload(t *testing.T) {
+	c := NewCollector(map[string]config.Host{})
+
+	assert.Nil(t, c.parseLockSection(""))
+	assert.Nil(t, c.parseLockSection("   \n"))
+	assert.Nil(t, c.parseLockSection("not valid json"))
+}
+
+func TestCollector_lockDir(t *testing.T) {
+	c := NewCollector(map[string]config.Host{})
+
+	// Default when lock checking is unconfigured
+	assert.Equal(t, "/tmp/rr.lock", c.lockDir())
+
+	// Configured lock dir
+	c.SetLockConfig(config.LockConfig{Dir: "/var/lock"})
+	assert.Equal(t, "/var/lock/rr.lock", c.lockDir())
+
+	// Configured but empty dir falls back to default
+	c.SetLockConfig(config.LockConfig{})
+	assert.Equal(t, "/tmp/rr.lock", c.lockDir())
 }

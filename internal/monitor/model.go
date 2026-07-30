@@ -88,8 +88,7 @@ type Model struct {
 	showHelp   bool
 
 	// Streaming collection state
-	resultsChan <-chan HostResult // Channel for receiving streaming results
-	collecting  bool              // Whether a collection cycle is in progress
+	collecting bool // Whether a collection cycle is in progress
 
 	// Animation state
 	spinnerFrame int // Current frame for connecting spinner animation
@@ -107,6 +106,9 @@ type tickMsg time.Time
 type spinnerTickMsg time.Time
 
 // hostResultMsg carries metrics from a single host (for streaming updates).
+// It also carries this collection round's channel and cancel func so the next
+// poll stays tied to its own round (overlapping rounds via manual refresh must
+// not clobber each other's state).
 type hostResultMsg struct {
 	alias        string
 	metrics      *HostMetrics  // nil on error
@@ -115,12 +117,16 @@ type hostResultMsg struct {
 	connectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
 	latency      time.Duration // round-trip time for metrics collection
 	time         time.Time
+	results      <-chan HostResult  // this round's channel, for continued polling
+	cancel       context.CancelFunc // this round's context cancel
 }
 
 // collectStartedMsg signals that collection has started and provides the results channel.
 // This allows state mutations to happen in Update instead of inside the async goroutine.
+// cancel releases the round's context resources once the channel closes.
 type collectStartedMsg struct {
 	results <-chan HostResult
+	cancel  context.CancelFunc
 }
 
 // HostConnectionState tracks connection attempts and errors per host.
@@ -293,7 +299,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case collectStartedMsg:
 		// Collection started - set up state and begin polling
-		m.resultsChan = msg.results
 		m.collecting = true
 
 		// Mark collection start time for hosts that aren't yet connected
@@ -305,13 +310,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Start polling for results
-		return m, pollResultsCmd(m.resultsChan)
+		return m, pollResultsCmd(msg.results, msg.cancel)
 
 	case hostResultMsg:
 		// Check if this is a completion signal (empty alias means channel closed)
 		if msg.alias == "" {
 			m.collecting = false
-			m.resultsChan = nil
 			return m, nil
 		}
 
@@ -325,9 +329,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateListViewportContent()
 		}
 
-		// Continue polling for more results if we have an active channel
-		if m.resultsChan != nil {
-			return m, pollResultsCmd(m.resultsChan)
+		// Continue polling this round's channel for more results
+		if msg.results != nil {
+			return m, pollResultsCmd(msg.results, msg.cancel)
 		}
 	}
 
@@ -392,25 +396,25 @@ func (m Model) collectCmd() tea.Cmd {
 	return func() tea.Msg {
 		// Create a background context for the collection cycle.
 		// Note: We don't defer cancel() here because CollectStreamingHosts spawns
-		// goroutines that need the context to remain valid. The context will be
-		// garbage collected after the timeout expires. This is acceptable because:
-		// 1. The timeout is bounded (timeout * numHosts+1)
-		// 2. Collection typically completes well before the timeout
-		// 3. The timer overhead is minimal
+		// goroutines that need the context to remain valid. Instead, cancel is
+		// carried alongside the results channel and invoked by pollResultsCmd
+		// when this round's channel closes, releasing the timeout timer promptly.
 		ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(numHosts+1))
-		_ = cancel // Context cleanup happens via timeout; see comment above
 
 		// Start streaming collection for only the non-backoff hosts
 		resultsChan := collector.CollectStreamingHosts(ctx, hostsToCollect)
 
 		// Return the channel to Update for safe state setup
-		return collectStartedMsg{results: resultsChan}
+		return collectStartedMsg{results: resultsChan, cancel: cancel}
 	}
 }
 
 // pollResultsCmd returns a command that polls for the next streaming result.
-// Takes the channel as a parameter to avoid data races (no Model field access in goroutine).
-func pollResultsCmd(results <-chan HostResult) tea.Cmd {
+// Takes the channel as a parameter to avoid data races (no Model field access
+// in goroutine). cancel belongs to the same collection round as the channel
+// and is invoked once the channel closes, so overlapping rounds (e.g. manual
+// refresh mid-collection) each clean up their own context.
+func pollResultsCmd(results <-chan HostResult, cancel context.CancelFunc) tea.Cmd {
 	if results == nil {
 		return nil
 	}
@@ -419,7 +423,10 @@ func pollResultsCmd(results <-chan HostResult) tea.Cmd {
 		// Simple channel receive (not select with single case)
 		result, ok := <-results
 		if !ok {
-			// Channel closed, collection complete - signal via nil result
+			// Channel closed, collection complete - release this round's context
+			if cancel != nil {
+				cancel()
+			}
 			return hostResultMsg{time: time.Now()} // Empty msg signals completion
 		}
 
@@ -436,6 +443,8 @@ func pollResultsCmd(results <-chan HostResult) tea.Cmd {
 			connectedVia: result.ConnectedVia,
 			latency:      result.Latency,
 			time:         time.Now(),
+			results:      results,
+			cancel:       cancel,
 		}
 	}
 }

@@ -281,3 +281,77 @@ func TestModel_Init(t *testing.T) {
 	// Should return a batch command
 	require.NotNil(t, cmd)
 }
+
+func TestPollResultsCmd_CancelInvokedOnChannelClose(t *testing.T) {
+	results := make(chan HostResult)
+	canceled := false
+
+	cmd := pollResultsCmd(results, func() { canceled = true })
+	require.NotNil(t, cmd)
+
+	close(results)
+	msg := cmd()
+
+	// Channel close produces the completion sentinel (empty alias)
+	sentinel, ok := msg.(hostResultMsg)
+	require.True(t, ok)
+	assert.Empty(t, sentinel.alias)
+
+	// The round's context cancel must fire when its channel closes
+	assert.True(t, canceled, "cancel should be invoked when the results channel closes")
+}
+
+func TestPollResultsCmd_NilChannel(t *testing.T) {
+	assert.Nil(t, pollResultsCmd(nil, nil))
+}
+
+func TestPollResultsCmd_OverlappingRoundsCancelIndependently(t *testing.T) {
+	// Simulates pressing 'r' mid-collection: two rounds in flight, each with
+	// its own channel and cancel. Each round must clean up only its own context.
+	round1 := make(chan HostResult, 1)
+	round2 := make(chan HostResult, 1)
+	var canceled1, canceled2 bool
+
+	cmd1 := pollResultsCmd(round1, func() { canceled1 = true })
+	cmd2 := pollResultsCmd(round2, func() { canceled2 = true })
+
+	// Round 1 finishes first: only its cancel fires
+	close(round1)
+	msg1 := cmd1().(hostResultMsg)
+	assert.Empty(t, msg1.alias)
+	assert.True(t, canceled1)
+	assert.False(t, canceled2, "round 2's cancel must not fire when round 1 completes")
+
+	// Round 2 still delivers results; its msg carries its own channel + cancel
+	round2 <- HostResult{Alias: "server1", Metrics: &HostMetrics{}}
+	msg2 := cmd2().(hostResultMsg)
+	assert.Equal(t, "server1", msg2.alias)
+	require.NotNil(t, msg2.results)
+	assert.False(t, canceled2)
+
+	// Feeding the result through Update continues polling round 2's channel,
+	// even after round 1's sentinel cleared the collecting state
+	collector := NewCollector(map[string]config.Host{"server1": {SSH: []string{"server1"}}})
+	m := NewModel(collector, time.Second, time.Second, nil)
+	_, _ = m.Update(msg1) // round 1 sentinel
+
+	_, cmd := m.Update(msg2)
+	require.NotNil(t, cmd, "Update should keep polling round 2 after round 1 completed")
+
+	// When round 2's channel closes, its cancel fires
+	close(round2)
+	msg3 := cmd().(hostResultMsg)
+	assert.Empty(t, msg3.alias)
+	assert.True(t, canceled2)
+}
+
+func TestModel_Update_CollectionCompleteSentinel(t *testing.T) {
+	collector := NewCollector(map[string]config.Host{"server1": {SSH: []string{"server1"}}})
+	m := NewModel(collector, time.Second, time.Second, nil)
+	m.collecting = true
+
+	// Empty alias signals the round's channel closed
+	updated, cmd := m.Update(hostResultMsg{time: time.Now()})
+	assert.Nil(t, cmd)
+	assert.False(t, updated.(Model).collecting)
+}
