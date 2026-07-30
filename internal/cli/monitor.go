@@ -16,16 +16,54 @@ import (
 // interval is only meaningful when intervalSet is true (--interval flag used);
 // otherwise the interval is resolved from project config with a 1s default.
 func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool) error {
-	// Load resolved config to get proper host ordering
-	resolved, err := config.LoadResolved("")
+	scope, err := resolveMonitorScope(hostsFilter)
 	if err != nil {
 		return err
 	}
 
 	// Resolve refresh interval: --interval flag > monitor.interval config > 1s default
-	interval, err = resolveMonitorInterval(interval, intervalSet, resolved.Project)
+	interval, err = resolveMonitorInterval(interval, intervalSet, scope.project)
 	if err != nil {
 		return err
+	}
+
+	collector := scope.newCollector()
+
+	// Create Bubble Tea model with host order for default sorting
+	model := monitor.NewModelWithThresholds(collector, interval, scope.timeout, scope.order, scope.thresholds)
+
+	// Run the TUI program with mouse support for scrolling
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	_, err = p.Run()
+
+	// Graceful shutdown: close all SSH connections
+	collector.Close()
+
+	return err
+}
+
+// monitorScope is the resolved set of hosts and settings both monitor modes
+// operate on: the same --hosts filter, monitor.exclude list, timeout, lock
+// config and thresholds, so --once and the TUI never drift apart.
+type monitorScope struct {
+	hosts      map[string]config.Host
+	order      []string
+	timeout    time.Duration
+	thresholds config.ThresholdConfig
+	lockCfg    *config.LockConfig
+	project    *config.Config
+}
+
+// defaultMonitorTimeout is the per-host collection timeout when monitor.timeout
+// is unset or unparseable.
+const defaultMonitorTimeout = 8 * time.Second
+
+// resolveMonitorScope loads config and applies host filtering, exclusion and
+// settings resolution shared by `rr monitor` and `rr monitor --once`.
+func resolveMonitorScope(hostsFilter string) (*monitorScope, error) {
+	resolved, err := config.LoadResolved("")
+	if err != nil {
+		return nil, err
 	}
 
 	// Get hosts with proper priority order (project hosts list order, or alphabetical for global)
@@ -33,7 +71,7 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 	if err != nil {
 		// Fall back to just global hosts if resolution fails
 		if len(resolved.Global.Hosts) == 0 {
-			return errors.New(errors.ErrConfig,
+			return nil, errors.New(errors.ErrConfig,
 				"No hosts configured",
 				"Add a host with 'rr host add' first.")
 		}
@@ -49,7 +87,7 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 	if hostsFilter != "" {
 		hosts = filterHosts(hosts, hostsFilter)
 		if len(hosts) == 0 {
-			return errors.New(errors.ErrConfig,
+			return nil, errors.New(errors.ErrConfig,
 				fmt.Sprintf("No hosts match '%s'", hostsFilter),
 				"Double-check your host names or try without the --hosts filter.")
 		}
@@ -62,7 +100,7 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 	if resolved.Project != nil && len(resolved.Project.Monitor.Exclude) > 0 {
 		hosts = excludeHosts(hosts, resolved.Project.Monitor.Exclude, hostsFilter)
 		if len(hosts) == 0 {
-			return errors.New(errors.ErrConfig,
+			return nil, errors.New(errors.ErrConfig,
 				"All hosts are excluded by monitor.exclude",
 				"Remove some entries from monitor.exclude in .rr.yaml, or request hosts explicitly with --hosts.")
 		}
@@ -70,45 +108,44 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 	}
 
 	if len(hosts) == 0 {
-		return errors.New(errors.ErrConfig,
+		return nil, errors.New(errors.ErrConfig,
 			"No hosts configured",
 			"Add a host with 'rr host add' first.")
 	}
 
-	// Parse timeout from config (default to 8s if not set or invalid)
-	timeout := 8 * time.Second
-	if resolved.Project != nil && resolved.Project.Monitor.Timeout != "" {
-		if parsed, err := time.ParseDuration(resolved.Project.Monitor.Timeout); err == nil {
-			timeout = parsed
+	scope := &monitorScope{
+		hosts:   hosts,
+		order:   hostOrder,
+		timeout: defaultMonitorTimeout,
+		project: resolved.Project,
+	}
+
+	if resolved.Project != nil {
+		if resolved.Project.Monitor.Timeout != "" {
+			if parsed, err := time.ParseDuration(resolved.Project.Monitor.Timeout); err == nil {
+				scope.timeout = parsed
+			}
+		}
+		// Zero threshold values fall back to the 70/90 defaults downstream.
+		scope.thresholds = resolved.Project.Monitor.Thresholds
+		if resolved.Project.Lock.Enabled {
+			lockCfg := resolved.Project.Lock
+			scope.lockCfg = &lockCfg
 		}
 	}
 
-	// Create collector from filtered hosts
-	collector := monitor.NewCollector(hosts)
+	return scope, nil
+}
 
-	// Configure lock checking if we have a project config with locking enabled
-	if resolved.Project != nil && resolved.Project.Lock.Enabled {
-		collector.SetLockConfig(resolved.Project.Lock)
+// newCollector builds a collector wired with the scope's hosts and lock
+// configuration. The per-host timeout is left at the collector default; the
+// TUI enforces scope.timeout itself, and --once applies it explicitly.
+func (s *monitorScope) newCollector() *monitor.Collector {
+	collector := monitor.NewCollector(s.hosts)
+	if s.lockCfg != nil {
+		collector.SetLockConfig(*s.lockCfg)
 	}
-
-	// Metric severity thresholds from project config (zero values fall back
-	// to the 70/90 defaults inside the model)
-	var thresholds config.ThresholdConfig
-	if resolved.Project != nil {
-		thresholds = resolved.Project.Monitor.Thresholds
-	}
-
-	// Create Bubble Tea model with host order for default sorting
-	model := monitor.NewModelWithThresholds(collector, interval, timeout, hostOrder, thresholds)
-
-	// Run the TUI program with mouse support for scrolling
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	_, err = p.Run()
-
-	// Graceful shutdown: close all SSH connections
-	collector.Close()
-
-	return err
+	return collector
 }
 
 // resolveMonitorInterval returns the effective refresh interval.

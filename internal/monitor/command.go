@@ -24,6 +24,19 @@ const (
 	darwinLockSection = 8
 )
 
+// SnapshotSleepSeconds is the delay between the two samples taken by the
+// snapshot command. Delta-based metrics (CPU%, per-core, disk I/O, network
+// rates) need two readings, so `rr monitor --once` pays this once.
+const SnapshotSleepSeconds = 1
+
+// Number of leading "priming" sections the snapshot command emits before the
+// normal metrics battery. Linux primes /proc/stat, /proc/net/dev and
+// /proc/diskstats; Darwin only needs netstat (top -l 1 is not delta-based).
+const (
+	linuxSnapshotPrimeSections  = 3
+	darwinSnapshotPrimeSections = 1
+)
+
 // BuildMetricsCommand returns a single batched command that collects all metrics
 // for the specified platform. This allows collecting all metrics in a single SSH exec.
 // lockDir is the rr lock directory on the remote; its info.json is read as the
@@ -77,6 +90,51 @@ func buildLinuxCommand(lockDir string) string {
 // 8. Lock info.json - rr lock status (empty if unlocked)
 func buildDarwinCommand(lockDir string) string {
 	return `top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ioreg -r -c AGXAccelerator 2>/dev/null | grep -E '"(model|gpu-core-count|PerformanceStatistics)"' || true; echo "---"; ps aux -r 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; sysctl -n hw.ncpu 2>/dev/null || true; echo "---"; sysctl -n kern.boottime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
+}
+
+// BuildSnapshotCommand returns a batched command that collects everything
+// BuildMetricsCommand does, preceded by a priming sample of the delta-based
+// sources and a one-second sleep. One SSH session yields real CPU%, per-core
+// usage, disk I/O rates and network rates without a second round trip.
+//
+// The output is the priming sections, then exactly the sections
+// BuildMetricsCommand produces, so the existing parsers apply unchanged after
+// dropping the prime prefix.
+func BuildSnapshotCommand(platform Platform, lockDir string) string {
+	switch platform {
+	case PlatformDarwin:
+		return buildDarwinSnapshotPrime() + BuildMetricsCommand(PlatformDarwin, lockDir)
+	case PlatformLinux, PlatformUnknown:
+		return buildLinuxSnapshotPrime() + BuildMetricsCommand(PlatformLinux, lockDir)
+	default:
+		return buildLinuxSnapshotPrime() + BuildMetricsCommand(PlatformLinux, lockDir)
+	}
+}
+
+// SnapshotPrimeSections returns how many leading sections BuildSnapshotCommand
+// emits before the regular metrics sections for the given platform.
+func SnapshotPrimeSections(platform Platform) int {
+	if platform == PlatformDarwin {
+		return darwinSnapshotPrimeSections
+	}
+	return linuxSnapshotPrimeSections
+}
+
+// buildLinuxSnapshotPrime emits /proc/stat, /proc/net/dev and /proc/diskstats
+// as sections 0-2, then sleeps so the second reading has a real interval.
+func buildLinuxSnapshotPrime() string {
+	return fmt.Sprintf(
+		`cat /proc/stat; echo "---"; cat /proc/net/dev; echo "---"; cat /proc/diskstats 2>/dev/null || true; echo "---"; sleep %d; `,
+		SnapshotSleepSeconds)
+}
+
+// buildDarwinSnapshotPrime emits netstat -ib as section 0, then sleeps.
+// macOS CPU comes from `top -l 1`, which is not delta-based, and there is no
+// cheap per-disk byte counter, so only network needs priming.
+func buildDarwinSnapshotPrime() string {
+	return fmt.Sprintf(
+		`netstat -ib; echo "---"; sleep %d; `,
+		SnapshotSleepSeconds)
 }
 
 // PlatformDetectCommand returns the command to detect the platform type.

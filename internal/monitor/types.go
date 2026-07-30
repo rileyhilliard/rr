@@ -94,6 +94,15 @@ type HostResult struct {
 	LockInfo     *HostLockInfo // Lock status (nil if not checked or error)
 	ConnectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
 	Latency      time.Duration // Actual SSH round-trip latency (from a lightweight probe)
+	Platform     Platform      // Detected remote platform (populated by CollectSnapshot)
+	NetRates     *NetRates     // Aggregate network throughput (CollectSnapshot only; the TUI derives rates from History)
+}
+
+// NetRates holds aggregate network throughput across all non-loopback
+// interfaces, in bytes per second.
+type NetRates struct {
+	RxBytesPerSec float64
+	TxBytesPerSec float64
 }
 
 // Duration returns how long the lock has been held.
