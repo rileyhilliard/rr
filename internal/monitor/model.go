@@ -99,6 +99,14 @@ type Model struct {
 	detailViewport viewport.Model
 	listViewport   viewport.Model
 	viewportReady  bool
+
+	// cardBodyCache holds the expensive rendered card body (graphs/metric
+	// sections) per host alias. Entries are invalidated when that host gets a
+	// new result and the whole cache is cleared on resize. Dynamic chrome
+	// (spinners, countdowns, selection border) is rendered fresh every frame
+	// and composed around the cached body. The map is shared across Model
+	// copies; Bubble Tea calls Update/View on a single goroutine.
+	cardBodyCache map[string]string
 }
 
 // tickMsg signals a periodic refresh.
@@ -220,6 +228,8 @@ func NewModelWithThresholds(collector *Collector, interval, timeout time.Duratio
 		timeout:    timeout,
 		thresholds: normalizeThresholds(thresholds),
 		sortOrder:  SortByDefault, // Start with default sort (online first, config order)
+
+		cardBodyCache: make(map[string]string),
 	}
 
 	// Apply initial sort
@@ -329,6 +339,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.listViewport.Height = viewportHeight
 		}
 
+		// Card bodies are rendered for a specific width/layout; drop them all
+		// so cards re-render at the new dimensions
+		clear(m.cardBodyCache)
+
 		// Update viewport content based on current view (dimensions changed)
 		if m.viewMode == ViewDetail {
 			m.updateDetailViewportContent()
@@ -342,6 +356,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		// Advance spinner animation frame (use large cycle to allow text animation to complete)
 		m.spinnerFrame = (m.spinnerFrame + 1) % 10000
+		// Refresh list content so dynamic chrome (spinners, backoff countdowns,
+		// running durations) stays fresh even when no results are arriving.
+		// Card bodies are cached, so this only re-renders chrome. The detail
+		// view's chrome lives outside its viewport and is already re-rendered
+		// on every View call.
+		if m.viewMode == ViewList {
+			m.updateListViewportContent()
+		}
 		return m, m.spinnerTickCmd()
 
 	case collectStartedMsg:
@@ -363,15 +385,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Check if this is a completion signal (empty alias means channel closed)
 		if msg.alias == "" {
 			m.collecting = false
+			// Re-sort once per collection round (statuses/metrics may have
+			// changed) instead of on every per-host result
+			m.sortHosts()
+			if m.viewMode == ViewList {
+				m.updateListViewportContent()
+			}
 			return m, nil
 		}
 
 		// Update this specific host's state immediately
 		m.lastUpdate = msg.time
 		m.updateHostResult(msg)
-		// Update viewport content based on current view
+		// Update viewport content based on current view. The detail view only
+		// shows the selected host, so skip regen for other hosts' results.
 		if m.viewMode == ViewDetail {
-			m.updateDetailViewportContent()
+			if msg.alias == m.SelectedHost() {
+				m.updateDetailViewportContent()
+			}
 		} else {
 			m.updateListViewportContent()
 		}
@@ -497,8 +528,13 @@ func pollResultsCmd(results <-chan HostResult, cancel context.CancelFunc) tea.Cm
 }
 
 // updateHostResult updates the model state for a single host result (streaming mode).
+// Sorting is deferred to the end of the collection round (see the completion
+// sentinel in Update) so a round costs one sort instead of one per host.
 func (m *Model) updateHostResult(msg hostResultMsg) {
 	alias := msg.alias
+
+	// This host has new data: drop its cached card body so it re-renders
+	delete(m.cardBodyCache, alias)
 
 	// Update connection state based on result
 	if state, ok := m.connState[alias]; ok {
@@ -534,7 +570,6 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 			m.errors[alias] = msg.error
 		}
 		delete(m.lockInfo, alias)
-		m.sortHosts()
 		return
 	}
 
@@ -569,9 +604,6 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 
 	// Clear any previous error
 	delete(m.errors, alias)
-
-	// Re-sort hosts since status may have changed
-	m.sortHosts()
 }
 
 // OnlineCount returns the number of hosts that are online (idle or running).

@@ -191,24 +191,29 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case key.Matches(msg, keys.SelectPrev):
 		if m.viewMode == ViewList && m.selected > 0 {
 			m.selected--
+			// Regenerate viewport content so the highlight moves immediately
+			m.updateListViewportContent()
 		}
 		return true, nil
 
 	case key.Matches(msg, keys.SelectNext):
 		if m.viewMode == ViewList && m.selected < len(m.hosts)-1 {
 			m.selected++
+			m.updateListViewportContent()
 		}
 		return true, nil
 
 	case key.Matches(msg, keys.SelectFirst):
-		if m.viewMode == ViewList {
+		if m.viewMode == ViewList && m.selected != 0 {
 			m.selected = 0
+			m.updateListViewportContent()
 		}
 		return true, nil
 
 	case key.Matches(msg, keys.SelectLast):
-		if m.viewMode == ViewList && len(m.hosts) > 0 {
+		if m.viewMode == ViewList && len(m.hosts) > 0 && m.selected != len(m.hosts)-1 {
 			m.selected = len(m.hosts) - 1
+			m.updateListViewportContent()
 		}
 		return true, nil
 

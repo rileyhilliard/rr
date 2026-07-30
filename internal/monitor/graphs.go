@@ -2,9 +2,75 @@ package monitor
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+// surfaceStyleCache caches graph cell styles keyed by foreground color.
+// The color set is small and fixed (gradient palette, threshold colors, and
+// custom ColorFunc outputs), so caching avoids re-building a lipgloss.Style
+// and its ANSI sequences for every rendered cell. sync.Map keeps reads
+// lock-free on the hot path.
+var surfaceStyleCache sync.Map // lipgloss.Color -> cachedSurfaceStyle
+
+// cachedSurfaceStyle holds a graph cell style plus its pre-rendered ANSI
+// escape prefix/suffix, so styling a run of characters is plain string
+// concatenation instead of a full lipgloss render.
+type cachedSurfaceStyle struct {
+	style     lipgloss.Style
+	prefix    string
+	suffix    string
+	sequenced bool // prefix/suffix extraction succeeded
+}
+
+// styleProbe is a marker that never appears in graph output, used to split a
+// rendered string into its ANSI prefix and suffix.
+const styleProbe = "\x00"
+
+// surfaceStyle returns the cached style entry for the given foreground color
+// on the standard graph surface background.
+func surfaceStyle(color lipgloss.Color) cachedSurfaceStyle {
+	if cached, ok := surfaceStyleCache.Load(color); ok {
+		return cached.(cachedSurfaceStyle)
+	}
+	style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
+	entry := cachedSurfaceStyle{style: style}
+	rendered := style.Render(styleProbe)
+	if idx := strings.Index(rendered, styleProbe); idx >= 0 {
+		entry.prefix = rendered[:idx]
+		entry.suffix = rendered[idx+len(styleProbe):]
+		entry.sequenced = true
+	}
+	surfaceStyleCache.Store(color, entry)
+	return entry
+}
+
+// render writes s styled with the cached ANSI sequences to b, falling back to
+// a full lipgloss render if sequence extraction failed.
+func (c cachedSurfaceStyle) render(b *strings.Builder, s string) {
+	if c.sequenced {
+		b.WriteString(c.prefix)
+		b.WriteString(s)
+		b.WriteString(c.suffix)
+		return
+	}
+	b.WriteString(c.style.Render(s))
+}
+
+// renderColorRuns writes chars to b, merging consecutive characters that share
+// the same color into a single styled segment. This collapses hundreds of
+// per-character style renders (and ANSI escape pairs) into one per run.
+// chars and colors must be the same length.
+func renderColorRuns(b *strings.Builder, chars []rune, colors []lipgloss.Color) {
+	runStart := 0
+	for i := 1; i <= len(chars); i++ {
+		if i == len(chars) || colors[i] != colors[runStart] {
+			surfaceStyle(colors[runStart]).render(b, string(chars[runStart:i]))
+			runStart = i
+		}
+	}
+}
 
 // Braille character rendering for high-resolution terminal graphs.
 //
@@ -175,28 +241,28 @@ func RenderBrailleSparklineWithOptions(data []float64, width, height int, baseCo
 		}
 	}
 
-	// Convert grid to string with per-column coloring based on data values
+	// Determine the color for each character column once (colors depend only
+	// on column data, so they are identical across rows)
+	colColors := make([]lipgloss.Color, width)
+	for colIdx := range colColors {
+		switch {
+		case colorFunc != nil:
+			// Custom color function provided
+			colColors[colIdx] = colorFunc(colMaxValues[colIdx])
+		case isPercentage:
+			// Default: use metric gradient for percentage data
+			colColors[colIdx] = MetricColor(colMaxValues[colIdx])
+		default:
+			// Default: use base color for non-percentage data
+			colColors[colIdx] = baseColor
+		}
+	}
+
+	// Convert grid to string, merging same-colored runs into single segments
 	var lines []string
 	for _, row := range grid {
 		var lineBuilder strings.Builder
-		for colIdx, char := range row {
-			// Determine color based on max value at this column
-			var color lipgloss.Color
-			if colorFunc != nil {
-				// Custom color function provided
-				color = colorFunc(colMaxValues[colIdx])
-			} else if isPercentage {
-				// Default: use metric gradient for percentage data
-				color = MetricColor(colMaxValues[colIdx])
-			} else {
-				// Default: use base color for non-percentage data
-				color = baseColor
-			}
-
-			// Apply both foreground and background color
-			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
-			lineBuilder.WriteString(style.Render(string(char)))
-		}
+		renderColorRuns(&lineBuilder, row, colColors)
 		lines = append(lines, lineBuilder.String())
 	}
 
@@ -230,26 +296,27 @@ func RenderGradientBarWithColorFunc(width int, percent float64, colorFunc ColorF
 		filled = width
 	}
 
-	var result strings.Builder
+	chars := make([]rune, width)
+	colors := make([]lipgloss.Color, width)
 	for i := 0; i < width; i++ {
 		if i < filled {
 			// Color based on position in the bar (gradient effect)
 			posPercent := float64(i+1) / float64(width) * 100
-			var color lipgloss.Color
 			if colorFunc != nil {
-				color = colorFunc(posPercent)
+				colors[i] = colorFunc(posPercent)
 			} else {
-				color = MetricColor(posPercent)
+				colors[i] = MetricColor(posPercent)
 			}
-			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
-			result.WriteString(style.Render("▰"))
+			chars[i] = '▰'
 		} else {
 			// Empty portion - use muted color
-			style := lipgloss.NewStyle().Foreground(ColorTextMuted).Background(ColorSurfaceBg)
-			result.WriteString(style.Render("▱"))
+			colors[i] = ColorTextMuted
+			chars[i] = '▱'
 		}
 	}
 
+	var result strings.Builder
+	renderColorRuns(&result, chars, colors)
 	return result.String()
 }
 

@@ -141,6 +141,24 @@ func truncateErrorMsg(errMsg string, maxLen int) string {
 	return msg
 }
 
+// cachedCardBody returns the cached rendered body (graphs/metric sections) for
+// a host, invoking render on a cache miss. The body depends only on the host's
+// metrics, history, and the card width, so it stays valid between results.
+// Invalidation happens in model.go: per-host when that host gets a new result,
+// and wholesale on resize (bodies are width/layout-dependent). Dynamic chrome
+// (spinners, countdowns, selection border) is never cached.
+func (m Model) cachedCardBody(host string, render func() string) string {
+	if m.cardBodyCache == nil {
+		return render()
+	}
+	if body, ok := m.cardBodyCache[host]; ok {
+		return body
+	}
+	body := render()
+	m.cardBodyCache[host] = body
+	return body
+}
+
 // renderCardLine renders a text line with symmetric padding and background fill.
 // Adds 1-space padding on each side for consistent card layout.
 func renderCardLine(content string, width int) string {
@@ -279,49 +297,62 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 			lines = append(lines, renderCardLine("", innerWidth))
 		}
 	} else {
-		// Divider after host name
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// CPU metrics with braille graph
-		cpuLines := m.renderCardCPUSection(host, metrics.CPU, innerWidth)
-		lines = append(lines, cpuLines...)
-
-		// GPU metrics with braille graph (if available)
-		if metrics.GPU != nil {
-			lines = append(lines, renderCardDivider(innerWidth))
-			gpuLines := m.renderCardGPUSection(host, metrics.GPU, innerWidth)
-			lines = append(lines, gpuLines...)
-		}
-
-		// Latency metrics with braille graph (if available)
-		latencyLines := m.renderCardLatencySection(host, innerWidth)
-		if len(latencyLines) > 0 {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, latencyLines...)
-		}
-
-		// RAM metrics with braille graph
-		lines = append(lines, renderCardDivider(innerWidth))
-		ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
-		lines = append(lines, ramLines...)
-
-		// Top process (with divider if present)
-		if len(metrics.Processes) > 0 {
-			lines = append(lines, renderCardDivider(innerWidth))
-			topLine := m.renderCardTopProcess(metrics.Processes, innerWidth)
-			lines = append(lines, renderCardLine(topLine, innerWidth))
-		}
-
-		// Network rates (with divider if present)
-		netLine := m.renderCardNetworkLine(host, innerWidth)
-		if netLine != "" {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(netLine, innerWidth))
-		}
+		// Expensive metric body: cached per host, invalidated on new results
+		lines = append(lines, m.cachedCardBody(host, func() string {
+			return m.renderCardBody(host, metrics, innerWidth)
+		}))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderCardBody renders the metric sections of a full card: divider,
+// CPU/GPU/latency/RAM graphs, top process, and network rates.
+func (m Model) renderCardBody(host string, metrics *HostMetrics, innerWidth int) string {
+	var lines []string
+
+	// Divider after host name
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// CPU metrics with braille graph
+	cpuLines := m.renderCardCPUSection(host, metrics.CPU, innerWidth)
+	lines = append(lines, cpuLines...)
+
+	// GPU metrics with braille graph (if available)
+	if metrics.GPU != nil {
+		lines = append(lines, renderCardDivider(innerWidth))
+		gpuLines := m.renderCardGPUSection(host, metrics.GPU, innerWidth)
+		lines = append(lines, gpuLines...)
+	}
+
+	// Latency metrics with braille graph (if available)
+	latencyLines := m.renderCardLatencySection(host, innerWidth)
+	if len(latencyLines) > 0 {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, latencyLines...)
+	}
+
+	// RAM metrics with braille graph
+	lines = append(lines, renderCardDivider(innerWidth))
+	ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
+	lines = append(lines, ramLines...)
+
+	// Top process (with divider if present)
+	if len(metrics.Processes) > 0 {
+		lines = append(lines, renderCardDivider(innerWidth))
+		topLine := m.renderCardTopProcess(metrics.Processes, innerWidth)
+		lines = append(lines, renderCardLine(topLine, innerWidth))
+	}
+
+	// Network rates (with divider if present)
+	netLine := m.renderCardNetworkLine(host, innerWidth)
+	if netLine != "" {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, renderCardLine(netLine, innerWidth))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // renderHostLine renders the host name with status indicator and status text.
@@ -742,34 +773,47 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 			}
 		}
 	} else {
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// CPU with single-row sparkline
-		cpuLines := m.renderCompactCPUSection(host, metrics.CPU, innerWidth)
-		lines = append(lines, cpuLines...)
-
-		// GPU with single-row sparkline (if available)
-		if metrics.GPU != nil {
-			lines = append(lines, renderCardDivider(innerWidth))
-			gpuLines := m.renderCompactGPUSection(host, metrics.GPU, innerWidth)
-			lines = append(lines, gpuLines...)
-		}
-
-		// Latency with single-row sparkline (if available)
-		latencyLines := m.renderCompactLatencySection(host, innerWidth)
-		if len(latencyLines) > 0 {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, latencyLines...)
-		}
-
-		// RAM with single-row sparkline
-		lines = append(lines, renderCardDivider(innerWidth))
-		ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
-		lines = append(lines, ramLines...)
+		// Expensive metric body: cached per host, invalidated on new results
+		lines = append(lines, m.cachedCardBody(host, func() string {
+			return m.renderCompactCardBody(host, metrics, innerWidth)
+		}))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderCompactCardBody renders the metric sections of a compact card:
+// divider plus single-row CPU/GPU/latency/RAM sparklines.
+func (m Model) renderCompactCardBody(host string, metrics *HostMetrics, innerWidth int) string {
+	var lines []string
+
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// CPU with single-row sparkline
+	cpuLines := m.renderCompactCPUSection(host, metrics.CPU, innerWidth)
+	lines = append(lines, cpuLines...)
+
+	// GPU with single-row sparkline (if available)
+	if metrics.GPU != nil {
+		lines = append(lines, renderCardDivider(innerWidth))
+		gpuLines := m.renderCompactGPUSection(host, metrics.GPU, innerWidth)
+		lines = append(lines, gpuLines...)
+	}
+
+	// Latency with single-row sparkline (if available)
+	latencyLines := m.renderCompactLatencySection(host, innerWidth)
+	if len(latencyLines) > 0 {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, latencyLines...)
+	}
+
+	// RAM with single-row sparkline
+	lines = append(lines, renderCardDivider(innerWidth))
+	ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
+	lines = append(lines, ramLines...)
+
+	return strings.Join(lines, "\n")
 }
 
 // renderCompactCPUSection renders CPU with a single-row braille graph for compact mode.
@@ -995,21 +1039,34 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 		}
 		lines = append(lines, renderCardLine(LabelStyle.Render(placeholder), innerWidth))
 	} else {
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// CPU with single-row sparkline
-		cpuLines := m.renderMinimalCPUSection(host, metrics.CPU, innerWidth)
-		lines = append(lines, cpuLines...)
-
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// RAM as text only (keep it minimal)
-		metricsLine := m.renderMinimalMetricsLine(metrics, contentWidth)
-		lines = append(lines, renderCardLine(metricsLine, innerWidth))
+		// Expensive metric body: cached per host, invalidated on new results
+		lines = append(lines, m.cachedCardBody(host, func() string {
+			return m.renderMinimalCardBody(host, metrics, innerWidth, contentWidth)
+		}))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderMinimalCardBody renders the metric sections of a minimal card:
+// CPU sparkline plus a text metrics line.
+func (m Model) renderMinimalCardBody(host string, metrics *HostMetrics, innerWidth, contentWidth int) string {
+	var lines []string
+
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// CPU with single-row sparkline
+	cpuLines := m.renderMinimalCPUSection(host, metrics.CPU, innerWidth)
+	lines = append(lines, cpuLines...)
+
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// RAM as text only (keep it minimal)
+	metricsLine := m.renderMinimalMetricsLine(metrics, contentWidth)
+	lines = append(lines, renderCardLine(metricsLine, innerWidth))
+
+	return strings.Join(lines, "\n")
 }
 
 // renderMinimalHostLine renders the hostname, truncating if necessary.
