@@ -21,17 +21,15 @@ type CPUMetrics struct {
 	LoadAvg [3]float64
 	PerCore []float64 // Per-core usage percentages (Linux only; empty on first sample)
 	TempC   float64   // CPU temperature in Celsius (0 = unavailable)
+	// FirstSample is set by the collector when no delta baseline existed yet,
+	// so Percent misleadingly reads 0. Only Linux CPU usage is delta-based;
+	// macOS reads instantaneous usage from `top` and never sets this.
+	FirstSample bool
 }
 
 // Valid reports whether Percent reflects a real measurement.
-//
-// Linux CPU usage is a delta between two /proc/stat reads, so the first sample
-// for a host always reports 0% rather than an actual reading. Those samples fill
-// in Cores (from /proc/stat) but leave PerCore empty, which is what we key off.
-// macOS reads instantaneous usage from `top` and reports Cores as 0, so its
-// samples are always valid.
 func (c CPUMetrics) Valid() bool {
-	return c.Cores == 0 || len(c.PerCore) > 0
+	return !c.FirstSample
 }
 
 // DiskMetrics contains root filesystem usage and disk I/O rates.

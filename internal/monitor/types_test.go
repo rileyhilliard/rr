@@ -106,7 +106,7 @@ func TestCPUMetrics_Valid(t *testing.T) {
 			// Linux first sample: /proc/stat gives core count but there's no
 			// previous reading to delta against, so Percent is a bogus 0
 			name:  "linux first sample has no delta",
-			cpu:   CPUMetrics{Percent: 0, Cores: 16},
+			cpu:   CPUMetrics{Percent: 0, Cores: 16, FirstSample: true},
 			valid: false,
 		},
 		{
@@ -115,14 +115,14 @@ func TestCPUMetrics_Valid(t *testing.T) {
 			valid: true,
 		},
 		{
-			// macOS reads instantaneous usage from top and reports Cores as 0
+			// macOS reads instantaneous usage from top; never a first-sample zero
 			name:  "darwin sample is always valid",
-			cpu:   CPUMetrics{Percent: 33.3, Cores: 0},
+			cpu:   CPUMetrics{Percent: 33.3, Cores: 10},
 			valid: true,
 		},
 		{
 			name:  "darwin zero usage is still a real reading",
-			cpu:   CPUMetrics{Percent: 0, Cores: 0},
+			cpu:   CPUMetrics{Percent: 0, Cores: 10},
 			valid: true,
 		},
 	}

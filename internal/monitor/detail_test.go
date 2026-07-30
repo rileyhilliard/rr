@@ -435,12 +435,13 @@ func TestModel_renderDetailCPUSection_WarmingUp(t *testing.T) {
 
 	// Linux first sample: Cores set but no per-core deltas yet. The bogus 0.0%
 	// must not be shown as a real reading.
-	cpu := CPUMetrics{Percent: 0, Cores: 8}
+	cpu := CPUMetrics{Percent: 0, Cores: 8, FirstSample: true}
 	result := m.renderDetailCPUSection("server1", cpu, 80)
 	assert.Contains(t, result, cpuWarmingUpText)
 	assert.NotContains(t, result, "0.0%")
 
 	// Once per-core deltas arrive, the real percentage is shown
+	cpu.FirstSample = false
 	cpu.Percent = 12.5
 	cpu.PerCore = []float64{10, 15, 12, 13, 11, 14, 12, 13}
 	result = m.renderDetailCPUSection("server1", cpu, 80)
@@ -456,7 +457,7 @@ func TestModel_renderCardCPUSection_WarmingUp(t *testing.T) {
 	m := NewModel(collector, time.Second, 0, nil)
 	m.width = 160
 
-	cpu := CPUMetrics{Percent: 0, Cores: 8, LoadAvg: [3]float64{1.5, 1.2, 1.0}}
+	cpu := CPUMetrics{Percent: 0, Cores: 8, LoadAvg: [3]float64{1.5, 1.2, 1.0}, FirstSample: true}
 	full := strings.Join(m.renderCardCPUSection("server1", cpu, 60), "\n")
 	assert.Contains(t, full, cpuWarmingUpText)
 
