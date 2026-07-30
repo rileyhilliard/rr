@@ -1024,3 +1024,21 @@ func TestValidatedRunOffset_TraversalGuard(t *testing.T) {
 		})
 	}
 }
+
+// TestOffsetRunDir pins that a validated offset resolves without re-stat'ing.
+// Run validates the explicit --cwd, then executes; deriving the directory a
+// second time through localRunDir would re-check the filesystem and degrade to
+// the project root, silently discarding a --cwd that had just passed.
+func TestOffsetRunDir(t *testing.T) {
+	root := t.TempDir()
+	wf := newTestWorkflowContext(root, "")
+	wf.WorkDir = root
+
+	assert.Equal(t, root, offsetRunDir(wf, ""), "empty offset is the project root")
+	assert.Equal(t, filepath.Join(root, "sub"), offsetRunDir(wf, "sub"))
+	assert.Equal(t, filepath.Join(root, "a", "b"), offsetRunDir(wf, "a/b"))
+
+	// The point of the split: a directory that no longer exists still resolves,
+	// because validation already happened and re-deciding here would undo it.
+	assert.Equal(t, filepath.Join(root, "vanished"), offsetRunDir(wf, "vanished"))
+}

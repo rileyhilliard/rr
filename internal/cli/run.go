@@ -105,7 +105,11 @@ func Run(opts RunOptions) (int, error) {
 		if offset != "" && opts.RemoteCWD == "" {
 			reportAutoCWD(wf, offset)
 		}
-		exitCode, err = exec.ExecuteLocal(opts.Command, localRunDir(wf, opts), streamHandler.Stdout(), streamHandler.Stderr())
+		// Run in the directory just validated rather than recomputing it:
+		// localRunDir re-stats and degrades to the project root, so a second
+		// computation could silently discard an explicit --cwd that passed
+		// validation a moment ago.
+		exitCode, err = exec.ExecuteLocal(opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
 		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
@@ -344,7 +348,14 @@ func autoSubdirOffset(wf *WorkflowContext) string {
 // invocations behave differently depending on whether a host happened to answer.
 // Falls back to the project root when the offset doesn't resolve.
 func localRunDir(wf *WorkflowContext, opts RunOptions) string {
-	offset := effectiveRunOffset(wf, opts)
+	return offsetRunDir(wf, effectiveRunOffset(wf, opts))
+}
+
+// offsetRunDir resolves an already-computed offset to an absolute directory.
+// Callers that have validated an offset use this instead of localRunDir so the
+// directory is derived once - re-deriving it re-stats the path and can degrade
+// to the project root, discarding an explicit --cwd that already passed.
+func offsetRunDir(wf *WorkflowContext, offset string) string {
 	if offset == "" {
 		return wf.WorkDir
 	}
