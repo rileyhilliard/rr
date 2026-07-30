@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Jest/vitest runs get a test summary** - `JestFormatter` implemented neither `GetTestCounts` nor `GetTestFailures`, so `details.summary` was omitted for *every* JS/TS run, passing suites included. Now populated from the parsed counts.
+- **`--cwd` can no longer escape the project root on local runs** - The remote path rejected a traversing `--cwd`, but local and `local_fallback` execution applied it with only an existence check, so `rr run --local --cwd ../ "cat outside.txt"` ran outside the project and exited 0. Both paths now return the same structured error.
 - **`rr init` documents `local_fallback` accurately** - The generated template described it as a boolean; it takes `never` / `on-unreachable` / `always` (booleans still accepted).
 
 ## [0.23.1] - 2026-07-26

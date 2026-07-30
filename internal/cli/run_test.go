@@ -956,3 +956,53 @@ func TestLocalRunDir(t *testing.T) {
 			localRunDir(wf, RunOptions{RemoteCWD: "backend"}))
 	})
 }
+
+// TestValidatedRunOffset_TraversalGuard - an escaping --cwd must be rejected on
+// the local path too. buildRemoteRunCommand has always rejected it, but the
+// local/local_fallback path applied opts.RemoteCWD with only an existence
+// check, so `rr run --local --cwd ../ "cat outside.txt"` read a file outside the
+// project and exited 0. Identical invocations must not be an error remotely and
+// a silent escape locally.
+func TestValidatedRunOffset_TraversalGuard(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+
+	wf := newTestWorkflowContext(root, "")
+	wf.WorkDir = root
+
+	tests := []struct {
+		name    string
+		cwd     string
+		offset  string
+		want    string
+		wantErr bool
+	}{
+		{name: "explicit cwd inside root", cwd: "sub", want: "sub"},
+		{name: "explicit cwd escapes root", cwd: "../", wantErr: true},
+		{name: "explicit cwd escapes deeper", cwd: "../../etc", wantErr: true},
+		// "." is passed through rather than normalized away; it joins to the
+		// root either way, and normalizeOffset reduces it for display.
+		{name: "explicit cwd is the root", cwd: ".", want: "."},
+		{name: "no cwd, no offset", want: ""},
+		{name: "auto offset inside root", offset: "sub", want: "sub"},
+		// An auto offset can't escape (subdirOffset filters ".."), and it's
+		// implicit, so it falls back to the root rather than erroring.
+		{name: "auto offset escaping falls back quietly", offset: "../oops", want: ""},
+		{name: "auto offset missing on disk", offset: "gone", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wf.SubdirOffset = tt.offset
+			got, err := validatedRunOffset(wf, RunOptions{RemoteCWD: tt.cwd})
+			if tt.wantErr {
+				require.Error(t, err, "escaping --cwd must be rejected")
+				assert.Contains(t, err.Error(), "escapes the project root")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

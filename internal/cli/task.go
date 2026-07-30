@@ -321,7 +321,11 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 		wf.PhaseDisplay.ThinDivider()
 		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 		repeatFallbackWarning(wf.ResultDetails)
-		warnNoTests(wf.ResultDetails)
+		// No warnNoTests here: deps.TaskExecutionResult carries only a name,
+		// exit code, and duration - no command or output for a formatter to
+		// read - so nothing ever sets no_tests on this path. Calling it would
+		// be dead code that reads as coverage. Surfacing zero-test subtasks in
+		// dependency chains needs output capture plumbed through the executor.
 	} else {
 		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}

@@ -90,10 +90,17 @@ func Run(opts RunOptions) (int, error) {
 	remoteProjectDir := ""
 
 	if wf.Conn.IsLocal {
+		// Validate here rather than in localRunDir: an escaping --cwd must fail
+		// the run the same way it does remotely, not quietly fall back.
+		offset, offsetErr := validatedRunOffset(wf, opts)
+		if offsetErr != nil {
+			wf.Reporter.PhaseFailed("exec", offsetErr)
+			return 1, offsetErr
+		}
 		// Report the offset here too: a local (or fallback) run applies the same
 		// subdirectory, and a consumer can't tell which directory was used
 		// otherwise.
-		if offset := effectiveRunOffset(wf, opts); offset != "" {
+		if offset != "" {
 			reportAutoCWD(wf, offset)
 		}
 		exitCode, err = exec.ExecuteLocal(opts.Command, localRunDir(wf, opts), streamHandler.Stdout(), streamHandler.Stderr())
@@ -347,19 +354,42 @@ func localRunDir(wf *WorkflowContext, opts RunOptions) string {
 // when neither applies or the directory doesn't exist locally, matching the
 // soft cd's fallback to the project root.
 func effectiveRunOffset(wf *WorkflowContext, opts RunOptions) string {
-	offset := opts.RemoteCWD
-	if offset == "" {
-		offset = autoSubdirOffset(wf)
-	}
-	if offset == "" {
-		return ""
-	}
-
-	dir := filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	offset, err := validatedRunOffset(wf, opts)
+	if err != nil {
 		return ""
 	}
 	return offset
+}
+
+// validatedRunOffset is effectiveRunOffset with the traversal check surfaced,
+// so the local path can reject an escaping --cwd instead of silently running
+// outside the project. Same guard the remote path applies in
+// buildRemoteRunCommand - an identical invocation must not be an error on one
+// and a silent escape on the other.
+func validatedRunOffset(wf *WorkflowContext, opts RunOptions) (string, error) {
+	offset := opts.RemoteCWD
+	explicit := offset != ""
+	if !explicit {
+		offset = autoSubdirOffset(wf)
+	}
+	if offset == "" {
+		return "", nil
+	}
+
+	dir := filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(dir+sep, wf.WorkDir+sep) {
+		if explicit {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' escapes the project root", opts.RemoteCWD),
+				"use a path relative to the project root without '..' components")
+		}
+		return "", nil
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", nil
+	}
+	return offset, nil
 }
 
 // reportAutoCWD records the implicit working directory so the behavior is
