@@ -57,6 +57,12 @@ func attachRunOutcome(wf *WorkflowContext, command, logPath string, exitCode int
 
 	if summary, ok := formatters.ExtractTestSummary(command, data); ok {
 		wf.AddResultDetail("summary", summary)
+		if summary.NoTests {
+			// A run that collected nothing looks identical to a clean suite if
+			// we only report counts, so call it out explicitly. Reported, not
+			// fatal: the exit code stays whatever the runner returned.
+			wf.AddResultDetail("no_tests", true)
+		}
 	}
 
 	if exitCode != 0 {

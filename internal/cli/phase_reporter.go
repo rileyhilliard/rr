@@ -77,6 +77,18 @@ func (r *PrettyReporter) CommandPrompt(command string) {
 func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	renderFinalStatus(r.pd, exitCode, totalDuration, execDuration, host)
 	repeatFallbackWarning(extra)
+	warnNoTests(extra)
+}
+
+// warnNoTests prints a warning when the test runner executed nothing. Exit
+// codes stay untouched, so without this a zero-test run is visually
+// indistinguishable from a clean suite.
+func warnNoTests(details map[string]interface{}) {
+	if noTests, ok := details["no_tests"].(bool); !ok || !noTests {
+		return
+	}
+	ui.PrintWarning("No tests ran - the runner collected zero tests. " +
+		"Check the path or filter you passed; relative paths resolve from the project root on the remote.")
 }
 
 // repeatFallbackWarning re-prints the local-fallback warning after the final

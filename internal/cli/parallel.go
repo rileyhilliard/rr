@@ -218,6 +218,9 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		if result.Failed > 0 {
 			details["failures"] = extractTaskFailures(result, logDir)
 		}
+		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+			details["no_tests"] = noTests
+		}
 		WritePhaseEvent(PhaseEvent{
 			Type:     "result",
 			Status:   map[bool]string{true: "success", false: "failed"}[result.Failed == 0],
@@ -234,6 +237,21 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 
 const maxOutputTailLines = 20
 const maxFailureMessageLen = 500
+
+// tasksWithoutTests names the subtasks whose runner collected zero tests.
+// Sharded suites make this easy to miss: the aggregate says "3 passed" while
+// one shard's path filter matched nothing. Reported per subtask, never fatal -
+// forwarded filters (forward_args) legitimately leave some shards empty.
+func tasksWithoutTests(result *parallel.Result) []string {
+	var names []string
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		if formatters.DetectNoTests(tr.Command, tr.Output) {
+			names = append(names, tr.TaskName)
+		}
+	}
+	return names
+}
 
 // extractTaskFailures builds structured failure info for machine-mode output.
 // When logDir is non-empty, each failure carries the path of its saved log.

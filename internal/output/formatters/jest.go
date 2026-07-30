@@ -50,6 +50,9 @@ type JestFormatter struct {
 	testsFailed  int
 	testsTotal   int
 	duration     string
+
+	// noTestsRan is set by vitest's explicit "Tests  no tests" summary.
+	noTestsRan bool
 }
 
 // NewJestFormatter creates a Jest output formatter.
@@ -85,7 +88,12 @@ var (
 	// Summary lines
 	jestSuiteSummaryPattern = regexp.MustCompile(`Test Suites:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total`)
 	jestTestSummaryPattern  = regexp.MustCompile(`Tests:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total`)
-	jestTimeSummaryPattern  = regexp.MustCompile(`Time:\s+(.+)`)
+
+	// Vitest prints a colon-less summary and, when nothing was collected,
+	// the literal "no tests" where a count would be: "Tests  no tests".
+	// Neither summary pattern above matches that form.
+	jestNoTestsPattern     = regexp.MustCompile(`^\s*Tests\s+no tests\s*$`)
+	jestTimeSummaryPattern = regexp.MustCompile(`Time:\s+(.+)`)
 
 	// Stack trace indicator (line starting with "at ")
 	jestStackTracePattern = regexp.MustCompile(`^\s+at\s+`)
@@ -102,6 +110,11 @@ func (f *JestFormatter) ProcessLine(line string) string {
 			jestTestSummaryPattern.MatchString(line) {
 			f.finishFailure()
 		}
+	}
+
+	// Vitest's explicit zero-collection summary.
+	if jestNoTestsPattern.MatchString(line) {
+		f.noTestsRan = true
 	}
 
 	// PASS suite line
@@ -353,6 +366,22 @@ func (f *JestFormatter) Reset() {
 	f.testsFailed = 0
 	f.testsTotal = 0
 	f.duration = ""
+	f.noTestsRan = false
+}
+
+// RanNothing implements output.NoTestsReporter.
+//
+// True only when the reporter explicitly said no tests ran (vitest's
+// "Tests  no tests") or a summary line reported a zero total. An absent
+// summary is not evidence - plenty of non-test output scores as jest.
+func (f *JestFormatter) RanNothing() bool {
+	if len(f.tests) > 0 {
+		return false
+	}
+	if f.testsPassed+f.testsFailed+f.testsTotal > 0 {
+		return false
+	}
+	return f.noTestsRan
 }
 
 // bulletPoint is used in summary output.
