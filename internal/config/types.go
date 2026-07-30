@@ -552,7 +552,7 @@ func DefaultConfig() *Config {
 			Verbosity: "normal",
 		},
 		Monitor: MonitorConfig{
-			Interval: "2s",
+			Interval: "1s",
 			Timeout:  "8s",
 			Thresholds: ThresholdConfig{
 				CPU: ThresholdValues{Warning: 70, Critical: 90},

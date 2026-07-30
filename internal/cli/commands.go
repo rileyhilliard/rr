@@ -265,9 +265,11 @@ Examples:
 		}
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Parse interval
-		interval := 2 * time.Second
-		if monitorIntervalFlag != "" {
+		// Parse the interval only when the flag was explicitly set; otherwise
+		// monitorCommand resolves it from project config (falling back to 1s).
+		var interval time.Duration
+		intervalSet := cmd.Flags().Changed("interval")
+		if intervalSet {
 			parsed, err := time.ParseDuration(monitorIntervalFlag)
 			if err != nil {
 				return errors.WrapWithCode(err, errors.ErrConfig,
@@ -282,7 +284,7 @@ Examples:
 			interval = parsed
 		}
 
-		return monitorCommand(monitorHostsFlag, interval)
+		return monitorCommand(monitorHostsFlag, interval, intervalSet)
 	},
 }
 

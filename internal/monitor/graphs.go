@@ -206,6 +206,13 @@ func RenderBrailleSparklineWithOptions(data []float64, width, height int, baseCo
 // RenderGradientBar renders a horizontal bar with gradient fill.
 // Colors transition from green to yellow to red based on position.
 func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
+	return RenderGradientBarWithColorFunc(width, percent, nil)
+}
+
+// RenderGradientBarWithColorFunc renders a horizontal gradient bar with custom coloring.
+// If colorFunc is provided, it's called with each cell's position percentage to determine color.
+// If colorFunc is nil, falls back to the default MetricColor thresholds.
+func RenderGradientBarWithColorFunc(width int, percent float64, colorFunc ColorFunc) string {
 	if width < 1 {
 		width = 1
 	}
@@ -228,7 +235,12 @@ func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
 		if i < filled {
 			// Color based on position in the bar (gradient effect)
 			posPercent := float64(i+1) / float64(width) * 100
-			color := MetricColor(posPercent)
+			var color lipgloss.Color
+			if colorFunc != nil {
+				color = colorFunc(posPercent)
+			} else {
+				color = MetricColor(posPercent)
+			}
 			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
 			result.WriteString(style.Render("▰"))
 		} else {

@@ -967,7 +967,7 @@ monitor:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `interval` | duration | `2s` | Time between metric updates. |
+| `interval` | duration | `1s` | Time between metric updates. |
 | `thresholds` | object | see below | Threshold settings for metric coloring. |
 | `exclude` | list | `[]` | Host names to exclude from the monitor. |
 

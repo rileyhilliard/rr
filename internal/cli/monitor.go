@@ -13,9 +13,17 @@ import (
 )
 
 // monitorCommand starts the TUI monitoring dashboard.
-func monitorCommand(hostsFilter string, interval time.Duration) error {
+// interval is only meaningful when intervalSet is true (--interval flag used);
+// otherwise the interval is resolved from project config with a 1s default.
+func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool) error {
 	// Load resolved config to get proper host ordering
 	resolved, err := config.LoadResolved("")
+	if err != nil {
+		return err
+	}
+
+	// Resolve refresh interval: --interval flag > monitor.interval config > 1s default
+	interval, err = resolveMonitorInterval(interval, intervalSet, resolved.Project)
 	if err != nil {
 		return err
 	}
@@ -49,6 +57,18 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 		hostOrder = filterHostOrder(hostOrder, hosts)
 	}
 
+	// Apply monitor.exclude from project config. Hosts explicitly requested
+	// via --hosts win over the exclude list.
+	if resolved.Project != nil && len(resolved.Project.Monitor.Exclude) > 0 {
+		hosts = excludeHosts(hosts, resolved.Project.Monitor.Exclude, hostsFilter)
+		if len(hosts) == 0 {
+			return errors.New(errors.ErrConfig,
+				"All hosts are excluded by monitor.exclude",
+				"Remove some entries from monitor.exclude in .rr.yaml, or request hosts explicitly with --hosts.")
+		}
+		hostOrder = filterHostOrder(hostOrder, hosts)
+	}
+
 	if len(hosts) == 0 {
 		return errors.New(errors.ErrConfig,
 			"No hosts configured",
@@ -71,8 +91,15 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 		collector.SetLockConfig(resolved.Project.Lock)
 	}
 
+	// Metric severity thresholds from project config (zero values fall back
+	// to the 70/90 defaults inside the model)
+	var thresholds config.ThresholdConfig
+	if resolved.Project != nil {
+		thresholds = resolved.Project.Monitor.Thresholds
+	}
+
 	// Create Bubble Tea model with host order for default sorting
-	model := monitor.NewModel(collector, interval, timeout, hostOrder)
+	model := monitor.NewModelWithThresholds(collector, interval, timeout, hostOrder, thresholds)
 
 	// Run the TUI program with mouse support for scrolling
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -82,6 +109,68 @@ func monitorCommand(hostsFilter string, interval time.Duration) error {
 	collector.Close()
 
 	return err
+}
+
+// resolveMonitorInterval returns the effective refresh interval.
+// Precedence: explicit --interval flag > monitor.interval from project config > 1s default.
+// Config-sourced intervals get the same >=500ms validation as the flag.
+func resolveMonitorInterval(flagInterval time.Duration, flagSet bool, project *config.Config) (time.Duration, error) {
+	if flagSet {
+		return flagInterval, nil
+	}
+
+	if project == nil || project.Monitor.Interval == "" {
+		return time.Second, nil
+	}
+
+	parsed, err := time.ParseDuration(project.Monitor.Interval)
+	if err != nil {
+		return 0, errors.WrapWithCode(err, errors.ErrConfig,
+			fmt.Sprintf("'%s' doesn't look like a valid monitor.interval", project.Monitor.Interval),
+			"Set monitor.interval in .rr.yaml to something like 1s, 2s, or 5s.")
+	}
+	if parsed < 500*time.Millisecond {
+		return 0, errors.New(errors.ErrConfig,
+			"That monitor.interval is too short",
+			"Keep monitor.interval in .rr.yaml at 500ms or above to avoid hammering the hosts.")
+	}
+
+	return parsed, nil
+}
+
+// excludeHosts removes hosts named in the monitor.exclude list.
+// Hosts explicitly requested via the --hosts filter are never excluded.
+func excludeHosts(allHosts map[string]config.Host, exclude []string, hostsFilter string) map[string]config.Host {
+	if len(exclude) == 0 {
+		return allHosts
+	}
+
+	// Hosts explicitly requested via --hosts win over the exclude list
+	requested := make(map[string]bool)
+	for _, name := range strings.Split(hostsFilter, ",") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			requested[name] = true
+		}
+	}
+
+	excluded := make(map[string]bool)
+	for _, name := range exclude {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			excluded[name] = true
+		}
+	}
+
+	result := make(map[string]config.Host)
+	for name := range allHosts {
+		if excluded[name] && !requested[name] {
+			continue
+		}
+		result[name] = allHosts[name]
+	}
+
+	return result
 }
 
 // filterHostOrder filters the host order list to only include hosts that exist in the hosts map.

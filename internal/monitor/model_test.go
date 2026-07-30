@@ -355,3 +355,94 @@ func TestModel_Update_CollectionCompleteSentinel(t *testing.T) {
 	assert.Nil(t, cmd)
 	assert.False(t, updated.(Model).collecting)
 }
+
+func TestNewModelWithThresholds(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"user@server1"}},
+	}
+
+	t.Run("custom thresholds shift class boundaries per metric", func(t *testing.T) {
+		thresholds := config.ThresholdConfig{
+			CPU: config.ThresholdValues{Warning: 50, Critical: 80},
+			RAM: config.ThresholdValues{Warning: 60, Critical: 85},
+			GPU: config.ThresholdValues{Warning: 40, Critical: 75},
+		}
+		m := NewModelWithThresholds(NewCollector(hosts), time.Second, 0, nil, thresholds)
+
+		cpuColor := thresholdColorFunc(m.thresholds.CPU)
+		assert.Equal(t, ColorHealthy, cpuColor(49.9))
+		assert.Equal(t, ColorWarning, cpuColor(50))
+		assert.Equal(t, ColorWarning, cpuColor(79.9))
+		assert.Equal(t, ColorCritical, cpuColor(80))
+
+		ramColor := thresholdColorFunc(m.thresholds.RAM)
+		assert.Equal(t, ColorHealthy, ramColor(59.9))
+		assert.Equal(t, ColorWarning, ramColor(60))
+		assert.Equal(t, ColorCritical, ramColor(85))
+
+		gpuColor := thresholdColorFunc(m.thresholds.GPU)
+		assert.Equal(t, ColorHealthy, gpuColor(39.9))
+		assert.Equal(t, ColorWarning, gpuColor(40))
+		assert.Equal(t, ColorCritical, gpuColor(75))
+
+		// The same value classifies differently across metrics with different thresholds
+		assert.Equal(t, ColorHealthy, cpuColor(45))
+		assert.Equal(t, ColorWarning, gpuColor(45))
+	})
+
+	t.Run("zero thresholds fall back to 70/90 defaults", func(t *testing.T) {
+		m := NewModelWithThresholds(NewCollector(hosts), time.Second, 0, nil, config.ThresholdConfig{})
+
+		for _, values := range []config.ThresholdValues{m.thresholds.CPU, m.thresholds.RAM, m.thresholds.GPU} {
+			color := thresholdColorFunc(values)
+			assert.Equal(t, ColorHealthy, color(69.9))
+			assert.Equal(t, ColorWarning, color(70))
+			assert.Equal(t, ColorWarning, color(89.9))
+			assert.Equal(t, ColorCritical, color(90))
+		}
+	})
+
+	t.Run("NewModel uses default thresholds", func(t *testing.T) {
+		m := NewModel(NewCollector(hosts), time.Second, 0, nil)
+
+		color := thresholdColorFunc(m.thresholds.CPU)
+		assert.Equal(t, ColorHealthy, color(69.9))
+		assert.Equal(t, ColorWarning, color(70))
+		assert.Equal(t, ColorCritical, color(90))
+	})
+}
+
+func TestNormalizeThresholdValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    config.ThresholdValues
+		expected config.ThresholdValues
+	}{
+		{
+			name:     "zero values get defaults",
+			input:    config.ThresholdValues{},
+			expected: config.ThresholdValues{Warning: 70, Critical: 90},
+		},
+		{
+			name:     "partial config keeps set value",
+			input:    config.ThresholdValues{Warning: 55},
+			expected: config.ThresholdValues{Warning: 55, Critical: 90},
+		},
+		{
+			name:     "negative values get defaults",
+			input:    config.ThresholdValues{Warning: -1, Critical: -5},
+			expected: config.ThresholdValues{Warning: 70, Critical: 90},
+		},
+		{
+			name:     "fully set config is unchanged",
+			input:    config.ThresholdValues{Warning: 40, Critical: 60},
+			expected: config.ThresholdValues{Warning: 40, Critical: 60},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, normalizeThresholdValues(tt.input))
+		})
+	}
+}

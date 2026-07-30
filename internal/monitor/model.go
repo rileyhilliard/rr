@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/config"
 )
 
 // HostStatus represents the connection state of a host.
@@ -81,7 +82,8 @@ type Model struct {
 	height     int
 	lastUpdate time.Time
 	interval   time.Duration
-	timeout    time.Duration // Per-host collection timeout
+	timeout    time.Duration          // Per-host collection timeout
+	thresholds config.ThresholdConfig // Metric severity thresholds for coloring
 	quitting   bool
 	sortOrder  SortOrder
 	viewMode   ViewMode
@@ -149,11 +151,19 @@ const (
 // spinnerInterval is the animation frame rate for the connecting spinner
 const spinnerInterval = 150 * time.Millisecond
 
-// NewModel creates a new dashboard model with the given collector.
+// NewModel creates a new dashboard model with the given collector and default
+// metric severity thresholds (warning 70, critical 90).
 // hostOrder is the priority order from config (default host first, then fallbacks).
 // If nil, hosts are sorted alphabetically.
 // timeout is the per-host collection timeout (0 uses default of 8s).
 func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder []string) Model {
+	return NewModelWithThresholds(collector, interval, timeout, hostOrder, config.ThresholdConfig{})
+}
+
+// NewModelWithThresholds creates a dashboard model with configured metric
+// severity thresholds. Zero or negative threshold values fall back to the
+// defaults (warning 70, critical 90).
+func NewModelWithThresholds(collector *Collector, interval, timeout time.Duration, hostOrder []string, thresholds config.ThresholdConfig) Model {
 	hosts := collector.Hosts()
 
 	// Store the original config order for default sorting
@@ -194,21 +204,22 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 	collector.SetTimeout(timeout)
 
 	m := Model{
-		hosts:     hosts, // Will be sorted by sortHosts
-		hostOrder: configOrder,
-		metrics:   make(map[string]*HostMetrics),
-		status:    status,
-		errors:    make(map[string]string),
-		lockInfo:  make(map[string]*HostLockInfo),
-		connState: connState,
-		sshAlias:  make(map[string]string),
-		latency:   make(map[string]time.Duration),
-		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
-		collector: collector,
-		history:   NewHistory(DefaultHistorySize),
-		interval:  interval,
-		timeout:   timeout,
-		sortOrder: SortByDefault, // Start with default sort (online first, config order)
+		hosts:      hosts, // Will be sorted by sortHosts
+		hostOrder:  configOrder,
+		metrics:    make(map[string]*HostMetrics),
+		status:     status,
+		errors:     make(map[string]string),
+		lockInfo:   make(map[string]*HostLockInfo),
+		connState:  connState,
+		sshAlias:   make(map[string]string),
+		latency:    make(map[string]time.Duration),
+		selected:   -1, // No selection yet; prevents sortHosts from preserving random initial order
+		collector:  collector,
+		history:    NewHistory(DefaultHistorySize),
+		interval:   interval,
+		timeout:    timeout,
+		thresholds: normalizeThresholds(thresholds),
+		sortOrder:  SortByDefault, // Start with default sort (online first, config order)
 	}
 
 	// Apply initial sort
@@ -220,6 +231,42 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 	}
 
 	return m
+}
+
+// normalizeThresholds fills in default warning/critical values for any
+// threshold that is unset (zero or negative).
+func normalizeThresholds(t config.ThresholdConfig) config.ThresholdConfig {
+	t.CPU = normalizeThresholdValues(t.CPU)
+	t.RAM = normalizeThresholdValues(t.RAM)
+	t.GPU = normalizeThresholdValues(t.GPU)
+	return t
+}
+
+// normalizeThresholdValues replaces unset (zero or negative) values with the
+// default warning (70) and critical (90) thresholds.
+func normalizeThresholdValues(v config.ThresholdValues) config.ThresholdValues {
+	if v.Warning <= 0 {
+		v.Warning = int(WarningThreshold)
+	}
+	if v.Critical <= 0 {
+		v.Critical = int(CriticalThreshold)
+	}
+	return v
+}
+
+// thresholdStyle returns the severity style for a percentage using the given
+// per-metric thresholds.
+func thresholdStyle(percent float64, t config.ThresholdValues) lipgloss.Style {
+	return MetricStyleWithThresholds(percent, t.Warning, t.Critical)
+}
+
+// thresholdColorFunc returns a ColorFunc that colors values using the given
+// per-metric thresholds. Used to keep graph coloring consistent with the
+// scalar metric text.
+func thresholdColorFunc(t config.ThresholdValues) ColorFunc {
+	return func(value float64) lipgloss.Color {
+		return MetricColorWithThresholds(value, t.Warning, t.Critical)
+	}
 }
 
 // Init starts the tick timer and triggers an initial metrics collection.

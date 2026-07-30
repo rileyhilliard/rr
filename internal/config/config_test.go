@@ -25,7 +25,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, "normal", cfg.Output.Verbosity)
 
 	// Monitor defaults
-	assert.Equal(t, "2s", cfg.Monitor.Interval)
+	assert.Equal(t, "1s", cfg.Monitor.Interval)
 	assert.Equal(t, 70, cfg.Monitor.Thresholds.CPU.Warning)
 	assert.Equal(t, 90, cfg.Monitor.Thresholds.CPU.Critical)
 	assert.Equal(t, 70, cfg.Monitor.Thresholds.RAM.Warning)
