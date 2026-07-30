@@ -44,10 +44,6 @@ func (m Model) renderDetailHeader(host string, status HostStatus) string {
 	case StatusRunningState:
 		indicator, indicatorStyle = m.RunningSpinner()
 		statusLabel = " Running"
-	case StatusSlowState:
-		indicator = StatusIdle
-		indicatorStyle = StatusSlowStyle
-		statusLabel = " Slow"
 	case StatusUnreachableState:
 		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle

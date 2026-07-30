@@ -54,59 +54,6 @@ func (c *Collector) SetTimeout(timeout time.Duration) {
 	c.timeout = timeout
 }
 
-// Collect gathers metrics from all configured hosts in parallel.
-// Returns a map of alias -> metrics, a map of alias -> error message,
-// and a map of alias -> lock info.
-// Hosts that fail to connect will have nil metrics and an error message.
-func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[string]*HostLockInfo) {
-	results := make(map[string]*HostMetrics)
-	errors := make(map[string]string)
-	lockInfo := make(map[string]*HostLockInfo)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for alias := range c.hosts {
-		wg.Add(1)
-		go func(alias string) {
-			defer wg.Done()
-
-			ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-			defer cancel()
-
-			metrics, _, err := c.collectOneWithContext(ctx, alias)
-
-			mu.Lock()
-			if err != nil {
-				// Store error message for diagnostics
-				errors[alias] = err.Error()
-				metrics = nil
-			}
-			results[alias] = metrics
-
-			// Check lock status if we have a connection
-			// Always check for locks so monitor shows when hosts are busy
-			if metrics != nil {
-				info := c.checkLockStatus(alias)
-				if info != nil {
-					lockInfo[alias] = info
-				}
-			}
-			mu.Unlock()
-		}(alias)
-	}
-
-	wg.Wait()
-	return results, errors, lockInfo
-}
-
-// CollectOne gathers metrics from a single host.
-func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-	metrics, _, err := c.collectOneWithContext(ctx, alias)
-	return metrics, err
-}
-
 // CollectStreaming gathers metrics from all hosts, streaming results as each completes.
 // Returns a channel that will receive HostResult for each host as it completes.
 // The channel is closed when all hosts have been processed.
@@ -456,67 +403,6 @@ func (c *Collector) Hosts() []string {
 }
 
 // Inline parsing functions to avoid import cycle with parsers package
-
-// parseLinuxCPU parses CPU metrics from /proc/stat and /proc/loadavg output.
-func parseLinuxCPU(procStat, procLoadavg string) (*CPUMetrics, error) {
-	metrics := &CPUMetrics{}
-
-	scanner := bufio.NewScanner(strings.NewReader(procStat))
-	coreCount := 0
-	var totalJiffies, idleJiffies int64
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if strings.HasPrefix(line, "cpu") && len(line) > 3 && line[3] >= '0' && line[3] <= '9' {
-			coreCount++
-			continue
-		}
-
-		if strings.HasPrefix(line, "cpu ") {
-			fields := strings.Fields(line)
-			if len(fields) < 5 {
-				return nil, fmt.Errorf("invalid /proc/stat cpu line: %s", line)
-			}
-
-			for i := 1; i < len(fields); i++ {
-				val, err := strconv.ParseInt(fields[i], 10, 64)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse cpu field %d: %w", i, err)
-				}
-				totalJiffies += val
-
-				if i == 4 || i == 5 {
-					idleJiffies += val
-				}
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error scanning /proc/stat: %w", err)
-	}
-
-	if totalJiffies > 0 {
-		metrics.Percent = float64(totalJiffies-idleJiffies) / float64(totalJiffies) * 100
-	}
-	metrics.Cores = coreCount
-
-	if procLoadavg != "" {
-		fields := strings.Fields(strings.TrimSpace(procLoadavg))
-		if len(fields) >= 3 {
-			for i := 0; i < 3; i++ {
-				val, err := strconv.ParseFloat(fields[i], 64)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse loadavg field %d: %w", i, err)
-				}
-				metrics.LoadAvg[i] = val
-			}
-		}
-	}
-
-	return metrics, nil
-}
 
 // parseLinuxCPUWithDelta calculates CPU usage from delta between two readings.
 // This gives instantaneous CPU usage rather than average-since-boot.

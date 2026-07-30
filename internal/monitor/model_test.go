@@ -46,7 +46,6 @@ func TestHostStatus_String(t *testing.T) {
 		{StatusConnectingState, "connecting"},
 		{StatusIdleState, "idle"},
 		{StatusRunningState, "running"},
-		{StatusSlowState, "slow"},
 		{StatusUnreachableState, "offline"},
 		{HostStatus(99), "unknown"},
 	}
@@ -79,8 +78,8 @@ func TestModel_OnlineCount(t *testing.T) {
 	m.status["server2"] = StatusIdleState
 	assert.Equal(t, 2, m.OnlineCount())
 
-	// Mark one as slow (not counted as online)
-	m.status["server3"] = StatusSlowState
+	// Mark one as unreachable (not counted as online)
+	m.status["server3"] = StatusUnreachableState
 	assert.Equal(t, 2, m.OnlineCount())
 }
 
@@ -120,39 +119,6 @@ func TestModel_SecondsSinceUpdate(t *testing.T) {
 	// Set last update to 5 seconds ago
 	m.lastUpdate = time.Now().Add(-5 * time.Second)
 	assert.GreaterOrEqual(t, m.SecondsSinceUpdate(), 5)
-}
-
-func TestModel_updateMetrics(t *testing.T) {
-	hosts := map[string]config.Host{
-		"server1": {SSH: []string{"server1"}},
-		"server2": {SSH: []string{"server2"}},
-	}
-	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, 0, nil)
-
-	// Create some metrics
-	metrics := map[string]*HostMetrics{
-		"server1": {
-			Timestamp: time.Now(),
-			CPU:       CPUMetrics{Percent: 50.0},
-		},
-		"server2": nil, // Server2 unreachable
-	}
-	errors := map[string]string{
-		"server2": "connection refused",
-	}
-
-	m.updateMetrics(metrics, errors, nil)
-
-	// Server1 should be connected
-	assert.Equal(t, StatusIdleState, m.status["server1"])
-	assert.NotNil(t, m.metrics["server1"])
-	_, hasError := m.errors["server1"]
-	assert.False(t, hasError)
-
-	// Server2 should be unreachable with error
-	assert.Equal(t, StatusUnreachableState, m.status["server2"])
-	assert.Equal(t, "connection refused", m.errors["server2"])
 }
 
 func TestModel_sortHosts_ByName(t *testing.T) {

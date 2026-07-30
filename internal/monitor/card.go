@@ -342,10 +342,6 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	case StatusRunningState:
 		indicator, indicatorStyle = m.RunningSpinner() // Animated braille spinner with color cycling
 		statusText = m.renderRunningStatusText(host)
-	case StatusSlowState:
-		indicator = StatusIdle
-		indicatorStyle = StatusSlowStyle
-		statusText = StatusTextStyle.Render(" - slow")
 	case StatusUnreachableState:
 		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle
@@ -1031,9 +1027,6 @@ func (m Model) renderMinimalHostLine(host string, status HostStatus, maxWidth in
 		indicatorStyle = StatusIdleStyle
 	case StatusRunningState:
 		indicator, indicatorStyle = m.RunningSpinner() // Animated braille spinner
-	case StatusSlowState:
-		indicator = StatusIdle
-		indicatorStyle = StatusSlowStyle
 	case StatusUnreachableState:
 		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle

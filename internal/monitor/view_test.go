@@ -398,34 +398,6 @@ func TestModel_renderHeader_LayoutModes(t *testing.T) {
 	}
 }
 
-func TestModel_renderFooter(t *testing.T) {
-	hosts := map[string]config.Host{
-		"server1": {SSH: []string{"server1"}},
-	}
-	collector := NewCollector(hosts)
-
-	tests := []struct {
-		name   string
-		width  int
-		layout LayoutMode
-	}{
-		{"minimal", 60, LayoutMinimal},
-		{"compact", 100, LayoutCompact},
-		{"standard", 140, LayoutStandard},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(collector, time.Second, 0, nil)
-			m.width = tt.width
-
-			result := m.renderFooter()
-			assert.NotEmpty(t, result)
-			assert.Contains(t, result, "quit")
-		})
-	}
-}
-
 func TestModel_renderHostCards_Empty(t *testing.T) {
 	m := Model{
 		hosts: []string{},

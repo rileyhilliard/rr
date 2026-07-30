@@ -17,7 +17,6 @@ const (
 	StatusConnectingState HostStatus = iota
 	StatusIdleState                  // Online, not running any task
 	StatusRunningState               // Online, actively running a task (locked)
-	StatusSlowState
 	StatusUnreachableState
 )
 
@@ -57,8 +56,6 @@ func (s HostStatus) String() string {
 		return "idle"
 	case StatusRunningState:
 		return "running"
-	case StatusSlowState:
-		return "slow"
 	case StatusUnreachableState:
 		return "offline"
 	default:
@@ -108,14 +105,6 @@ type tickMsg time.Time
 
 // spinnerTickMsg signals a spinner animation frame update.
 type spinnerTickMsg time.Time
-
-// metricsMsg carries new metrics from the collector (batched, all hosts).
-type metricsMsg struct {
-	metrics  map[string]*HostMetrics
-	errors   map[string]string        // Connection errors per host
-	lockInfo map[string]*HostLockInfo // Lock status per host
-	time     time.Time
-}
 
 // hostResultMsg carries metrics from a single host (for streaming updates).
 type hostResultMsg struct {
@@ -302,16 +291,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame = (m.spinnerFrame + 1) % 10000
 		return m, m.spinnerTickCmd()
 
-	case metricsMsg:
-		m.lastUpdate = msg.time
-		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
-		// Update viewport content based on current view
-		if m.viewMode == ViewDetail {
-			m.updateDetailViewportContent()
-		} else {
-			m.updateListViewportContent()
-		}
-
 	case collectStartedMsg:
 		// Collection started - set up state and begin polling
 		m.resultsChan = msg.results
@@ -458,42 +437,6 @@ func pollResultsCmd(results <-chan HostResult) tea.Cmd {
 			latency:      result.Latency,
 			time:         time.Now(),
 		}
-	}
-}
-
-// updateMetrics updates the model with new metrics and determines host status.
-func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[string]string, newLockInfo map[string]*HostLockInfo) {
-	for alias, metrics := range newMetrics {
-		if metrics == nil {
-			m.status[alias] = StatusUnreachableState
-			// Store error message if available
-			if errMsg, ok := newErrors[alias]; ok {
-				m.errors[alias] = errMsg
-			}
-			// Clear lock info for unreachable hosts
-			delete(m.lockInfo, alias)
-			continue
-		}
-
-		m.metrics[alias] = metrics
-		m.history.Push(alias, metrics)
-
-		// Update lock info
-		if lockInfo, ok := newLockInfo[alias]; ok && lockInfo != nil {
-			m.lockInfo[alias] = lockInfo
-		} else {
-			delete(m.lockInfo, alias)
-		}
-
-		// Determine status based on lock state and collection latency
-		if lockInfo, ok := m.lockInfo[alias]; ok && lockInfo.IsLocked {
-			m.status[alias] = StatusRunningState
-		} else {
-			m.status[alias] = StatusIdleState
-		}
-
-		// Clear any previous error
-		delete(m.errors, alias)
 	}
 }
 

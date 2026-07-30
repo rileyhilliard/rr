@@ -246,17 +246,6 @@ func (p *Pool) GetWithPlatform(alias string) (*sshutil.Client, Platform, error) 
 	return client, platform, nil
 }
 
-// Return returns a connection to the pool for reuse.
-// This is a no-op since we keep connections in the map, but it updates last used time.
-func (p *Pool) Return(alias string, _ *sshutil.Client) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if entry, ok := p.connections[alias]; ok {
-		entry.lastUsed = time.Now()
-	}
-}
-
 // Close closes all connections in the pool and clears it.
 func (p *Pool) Close() {
 	p.mu.Lock()
@@ -273,13 +262,6 @@ func (p *Pool) Close() {
 // CloseOne closes and removes a specific connection from the pool.
 func (p *Pool) CloseOne(alias string) {
 	p.remove(alias)
-}
-
-// Size returns the number of connections in the pool.
-func (p *Pool) Size() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.connections)
 }
 
 // GetConnectedVia returns the SSH alias that was used to connect to the given host.

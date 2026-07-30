@@ -236,33 +236,6 @@ func (m Model) cardsPerRow(cardWidth int) int {
 	}
 }
 
-// renderFooter renders the keyboard help footer.
-func (m Model) renderFooter() string {
-	layout := m.LayoutMode()
-
-	var hints []string
-	switch layout {
-	case LayoutMinimal:
-		// Most compact: minimal hints
-		hints = []string{"q quit", "? help"}
-	case LayoutCompact:
-		// Compact hints
-		hints = []string{"q quit", "r refresh", "s sort", "? help"}
-	default:
-		// Full hints for wider terminals
-		hints = []string{
-			"q quit",
-			"r refresh",
-			"s sort",
-			"\u2191\u2193 select",
-			"Enter expand",
-			"? help",
-		}
-	}
-
-	return FooterStyle.Render(strings.Join(hints, " | "))
-}
-
 // formatBytes formats a byte count as a human-readable string.
 func formatBytes(bytes int64) string {
 	const unit = 1024

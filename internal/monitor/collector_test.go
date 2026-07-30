@@ -236,59 +236,6 @@ CPU usage: 10.0% user, 20.0% sys, 70.0% idle`
 }
 
 // Note: Tests that require actual SSH connections are integration tests.
-// The Collect and CollectOne methods need real hosts or proper mocking.
-
-func TestParseLinuxCPU(t *testing.T) {
-	tests := []struct {
-		name        string
-		procStat    string
-		procLoadavg string
-		wantCores   int
-		wantLoadAvg [3]float64
-		wantErr     bool
-	}{
-		{
-			name: "valid input",
-			procStat: `cpu  1000000 10000 200000 8000000 10000 0 5000 0 0 0
-cpu0 500000 5000 100000 4000000 5000 0 2500 0 0 0
-cpu1 500000 5000 100000 4000000 5000 0 2500 0 0 0`,
-			procLoadavg: "1.50 2.25 3.00 1/234 5678",
-			wantCores:   2,
-			wantLoadAvg: [3]float64{1.50, 2.25, 3.00},
-			wantErr:     false,
-		},
-		{
-			name:        "empty loadavg",
-			procStat:    "cpu  1000000 10000 200000 8000000 10000 0 5000 0 0 0",
-			procLoadavg: "",
-			wantCores:   0,
-			wantLoadAvg: [3]float64{0, 0, 0},
-			wantErr:     false,
-		},
-		{
-			name:        "invalid cpu line",
-			procStat:    "cpu  invalid",
-			procLoadavg: "1.0 2.0 3.0",
-			wantErr:     true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := parseLinuxCPU(tt.procStat, tt.procLoadavg)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.NotNil(t, result)
-			assert.Equal(t, tt.wantCores, result.Cores)
-			assert.InDelta(t, tt.wantLoadAvg[0], result.LoadAvg[0], 0.01)
-			assert.InDelta(t, tt.wantLoadAvg[1], result.LoadAvg[1], 0.01)
-			assert.InDelta(t, tt.wantLoadAvg[2], result.LoadAvg[2], 0.01)
-		})
-	}
-}
 
 func TestParseLinuxMemory(t *testing.T) {
 	tests := []struct {

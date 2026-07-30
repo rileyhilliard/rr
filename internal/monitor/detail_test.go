@@ -67,7 +67,6 @@ func TestModel_renderDetailHeader(t *testing.T) {
 		status HostStatus
 	}{
 		{"idle", "server1", StatusIdleState},
-		{"slow", "server1", StatusSlowState},
 		{"unreachable", "server1", StatusUnreachableState},
 	}
 
