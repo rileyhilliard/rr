@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -172,6 +173,37 @@ func TestColorConstants(t *testing.T) {
 	assert.NotEmpty(t, string(ColorAccent))
 	assert.NotEmpty(t, string(ColorAccentDim))
 	assert.NotEmpty(t, string(ColorGraph))
+}
+
+// TestPaletteHexValues pins the exact hex of every dashboard color. These now
+// resolve through internal/ui, so this guards against a refactor there silently
+// re-mapping the monitor palette (e.g. pointing ColorHealthy at ui.ColorSuccess,
+// which is a different green).
+func TestPaletteHexValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		color lipgloss.Color
+		hex   string
+	}{
+		{"ColorDarkBg", ColorDarkBg, "#0A0A0F"},
+		{"ColorSurfaceBg", ColorSurfaceBg, "#12121A"},
+		{"ColorBorder", ColorBorder, "#2A2A4A"},
+		{"ColorHealthy", ColorHealthy, "#00FFFF"},
+		{"ColorWarning", ColorWarning, "#BF40FF"},
+		{"ColorCritical", ColorCritical, "#FF2E97"},
+		{"ColorTextPrimary", ColorTextPrimary, "#FFFFFF"},
+		{"ColorTextSecondary", ColorTextSecondary, "#B4B4D0"},
+		{"ColorTextMuted", ColorTextMuted, "#6B6B8D"},
+		{"ColorAccent", ColorAccent, "#FF2E97"},
+		{"ColorAccentDim", ColorAccentDim, "#BF40FF"},
+		{"ColorGraph", ColorGraph, "#00FFFF"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.hex, string(tt.color))
+		})
+	}
 }
 
 func TestRunningSpinnerFrames(t *testing.T) {

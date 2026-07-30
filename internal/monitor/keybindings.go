@@ -59,11 +59,12 @@ type keyMap struct {
 	Expand      key.Binding
 	Collapse    key.Binding
 	ToggleHelp  key.Binding
-	// Detail view scrolling
-	ScrollUp   key.Binding
-	ScrollDown key.Binding
-	PageUp     key.Binding
-	PageDown   key.Binding
+	// Detail view
+	CycleProcSort key.Binding
+	ScrollUp      key.Binding
+	ScrollDown    key.Binding
+	PageUp        key.Binding
+	PageDown      key.Binding
 }
 
 // ShortHelp returns the short help view.
@@ -75,7 +76,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.SelectPrev, k.SelectNext, k.SelectFirst, k.SelectLast},
-		{k.Expand, k.Collapse},
+		{k.Expand, k.Collapse, k.CycleProcSort},
 		{k.Quit, k.Refresh, k.CycleSort, k.ToggleHelp},
 	}
 }
@@ -122,7 +123,11 @@ var keys = keyMap{
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
 	),
-	// Detail view scrolling
+	// Detail view
+	CycleProcSort: key.NewBinding(
+		key.WithKeys("p"),
+		key.WithHelp("p", "sort processes"),
+	),
 	ScrollUp: key.NewBinding(
 		key.WithKeys("up", "k"),
 		key.WithHelp("↑/k", "scroll up"),
@@ -163,6 +168,13 @@ func (m *Model) HandleKeyMsg(msg tea.KeyMsg) (bool, tea.Cmd) {
 		m.detailViewport.GotoTop()
 		// Update list viewport content in case it changed
 		m.updateListViewportContent()
+		return true, nil
+	}
+
+	// Detail view: cycle the process table sort order
+	if m.viewMode == ViewDetail && key.Matches(msg, keys.CycleProcSort) {
+		m.procSortOrder = m.procSortOrder.Next()
+		m.updateDetailViewportContent()
 		return true, nil
 	}
 

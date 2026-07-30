@@ -258,6 +258,7 @@ Keyboard shortcuts:
   down/j      Select next host
   Enter       Expand selected host details
   Esc         Collapse / go back
+  p           Cycle process sort (CPU/MEM, detail view)
   ?           Show help
 
 Examples:

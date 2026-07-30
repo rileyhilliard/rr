@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -285,48 +286,77 @@ func TestModel_calculateCardWidth(t *testing.T) {
 
 func TestModel_cardsPerRow(t *testing.T) {
 	tests := []struct {
-		name      string
-		width     int
-		cardWidth int
-		expect    int
+		name   string
+		width  int
+		expect int
 	}{
 		{
-			name:      "minimal layout",
-			width:     60,
-			cardWidth: 50,
-			expect:    1,
+			name:   "minimal layout",
+			width:  60,
+			expect: 1,
 		},
 		{
-			name:      "compact layout",
-			width:     100,
-			cardWidth: 80,
-			expect:    1,
+			name:   "compact layout",
+			width:  100,
+			expect: 1,
 		},
 		{
-			name:      "standard layout",
-			width:     140,
-			cardWidth: 50,
-			expect:    2,
+			name:   "standard layout",
+			width:  140,
+			expect: 2,
 		},
 		{
-			name:      "wide layout",
-			width:     200,
-			cardWidth: 60,
-			expect:    2, // capped at 2
+			name:   "wide layout fits three",
+			width:  200,
+			expect: 3,
 		},
 		{
-			name:      "zero width",
-			width:     0,
-			cardWidth: 40,
-			expect:    1,
+			name:   "very wide layout fits four",
+			width:  240,
+			expect: 4,
+		},
+		{
+			name:   "ultra wide capped at four",
+			width:  320,
+			expect: 4,
+		},
+		{
+			name:   "zero width",
+			width:  0,
+			expect: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := Model{width: tt.width}
-			result := m.cardsPerRow(tt.cardWidth)
+			result := m.cardsPerRow()
 			assert.Equal(t, tt.expect, result)
+		})
+	}
+}
+
+// TestModel_cardGrid_MinimumWidth verifies the grid never shrinks cards below
+// minCardWidth as columns are added, and that the columns fill the terminal.
+func TestModel_cardGrid_MinimumWidth(t *testing.T) {
+	for _, width := range []int{100, 160, 240, 320} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			m := Model{width: width}
+			cols := m.cardsPerRow()
+			cardWidth := m.calculateCardWidth()
+
+			assert.GreaterOrEqual(t, cols, 1)
+			assert.LessOrEqual(t, cols, maxCardColumns)
+
+			// Multi-column layouts must keep cards readable
+			if cols > 1 {
+				assert.GreaterOrEqual(t, cardWidth, minCardWidth,
+					"cards must stay at least minCardWidth wide when columns are active")
+			}
+
+			// The rendered row must fit within the terminal
+			assert.LessOrEqual(t, cols*(cardWidth+perCardOverhead), width,
+				"row of cards must not overflow the terminal width")
 		})
 	}
 }
@@ -413,19 +443,18 @@ func TestModel_layoutCards(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		cards     []string
-		cardWidth int
+		name  string
+		cards []string
 	}{
-		{"empty cards", []string{}, 40},
-		{"single card", []string{"card1"}, 40},
-		{"two cards", []string{"card1", "card2"}, 40},
-		{"three cards", []string{"card1", "card2", "card3"}, 40},
+		{"empty cards", []string{}},
+		{"single card", []string{"card1"}},
+		{"two cards", []string{"card1", "card2"}},
+		{"three cards", []string{"card1", "card2", "card3"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := m.layoutCards(tt.cards, tt.cardWidth)
+			result := m.layoutCards(tt.cards)
 			if len(tt.cards) == 0 {
 				assert.Empty(t, result)
 			} else {

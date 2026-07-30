@@ -30,6 +30,31 @@ const (
 	ProcSortByPID
 )
 
+// String returns the label shown in the Processes section header.
+func (p ProcSortOrder) String() string {
+	switch p {
+	case ProcSortByMemory:
+		return "by MEM"
+	case ProcSortByPID:
+		return "by PID"
+	default:
+		return "by CPU"
+	}
+}
+
+// Next cycles to the next process sort order. Only CPU and memory are cycled;
+// PID is available as a value but isn't part of the keyboard rotation.
+func (p ProcSortOrder) Next() ProcSortOrder {
+	if p == ProcSortByCPU {
+		return ProcSortByMemory
+	}
+	return ProcSortByCPU
+}
+
+// detailProcessLimit is how many processes the detail view lists. The collector
+// gathers more (15); this is the display cap.
+const detailProcessLimit = 10
+
 // renderDetailHeader renders the host name and status prominently.
 // Includes the running command on a second line when available.
 func (m Model) renderDetailHeader(host string, status HostStatus) string {
@@ -119,8 +144,13 @@ func formatUptime(d time.Duration) string {
 func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) string {
 	var lines []string
 
-	// Section header with right-aligned percentage (+ temperature when available)
+	// Section header with right-aligned percentage (+ temperature when available).
+	// The first Linux sample has no delta to measure, so show a placeholder
+	// instead of a misleading 0.0%.
 	headerValue := fmt.Sprintf("%.1f%%", cpu.Percent)
+	if !cpu.Valid() {
+		headerValue = renderCPUWarmingUp()
+	}
 	if cpu.TempC > 0 {
 		headerValue += " " + GPUTempStyle(int(cpu.TempC)).Render(fmt.Sprintf("%.0fC", cpu.TempC))
 	}
@@ -153,6 +183,9 @@ func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) st
 		}
 	}
 
+	// Peak/Avg over the same history window shown in the graph
+	lines = append(lines, SectionContentLine(LabelStyle.Render(renderPercentStats(history)), width))
+
 	// Per-core heat strip (one colored block per core, btop-style)
 	if len(cpu.PerCore) > 0 {
 		strip := RenderCoreHeatStrip(cpu.PerCore, graphWidth, thresholdColorFunc(m.thresholds.CPU))
@@ -170,6 +203,23 @@ func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) st
 	lines = append(lines, SectionFooter(width))
 
 	return strings.Join(lines, "\n")
+}
+
+// renderPercentStats formats a Peak/Avg summary over a percentage history
+// window, matching the latency section's stats line style.
+func renderPercentStats(history []float64) string {
+	if len(history) == 0 {
+		return "Waiting for data..."
+	}
+	peak, sum := history[0], float64(0)
+	for _, v := range history {
+		if v > peak {
+			peak = v
+		}
+		sum += v
+	}
+	avg := sum / float64(len(history))
+	return fmt.Sprintf("Peak: %.1f%%  ·  Avg: %.1f%%", peak, avg)
 }
 
 // centerText centers a string within the given width
@@ -412,6 +462,9 @@ func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) s
 		}
 	}
 
+	// Peak/Avg over the same history window shown in the graph
+	lines = append(lines, SectionContentLine(LabelStyle.Render(renderPercentStats(gpuHistory)), width))
+
 	// VRAM, temp, power on one line
 	var details []string
 	if gpu.MemoryTotal > 0 {
@@ -570,14 +623,21 @@ func (m Model) renderDetailNetworkSection(host string, width int) string {
 func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string {
 	var lines []string
 
-	// Section header
-	lines = append(lines, SectionHeader("Processes", "by CPU", width))
+	// Section header shows the active sort (cycled with 'p')
+	lines = append(lines, SectionHeader("Processes", m.procSortOrder.String(), width))
 
-	// Sort by CPU (already should be, but ensure)
+	// Sort by the active order
 	sorted := make([]ProcessInfo, len(procs))
 	copy(sorted, procs)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].CPU > sorted[j].CPU
+		switch m.procSortOrder {
+		case ProcSortByMemory:
+			return sorted[i].Memory > sorted[j].Memory
+		case ProcSortByPID:
+			return sorted[i].PID < sorted[j].PID
+		default:
+			return sorted[i].CPU > sorted[j].CPU
+		}
 	})
 
 	// Table header
@@ -585,8 +645,7 @@ func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string
 	header := fmt.Sprintf("%-6s %-10s %6s %6s  %s", "PID", "USER", "CPU%", "MEM%", "COMMAND")
 	lines = append(lines, SectionContentLine(headerStyle.Render(header), width))
 
-	// Show up to 5 processes (reduced from 10 for cleaner layout)
-	maxProcs := 5
+	maxProcs := detailProcessLimit
 	if len(sorted) < maxProcs {
 		maxProcs = len(sorted)
 	}
@@ -632,7 +691,7 @@ func (m Model) renderDetailProcessSection(procs []ProcessInfo, width int) string
 
 // renderDetailFooter renders navigation hints for the detail view.
 func (m Model) renderDetailFooter() string {
-	hints := []string{"Esc:back", "?:help", "q:quit"}
+	hints := []string{"Esc:back", "p:proc sort", "?:help", "q:quit"}
 	return FooterStyle.Render(strings.Join(hints, "  "))
 }
 
@@ -782,6 +841,6 @@ func (m Model) renderDetailFooterWithScroll() string {
 		hints = append(hints, "j/k:scroll")
 	}
 
-	hints = append(hints, "Esc:back", "?:help", "q:quit")
+	hints = append(hints, "Esc:back", "p:proc sort", "?:help", "q:quit")
 	return FooterStyle.Render(strings.Join(hints, "  "))
 }

@@ -160,8 +160,10 @@ func TestParseSnapshotOutput_LinuxRatesAreRealOnFirstRound(t *testing.T) {
 	require.NotNil(t, metrics)
 
 	// CPU: 500 busy / 1000 total delta = 50%. The whole point of double
-	// sampling; a single round would report 0.
+	// sampling; a single round would report 0 and flag itself as warming up.
 	assert.InDelta(t, 50.0, metrics.CPU.Percent, 0.01)
+	assert.False(t, metrics.CPU.FirstSample, "the priming sample supplies the baseline")
+	assert.True(t, metrics.CPU.Valid())
 	assert.Equal(t, 2, metrics.CPU.Cores)
 	require.Len(t, metrics.CPU.PerCore, 2)
 	assert.InDelta(t, 50.0, metrics.CPU.PerCore[0], 0.01)
@@ -228,14 +230,23 @@ func TestParseSnapshotOutput_DarwinNetRates(t *testing.T) {
 func TestParseSnapshotOutput_TruncatedFallsBackToSingleSample(t *testing.T) {
 	c := NewCollector(map[string]config.Host{})
 
-	// Host died before emitting enough sections to contain a second sample.
+	// Host died after the first sample, before the sleep produced a second.
+	// What's left looks like a plain single-sample payload.
 	truncated := snapshotStatFixture(1_000, 9_000) + "\n" + OutputSeparator + "\n" +
-		snapshotNetFixture(1, 2)
+		"1.23 2.34 3.45"
 
 	metrics, _, rates := c.parseSnapshotOutput("flaky", PlatformLinux, truncated)
 	require.NotNil(t, metrics)
-	// No delta available, so no fabricated rates.
+
+	// Salvage what's parseable rather than dropping the host entirely.
+	assert.Equal(t, 2, metrics.CPU.Cores)
+	assert.InDelta(t, 1.23, metrics.CPU.LoadAvg[0], 0.001)
+
+	// But no delta baseline exists, so the 0% is flagged as warming up rather
+	// than passed off as a real reading, and no rates are fabricated.
 	assert.Zero(t, metrics.CPU.Percent)
+	assert.True(t, metrics.CPU.FirstSample)
+	assert.False(t, metrics.CPU.Valid())
 	assert.Nil(t, rates)
 }
 

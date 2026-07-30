@@ -96,6 +96,44 @@ func TestCPUMetrics_Struct(t *testing.T) {
 	assert.Equal(t, [3]float64{4.5, 3.2, 2.1}, cpu.LoadAvg)
 }
 
+func TestCPUMetrics_Valid(t *testing.T) {
+	tests := []struct {
+		name  string
+		cpu   CPUMetrics
+		valid bool
+	}{
+		{
+			// Linux first sample: /proc/stat gives core count but there's no
+			// previous reading to delta against, so Percent is a bogus 0
+			name:  "linux first sample has no delta",
+			cpu:   CPUMetrics{Percent: 0, Cores: 16, FirstSample: true},
+			valid: false,
+		},
+		{
+			name:  "linux steady state has per-core deltas",
+			cpu:   CPUMetrics{Percent: 42, Cores: 4, PerCore: []float64{10, 20, 30, 40}},
+			valid: true,
+		},
+		{
+			// macOS reads instantaneous usage from top; never a first-sample zero
+			name:  "darwin sample is always valid",
+			cpu:   CPUMetrics{Percent: 33.3, Cores: 10},
+			valid: true,
+		},
+		{
+			name:  "darwin zero usage is still a real reading",
+			cpu:   CPUMetrics{Percent: 0, Cores: 10},
+			valid: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.valid, tt.cpu.Valid())
+		})
+	}
+}
+
 func TestRAMMetrics_Struct(t *testing.T) {
 	ram := RAMMetrics{
 		UsedBytes:  1024 * 1024 * 1024 * 4,

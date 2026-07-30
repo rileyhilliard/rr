@@ -903,11 +903,13 @@ func TestParseLinuxCPUWithDelta_PerCore(t *testing.T) {
 cpu0 1000 0 0 500 0 0 0 0 0 0
 cpu1 1000 0 0 500 0 0 0 0 0 0`
 
-	// First sample: no per-core rates yet
+	// First sample: no per-core rates yet, and flagged so render shows "warming up"
 	cpu, err := c.parseLinuxCPUWithDelta("host1", stat1, loadavg)
 	require.NoError(t, err)
 	assert.Equal(t, 2, cpu.Cores)
 	assert.Empty(t, cpu.PerCore)
+	assert.True(t, cpu.FirstSample)
+	assert.False(t, cpu.Valid())
 
 	// Second sample: core0 delta total=100 idle=40 -> 60%; core1 delta total=100 idle=90 -> 10%
 	stat2 := `cpu  2130 0 0 1130 0 0 0 0 0 0
@@ -918,6 +920,8 @@ cpu1 1010 0 0 590 0 0 0 0 0 0`
 	require.Len(t, cpu.PerCore, 2)
 	assert.InDelta(t, 60, cpu.PerCore[0], 0.01)
 	assert.InDelta(t, 10, cpu.PerCore[1], 0.01)
+	assert.False(t, cpu.FirstSample)
+	assert.True(t, cpu.Valid())
 }
 
 func TestParseLinuxCPUWithDelta_PerCoreCountChange(t *testing.T) {

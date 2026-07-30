@@ -51,6 +51,10 @@ type MonitorCPUOutput struct {
 	Load    [3]float64 `json:"load"`
 	PerCore []float64  `json:"per_core,omitempty"`
 	TempC   float64    `json:"temp_c,omitempty"`
+	// PercentUnavailable marks the rare case where the host truncated its
+	// output before the second sample, leaving Percent an artifact 0 rather
+	// than a measurement. Absent on a healthy snapshot.
+	PercentUnavailable bool `json:"percent_unavailable,omitempty"`
 }
 
 // MonitorRAMOutput reports memory usage.
@@ -200,11 +204,12 @@ func buildMonitorHost(r monitor.HostResult) MonitorHostOutput {
 
 	m := r.Metrics
 	h.CPU = &MonitorCPUOutput{
-		Percent: round2(m.CPU.Percent),
-		Cores:   m.CPU.Cores,
-		Load:    m.CPU.LoadAvg,
-		PerCore: roundAll(m.CPU.PerCore),
-		TempC:   round2(m.CPU.TempC),
+		Percent:            round2(m.CPU.Percent),
+		Cores:              m.CPU.Cores,
+		Load:               m.CPU.LoadAvg,
+		PerCore:            roundAll(m.CPU.PerCore),
+		TempC:              round2(m.CPU.TempC),
+		PercentUnavailable: !m.CPU.Valid(),
 	}
 	h.RAM = &MonitorRAMOutput{
 		UsedBytes:  m.RAM.UsedBytes,
@@ -312,10 +317,15 @@ func monitorTextRow(h MonitorHostOutput, thresholds config.ThresholdConfig) []st
 		lock = truncateCell(h.Lock.Holder, 24)
 	}
 
+	cpu := metricCell(h.CPU.Percent, thresholds.CPU)
+	if h.CPU.PercentUnavailable {
+		cpu = "n/a"
+	}
+
 	return []string{
 		h.Name,
 		colorize("online", ui.ColorSuccess),
-		metricCell(h.CPU.Percent, thresholds.CPU),
+		cpu,
 		metricCell(h.RAM.Percent, thresholds.RAM),
 		gpu,
 		metricCell(h.Disk.Percent, monitorDiskThresholds),

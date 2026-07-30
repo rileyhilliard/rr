@@ -86,6 +86,8 @@ func TestBuildMonitorOutput_JSONSchema(t *testing.T) {
 	assert.Equal(t, []any{1.5, 1.25, float64(1)}, cpu["load"])
 	assert.Equal(t, []any{40.11, 46.0}, cpu["per_core"])
 	assert.Equal(t, 61.5, cpu["temp_c"])
+	assert.NotContains(t, cpu, "percent_unavailable",
+		"a healthy double-sampled snapshot never flags CPU as unavailable")
 
 	ram := host["ram"].(map[string]any)
 	assert.Equal(t, float64(8<<30), ram["used_bytes"])
@@ -146,6 +148,30 @@ func TestBuildMonitorOutput_OmitsEmptyOptionals(t *testing.T) {
 	// per_core and temp_c are Linux extras; they must not show up as zeros.
 	assert.NotContains(t, cpu, "per_core")
 	assert.NotContains(t, cpu, "temp_c")
+}
+
+func TestBuildMonitorOutput_WarmingUpCPUIsFlagged(t *testing.T) {
+	// A host that truncated its output before the second sample reports a 0%
+	// that is an artifact, not a measurement. Say so instead of lying.
+	degraded := monitor.HostResult{
+		Alias: "flaky",
+		Metrics: &monitor.HostMetrics{
+			CPU: monitor.CPUMetrics{Percent: 0, Cores: 8, FirstSample: true},
+		},
+	}
+
+	out := buildMonitorOutput([]monitor.HostResult{degraded}, snapshotAt)
+	require.NotNil(t, out.Hosts[0].CPU)
+	assert.True(t, out.Hosts[0].CPU.PercentUnavailable)
+
+	// The CPU cell reads n/a rather than a fake 0%. RAM and disk legitimately
+	// report 0% here, so assert on the row's CPU column specifically.
+	row := monitorTextRow(out.Hosts[0], config.ThresholdConfig{})
+	assert.Equal(t, "n/a", row[2])
+
+	var buf bytes.Buffer
+	require.NoError(t, writeMonitorText(&buf, out, config.ThresholdConfig{}))
+	assert.Contains(t, buf.String(), "n/a")
 }
 
 func TestBuildMonitorOutput_FailedHost(t *testing.T) {

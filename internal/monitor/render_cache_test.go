@@ -209,6 +209,31 @@ func TestCardBodyCache_InvalidatedOnResize(t *testing.T) {
 		"cached card body must be re-rendered after a resize")
 }
 
+// TestCardBodyCache_InvalidatedOnHeightChange guards the height dependency
+// introduced by CanShowExtendedInfo: card bodies size their graphs and process
+// list from the terminal height, so a height-only resize must drop the cache.
+func TestCardBodyCache_InvalidatedOnHeightChange(t *testing.T) {
+	m := newBenchModel(2, 30)
+	host := "bench-host-0"
+
+	// Start short: 2-row graphs, single top process
+	nm, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: HeightStandard - 1})
+	m = nm.(Model)
+	_ = m.View()
+	require.Contains(t, m.cardBodyCache, host)
+	bodyShort := m.cardBodyCache[host]
+
+	// Grow past the extended-info breakpoint at the same width. The resize
+	// handler clears the cache and immediately re-renders at the new height.
+	nm, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: HeightStandard + 10})
+	m = nm.(Model)
+
+	_ = m.View()
+	require.Contains(t, m.cardBodyCache, host)
+	assert.NotEqual(t, bodyShort, m.cardBodyCache[host],
+		"cached card body must re-render with taller graphs when the terminal grows")
+}
+
 func TestSelectionHighlightUpdatesImmediately(t *testing.T) {
 	m := newBenchModel(2, 30)
 

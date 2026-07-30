@@ -509,8 +509,10 @@ func (c *Collector) parseLinuxCPUWithDelta(alias, procStat, procLoadavg string) 
 		if totalDelta > 0 {
 			metrics.Percent = float64(totalDelta-idleDelta) / float64(totalDelta) * 100
 		}
+	} else {
+		// No baseline yet: Percent would misleadingly read 0 until the next poll.
+		metrics.FirstSample = true
 	}
-	// If no previous reading, Percent stays 0 (will show correct on next poll)
 
 	// Per-core percentages from deltas. If the core count changed between
 	// samples (e.g. host swap behind an alias), skip this round; the freshly

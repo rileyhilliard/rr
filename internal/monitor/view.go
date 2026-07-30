@@ -138,7 +138,38 @@ func (m Model) renderHostCards() string {
 	}
 
 	// Arrange cards in a grid
-	return m.layoutCards(cards, cardWidth)
+	return m.layoutCards(cards)
+}
+
+// Grid sizing for the multi-column layouts.
+const (
+	// perCardOverhead is the non-content width each card occupies:
+	// borders (2) + marginRight (1).
+	perCardOverhead = 3
+	// minCardWidth is the narrowest content width a full card stays readable at.
+	// Columns are only added while every card can hold at least this much.
+	minCardWidth = 55
+	// maxCardColumns caps the grid so very wide terminals don't shrink cards
+	// into an unreadable wall of columns.
+	maxCardColumns = 4
+)
+
+// cardColumns returns how many card columns fit at the current width, for the
+// multi-column (Standard/Wide) layouts. Columns are added only while each card
+// keeps at least minCardWidth of content, and the count is capped at
+// maxCardColumns.
+func (m Model) cardColumns() int {
+	if m.width <= 0 {
+		return 1
+	}
+	cols := m.width / (minCardWidth + perCardOverhead)
+	if cols < 1 {
+		return 1
+	}
+	if cols > maxCardColumns {
+		return maxCardColumns
+	}
+	return cols
 }
 
 // calculateCardWidth determines the optimal card width based on terminal width and layout mode.
@@ -149,11 +180,6 @@ func (m Model) calculateCardWidth() int {
 
 	layout := m.LayoutMode()
 
-	// Card overhead per card: borders (2) + marginRight (1) = 3
-	// For N cards: N * (contentWidth + 3) = availableWidth
-	// So: contentWidth = availableWidth / N - 3
-	const perCardOverhead = 3
-
 	switch layout {
 	case LayoutMinimal:
 		// Single column, use full width minus overhead
@@ -163,18 +189,10 @@ func (m Model) calculateCardWidth() int {
 		// Single column with slight margin
 		return m.width - perCardOverhead - 1
 
-	case LayoutStandard:
-		// Try to fit 2 cards per row
-		cardWidth := m.width/2 - perCardOverhead
-		if cardWidth < 40 {
-			// Fall back to single column if cards would be too narrow
-			return m.width - perCardOverhead
-		}
-		return cardWidth
-
-	case LayoutWide:
-		// Fit 2 cards per row, fill available width
-		return m.width/2 - perCardOverhead
+	case LayoutStandard, LayoutWide:
+		// Divide the available width evenly across the fitted columns
+		// (contentWidth = width/N - overhead)
+		return m.width/m.cardColumns() - perCardOverhead
 
 	default:
 		return 40
@@ -182,13 +200,13 @@ func (m Model) calculateCardWidth() int {
 }
 
 // layoutCards arranges cards in rows based on terminal width and layout mode.
-func (m Model) layoutCards(cards []string, cardWidth int) string {
+func (m Model) layoutCards(cards []string) string {
 	if len(cards) == 0 {
 		return ""
 	}
 
 	// Calculate cards per row based on layout mode
-	cardsPerRow := m.cardsPerRow(cardWidth)
+	cardsPerRow := m.cardsPerRow()
 
 	var rows []string
 	for i := 0; i < len(cards); i += cardsPerRow {
@@ -206,30 +224,14 @@ func (m Model) layoutCards(cards []string, cardWidth int) string {
 }
 
 // cardsPerRow returns the number of cards to display per row based on layout mode.
-func (m Model) cardsPerRow(cardWidth int) int {
-	layout := m.LayoutMode()
-
-	switch layout {
+func (m Model) cardsPerRow() int {
+	switch m.LayoutMode() {
 	case LayoutMinimal, LayoutCompact:
 		// Always single column for narrow terminals
 		return 1
 
 	case LayoutStandard, LayoutWide:
-		// Calculate how many cards fit
-		if m.width <= 0 {
-			return 1
-		}
-		// Account for card borders (2) and marginRight (1)
-		effectiveCardWidth := cardWidth + 3
-		perRow := m.width / effectiveCardWidth
-		if perRow < 1 {
-			return 1
-		}
-		// Cap at 2 for readability
-		if perRow > 2 {
-			return 2
-		}
-		return perRow
+		return m.cardColumns()
 
 	default:
 		return 1

@@ -6,6 +6,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRenderCardDivider(t *testing.T) {
@@ -363,7 +364,7 @@ func TestModel_renderMinimalMetricsLine(t *testing.T) {
 	}
 }
 
-func TestModel_renderCardTopProcess(t *testing.T) {
+func TestModel_renderCardTopProcesses(t *testing.T) {
 	hosts := map[string]config.Host{
 		"server1": {SSH: []string{"server1"}},
 	}
@@ -389,14 +390,49 @@ func TestModel_renderCardTopProcess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := m.renderCardTopProcess(tt.procs, tt.maxWidth)
+			result := m.renderCardTopProcesses(tt.procs, tt.maxWidth)
 			if len(tt.procs) == 0 {
 				assert.Empty(t, result)
 			} else {
-				assert.NotEmpty(t, result)
+				assert.Len(t, result, 1) // short terminal: one process
+				assert.NotEmpty(t, result[0])
 			}
 		})
 	}
+}
+
+// TestModel_renderCardTopProcesses_Extended verifies tall terminals list more
+// of the already-collected process data.
+func TestModel_renderCardTopProcesses_Extended(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+
+	procs := []ProcessInfo{
+		{PID: 1, User: "root", CPU: 90.0, Command: "one"},
+		{PID: 2, User: "root", CPU: 50.0, Command: "two"},
+		{PID: 3, User: "root", CPU: 10.0, Command: "three"},
+		{PID: 4, User: "root", CPU: 5.0, Command: "four"},
+	}
+
+	m.height = HeightStandard - 1
+	require.False(t, m.CanShowExtendedInfo())
+	assert.Len(t, m.renderCardTopProcesses(procs, 60), cardTopProcs)
+
+	m.height = HeightStandard
+	require.True(t, m.CanShowExtendedInfo())
+	assert.Len(t, m.renderCardTopProcesses(procs, 60), cardTopProcsExtended)
+}
+
+// TestModel_cardGraphRows verifies the card graph grows on tall terminals.
+func TestModel_cardGraphRows(t *testing.T) {
+	m := Model{height: HeightStandard - 1}
+	assert.Equal(t, cardGraphHeight, m.cardGraphRows())
+
+	m.height = HeightStandard
+	assert.Equal(t, cardGraphHeightExtended, m.cardGraphRows())
 }
 
 func TestModel_renderCardNetworkLine(t *testing.T) {
