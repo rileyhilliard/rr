@@ -352,6 +352,13 @@ func (m Model) renderCardBody(host string, metrics *HostMetrics, innerWidth int)
 		lines = append(lines, renderCardLine(netLine, innerWidth))
 	}
 
+	// Disk usage (with divider if present)
+	diskLine := m.renderCardDiskLine(metrics.Disk, innerWidth)
+	if diskLine != "" {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, renderCardLine(diskLine, innerWidth))
+	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -627,6 +634,29 @@ func (m Model) renderCardNetworkLine(host string, lineWidth int) string {
 
 	// Right-align the rates
 	rightContent := downArrow + inText + " " + upArrow + outText
+	rightWidth := lipgloss.Width(rightContent)
+	padding := ""
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
+	}
+
+	return label + padding + rightContent
+}
+
+// renderCardDiskLine renders root filesystem usage in a single line.
+// Returns empty string when no disk data is available.
+func (m Model) renderCardDiskLine(disk DiskMetrics, lineWidth int) string {
+	if disk.TotalBytes == 0 {
+		return ""
+	}
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
+
+	label := LabelStyle.Render("DISK")
+	pctText := thresholdStyle(disk.Percent, diskThresholds).Render(fmt.Sprintf("%5.1f%%", disk.Percent))
+	usageText := LabelStyle.Render(formatBytes(disk.UsedBytes) + "/" + formatBytes(disk.TotalBytes))
+
+	// Right-align the usage
+	rightContent := pctText + " " + usageText
 	rightWidth := lipgloss.Width(rightContent)
 	padding := ""
 	if contentWidth > lipgloss.Width(label)+rightWidth {

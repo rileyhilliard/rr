@@ -264,6 +264,12 @@ func normalizeThresholdValues(v config.ThresholdValues) config.ThresholdValues {
 	return v
 }
 
+// diskThresholds are the fixed severity thresholds for disk usage coloring.
+// df capacity percent has different semantics than CPU/RAM load (reserved
+// blocks, steadily high usage is normal), so v1 uses a fixed 80/95 warn/crit
+// pair instead of the configurable metric thresholds.
+var diskThresholds = config.ThresholdValues{Warning: 80, Critical: 95}
+
 // thresholdStyle returns the severity style for a percentage using the given
 // per-metric thresholds.
 func thresholdStyle(percent float64, t config.ThresholdValues) lipgloss.Style {

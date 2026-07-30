@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -417,4 +418,35 @@ func TestRenderGradientBar(t *testing.T) {
 			assert.NotEmpty(t, result)
 		})
 	}
+}
+
+func TestRenderCoreHeatStrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		perCore   []float64
+		maxWidth  int
+		wantCells int
+	}{
+		{"empty per-core", nil, 40, 0},
+		{"zero width", []float64{10, 20}, 0, 0},
+		{"one cell per core", []float64{10, 50, 90, 99}, 40, 4},
+		{"capped at max width", []float64{1, 2, 3, 4, 5, 6, 7, 8}, 4, 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := RenderCoreHeatStrip(tt.perCore, tt.maxWidth, thresholdColorFunc(config.ThresholdValues{Warning: 70, Critical: 90}))
+			if tt.wantCells == 0 {
+				assert.Empty(t, result)
+				return
+			}
+			assert.Equal(t, tt.wantCells, strings.Count(result, "▰"))
+		})
+	}
+}
+
+func TestRenderCoreHeatStrip_NilColorFunc(t *testing.T) {
+	// nil colorFunc falls back to default MetricColor thresholds
+	result := RenderCoreHeatStrip([]float64{10, 95}, 10, nil)
+	assert.Equal(t, 2, strings.Count(result, "▰"))
 }

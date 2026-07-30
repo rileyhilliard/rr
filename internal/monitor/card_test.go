@@ -425,6 +425,59 @@ func TestModel_renderCardNetworkLine(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
+func TestModel_renderCardDiskLine(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+
+	// No disk data: hidden
+	result := m.renderCardDiskLine(DiskMetrics{}, 40)
+	assert.Empty(t, result)
+
+	// With disk data: DISK label plus usage
+	disk := DiskMetrics{
+		UsedBytes:  200 * 1024 * 1024 * 1024,
+		TotalBytes: 500 * 1024 * 1024 * 1024,
+		Percent:    42.0,
+	}
+	result = m.renderCardDiskLine(disk, 40)
+	assert.Contains(t, result, "DISK")
+	assert.Contains(t, result, "42.0%")
+}
+
+func TestModel_renderCard_DiskLine(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+	m.height = 40
+
+	// Full card without disk data has no DISK line
+	m.metrics["server1"] = &HostMetrics{
+		CPU: CPUMetrics{Percent: 50.0},
+		RAM: RAMMetrics{UsedBytes: 4000000000, TotalBytes: 8000000000},
+	}
+	m.status["server1"] = StatusIdleState
+	result := m.renderCard("server1", 40, false)
+	assert.NotContains(t, result, "DISK")
+
+	// Full card with disk data shows the DISK line (fresh cache: new result
+	// invalidates the body in the real flow)
+	delete(m.cardBodyCache, "server1")
+	m.metrics["server1"].Disk = DiskMetrics{
+		UsedBytes:  100 * 1024 * 1024 * 1024,
+		TotalBytes: 500 * 1024 * 1024 * 1024,
+		Percent:    20.0,
+	}
+	result = m.renderCard("server1", 40, false)
+	assert.Contains(t, result, "DISK")
+	assert.Contains(t, result, "20.0%")
+}
+
 func TestCardConstants(t *testing.T) {
 	assert.Equal(t, 2, cardGraphHeight)
 	assert.Equal(t, 10, cardMinBarWidth)

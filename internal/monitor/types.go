@@ -8,6 +8,7 @@ type HostMetrics struct {
 	CPU       CPUMetrics
 	RAM       RAMMetrics
 	GPU       *GPUMetrics // nil if no GPU
+	Disk      DiskMetrics
 	Network   []NetworkInterface
 	Processes []ProcessInfo
 	System    SystemInfo
@@ -18,6 +19,17 @@ type CPUMetrics struct {
 	Percent float64
 	Cores   int
 	LoadAvg [3]float64
+	PerCore []float64 // Per-core usage percentages (Linux only; empty on first sample)
+	TempC   float64   // CPU temperature in Celsius (0 = unavailable)
+}
+
+// DiskMetrics contains root filesystem usage and disk I/O rates.
+type DiskMetrics struct {
+	UsedBytes        int64
+	TotalBytes       int64
+	Percent          float64
+	ReadBytesPerSec  float64 // Linux only; 0 on first sample or when unavailable
+	WriteBytesPerSec float64 // Linux only; 0 on first sample or when unavailable
 }
 
 // RAMMetrics contains memory usage information.
