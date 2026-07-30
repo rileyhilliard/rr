@@ -102,6 +102,10 @@ type Model struct {
 	listViewport   viewport.Model
 	viewportReady  bool
 
+	// alerts holds the threshold alert state machine. Shared across Model
+	// copies like cardBodyCache; Update runs on a single goroutine.
+	alerts *alertTracker
+
 	// cardBodyCache holds the expensive rendered card body (graphs/metric
 	// sections) per host alias. Entries are invalidated when that host gets a
 	// new result and the whole cache is cleared on resize. Dynamic chrome
@@ -171,9 +175,25 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 }
 
 // NewModelWithThresholds creates a dashboard model with configured metric
-// severity thresholds. Zero or negative threshold values fall back to the
-// defaults (warning 70, critical 90).
+// severity thresholds and alerting turned off. Zero or negative threshold
+// values fall back to the defaults (warning 70, critical 90).
 func NewModelWithThresholds(collector *Collector, interval, timeout time.Duration, hostOrder []string, thresholds config.ThresholdConfig) Model {
+	return NewModelWithOptions(collector, interval, timeout, hostOrder, ModelOptions{Thresholds: thresholds})
+}
+
+// ModelOptions carries the configurable dashboard settings that come from
+// project config. Zero values fall back to defaults.
+type ModelOptions struct {
+	// Thresholds are the per-metric warning/critical severity levels.
+	Thresholds config.ThresholdConfig
+
+	// Alerts controls threshold alerting (disabled when Enabled is false).
+	Alerts config.AlertsConfig
+}
+
+// NewModelWithOptions creates a dashboard model with configured thresholds and
+// threshold alerting.
+func NewModelWithOptions(collector *Collector, interval, timeout time.Duration, hostOrder []string, opts ModelOptions) Model {
 	hosts := collector.Hosts()
 
 	// Store the original config order for default sorting
@@ -228,9 +248,10 @@ func NewModelWithThresholds(collector *Collector, interval, timeout time.Duratio
 		history:    NewHistory(DefaultHistorySize),
 		interval:   interval,
 		timeout:    timeout,
-		thresholds: normalizeThresholds(thresholds),
+		thresholds: normalizeThresholds(opts.Thresholds),
 		sortOrder:  SortByDefault, // Start with default sort (online first, config order)
 
+		alerts:        newAlertTracker(opts.Alerts),
 		cardBodyCache: make(map[string]string),
 	}
 
@@ -406,6 +427,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update this specific host's state immediately
 		m.lastUpdate = msg.time
 		m.updateHostResult(msg)
+
+		// Evaluate threshold alerts on this host's fresh metrics. Done before
+		// the viewport regen below so a newly firing card flashes this frame.
+		alertCmd := m.evaluateAlerts(msg)
+
 		// Update viewport content based on current view. The detail view only
 		// shows the selected host, so skip regen for other hosts' results.
 		if m.viewMode == ViewDetail {
@@ -418,8 +444,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Continue polling this round's channel for more results
 		if msg.results != nil {
-			return m, pollResultsCmd(msg.results, msg.cancel)
+			return m, tea.Batch(alertCmd, pollResultsCmd(msg.results, msg.cancel))
 		}
+		return m, alertCmd
 	}
 
 	return m, nil
@@ -613,6 +640,49 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 
 	// Clear any previous error
 	delete(m.errors, alias)
+}
+
+// evaluateAlerts feeds a host result through the alert state machine and
+// returns the command carrying any new alert's side effects (bell, hook).
+// Alert state is dropped for hosts that lost their metrics, so an unreachable
+// host stops flashing instead of latching on stale data.
+//
+// No card cache invalidation is needed: the border is composed outside the
+// cached body (see renderCard), so a flashing card re-renders its chrome on
+// the next frame regardless.
+func (m *Model) evaluateAlerts(msg hostResultMsg) tea.Cmd {
+	if !m.alerts.Enabled() {
+		return nil
+	}
+
+	if msg.metrics == nil {
+		m.alerts.Clear(msg.alias)
+		return nil
+	}
+
+	events := m.alerts.Evaluate(msg.alias, msg.metrics, m.thresholds)
+	return m.alerts.alertEffectsCmd(events)
+}
+
+// AlertsEnabled reports whether threshold alerting is turned on.
+func (m Model) AlertsEnabled() bool {
+	return m.alerts.Enabled()
+}
+
+// AlertCount returns the number of host+metric pairs currently alerting.
+func (m Model) AlertCount() int {
+	return m.alerts.FiringCount()
+}
+
+// IsAlerting reports whether the host has any metric currently alerting.
+func (m Model) IsAlerting(host string) bool {
+	return m.alerts.Firing(host)
+}
+
+// IsFlashing reports whether the host's card should render its alert border.
+// Always false when monitor.alerts.flash is off.
+func (m Model) IsFlashing(host string) bool {
+	return m.alerts.Flashing(host)
 }
 
 // OnlineCount returns the number of hosts that are online (idle or running).

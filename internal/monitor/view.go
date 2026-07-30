@@ -106,7 +106,26 @@ func (m Model) renderHeader() string {
 			Render(fmt.Sprintf(" | %d hosts | %d online | last update %s |%s", totalHosts, onlineHosts, updateText, sortIndicator))
 	}
 
-	return HeaderStyle.Render(title + stats)
+	return HeaderStyle.Render(title + stats + m.renderAlertBadge())
+}
+
+// renderAlertBadge renders the active alert count for the header. Empty when
+// alerting is off or nothing is firing.
+func (m Model) renderAlertBadge() string {
+	count := m.AlertCount()
+	if count == 0 {
+		return ""
+	}
+
+	label := " alerts"
+	if count == 1 {
+		label = " alert"
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(ColorCritical).
+		Bold(true).
+		Render(fmt.Sprintf(" %d%s", count, label))
 }
 
 // renderHostCards renders the grid of host cards.

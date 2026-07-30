@@ -192,6 +192,24 @@ func (m Model) cachedCardBody(host string, render func() string) string {
 	return body
 }
 
+// cardStyle returns the border style for a host's card at the given width.
+// An alerting host flashes its border in the critical color; selection still
+// reads through because a selected card keeps the thick border, so a selected
+// alerting card is distinguishable from an unselected one.
+func (m Model) cardStyle(host string, width int, selected bool) lipgloss.Style {
+	style := CardStyle
+	if selected {
+		style = CardSelectedStyle
+	}
+	if m.IsFlashing(host) {
+		style = style.BorderForeground(ColorCritical)
+		if selected {
+			style = style.Border(lipgloss.ThickBorder())
+		}
+	}
+	return style.Width(width)
+}
+
 // renderCardLine renders a text line with symmetric padding and background fill.
 // Adds 1-space padding on each side for consistent card layout.
 func renderCardLine(content string, width int) string {
@@ -212,11 +230,8 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
 
-	// Choose card style based on selection
-	style := CardStyle.Width(width)
-	if selected {
-		style = CardSelectedStyle.Width(width)
-	}
+	// Choose card style based on selection and alert state
+	style := m.cardStyle(host, width, selected)
 
 	// width IS the content area (lipgloss Width sets content area, borders add to total)
 	innerWidth := width
@@ -776,11 +791,8 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
 
-	// Choose card style based on selection
-	style := CardStyle.Width(width)
-	if selected {
-		style = CardSelectedStyle.Width(width)
-	}
+	// Choose card style based on selection and alert state
+	style := m.cardStyle(host, width, selected)
 
 	// width IS the content area (lipgloss Width sets content area, borders add to total)
 	innerWidth := width
@@ -1104,11 +1116,8 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
 
-	// Choose card style based on selection
-	style := CardStyle.Width(width)
-	if selected {
-		style = CardSelectedStyle.Width(width)
-	}
+	// Choose card style based on selection and alert state
+	style := m.cardStyle(host, width, selected)
 
 	// width IS the content area (lipgloss Width sets content area, borders add to total)
 	innerWidth := width

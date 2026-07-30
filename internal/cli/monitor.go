@@ -30,7 +30,8 @@ func monitorCommand(hostsFilter string, interval time.Duration, intervalSet bool
 	collector := scope.newCollector()
 
 	// Create Bubble Tea model with host order for default sorting
-	model := monitor.NewModelWithThresholds(collector, interval, scope.timeout, scope.order, scope.thresholds)
+	model := monitor.NewModelWithOptions(collector, interval, scope.timeout, scope.order,
+		monitorModelOptions(scope.project))
 
 	// Run the TUI program with mouse support for scrolling
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -146,6 +147,19 @@ func (s *monitorScope) newCollector() *monitor.Collector {
 		collector.SetLockConfig(*s.lockCfg)
 	}
 	return collector
+}
+
+// monitorModelOptions builds the dashboard options from project config.
+// A nil project (global-only setup) leaves everything at its zero value, which
+// the model reads as default thresholds and alerting turned off.
+func monitorModelOptions(project *config.Config) monitor.ModelOptions {
+	if project == nil {
+		return monitor.ModelOptions{}
+	}
+	return monitor.ModelOptions{
+		Thresholds: project.Monitor.Thresholds,
+		Alerts:     project.Monitor.Alerts,
+	}
 }
 
 // resolveMonitorInterval returns the effective refresh interval.
