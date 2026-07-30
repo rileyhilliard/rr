@@ -284,6 +284,64 @@ hosts:
   - backup-host  # Tried last (lowest priority)
 ```
 
+## Working directory
+
+`rr run` and `rr exec` preserve the subdirectory you invoked them from, so relative paths keep the meaning they have locally:
+
+```bash
+cd backend
+rr run "pytest tests/test_api.py"   # runs in <remote dir>/backend
+```
+
+The offset is reported as `remote_cwd` in the result envelope. It applies to local execution too, so a command means the same thing whether or not a remote host answered. If the directory wasn't synced (it matches a `sync.exclude` pattern, for instance), the command falls back to the project root rather than failing.
+
+`--cwd` overrides the offset:
+
+```bash
+rr run --cwd backend "pytest tests/"   # explicit, ignores where you are
+```
+
+**Named tasks do not get an offset.** `rr test` means the same thing from every directory, since task commands are project-scoped and often embed their own `cd` (see [Tasks](#tasks)).
+
+This changed in the release noted in the CHANGELOG: ad-hoc commands used to run at the project root no matter where you were. If you relied on that, `--cwd .` restores it.
+
+When a relative path fails because it resolved differently than you expected, `rr` says so in the result `hint`, naming the directory it ran in and the fix. The hint needs the failing path to appear in stderr, so tools that report a missing file without naming it (`make` says only "no makefile found") fail without one.
+
+## Exit codes and pipes
+
+`rr` reports the exit code the remote command returned, unchanged. If your command pipes its output, the shell reports only the **last** stage's status, so a failing test runner can still exit 0:
+
+```bash
+rr run "pytest tests/ | tail -20"    # exit code comes from tail, not pytest
+```
+
+`rr` won't rewrite your command's semantics, since `cmd | grep -q pattern` tolerates upstream failure on purpose. Two things help:
+
+- When a piped run collects zero tests, `rr` warns and sets `details.piped_exit_code` so the misleading exit code is visible.
+- To propagate the failure, enable `pipefail` through the host's `shell` field:
+
+  ```yaml
+  hosts:
+    mini:
+      shell: "bash -o pipefail -c"
+  ```
+
+  Note `bash`, not `sh`: `dash` (Debian/Ubuntu's `/bin/sh`) doesn't support `pipefail`.
+
+The same trap applies one level up, where no host config can reach it. Piping `rr` itself discards `rr`'s exit code:
+
+```bash
+rr test | tail -8          # exit code comes from tail; a failed suite reports 0
+set -o pipefail            # in your shell or script, before the pipe
+rr test | tail -8          # exit code comes from rr
+```
+
+Use `--tail N` instead of an external pager when you only want the end of the output; it prints after the result envelope and keeps the exit code intact:
+
+```bash
+rr test --tail 20
+```
+
 ## Sync
 
 Controls file synchronization behavior using rsync.

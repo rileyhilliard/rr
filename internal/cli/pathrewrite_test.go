@@ -255,3 +255,126 @@ func TestBuildFailureHint(t *testing.T) {
 		assert.Empty(t, buildFailureHint("make test", "assertion failed", root, remote, host))
 	})
 }
+
+// relPathHintFixture builds a project root containing sub/tests/foo.py, so
+// "tests/foo.py" resolves from sub/ but not from the root.
+func relPathHintFixture(t *testing.T) string {
+	t.Helper()
+
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub", "tests"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "sub", "tests", "foo.py"), []byte("x"), 0o644))
+	return root
+}
+
+func TestBuildRelativePathHint(t *testing.T) {
+	root := relPathHintFixture(t)
+
+	t.Run("pytest form names both dirs and the fix", func(t *testing.T) {
+		stderr := "ERROR: file or directory not found: tests/foo.py"
+		hint := buildRelativePathHint(stderr, root, "sub", "")
+		require.NotEmpty(t, hint)
+		assert.Contains(t, hint, "tests/foo.py")
+		assert.Contains(t, hint, "sub")
+		assert.Contains(t, hint, "the project root")
+		assert.Contains(t, hint, "'--cwd sub'")
+		assert.Contains(t, hint, "'sub/tests/foo.py'")
+	})
+
+	// The case auto-cwd made common and the first implementation missed
+	// entirely: the offset resolved, so rr ran in sub/, but the user typed a
+	// path relative to the project root. invocationDir == runDir here, which
+	// the original invocationDir != runDir gate rejected outright.
+	t.Run("auto-cwd active and path is root-relative", func(t *testing.T) {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "toplevel"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "toplevel", "f.txt"), []byte("x"), 0o644))
+
+		hint := buildRelativePathHint("cat: toplevel/f.txt: No such file or directory", root, "sub", "sub")
+		require.NotEmpty(t, hint, "must fire when rr ran in the caller's subdir")
+		assert.Contains(t, hint, "the project root")
+		assert.Contains(t, hint, "'--cwd .'")
+		assert.Contains(t, hint, "../toplevel/f.txt")
+	})
+
+	t.Run("generic shell form", func(t *testing.T) {
+		stderr := "cat: tests/foo.py: No such file or directory"
+		assert.NotEmpty(t, buildRelativePathHint(stderr, root, "sub", ""))
+	})
+
+	t.Run("bare form", func(t *testing.T) {
+		stderr := "python: No such file or directory: tests/foo.py"
+		assert.NotEmpty(t, buildRelativePathHint(stderr, root, "sub", ""))
+	})
+
+	t.Run("pytest node id selector stripped", func(t *testing.T) {
+		stderr := "ERROR: file or directory not found: tests/foo.py::test_bar"
+		hint := buildRelativePathHint(stderr, root, "sub", "")
+		require.NotEmpty(t, hint)
+		assert.Contains(t, hint, "'sub/tests/foo.py'")
+	})
+
+	t.Run("nested offset", func(t *testing.T) {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "a", "b", "tests"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "a", "b", "tests", "deep.py"), []byte("x"), 0o644))
+
+		hint := buildRelativePathHint("ERROR: file or directory not found: tests/deep.py", root, "a/b", "")
+		require.NotEmpty(t, hint)
+		assert.Contains(t, hint, "'a/b/tests/deep.py'")
+	})
+
+	// The case that motivated the fix's final shape: an explicit --cwd that
+	// points somewhere the relative path doesn't resolve. Here the caller ran
+	// from sub/ but --cwd sent the command to the project root.
+	t.Run("explicit cwd differing from invocation dir", func(t *testing.T) {
+		hint := buildRelativePathHint("cat: tests/foo.py: No such file or directory", root, "sub", ".")
+		require.NotEmpty(t, hint)
+		assert.Contains(t, hint, "'--cwd sub'")
+	})
+
+	t.Run("explicit cwd from project root suggests dropping it", func(t *testing.T) {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "top"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "top", "f.txt"), []byte("x"), 0o644))
+
+		hint := buildRelativePathHint("cat: top/f.txt: No such file or directory", root, "", "sub")
+		require.NotEmpty(t, hint)
+		assert.Contains(t, hint, "'--cwd .'", "suggest returning to the project root")
+	})
+
+	t.Run("truly missing path gives no hint", func(t *testing.T) {
+		stderr := "ERROR: file or directory not found: tests/typo.py"
+		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", ""))
+	})
+
+	t.Run("path valid in both dirs gives no hint", func(t *testing.T) {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "shared"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "shared", "ok.py"), []byte("x"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "sub", "shared"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "sub", "shared", "ok.py"), []byte("x"), 0o644))
+
+		stderr := "ERROR: file or directory not found: shared/ok.py"
+		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", ""))
+	})
+
+	t.Run("absolute path left to buildFailureHint", func(t *testing.T) {
+		stderr := "cat: /Users/r/app/tests/foo.py: No such file or directory"
+		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", ""))
+	})
+
+	t.Run("nothing resolves anywhere gives no hint", func(t *testing.T) {
+		stderr := "ERROR: file or directory not found: tests/foo.py"
+		// At the root with no offset, tests/foo.py exists nowhere reachable.
+		assert.Empty(t, buildRelativePathHint(stderr, root, "", ""))
+	})
+
+	t.Run("unrelated stderr gives no hint", func(t *testing.T) {
+		assert.Empty(t, buildRelativePathHint("assertion failed", root, "sub", ""))
+	})
+
+	t.Run("only first candidate considered", func(t *testing.T) {
+		// A traceback mentioning several paths must not be mined for a match
+		// further down; the first "not found" line is the failing one.
+		stderr := "ERROR: file or directory not found: tests/typo.py\nERROR: file or directory not found: tests/foo.py"
+		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", ""))
+	})
+}

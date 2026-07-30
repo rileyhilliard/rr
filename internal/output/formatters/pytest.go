@@ -47,6 +47,13 @@ type PytestFormatter struct {
 	inFailures     bool
 	currentFailure *pytestFailureBuilder
 	summaryLine    string
+
+	// noTestsRan is set by pytest's explicit "no tests ran" summary.
+	noTestsRan bool
+	// collected holds the "collected N items" count; sawCollected records
+	// whether such a line appeared at all.
+	collected    int
+	sawCollected bool
 }
 
 // pytestFailureBuilder accumulates failure details across multiple lines.
@@ -115,6 +122,16 @@ var (
 	// Extracts "<count> <word>" pairs from a summary line.
 	pytestCountPairPattern = regexp.MustCompile(`(\d+)\s+(\w+)`)
 
+	// Matches pytest's zero-result summary, decorated or bare: pytest prints
+	// "no tests ran in 0.05s" with no leading count, so neither summary
+	// pattern above matches it and the counters silently stay at zero.
+	pytestNoTestsRanPattern = regexp.MustCompile(`(?:^|=\s*)no tests ran in [\d.]+s`)
+
+	// Matches the collection count: "collected 0 items" / "collected 12 items".
+	// A nonzero count means tests were found, which distinguishes an
+	// intentional --collect-only run from one that matched nothing.
+	pytestCollectedPattern = regexp.MustCompile(`collected (\d+) items?`)
+
 	// Matches the failures section header
 	pytestFailuresSectionStart = regexp.MustCompile(`^=+\s*FAILURES\s*=+$`)
 	pytestFailuresSectionEnd   = regexp.MustCompile(`^=+\s*short test summary`)
@@ -176,6 +193,20 @@ func (f *PytestFormatter) ProcessLine(line string) string {
 	// Check for summary line (decorated, or bare in -q/-qq mode)
 	if pytestSummaryPattern.MatchString(trimmed) || pytestBareSummaryPattern.MatchString(trimmed) {
 		f.summaryLine = trimmed
+	}
+
+	// "no tests ran" is pytest's explicit zero-result signal.
+	if pytestNoTestsRanPattern.MatchString(trimmed) {
+		f.noTestsRan = true
+	}
+
+	// Record the collection count so an intentional collect-only run (which
+	// collects tests but runs none) isn't mistaken for one that matched nothing.
+	if m := pytestCollectedPattern.FindStringSubmatch(trimmed); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			f.collected = n
+			f.sawCollected = true
+		}
 	}
 
 	// Pass through ANSI codes and other lines unchanged
@@ -336,6 +367,27 @@ func (f *PytestFormatter) Reset() {
 	f.inFailures = false
 	f.currentFailure = nil
 	f.summaryLine = ""
+	f.noTestsRan = false
+	f.collected = 0
+	f.sawCollected = false
+}
+
+// RanNothing implements output.NoTestsReporter.
+//
+// True only on positive evidence from the output: pytest said "no tests ran",
+// or it reported collecting zero items. A "collected N>0 items" line means
+// tests were found, so an intentional --collect-only run reports false.
+func (f *PytestFormatter) RanNothing() bool {
+	if len(f.results) > 0 {
+		return false
+	}
+	if passed, failed, skipped, errs := f.GetTestCounts(); passed+failed+skipped+errs > 0 {
+		return false
+	}
+	if f.sawCollected && f.collected > 0 {
+		return false
+	}
+	return f.noTestsRan || (f.sawCollected && f.collected == 0)
 }
 
 // GetTestFailures implements output.TestSummaryProvider.

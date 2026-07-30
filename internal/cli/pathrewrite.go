@@ -3,7 +3,9 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -331,6 +333,133 @@ func buildFailureHint(command, stderr, localRoot, remoteDir, host string) string
 		return fmt.Sprintf("A path in this command exists on this machine but not on %s. rr syncs %s to %s:%s - use paths under the project root (or relative paths).", host, localRoot, host, remoteDir)
 	}
 
+	return ""
+}
+
+// missingPathPatterns extract the offending path from a runner's "not found"
+// message. Ordered most specific first.
+var missingPathPatterns = []*regexp.Regexp{
+	// pytest: "ERROR: file or directory not found: tests/foo.py"
+	regexp.MustCompile(`(?i)file or directory not found:\s*(\S+)`),
+	// generic shell/tool: "cat: tests/foo.py: No such file or directory"
+	regexp.MustCompile(`(?i)^[^:\n]*:\s*(\S+):\s*no such file or directory`),
+	// bare: "no such file or directory: tests/foo.py"
+	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
+}
+
+// buildRelativePathHint explains a relative path that failed because it was
+// written against a different directory than the one rr ran the command in.
+//
+// rr runs commands in the caller's subdirectory (or an explicit --cwd), so a
+// path is only wrong relative to *somewhere*. The asymmetry is checkable
+// locally for free: every candidate is on this machine. It tries each directory
+// the user plausibly meant - the project root, and the directory they invoked
+// from - and reports the first that resolves.
+//
+// Returns "" unless the path exists somewhere else and not under runDir. A path
+// missing everywhere is an ordinary typo, and inventing a directory story for it
+// would mislead.
+//
+// invocationDir and runDir are project-root-relative ("" means the root).
+func buildRelativePathHint(stderr, projectRoot, invocationDir, runDir string) string {
+	invocationDir = normalizeOffset(invocationDir)
+	runDir = normalizeOffset(runDir)
+	if projectRoot == "" {
+		return ""
+	}
+
+	rel := extractMissingRelPath(stderr)
+	if rel == "" {
+		return ""
+	}
+
+	resolve := func(base string) string {
+		return filepath.Join(projectRoot, filepath.FromSlash(base), filepath.FromSlash(rel))
+	}
+	// Resolving where it ran means the failure is something else entirely.
+	if _, err := os.Stat(resolve(runDir)); err == nil {
+		return ""
+	}
+
+	// Candidates in the order a user is most likely to have meant them.
+	for _, cand := range []string{"", invocationDir} {
+		if cand == runDir {
+			continue
+		}
+		if _, err := os.Stat(resolve(cand)); err != nil {
+			continue
+		}
+		return fmt.Sprintf("'%s' doesn't exist in %s, where rr ran the command, but it does in %s. Use '%s', or run with %s",
+			rel, describeOffset(runDir), describeOffset(cand),
+			relFromRunDir(cand, rel, runDir), describeCWDFix(cand))
+	}
+	return ""
+}
+
+// describeOffset names a project-root-relative directory for a human.
+func describeOffset(offset string) string {
+	if offset == "" {
+		return "the project root"
+	}
+	return offset + "/"
+}
+
+// describeCWDFix names the --cwd change that would make the path resolve.
+// Ends without a period: the value is the last thing on the line, and a
+// trailing period reads as part of the path ("--cwd ..").
+func describeCWDFix(target string) string {
+	if target == "" {
+		return "'--cwd .'"
+	}
+	return "'--cwd " + target + "'"
+}
+
+// relFromRunDir rewrites rel so it resolves from runDir instead of target,
+// giving the user a path they can paste as-is.
+func relFromRunDir(target, rel, runDir string) string {
+	fixed, err := filepath.Rel(filepath.FromSlash(runDir), filepath.FromSlash(path.Join(target, rel)))
+	if err != nil {
+		return path.Join(target, rel)
+	}
+	return filepath.ToSlash(fixed)
+}
+
+// normalizeOffset reduces a project-root-relative directory to a canonical
+// form so "", ".", and "./sub" compare as expected against "sub".
+func normalizeOffset(offset string) string {
+	if offset == "" {
+		return ""
+	}
+	cleaned := path.Clean(filepath.ToSlash(offset))
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
+}
+
+// extractMissingRelPath pulls a relative path out of a "not found" message,
+// or "" when none is found. Absolute paths are left to buildFailureHint, and
+// only the first match is considered: stderr often mentions several paths
+// (traceback frames, for one) and guessing among them invents failures.
+func extractMissingRelPath(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		for _, re := range missingPathPatterns {
+			m := re.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			candidate := strings.Trim(m[1], `'"`)
+			if candidate == "" || strings.HasPrefix(candidate, "/") || strings.HasPrefix(candidate, "~") {
+				continue
+			}
+			// Strip pytest node-id selectors ("tests/foo.py::test_bar").
+			if idx := strings.Index(candidate, "::"); idx > 0 {
+				candidate = candidate[:idx]
+			}
+			return candidate
+		}
+	}
 	return ""
 }
 

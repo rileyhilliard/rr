@@ -113,3 +113,32 @@ func TestIsCompoundCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestHasPipe(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmd      string
+		expected bool
+	}{
+		{"plain command", "pytest tests/", false},
+		{"simple pipe", "pytest | tail -3", true},
+		{"multiple pipes", "pytest | grep FAIL | wc -l", true},
+		{"logical or is not a pipe", "pytest || echo failed", false},
+		{"logical or then pipe", "pytest || echo failed | tee log", true},
+		{"pipe in single quotes", "grep '|' file.txt", false},
+		{"pipe in double quotes", `awk -F"|" '{print $1}' f`, false},
+		{"escaped pipe", `echo a \| b`, false},
+		{"and-chain without pipe", "cd sub && pytest", false},
+		{"redirect is not a pipe", "pytest > out.txt", false},
+		{"pipe after quoted section", "grep 'a|b' f | wc -l", true},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasPipe(tt.cmd); got != tt.expected {
+				t.Errorf("HasPipe(%q) = %v, want %v", tt.cmd, got, tt.expected)
+			}
+		})
+	}
+}

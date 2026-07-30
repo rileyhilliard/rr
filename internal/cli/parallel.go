@@ -202,6 +202,12 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 
 	if PrettyMode() {
 		parallel.RenderSummary(result, logDir)
+		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+			warnNoTests(map[string]interface{}{
+				"no_tests":       true,
+				"no_tests_tasks": noTests,
+			})
+		}
 	} else {
 		exitCode := 0
 		if result.Failed > 0 {
@@ -217,6 +223,13 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		}
 		if result.Failed > 0 {
 			details["failures"] = extractTaskFailures(result, logDir)
+		}
+		// no_tests stays a bool here as it is for single runs - one key, one
+		// type, so consumers can branch on it without sniffing. The subtask
+		// names go in their own field.
+		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+			details["no_tests"] = true
+			details["no_tests_tasks"] = noTests
 		}
 		WritePhaseEvent(PhaseEvent{
 			Type:     "result",
@@ -234,6 +247,21 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 
 const maxOutputTailLines = 20
 const maxFailureMessageLen = 500
+
+// tasksWithoutTests names the subtasks whose runner collected zero tests.
+// Sharded suites make this easy to miss: the aggregate says "3 passed" while
+// one shard's path filter matched nothing. Reported per subtask, never fatal -
+// forwarded filters (forward_args) legitimately leave some shards empty.
+func tasksWithoutTests(result *parallel.Result) []string {
+	var names []string
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		if formatters.DetectNoTests(tr.Command, tr.Output) {
+			names = append(names, tr.TaskName)
+		}
+	}
+	return names
+}
 
 // extractTaskFailures builds structured failure info for machine-mode output.
 // When logDir is non-empty, each failure carries the path of its saved log.

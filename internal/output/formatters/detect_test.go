@@ -197,3 +197,157 @@ func TestExtractTestSummary_UnknownFormat(t *testing.T) {
 	_, ok := ExtractTestSummary("make build", []byte("compiling...\ndone\n"))
 	assert.False(t, ok)
 }
+
+// TestDetectNoTests is the regression suite for false-green test runs: a
+// command that executed zero tests previously reported success with no signal
+// at all in the envelope. The "must not flag" cases matter as much as the
+// positive ones - flagging an intentional zero-test run (--collect-only) or a
+// normal dev-loop invocation (go test -run NoMatch) would be a false red.
+func TestDetectNoTests(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		output  string
+		want    bool
+	}{
+		{
+			name:    "pytest decorated no tests ran",
+			command: "uv run pytest tests/x.py -k classify",
+			output:  "collected 0 items\n\n===== no tests ran in 0.05s =====",
+			want:    true,
+		},
+		{
+			name:    "pytest quiet bare no tests ran",
+			command: "uv run pytest tests/x.py -q -k classify",
+			output:  "no tests ran in 0.05s",
+			want:    true,
+		},
+		{
+			name:    "vitest reports no tests",
+			command: "bunx vitest run tests/tracking.test.ts",
+			output:  " Test Files  1 failed (1)\n      Tests  no tests",
+			want:    true,
+		},
+		{
+			name:    "go test where every package lacks tests",
+			command: "go test ./...",
+			output:  "?   \tgithub.com/example/a\t[no test files]\n?   \tgithub.com/example/b\t[no test files]",
+			want:    true,
+		},
+		{
+			name:    "pytest collect-only collects but runs nothing by design",
+			command: "pytest --collect-only tests/",
+			output:  "collected 12 items\n\n12 tests collected in 0.01s",
+			want:    false,
+		},
+		{
+			name:    "go test -run with no match is a normal dev loop",
+			command: "go test ./internal/lock/... -run TestNope",
+			output:  "ok  \tgithub.com/example/lock\t0.002s",
+			want:    false,
+		},
+		{
+			name:    "jest passWithNoTests opts into zero tests",
+			command: "jest --passWithNoTests",
+			output:  "No tests found, exiting with code 0",
+			want:    false,
+		},
+		{
+			name:    "passing pytest run",
+			command: "pytest tests/",
+			output:  "collected 3 items\n\n===== 3 passed in 0.10s =====",
+			want:    false,
+		},
+		{
+			name:    "all-skipped run is not a no-tests run",
+			command: "pytest tests/",
+			output:  "collected 3 items\n\n===== 3 skipped in 0.05s =====",
+			want:    false,
+		},
+		{
+			name:    "go test mixing no-test packages with real passes",
+			command: "go test ./...",
+			output:  "?   \tgithub.com/example/a\t[no test files]\nok  \tgithub.com/example/b\t0.002s",
+			want:    false,
+		},
+		{
+			name:    "installing pytest is not a test run",
+			command: "pip install pytest",
+			output:  "Successfully installed pytest-7.4.0",
+			want:    false,
+		},
+		{
+			name:    "grepping for pytest is not a test run",
+			command: "grep -r pytest .",
+			output:  "conftest.py:import pytest",
+			want:    false,
+		},
+		{
+			name:    "unrecognized command",
+			command: "make build",
+			output:  "building...",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, DetectNoTests(tt.command, []byte(tt.output)))
+		})
+	}
+}
+
+// TestExtractTestSummaryNoTests pins that a zero-test run now produces a
+// summary carrying NoTests instead of being dropped entirely (which made it
+// indistinguishable from a non-test command).
+func TestExtractTestSummaryNoTests(t *testing.T) {
+	summary, ok := ExtractTestSummary("pytest tests/x.py -k nomatch",
+		[]byte("collected 0 items\n\n===== no tests ran in 0.05s ====="))
+	assert.True(t, ok)
+	assert.True(t, summary.NoTests)
+	assert.Zero(t, summary.Passed)
+
+	// Unparseable output still yields no summary at all.
+	_, ok = ExtractTestSummary("make build", []byte("building..."))
+	assert.False(t, ok)
+}
+
+// TestHasIntentionalZeroFlag guards against substring matching. "--co" is a
+// prefix of "--cov", "--color", "--config", and
+// "--continue-on-collection-errors", so a strings.Contains check silently
+// disabled no-tests detection for `pytest --cov=app -k typo` and most other
+// real CI commands - the feature was off exactly where it mattered most.
+func TestHasIntentionalZeroFlag(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"plain pytest", "pytest -k typo", false},
+		{"collect-only", "pytest --collect-only tests/", true},
+		{"co abbreviation", "pytest --co tests/", true},
+		{"fixtures", "pytest --fixtures", true},
+		{"markers", "pytest --markers", true},
+		{"passWithNoTests", "jest --passWithNoTests", true},
+		{"listTests", "jest --listTests", true},
+
+		// Flags that merely start with an opt-out flag's name.
+		{"coverage flag", "pytest --cov=app -k typo", false},
+		{"cov-report", "pytest --cov-report=xml tests/", false},
+		{"color flag", "pytest --color=yes -k typo", false},
+		{"config flag", "pytest --config=setup.cfg -k typo", false},
+		{"count flag", "pytest --count=3 tests/", false},
+		{"continue-on-collection-errors", "pytest --continue-on-collection-errors", false},
+		{"vitest coverage", "vitest run --coverage", false},
+
+		{"flag with = value still matches", "pytest --collect-only=x tests/", true},
+		{"case insensitive", "jest --PASSWITHNOTESTS", true},
+		{"flag name inside a path is not a flag", "pytest tests/--collect-only-fixture", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasIntentionalZeroFlag(tt.command))
+		})
+	}
+}

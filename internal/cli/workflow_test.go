@@ -1791,3 +1791,92 @@ func TestExecutePullPhase_NilConnection(t *testing.T) {
 	// Nil connection should be handled gracefully
 	ExecutePullPhase(ctx, []config.PullItem{{Src: "file.txt"}}, "")
 }
+
+// TestSetupWorkDir_CapturesSubdirOffset pins that the caller's subdirectory is
+// recorded. Before this, setupWorkDir replaced cwd with the project root and
+// discarded the offset, so every relative path in a command silently changed
+// meaning - "pytest tests/foo.py" from backend/ looked for tests/ at the root.
+func TestSetupWorkDir_CapturesSubdirOffset(t *testing.T) {
+	tests := []struct {
+		name       string
+		subdir     string
+		wantOffset string
+	}{
+		{name: "project root has no offset", subdir: "", wantOffset: ""},
+		{name: "one level down", subdir: "backend", wantOffset: "backend"},
+		{name: "nested", subdir: filepath.Join("backend", "api"), wantOffset: "backend/api"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			workDir := root
+			if tt.subdir != "" {
+				workDir = filepath.Join(root, tt.subdir)
+				require.NoError(t, os.MkdirAll(workDir, 0o755))
+			}
+
+			origDir, err := os.Getwd()
+			require.NoError(t, err)
+			defer func() { _ = os.Chdir(origDir) }()
+			require.NoError(t, os.Chdir(workDir))
+
+			ctx := &WorkflowContext{
+				Resolved: &config.ResolvedConfig{ProjectRoot: root},
+			}
+			require.NoError(t, setupWorkDir(ctx, WorkflowOptions{}))
+
+			assert.Equal(t, tt.wantOffset, ctx.SubdirOffset)
+			// WorkDir must stay the project root: it is the sync root and the
+			// basis for path rewriting.
+			assert.Equal(t, root, ctx.WorkDir)
+		})
+	}
+}
+
+// TestSubdirOffset_SymlinkedRoot guards the macOS case where os.Getwd() returns
+// /private/var while the project root is /var. A naive filepath.Rel across that
+// boundary returns "../../../../../private/var/..." which would trip the
+// traversal guard and silently disable the feature.
+func TestSubdirOffset_SymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	require.NoError(t, os.MkdirAll(filepath.Join(realRoot, "backend"), 0o755))
+	require.NoError(t, os.Symlink(realRoot, link))
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	defer func() { _ = os.Chdir(origDir) }()
+	require.NoError(t, os.Chdir(filepath.Join(link, "backend")))
+
+	assert.Equal(t, "backend", subdirOffset(link))
+}
+
+func TestSubdirOffset_OutsideProjectRoot(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "project")
+	sibling := filepath.Join(base, "elsewhere")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.MkdirAll(sibling, 0o755))
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	defer func() { _ = os.Chdir(origDir) }()
+	require.NoError(t, os.Chdir(sibling))
+
+	// cwd isn't under the root, so there's no meaningful offset to apply.
+	assert.Empty(t, subdirOffset(root))
+}
+
+// TestSetupWorkDir_ExplicitWorkingDirSkipsOffset - an explicit --workdir means
+// the caller chose the directory, so no implicit offset applies.
+func TestSetupWorkDir_ExplicitWorkingDirSkipsOffset(t *testing.T) {
+	ctx := &WorkflowContext{
+		Resolved: &config.ResolvedConfig{ProjectRoot: "/project/root"},
+	}
+	require.NoError(t, setupWorkDir(ctx, WorkflowOptions{WorkingDir: "/explicit/path"}))
+
+	assert.Equal(t, "/explicit/path", ctx.WorkDir)
+	assert.Empty(t, ctx.SubdirOffset)
+}

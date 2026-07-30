@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"fmt"
 	"os"
+	osexec "os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/stretchr/testify/assert"
@@ -781,4 +785,260 @@ func TestPull_DryRunMode(t *testing.T) {
 	})
 	require.Error(t, err)
 	// Should fail on config, not on dry-run flag
+}
+
+// newTestWorkflowContext builds the minimum context buildRemoteRunCommand needs.
+// Conn.Client stays nil: the function assembles a command string and never
+// executes it. Resolved.Project must be non-nil - Defaults.Setup is dereferenced
+// unconditionally.
+func newTestWorkflowContext(workDir, offset string) *WorkflowContext {
+	rewrite := false
+	return &WorkflowContext{
+		WorkDir:      workDir,
+		SubdirOffset: offset,
+		Resolved: &config.ResolvedConfig{
+			ProjectRoot: workDir,
+			Project:     &config.Config{RewritePaths: &rewrite},
+			Global:      &config.GlobalConfig{},
+		},
+		Conn: &host.Connection{Name: "m4-mini", Host: config.Host{Dir: "~/rr/app"}},
+	}
+}
+
+// TestBuildRemoteRunCommand_AutoCWD pins the fix for relative paths breaking
+// when rr is invoked from a subdirectory. rr executes at the remote project
+// root, so "pytest tests/foo.py" written in backend/ looked for backend's tests
+// at the root, found nothing, and reported success.
+func TestBuildRemoteRunCommand_AutoCWD(t *testing.T) {
+	const remoteDir = "/home/u/rr/app"
+
+	tests := []struct {
+		name        string
+		offset      string
+		explicitCWD string
+		wantContain string
+		wantAbsent  string
+	}{
+		{
+			name:        "offset applied when no explicit cwd",
+			offset:      "backend",
+			wantContain: "cd '/home/u/rr/app/backend' 2>/dev/null || true;",
+		},
+		{
+			name:        "nested offset",
+			offset:      "backend/api",
+			wantContain: "cd '/home/u/rr/app/backend/api' 2>/dev/null || true;",
+		},
+		{
+			name:       "no offset at project root",
+			offset:     "",
+			wantAbsent: "cd '/home/u/rr/app/",
+		},
+		{
+			name:        "explicit --cwd wins over the offset",
+			offset:      "backend",
+			explicitCWD: "frontend",
+			wantContain: "cd '/home/u/rr/app/frontend' &&",
+			wantAbsent:  "backend",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wf := newTestWorkflowContext("/Users/r/app", tt.offset)
+			got, err := buildRemoteRunCommand(wf, RunOptions{
+				Command:   "pytest tests/foo.py",
+				RemoteCWD: tt.explicitCWD,
+			}, remoteDir)
+			require.NoError(t, err)
+
+			if tt.wantContain != "" {
+				assert.Contains(t, got, tt.wantContain)
+			}
+			if tt.wantAbsent != "" {
+				assert.NotContains(t, got, tt.wantAbsent)
+			}
+		})
+	}
+}
+
+// TestBuildRemoteRunCommand_AutoCWDIsSoft - the implicit cd must never turn a
+// working command into a failure, since the subdirectory may not exist remotely
+// (sync excludes node_modules/, .venv/, and friends).
+func TestBuildRemoteRunCommand_AutoCWDIsSoft(t *testing.T) {
+	wf := newTestWorkflowContext("/Users/r/app", "node_modules/.bin")
+	got, err := buildRemoteRunCommand(wf, RunOptions{Command: "make build"}, "/home/u/rr/app")
+	require.NoError(t, err)
+
+	assert.Contains(t, got, "|| true; } &&",
+		"implicit cd must tolerate a missing directory, grouped so || binds only to it")
+	assert.Contains(t, got, "make build")
+}
+
+// TestAutoCWDSoftCdShellSemantics runs the emitted soft cd through a real shell.
+//
+// This is the regression guard for a precedence bug that a substring assertion
+// cannot catch: BuildRemoteCommand joins setup commands and the mandatory
+// `cd <project dir>` with &&, and `||` binds looser than `&&`, so an ungrouped
+// `cd X || true` swallowed the failure of the entire chain to its left. The
+// command then ran in $HOME with a half-built environment and reported success -
+// the exact false-green this branch exists to prevent.
+func TestAutoCWDSoftCdShellSemantics(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+
+	// The soft cd as emitted, with a deliberately missing target.
+	const softCd = `{ cd /nonexistent/subdir 2>/dev/null || true; }`
+
+	t.Run("earlier failure in the && chain stays fatal", func(t *testing.T) {
+		script := "false && cd /tmp && " + softCd + " && echo RAN"
+		out, err := osexec.Command("bash", "-c", script).CombinedOutput()
+		require.Error(t, err, "a failed setup command must abort the run")
+		assert.NotContains(t, string(out), "RAN",
+			"the command must not run when an earlier && step failed")
+	})
+
+	t.Run("missing subdir falls back to the parent cwd", func(t *testing.T) {
+		script := "cd /tmp && " + softCd + " && pwd"
+		out, err := osexec.Command("bash", "-c", script).CombinedOutput()
+		require.NoError(t, err, "a missing subdirectory must not fail the run")
+		assert.Contains(t, string(out), "/tmp",
+			"command should run in the project dir when the offset is missing")
+	})
+
+	t.Run("existing subdir is entered", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+		script := fmt.Sprintf("cd %s && { cd %s/sub 2>/dev/null || true; } && pwd", root, root)
+		out, err := osexec.Command("bash", "-c", script).CombinedOutput()
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "sub")
+	})
+}
+
+// TestBuildRemoteRunCommand_ExplicitCWDStillHardFails - an explicit --cwd is a
+// direct request, so traversal outside the project root is still an error. This
+// exercises the real guard rather than mirroring its logic.
+func TestBuildRemoteRunCommand_ExplicitCWDStillHardFails(t *testing.T) {
+	wf := newTestWorkflowContext("/Users/r/app", "")
+	_, err := buildRemoteRunCommand(wf, RunOptions{
+		Command:   "ls",
+		RemoteCWD: "../../etc",
+	}, "/home/u/rr/app")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes the remote project root")
+}
+
+func TestLocalRunDir(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "backend"), 0o755))
+
+	t.Run("applies offset so local matches remote", func(t *testing.T) {
+		wf := newTestWorkflowContext(root, "backend")
+		assert.Equal(t, filepath.Join(root, "backend"), localRunDir(wf, RunOptions{}))
+	})
+
+	t.Run("falls back to root when offset is missing locally", func(t *testing.T) {
+		wf := newTestWorkflowContext(root, "nonexistent")
+		assert.Equal(t, root, localRunDir(wf, RunOptions{}))
+	})
+
+	t.Run("no offset yields project root", func(t *testing.T) {
+		wf := newTestWorkflowContext(root, "")
+		assert.Equal(t, root, localRunDir(wf, RunOptions{}))
+	})
+
+	t.Run("explicit cwd wins", func(t *testing.T) {
+		wf := newTestWorkflowContext(root, "nonexistent")
+		assert.Equal(t, filepath.Join(root, "backend"),
+			localRunDir(wf, RunOptions{RemoteCWD: "backend"}))
+	})
+
+	// localRunDir itself degrades to the root for an unusable explicit --cwd,
+	// but Run rejects that case before executing (see
+	// TestValidatedRunOffset_TraversalGuard) - the flag is never silently
+	// ignored in practice.
+	t.Run("explicit cwd missing locally degrades to root", func(t *testing.T) {
+		wf := newTestWorkflowContext(root, "")
+		assert.Equal(t, root, localRunDir(wf, RunOptions{RemoteCWD: "gone"}))
+
+		_, err := validatedRunOffset(wf, RunOptions{RemoteCWD: "gone"})
+		require.Error(t, err, "Run must reject it rather than run at the root")
+	})
+}
+
+// TestValidatedRunOffset_TraversalGuard - an escaping --cwd must be rejected on
+// the local path too. buildRemoteRunCommand has always rejected it, but the
+// local/local_fallback path applied opts.RemoteCWD with only an existence
+// check, so `rr run --local --cwd ../ "cat outside.txt"` read a file outside the
+// project and exited 0. Identical invocations must not be an error remotely and
+// a silent escape locally.
+func TestValidatedRunOffset_TraversalGuard(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "afile"), []byte("x"), 0o644))
+
+	wf := newTestWorkflowContext(root, "")
+	wf.WorkDir = root
+
+	tests := []struct {
+		name    string
+		cwd     string
+		offset  string
+		want    string
+		wantErr string
+	}{
+		{name: "explicit cwd inside root", cwd: "sub", want: "sub"},
+		{name: "explicit cwd escapes root", cwd: "../", wantErr: "escapes the project root"},
+		{name: "explicit cwd escapes deeper", cwd: "../../etc", wantErr: "escapes the project root"},
+		// "." is passed through rather than normalized away; it joins to the
+		// root either way, and normalizeOffset reduces it for display.
+		{name: "explicit cwd is the root", cwd: ".", want: "."},
+		{name: "no cwd, no offset", want: ""},
+		{name: "auto offset inside root", offset: "sub", want: "sub"},
+		// An auto offset can't escape (subdirOffset filters ".."), and it's
+		// implicit, so it falls back to the root rather than erroring.
+		{name: "auto offset escaping falls back quietly", offset: "../oops", want: ""},
+		{name: "auto offset missing on disk", offset: "gone", want: ""},
+		// An explicit --cwd that doesn't exist must fail, not quietly run at
+		// the root: the remote path emits a hard `cd X && cmd`, so ignoring
+		// the flag locally would make the same invocation mean two things.
+		{name: "explicit cwd missing on disk", cwd: "gone", wantErr: "doesn't exist in the project"},
+		{name: "explicit cwd is a file, not a dir", cwd: "afile", wantErr: "doesn't exist in the project"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wf.SubdirOffset = tt.offset
+			got, err := validatedRunOffset(wf, RunOptions{RemoteCWD: tt.cwd})
+			if tt.wantErr != "" {
+				require.Error(t, err, "an unusable explicit --cwd must be rejected")
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestOffsetRunDir pins that a validated offset resolves without re-stat'ing.
+// Run validates the explicit --cwd, then executes; deriving the directory a
+// second time through localRunDir would re-check the filesystem and degrade to
+// the project root, silently discarding a --cwd that had just passed.
+func TestOffsetRunDir(t *testing.T) {
+	root := t.TempDir()
+	wf := newTestWorkflowContext(root, "")
+	wf.WorkDir = root
+
+	assert.Equal(t, root, offsetRunDir(wf, ""), "empty offset is the project root")
+	assert.Equal(t, filepath.Join(root, "sub"), offsetRunDir(wf, "sub"))
+	assert.Equal(t, filepath.Join(root, "a", "b"), offsetRunDir(wf, "a/b"))
+
+	// The point of the split: a directory that no longer exists still resolves,
+	// because validation already happened and re-deciding here would undo it.
+	assert.Equal(t, filepath.Join(root, "vanished"), offsetRunDir(wf, "vanished"))
 }

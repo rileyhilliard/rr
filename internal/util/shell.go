@@ -62,6 +62,41 @@ func IsCompoundCommand(cmd string) bool {
 	return false
 }
 
+// HasPipe reports whether cmd pipes output between commands outside quotes.
+// This matters for exit codes: without `set -o pipefail` the shell reports only
+// the last stage's status, so a runner that failed upstream still exits 0.
+// `||` is not a pipe, so consecutive bars are skipped.
+func HasPipe(cmd string) bool {
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+		case c == '\\':
+			i++ // skip escaped character
+		case inDouble:
+			if c == '"' {
+				inDouble = false
+			}
+		case c == '\'':
+			inSingle = true
+		case c == '"':
+			inDouble = true
+		case c == '|':
+			if i+1 < len(cmd) && cmd[i+1] == '|' {
+				i++ // `||` is logical OR, not a pipe
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // ShellQuotePreserveTilde quotes a path for shell execution while preserving tilde expansion.
 // For paths starting with ~/, the tilde is kept unquoted and the rest is single-quoted.
 // For other paths, the entire path is single-quoted.

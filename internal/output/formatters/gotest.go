@@ -349,6 +349,24 @@ func (f *GoTestFormatter) Reset() {
 	f.failureLines = make([]string, 0)
 }
 
+// RanNothing implements output.NoTestsReporter.
+//
+// True only when go test reported packages and every one of them had no test
+// files. Deliberately narrow: `go test -run NoSuchTest` leaves the package
+// status "ok" (not "?") and exits 0, which is a normal dev-loop invocation
+// rather than a defect, so it is not reported here.
+func (f *GoTestFormatter) RanNothing() bool {
+	if len(f.tests) > 0 || len(f.packages) == 0 {
+		return false
+	}
+	for _, p := range f.packages {
+		if p.Status != "?" {
+			return false
+		}
+	}
+	return true
+}
+
 // GetTestFailures implements output.TestSummaryProvider.
 // Returns the list of test failures collected during processing.
 func (f *GoTestFormatter) GetTestFailures() []output.TestFailure {

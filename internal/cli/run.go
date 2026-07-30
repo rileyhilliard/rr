@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -89,7 +90,26 @@ func Run(opts RunOptions) (int, error) {
 	remoteProjectDir := ""
 
 	if wf.Conn.IsLocal {
-		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
+		// Validate here rather than in localRunDir: an escaping --cwd must fail
+		// the run the same way it does remotely, not quietly fall back.
+		offset, offsetErr := validatedRunOffset(wf, opts)
+		if offsetErr != nil {
+			wf.Reporter.PhaseFailed("exec", offsetErr)
+			return 1, offsetErr
+		}
+		// Report the offset here too: a local (or fallback) run applies the same
+		// subdirectory, and a consumer can't tell which directory was used
+		// otherwise. Only for an inferred offset, though - reportAutoCWD's
+		// reason is "matched_invocation_dir", which would be a false claim for
+		// a directory the user named with --cwd.
+		if offset != "" && opts.RemoteCWD == "" {
+			reportAutoCWD(wf, offset)
+		}
+		// Run in the directory just validated rather than recomputing it:
+		// localRunDir re-stats and degrades to the project root, so a second
+		// computation could silently discard an explicit --cwd that passed
+		// validation a moment ago.
+		exitCode, err = exec.ExecuteLocal(opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
 		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
@@ -126,8 +146,18 @@ func Run(opts RunOptions) (int, error) {
 	// Post-failure hint: detect local-machine assumptions (paths that only
 	// exist here, git commands against the synced snapshot).
 	failureHint := ""
-	if exitCode != 0 && !wf.Conn.IsLocal {
-		failureHint = buildFailureHint(opts.Command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteProjectDir, wf.Conn.Name)
+	if exitCode != 0 {
+		stderr := streamHandler.GetStderrCapture()
+		if !wf.Conn.IsLocal {
+			failureHint = buildFailureHint(opts.Command, stderr, wf.WorkDir, remoteProjectDir, wf.Conn.Name)
+		}
+		// A relative path that resolves from the caller's directory but not
+		// from wherever the command ran is rr's own doing - it moved the cwd.
+		// Both candidates are on this machine, so the check is local either
+		// way, and it applies equally to an explicit --cwd.
+		if failureHint == "" {
+			failureHint = buildRelativePathHint(stderr, wf.WorkDir, wf.SubdirOffset, effectiveRunOffset(wf, opts))
+		}
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
 		}
@@ -156,6 +186,7 @@ func Run(opts RunOptions) (int, error) {
 	wf.PhaseDisplay.ThinDivider()
 	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 	repeatFallbackWarning(wf.ResultDetails)
+	warnNoTests(wf.ResultDetails)
 
 	if failureHint != "" {
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
@@ -265,9 +296,141 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 		}
 		subdir := util.ShellQuotePreserveTilde(resolved)
 		cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
+	} else if offset := autoSubdirOffset(wf); offset != "" {
+		// No explicit --cwd: mirror the caller's subdirectory so relative paths
+		// in the command mean what they meant locally. rr executes at the
+		// project root, which silently changes every relative path otherwise.
+		resolved := path.Join(remoteProjectDir, offset)
+		// Same guard the explicit --cwd branch applies. subdirOffset already
+		// rejects ".." escapes, but two paths reach this cd and only validating
+		// one of them is how the next refactor introduces a hole.
+		if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("subdirectory '%s' escapes the remote project root", offset),
+				"run rr from inside the project, or pass --cwd with a path under the project root")
+		}
+		subdir := util.ShellQuotePreserveTilde(resolved)
+		// Soft cd: the offset may not exist remotely (excluded from sync), and
+		// this is implicit, so it must never turn a working command into a
+		// failure. An explicit --cwd above still hard-fails.
+		//
+		// The braces and the trailing && both matter. BuildRemoteCommand joins
+		// setup commands and the mandatory `cd <project dir>` with &&, and `||`
+		// binds looser than `&&`, so a bare `cd X || true` would swallow the
+		// failure of everything to its left - running the command in $HOME with
+		// a half-built environment and calling it success. Grouping confines
+		// `|| true` to this cd, and joining with && keeps the earlier chain fatal.
+		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", subdir, cmd)
+		reportAutoCWD(wf, offset)
 	}
 
 	return exec.BuildRemoteCommand(cmd, &wf.Conn.Host), nil
+}
+
+// autoSubdirOffset returns the caller's subdirectory offset to apply to an
+// ad-hoc remote command, or "" when none should apply.
+//
+// Named tasks never reach here - they declare their own directories
+// (docs/configuration.md shows "run: cd backend && pytest"), so an offset would
+// double up, and their args are already rewritten relative to the project root.
+//
+// The offset may not exist remotely (e.g. invoked from inside node_modules/,
+// which sync excludes); the soft cd at the call site absorbs that rather than
+// re-deriving rsync's exclude semantics here.
+func autoSubdirOffset(wf *WorkflowContext) string {
+	return wf.SubdirOffset
+}
+
+// localRunDir picks the working directory for a local (--local or fallback) run.
+//
+// It applies the same subdirectory offset as the remote path, so a command means
+// the same thing either way. Without this, `local_fallback` would make identical
+// invocations behave differently depending on whether a host happened to answer.
+// Falls back to the project root when the offset doesn't resolve.
+func localRunDir(wf *WorkflowContext, opts RunOptions) string {
+	return offsetRunDir(wf, effectiveRunOffset(wf, opts))
+}
+
+// offsetRunDir resolves an already-computed offset to an absolute directory.
+// Callers that have validated an offset use this instead of localRunDir so the
+// directory is derived once - re-deriving it re-stats the path and can degrade
+// to the project root, discarding an explicit --cwd that already passed.
+func offsetRunDir(wf *WorkflowContext, offset string) string {
+	if offset == "" {
+		return wf.WorkDir
+	}
+	return filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+}
+
+// effectiveRunOffset returns the project-root-relative directory the command
+// runs in: an explicit --cwd wins over the caller's subdirectory. Returns ""
+// when neither applies or the directory doesn't exist locally, matching the
+// soft cd's fallback to the project root.
+func effectiveRunOffset(wf *WorkflowContext, opts RunOptions) string {
+	offset, err := validatedRunOffset(wf, opts)
+	if err != nil {
+		return ""
+	}
+	return offset
+}
+
+// validatedRunOffset is effectiveRunOffset with the traversal check surfaced,
+// so the local path can reject an escaping --cwd instead of silently running
+// outside the project. Same guard the remote path applies in
+// buildRemoteRunCommand - an identical invocation must not be an error on one
+// and a silent escape on the other.
+func validatedRunOffset(wf *WorkflowContext, opts RunOptions) (string, error) {
+	offset := opts.RemoteCWD
+	explicit := offset != ""
+	if !explicit {
+		offset = autoSubdirOffset(wf)
+	}
+	if offset == "" {
+		return "", nil
+	}
+
+	dir := filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(dir+sep, wf.WorkDir+sep) {
+		if explicit {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' escapes the project root", opts.RemoteCWD),
+				"use a path relative to the project root without '..' components")
+		}
+		return "", nil
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		// Explicit --cwd is a direct request: the remote path emits a hard
+		// `cd X && cmd`, so a missing directory fails there. Silently running
+		// at the root here would ignore the flag and report success.
+		if explicit {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' doesn't exist in the project", opts.RemoteCWD),
+				"check the path, or omit --cwd to run at the project root")
+		}
+		// An implicit offset is rr's inference, not the user's instruction, so
+		// it falls back to the root instead - matching the remote soft cd.
+		return "", nil
+	}
+	return offset, nil
+}
+
+// reportAutoCWD records the implicit working directory so the behavior is
+// visible rather than magic, mirroring how path rewrites are reported.
+func reportAutoCWD(wf *WorkflowContext, offset string) {
+	wf.AddResultDetail("remote_cwd", offset)
+	if PrettyMode() {
+		return
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:   "phase",
+		Phase:  "exec",
+		Status: "info",
+		Details: map[string]interface{}{
+			"remote_cwd": offset,
+			"reason":     "matched_invocation_dir",
+		},
+	})
 }
 
 // renderFinalStatus displays the final execution status line.

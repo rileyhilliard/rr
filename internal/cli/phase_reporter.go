@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/ui"
@@ -77,6 +78,32 @@ func (r *PrettyReporter) CommandPrompt(command string) {
 func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	renderFinalStatus(r.pd, exitCode, totalDuration, execDuration, host)
 	repeatFallbackWarning(extra)
+	warnNoTests(extra)
+}
+
+// warnNoTests prints a warning when the test runner executed nothing. Exit
+// codes stay untouched, so without this a zero-test run is visually
+// indistinguishable from a clean suite.
+func warnNoTests(details map[string]interface{}) {
+	if noTests, ok := details["no_tests"].(bool); !ok || !noTests {
+		return
+	}
+	// Deliberately says nothing about where relative paths resolve: that
+	// depends on the offset and on --cwd, and details.remote_cwd already
+	// reports the answer. Stale directory advice is worse than none.
+	msg := "No tests ran - the runner collected zero tests. " +
+		"Check the path or filter you passed."
+	if tasks, ok := details["no_tests_tasks"].([]string); ok && len(tasks) > 0 {
+		msg = fmt.Sprintf("No tests ran in: %s. Check the path or filter passed to those subtasks.",
+			strings.Join(tasks, ", "))
+	}
+	// A pipe is why the exit code can't be trusted here: the shell reports the
+	// last stage's status, so a runner that failed upstream still exits 0.
+	if piped, ok := details["piped_exit_code"].(bool); ok && piped {
+		msg += " The command pipes its output, so the exit code came from the last stage, not the runner - " +
+			"set shell: \"bash -o pipefail -c\" on the host to propagate it."
+	}
+	ui.PrintWarning(msg)
 }
 
 // repeatFallbackWarning re-prints the local-fallback warning after the final

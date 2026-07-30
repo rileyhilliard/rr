@@ -40,3 +40,105 @@ func TestTailLines(t *testing.T) {
 		assert.Equal(t, []string{"last"}, lines)
 	})
 }
+
+// TestAttachRunOutcomeNoTests pins that a run collecting zero tests is flagged
+// in the result envelope. Without the no_tests detail such a run is reported
+// exactly like a clean suite - the original false-green bug.
+func TestAttachRunOutcomeNoTests(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		logContents string
+		wantNoTests bool
+	}{
+		{
+			name:        "pytest collected nothing",
+			command:     "uv run pytest tests/scripts/test_cluster.py -k classify",
+			logContents: "collected 0 items\n\n===== no tests ran in 0.05s =====\n",
+			wantNoTests: true,
+		},
+		{
+			name:        "pytest ran tests",
+			command:     "uv run pytest tests/",
+			logContents: "collected 2 items\n\n===== 2 passed in 0.10s =====\n",
+			wantNoTests: false,
+		},
+		{
+			name:        "collect-only is an intentional zero-test run",
+			command:     "uv run pytest --collect-only tests/",
+			logContents: "collected 12 items\n\n12 tests collected in 0.01s\n",
+			wantNoTests: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "output.log")
+			require.NoError(t, os.WriteFile(logPath, []byte(tt.logContents), 0o600))
+
+			wf := &WorkflowContext{}
+			attachRunOutcome(wf, tt.command, logPath, 0)
+
+			noTests, present := wf.ResultDetails["no_tests"].(bool)
+			if tt.wantNoTests {
+				assert.True(t, present && noTests, "expected no_tests detail")
+			} else {
+				assert.False(t, present && noTests, "no_tests must not be set")
+			}
+		})
+	}
+}
+
+// TestAttachRunOutcomePipedExitCode pins the caveat that explains why the exit
+// code can't be trusted on a zero-test run: a pipe means the shell reported the
+// last stage's status, not the runner's. The flag is advisory only - rr does not
+// rewrite the command, since `cmd | grep -q` tolerates upstream failure on
+// purpose.
+func TestAttachRunOutcomePipedExitCode(t *testing.T) {
+	const noTestsLog = "collected 0 items\n\n===== no tests ran in 0.05s =====\n"
+
+	tests := []struct {
+		name      string
+		command   string
+		log       string
+		wantPiped bool
+	}{
+		{
+			name:      "piped zero-test run",
+			command:   "uv run pytest -k classify | tail -8",
+			log:       noTestsLog,
+			wantPiped: true,
+		},
+		{
+			name:      "unpiped zero-test run",
+			command:   "uv run pytest -k classify",
+			log:       noTestsLog,
+			wantPiped: false,
+		},
+		{
+			name:      "pipe but tests actually ran",
+			command:   "uv run pytest tests/ | tail -8",
+			log:       "collected 2 items\n\n===== 2 passed in 0.10s =====\n",
+			wantPiped: false,
+		},
+		{
+			name:      "logical or is not a pipe",
+			command:   "uv run pytest -k classify || true",
+			log:       noTestsLog,
+			wantPiped: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "output.log")
+			require.NoError(t, os.WriteFile(logPath, []byte(tt.log), 0o600))
+
+			wf := &WorkflowContext{}
+			attachRunOutcome(wf, tt.command, logPath, 0)
+
+			piped, present := wf.ResultDetails["piped_exit_code"].(bool)
+			assert.Equal(t, tt.wantPiped, present && piped)
+		})
+	}
+}
