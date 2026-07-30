@@ -127,8 +127,18 @@ func Run(opts RunOptions) (int, error) {
 	// Post-failure hint: detect local-machine assumptions (paths that only
 	// exist here, git commands against the synced snapshot).
 	failureHint := ""
-	if exitCode != 0 && !wf.Conn.IsLocal {
-		failureHint = buildFailureHint(opts.Command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteProjectDir, wf.Conn.Name)
+	if exitCode != 0 {
+		stderr := streamHandler.GetStderrCapture()
+		if !wf.Conn.IsLocal {
+			failureHint = buildFailureHint(opts.Command, stderr, wf.WorkDir, remoteProjectDir, wf.Conn.Name)
+		}
+		// A relative path that resolves from the caller's directory but not
+		// from wherever the command ran is rr's own doing - it moved the cwd.
+		// Both candidates are on this machine, so the check is local either
+		// way, and it applies equally to an explicit --cwd.
+		if failureHint == "" {
+			failureHint = buildRelativePathHint(stderr, wf.WorkDir, wf.SubdirOffset, effectiveRunOffset(wf, opts))
+		}
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
 		}
@@ -304,19 +314,31 @@ func autoSubdirOffset(wf *WorkflowContext) string {
 // invocations behave differently depending on whether a host happened to answer.
 // Falls back to the project root when the offset doesn't resolve.
 func localRunDir(wf *WorkflowContext, opts RunOptions) string {
+	offset := effectiveRunOffset(wf, opts)
+	if offset == "" {
+		return wf.WorkDir
+	}
+	return filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+}
+
+// effectiveRunOffset returns the project-root-relative directory the command
+// runs in: an explicit --cwd wins over the caller's subdirectory. Returns ""
+// when neither applies or the directory doesn't exist locally, matching the
+// soft cd's fallback to the project root.
+func effectiveRunOffset(wf *WorkflowContext, opts RunOptions) string {
 	offset := opts.RemoteCWD
 	if offset == "" {
 		offset = autoSubdirOffset(wf)
 	}
 	if offset == "" {
-		return wf.WorkDir
+		return ""
 	}
 
 	dir := filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return wf.WorkDir
+		return ""
 	}
-	return dir
+	return offset
 }
 
 // reportAutoCWD records the implicit working directory so the behavior is
