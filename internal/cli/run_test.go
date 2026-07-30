@@ -955,6 +955,18 @@ func TestLocalRunDir(t *testing.T) {
 		assert.Equal(t, filepath.Join(root, "backend"),
 			localRunDir(wf, RunOptions{RemoteCWD: "backend"}))
 	})
+
+	// localRunDir itself degrades to the root for an unusable explicit --cwd,
+	// but Run rejects that case before executing (see
+	// TestValidatedRunOffset_TraversalGuard) - the flag is never silently
+	// ignored in practice.
+	t.Run("explicit cwd missing locally degrades to root", func(t *testing.T) {
+		wf := newTestWorkflowContext(root, "")
+		assert.Equal(t, root, localRunDir(wf, RunOptions{RemoteCWD: "gone"}))
+
+		_, err := validatedRunOffset(wf, RunOptions{RemoteCWD: "gone"})
+		require.Error(t, err, "Run must reject it rather than run at the root")
+	})
 }
 
 // TestValidatedRunOffset_TraversalGuard - an escaping --cwd must be rejected on
@@ -967,6 +979,7 @@ func TestValidatedRunOffset_TraversalGuard(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "afile"), []byte("x"), 0o644))
 
 	wf := newTestWorkflowContext(root, "")
 	wf.WorkDir = root
@@ -976,11 +989,11 @@ func TestValidatedRunOffset_TraversalGuard(t *testing.T) {
 		cwd     string
 		offset  string
 		want    string
-		wantErr bool
+		wantErr string
 	}{
 		{name: "explicit cwd inside root", cwd: "sub", want: "sub"},
-		{name: "explicit cwd escapes root", cwd: "../", wantErr: true},
-		{name: "explicit cwd escapes deeper", cwd: "../../etc", wantErr: true},
+		{name: "explicit cwd escapes root", cwd: "../", wantErr: "escapes the project root"},
+		{name: "explicit cwd escapes deeper", cwd: "../../etc", wantErr: "escapes the project root"},
 		// "." is passed through rather than normalized away; it joins to the
 		// root either way, and normalizeOffset reduces it for display.
 		{name: "explicit cwd is the root", cwd: ".", want: "."},
@@ -990,15 +1003,20 @@ func TestValidatedRunOffset_TraversalGuard(t *testing.T) {
 		// implicit, so it falls back to the root rather than erroring.
 		{name: "auto offset escaping falls back quietly", offset: "../oops", want: ""},
 		{name: "auto offset missing on disk", offset: "gone", want: ""},
+		// An explicit --cwd that doesn't exist must fail, not quietly run at
+		// the root: the remote path emits a hard `cd X && cmd`, so ignoring
+		// the flag locally would make the same invocation mean two things.
+		{name: "explicit cwd missing on disk", cwd: "gone", wantErr: "doesn't exist in the project"},
+		{name: "explicit cwd is a file, not a dir", cwd: "afile", wantErr: "doesn't exist in the project"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wf.SubdirOffset = tt.offset
 			got, err := validatedRunOffset(wf, RunOptions{RemoteCWD: tt.cwd})
-			if tt.wantErr {
-				require.Error(t, err, "escaping --cwd must be rejected")
-				assert.Contains(t, err.Error(), "escapes the project root")
+			if tt.wantErr != "" {
+				require.Error(t, err, "an unusable explicit --cwd must be rejected")
+				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
 			require.NoError(t, err)

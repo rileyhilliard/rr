@@ -99,8 +99,10 @@ func Run(opts RunOptions) (int, error) {
 		}
 		// Report the offset here too: a local (or fallback) run applies the same
 		// subdirectory, and a consumer can't tell which directory was used
-		// otherwise.
-		if offset != "" {
+		// otherwise. Only for an inferred offset, though - reportAutoCWD's
+		// reason is "matched_invocation_dir", which would be a false claim for
+		// a directory the user named with --cwd.
+		if offset != "" && opts.RemoteCWD == "" {
 			reportAutoCWD(wf, offset)
 		}
 		exitCode, err = exec.ExecuteLocal(opts.Command, localRunDir(wf, opts), streamHandler.Stdout(), streamHandler.Stderr())
@@ -387,6 +389,16 @@ func validatedRunOffset(wf *WorkflowContext, opts RunOptions) (string, error) {
 		return "", nil
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		// Explicit --cwd is a direct request: the remote path emits a hard
+		// `cd X && cmd`, so a missing directory fails there. Silently running
+		// at the root here would ignore the flag and report success.
+		if explicit {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' doesn't exist in the project", opts.RemoteCWD),
+				"check the path, or omit --cwd to run at the project root")
+		}
+		// An implicit offset is rr's inference, not the user's instruction, so
+		// it falls back to the root instead - matching the remote soft cd.
 		return "", nil
 	}
 	return offset, nil
