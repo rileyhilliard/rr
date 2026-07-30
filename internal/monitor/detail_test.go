@@ -1,6 +1,8 @@
 package monitor
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -421,6 +423,127 @@ func TestModel_renderDetailCPUSection_Temperature(t *testing.T) {
 	cpu.TempC = 45.0
 	result = m.renderDetailCPUSection("server1", cpu, 80)
 	assert.Contains(t, result, "45C")
+}
+
+func TestModel_renderDetailCPUSection_WarmingUp(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+
+	// Linux first sample: Cores set but no per-core deltas yet. The bogus 0.0%
+	// must not be shown as a real reading.
+	cpu := CPUMetrics{Percent: 0, Cores: 8}
+	result := m.renderDetailCPUSection("server1", cpu, 80)
+	assert.Contains(t, result, cpuWarmingUpText)
+	assert.NotContains(t, result, "0.0%")
+
+	// Once per-core deltas arrive, the real percentage is shown
+	cpu.Percent = 12.5
+	cpu.PerCore = []float64{10, 15, 12, 13, 11, 14, 12, 13}
+	result = m.renderDetailCPUSection("server1", cpu, 80)
+	assert.NotContains(t, result, cpuWarmingUpText)
+	assert.Contains(t, result, "12.5%")
+}
+
+func TestModel_renderCardCPUSection_WarmingUp(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 160
+
+	cpu := CPUMetrics{Percent: 0, Cores: 8, LoadAvg: [3]float64{1.5, 1.2, 1.0}}
+	full := strings.Join(m.renderCardCPUSection("server1", cpu, 60), "\n")
+	assert.Contains(t, full, cpuWarmingUpText)
+
+	compact := strings.Join(m.renderCompactCPUSection("server1", cpu, 60), "\n")
+	assert.Contains(t, compact, cpuWarmingUpText)
+
+	minimal := strings.Join(m.renderMinimalCPUSection("server1", cpu, 60), "\n")
+	assert.Contains(t, minimal, cpuWarmingUpText)
+}
+
+func TestRenderPercentStats(t *testing.T) {
+	assert.Equal(t, "Waiting for data...", renderPercentStats(nil))
+
+	// Peak and average over the full window
+	got := renderPercentStats([]float64{10, 20, 60})
+	assert.Contains(t, got, "Peak: 60.0%")
+	assert.Contains(t, got, "Avg: 30.0%")
+}
+
+func TestModel_renderDetailSections_PeakAvgStats(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+
+	// Push history so the sections have a window to summarize
+	for _, pct := range []float64{20, 40, 80} {
+		m.history.Push("server1", &HostMetrics{
+			CPU: CPUMetrics{Percent: pct, Cores: 4, PerCore: []float64{pct}},
+			GPU: &GPUMetrics{Percent: pct},
+		})
+	}
+
+	cpuSection := m.renderDetailCPUSection("server1", CPUMetrics{Percent: 80, Cores: 4, PerCore: []float64{80}}, 80)
+	assert.Contains(t, cpuSection, "Peak:")
+	assert.Contains(t, cpuSection, "Avg:")
+
+	gpuSection := m.renderDetailGPUSection("server1", &GPUMetrics{Percent: 80}, 80)
+	assert.Contains(t, gpuSection, "Peak:")
+	assert.Contains(t, gpuSection, "Avg:")
+}
+
+func TestModel_renderDetailProcessSection_SortOrder(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+
+	procs := []ProcessInfo{
+		{PID: 1, User: "root", CPU: 90, Memory: 5, Command: "cpuhog"},
+		{PID: 2, User: "root", CPU: 5, Memory: 90, Command: "memhog"},
+	}
+
+	// Header reflects the active sort, and ordering follows it
+	byCPU := m.renderDetailProcessSection(procs, 100)
+	assert.Contains(t, byCPU, "by CPU")
+	assert.Less(t, strings.Index(byCPU, "cpuhog"), strings.Index(byCPU, "memhog"))
+
+	m.procSortOrder = ProcSortByMemory
+	byMem := m.renderDetailProcessSection(procs, 100)
+	assert.Contains(t, byMem, "by MEM")
+	assert.Less(t, strings.Index(byMem, "memhog"), strings.Index(byMem, "cpuhog"))
+}
+
+func TestModel_renderDetailProcessSection_ShowsTenProcesses(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+
+	// Collector gathers 15; the detail view lists 10
+	procs := make([]ProcessInfo, 15)
+	for i := range procs {
+		procs[i] = ProcessInfo{PID: i + 1, User: "root", CPU: float64(15 - i), Command: fmt.Sprintf("proc%d", i)}
+	}
+
+	result := m.renderDetailProcessSection(procs, 100)
+	for i := 0; i < detailProcessLimit; i++ {
+		assert.Contains(t, result, fmt.Sprintf("proc%d", i))
+	}
+	assert.NotContains(t, result, "proc10")
 }
 
 func TestModel_renderDetailDiskSection(t *testing.T) {

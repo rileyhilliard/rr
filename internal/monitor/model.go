@@ -86,8 +86,10 @@ type Model struct {
 	thresholds config.ThresholdConfig // Metric severity thresholds for coloring
 	quitting   bool
 	sortOrder  SortOrder
-	viewMode   ViewMode
-	showHelp   bool
+	// procSortOrder controls the detail view's process table ordering ('p')
+	procSortOrder ProcSortOrder
+	viewMode      ViewMode
+	showHelp      bool
 
 	// Streaming collection state
 	collecting bool // Whether a collection cycle is in progress
@@ -345,8 +347,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.listViewport.Height = viewportHeight
 		}
 
-		// Card bodies are rendered for a specific width/layout; drop them all
-		// so cards re-render at the new dimensions
+		// Card bodies are rendered for a specific width/layout and height
+		// (graph rows and process count follow CanShowExtendedInfo); drop them
+		// all so cards re-render at the new dimensions
 		clear(m.cardBodyCache)
 
 		// Update viewport content based on current view (dimensions changed)

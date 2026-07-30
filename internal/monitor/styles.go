@@ -4,31 +4,35 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/ui"
 )
 
-// Dashboard color palette - Gen Z Electric Synthwave
+// Dashboard color palette - Gen Z Electric Synthwave.
+// Shared base colors (backgrounds, border, text) come from internal/ui; the
+// severity colors come from the monitor theme block there, which maps severity
+// to cyan/purple/pink rather than the CLI's green/amber/red.
 const (
 	// Background colors (glassmorphism-inspired)
-	ColorDarkBg    = lipgloss.Color("#0A0A0F") // Deep void
-	ColorSurfaceBg = lipgloss.Color("#12121A") // Dark surface
-	ColorBorder    = lipgloss.Color("#2A2A4A") // Glass border (purple tint)
+	ColorDarkBg    = ui.ColorDeepVoid    // Deep void
+	ColorSurfaceBg = ui.ColorDarkSurface // Dark surface
+	ColorBorder    = ui.ColorGlassBorder // Glass border (purple tint)
 
 	// Semantic colors for metrics - gen-z synthwave gradient
-	ColorHealthy  = lipgloss.Color("#00FFFF") // Neon cyan - chill vibes
-	ColorWarning  = lipgloss.Color("#BF40FF") // Neon purple - getting spicy
-	ColorCritical = lipgloss.Color("#FF2E97") // Hot pink - main character energy
+	ColorHealthy  = ui.MonitorHealthy  // Neon cyan - chill vibes
+	ColorWarning  = ui.MonitorWarning  // Neon purple - getting spicy
+	ColorCritical = ui.MonitorCritical // Hot pink - main character energy
 
 	// Text colors
-	ColorTextPrimary   = lipgloss.Color("#FFFFFF") // Pure white
-	ColorTextSecondary = lipgloss.Color("#B4B4D0") // Lavender gray
-	ColorTextMuted     = lipgloss.Color("#6B6B8D") // Purple-gray
+	ColorTextPrimary   = ui.ColorPrimary   // Pure white
+	ColorTextSecondary = ui.ColorSecondary // Lavender gray
+	ColorTextMuted     = ui.ColorMuted     // Purple-gray
 
 	// Accent colors - neon pink primary, cyan secondary
-	ColorAccent    = lipgloss.Color("#FF2E97") // Neon pink
-	ColorAccentDim = lipgloss.Color("#BF40FF") // Neon purple
+	ColorAccent    = ui.ColorNeonPink   // Neon pink
+	ColorAccentDim = ui.ColorNeonPurple // Neon purple
 
 	// Graph colors
-	ColorGraph = lipgloss.Color("#00FFFF") // Neon cyan
+	ColorGraph = ui.ColorNeonCyan // Neon cyan
 )
 
 // Thresholds for metric severity levels

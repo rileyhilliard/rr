@@ -23,6 +23,17 @@ type CPUMetrics struct {
 	TempC   float64   // CPU temperature in Celsius (0 = unavailable)
 }
 
+// Valid reports whether Percent reflects a real measurement.
+//
+// Linux CPU usage is a delta between two /proc/stat reads, so the first sample
+// for a host always reports 0% rather than an actual reading. Those samples fill
+// in Cores (from /proc/stat) but leave PerCore empty, which is what we key off.
+// macOS reads instantaneous usage from `top` and reports Cores as 0, so its
+// samples are always valid.
+func (c CPUMetrics) Valid() bool {
+	return c.Cores == 0 || len(c.PerCore) > 0
+}
+
 // DiskMetrics contains root filesystem usage and disk I/O rates.
 type DiskMetrics struct {
 	UsedBytes        int64

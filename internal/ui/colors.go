@@ -53,6 +53,19 @@ const (
 	ColorMuted     lipgloss.Color = "#6B6B8D" // Purple-gray
 )
 
+// Monitor dashboard theme.
+//
+// The dashboard reuses the shared backgrounds, borders, and text colors above,
+// but maps severity to its own gradient: cyan (chill) -> purple (spicy) ->
+// hot pink (main character energy). That mapping is deliberate and differs from
+// the CLI's success/warning/error semantics, so it lives here as its own block
+// rather than aliasing ColorSuccess/ColorWarning/ColorError.
+const (
+	MonitorHealthy  lipgloss.Color = ColorNeonCyan   // Neon cyan - chill vibes
+	MonitorWarning  lipgloss.Color = ColorNeonPurple // Neon purple - getting spicy
+	MonitorCritical lipgloss.Color = ColorNeonPink   // Hot pink - main character energy
+)
+
 // Gradient colors for animations and progress bars
 var GradientColors = []lipgloss.Color{
 	"#FF2E97", // Neon Pink
