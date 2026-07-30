@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -59,6 +60,13 @@ func (m Model) renderDetailHeader(host string, status HostStatus) string {
 
 	headerLine := fmt.Sprintf("%s  %s", hostTitle, statusText)
 
+	// System info line (OS, kernel, uptime) when populated
+	if metrics := m.metrics[host]; metrics != nil {
+		if sysLine := renderSystemInfoLine(metrics.System); sysLine != "" {
+			headerLine += "\n" + sysLine
+		}
+	}
+
 	// Add command line for running hosts
 	if status == StatusRunningState {
 		if lockInfo, ok := m.lockInfo[host]; ok && lockInfo != nil && lockInfo.Command != "" {
@@ -72,14 +80,51 @@ func (m Model) renderDetailHeader(host string, status HostStatus) string {
 	return headerLine
 }
 
+// renderSystemInfoLine formats OS, kernel, and uptime as a muted single line.
+// Returns empty string when no system info has been collected.
+func renderSystemInfoLine(sys SystemInfo) string {
+	var parts []string
+	if sys.OS != "" {
+		parts = append(parts, sys.OS)
+	}
+	if sys.Kernel != "" {
+		parts = append(parts, "kernel "+sys.Kernel)
+	}
+	if sys.Uptime > 0 {
+		parts = append(parts, "up "+formatUptime(sys.Uptime))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(ColorTextMuted).Render(strings.Join(parts, " · "))
+}
+
+// formatUptime formats an uptime duration as a compact human-readable string.
+func formatUptime(d time.Duration) string {
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	mins := int(d.Minutes()) % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	default:
+		return fmt.Sprintf("%dm", mins)
+	}
+}
+
 // renderDetailCPUSection renders the CPU section with high-resolution braille graph.
 // Inspired by btop's CPU visualization with tall graphs and per-core display.
 func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) string {
 	var lines []string
 
-	// Section header with right-aligned percentage
-	pctText := fmt.Sprintf("%.1f%%", cpu.Percent)
-	lines = append(lines, SectionHeader("CPU", pctText, width))
+	// Section header with right-aligned percentage (+ temperature when available)
+	headerValue := fmt.Sprintf("%.1f%%", cpu.Percent)
+	if cpu.TempC > 0 {
+		headerValue += " " + GPUTempStyle(int(cpu.TempC)).Render(fmt.Sprintf("%.0fC", cpu.TempC))
+	}
+	lines = append(lines, SectionHeader("CPU", headerValue, width))
 
 	// Content area (width - 4 for borders and padding: "│  " on left and " │" on right)
 	graphWidth := width - 4
@@ -106,6 +151,12 @@ func (m Model) renderDetailCPUSection(host string, cpu CPUMetrics, width int) st
 				lines = append(lines, SectionContentLine(emptyLine, width))
 			}
 		}
+	}
+
+	// Per-core heat strip (one colored block per core, btop-style)
+	if len(cpu.PerCore) > 0 {
+		strip := RenderCoreHeatStrip(cpu.PerCore, graphWidth, thresholdColorFunc(m.thresholds.CPU))
+		lines = append(lines, SectionContentLine(strip, width))
 	}
 
 	// Load average and cores on same line
@@ -384,6 +435,39 @@ func (m Model) renderDetailGPUSection(host string, gpu *GPUMetrics, width int) s
 	return strings.Join(lines, "\n")
 }
 
+// renderDetailDiskSection renders root filesystem usage with a gradient bar
+// plus read/write rates when available.
+func (m Model) renderDetailDiskSection(disk DiskMetrics, width int) string {
+	var lines []string
+
+	// Section header with right-aligned percentage
+	pctText := fmt.Sprintf("%.1f%%", disk.Percent)
+	lines = append(lines, SectionHeader("Disk", pctText, width))
+
+	// Content area (width - 4 for borders and padding)
+	barWidth := width - 4
+	if barWidth < 10 {
+		barWidth = 10
+	}
+
+	// Usage gradient bar with fixed disk thresholds
+	bar := RenderGradientBarWithColorFunc(barWidth, disk.Percent, thresholdColorFunc(diskThresholds))
+	lines = append(lines, SectionContentLine(bar, width))
+
+	// Usage breakdown plus I/O rates when available
+	detailText := fmt.Sprintf("%s / %s", formatBytes(disk.UsedBytes), formatBytes(disk.TotalBytes))
+	if disk.ReadBytesPerSec > 0 || disk.WriteBytesPerSec > 0 {
+		detailText += fmt.Sprintf("  ·  R: %s  ·  W: %s",
+			FormatRate(disk.ReadBytesPerSec), FormatRate(disk.WriteBytesPerSec))
+	}
+	lines = append(lines, SectionContentLine(LabelStyle.Render(detailText), width))
+
+	// Section footer
+	lines = append(lines, SectionFooter(width))
+
+	return strings.Join(lines, "\n")
+}
+
 // renderDetailNetworkSection renders network with rates and activity graph.
 func (m Model) renderDetailNetworkSection(host string, width int) string {
 	var lines []string
@@ -635,6 +719,13 @@ func (m Model) generateDetailContent() string {
 
 		netSection := m.renderDetailNetworkSection(host, contentWidth)
 		content.WriteString(netSection)
+		content.WriteString("\n")
+	}
+
+	// 4. Disk (usage bar + I/O rates) on its own row when data is available
+	if metrics.Disk.TotalBytes > 0 {
+		diskSection := m.renderDetailDiskSection(metrics.Disk, contentWidth)
+		content.WriteString(diskSection)
 		content.WriteString("\n")
 	}
 

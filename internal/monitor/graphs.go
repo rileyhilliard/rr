@@ -269,6 +269,36 @@ func RenderBrailleSparklineWithOptions(data []float64, width, height int, baseCo
 	return strings.Join(lines, "\n")
 }
 
+// RenderCoreHeatStrip renders one small colored block per CPU core, btop-style.
+// Each core is a single cell colored by colorFunc(percent); when colorFunc is
+// nil the default MetricColor thresholds apply. maxWidth caps the number of
+// cells rendered (excess cores are dropped). Same-colored runs are merged via
+// the cached surface styles.
+func RenderCoreHeatStrip(perCore []float64, maxWidth int, colorFunc ColorFunc) string {
+	if len(perCore) == 0 || maxWidth <= 0 {
+		return ""
+	}
+	n := len(perCore)
+	if n > maxWidth {
+		n = maxWidth
+	}
+
+	chars := make([]rune, n)
+	colors := make([]lipgloss.Color, n)
+	for i := 0; i < n; i++ {
+		chars[i] = '▰'
+		if colorFunc != nil {
+			colors[i] = colorFunc(perCore[i])
+		} else {
+			colors[i] = MetricColor(perCore[i])
+		}
+	}
+
+	var result strings.Builder
+	renderColorRuns(&result, chars, colors)
+	return result.String()
+}
+
 // RenderGradientBar renders a horizontal bar with gradient fill.
 // Colors transition from green to yellow to red based on position.
 func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {

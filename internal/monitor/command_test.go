@@ -17,6 +17,11 @@ func TestBuildMetricsCommand_Linux(t *testing.T) {
 	assert.Contains(t, cmd, "/proc/net/dev")
 	assert.Contains(t, cmd, "nvidia-smi")
 	assert.Contains(t, cmd, "ps aux")
+	assert.Contains(t, cmd, "df -P -k /")
+	assert.Contains(t, cmd, "/proc/diskstats")
+	assert.Contains(t, cmd, "/sys/class/hwmon")
+	assert.Contains(t, cmd, "/proc/uptime")
+	assert.Contains(t, cmd, "uname -r")
 
 	// Should use the output separator
 	assert.Contains(t, cmd, OutputSeparator)
@@ -31,6 +36,10 @@ func TestBuildMetricsCommand_Darwin(t *testing.T) {
 	assert.Contains(t, cmd, "sysctl hw.memsize")
 	assert.Contains(t, cmd, "netstat -ib")
 	assert.Contains(t, cmd, "ps aux")
+	assert.Contains(t, cmd, "df -P -k /")
+	assert.Contains(t, cmd, "sysctl -n hw.ncpu")
+	assert.Contains(t, cmd, "sysctl -n kern.boottime")
+	assert.Contains(t, cmd, "uname -r")
 
 	// Should use the output separator
 	assert.Contains(t, cmd, OutputSeparator)
@@ -140,18 +149,19 @@ func TestBuildLinuxCommand_SectionCount(t *testing.T) {
 	cmd := BuildMetricsCommand(PlatformLinux, "/tmp/rr.lock")
 
 	// Count the number of sections by counting separators
-	// Linux command should have 6 separators (7 sections, lock info last)
+	// Linux command should have 10 separators (11 sections, lock info last)
 	separatorCount := strings.Count(cmd, `echo "---"`)
-	assert.Equal(t, 6, separatorCount, "Linux command should have 6 separators for 7 sections")
+	assert.Equal(t, 10, separatorCount, "Linux command should have 10 separators for 11 sections")
 	assert.Equal(t, linuxLockSection, separatorCount, "lock section index should match separator count")
 }
 
 func TestBuildDarwinCommand_SectionCount(t *testing.T) {
 	cmd := BuildMetricsCommand(PlatformDarwin, "/tmp/rr.lock")
 
-	// Darwin command should have 5 separators (6 sections: top, vm_stat, netstat, ioreg GPU, ps, lock info)
+	// Darwin command should have 8 separators (9 sections: top, vm_stat, netstat,
+	// ioreg GPU, ps, df, hw.ncpu, boottime+kernel, lock info)
 	separatorCount := strings.Count(cmd, `echo "---"`)
-	assert.Equal(t, 5, separatorCount, "Darwin command should have 5 separators for 6 sections")
+	assert.Equal(t, 8, separatorCount, "Darwin command should have 8 separators for 9 sections")
 	assert.Equal(t, darwinLockSection, separatorCount, "lock section index should match separator count")
 }
 
