@@ -73,7 +73,7 @@ rr fills the gap: **a single binary that handles sync, execution, locking, load 
 -   **Claude Code skill** — Install the `rr` skill and let Claude set up your environment and troubleshoot issues
 -   **Named tasks** — Define `test`, `build`, `deploy` commands in config, run with `rr test`
 -   **Output formatters** — Auto-formats pytest, Jest, Go test, and Cargo output for readable failure summaries
--   **Real-time monitor** — TUI dashboard showing CPU, RAM, GPU across all your hosts
+-   **Real-time monitor** — TUI dashboard showing CPU, RAM, GPU, disk, and network across all your hosts, or `--once --json` for a scriptable snapshot
 -   **Remote environment bootstrap** — Declare required tools with `require:`, rr verifies they exist before running
 -   **Zero dependencies** — Single Go binary, no runtime requirements
 -   **Works anywhere** — macOS, Linux, Windows (WSL)

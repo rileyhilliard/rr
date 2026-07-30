@@ -21,13 +21,22 @@ type cpuJiffies struct {
 	idle  int64
 }
 
+// diskSample stores cumulative disk I/O byte counters for rate calculation.
+type diskSample struct {
+	readBytes  int64
+	writeBytes int64
+	at         time.Time
+}
+
 // Collector gathers system metrics from multiple remote hosts.
 type Collector struct {
-	hosts       map[string]config.Host
-	pool        *Pool
-	timeout     time.Duration
-	prevJiffies map[string]cpuJiffies // Previous CPU jiffies per host for delta calculation
-	mu          sync.Mutex            // Protects prevJiffies
+	hosts           map[string]config.Host
+	pool            *Pool
+	timeout         time.Duration
+	prevJiffies     map[string]cpuJiffies   // Previous aggregate CPU jiffies per host for delta calculation
+	prevCoreJiffies map[string][]cpuJiffies // Previous per-core CPU jiffies per host for delta calculation
+	prevDisk        map[string]diskSample   // Previous disk I/O counters per host for rate calculation
+	mu              sync.Mutex              // Protects prevJiffies, prevCoreJiffies, and prevDisk
 
 	// Lock checking configuration (optional)
 	lockConfig *config.LockConfig
@@ -36,10 +45,12 @@ type Collector struct {
 // NewCollector creates a new metrics collector for the specified hosts.
 func NewCollector(hosts map[string]config.Host) *Collector {
 	return &Collector{
-		hosts:       hosts,
-		pool:        NewPool(hosts, 10*time.Second),
-		timeout:     30 * time.Second,
-		prevJiffies: make(map[string]cpuJiffies),
+		hosts:           hosts,
+		pool:            NewPool(hosts, 10*time.Second),
+		timeout:         30 * time.Second,
+		prevJiffies:     make(map[string]cpuJiffies),
+		prevCoreJiffies: make(map[string][]cpuJiffies),
+		prevDisk:        make(map[string]diskSample),
 	}
 }
 
@@ -52,59 +63,6 @@ func (c *Collector) SetLockConfig(lockCfg config.LockConfig) {
 // SetTimeout sets the per-host collection timeout.
 func (c *Collector) SetTimeout(timeout time.Duration) {
 	c.timeout = timeout
-}
-
-// Collect gathers metrics from all configured hosts in parallel.
-// Returns a map of alias -> metrics, a map of alias -> error message,
-// and a map of alias -> lock info.
-// Hosts that fail to connect will have nil metrics and an error message.
-func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[string]*HostLockInfo) {
-	results := make(map[string]*HostMetrics)
-	errors := make(map[string]string)
-	lockInfo := make(map[string]*HostLockInfo)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for alias := range c.hosts {
-		wg.Add(1)
-		go func(alias string) {
-			defer wg.Done()
-
-			ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-			defer cancel()
-
-			metrics, _, err := c.collectOneWithContext(ctx, alias)
-
-			mu.Lock()
-			if err != nil {
-				// Store error message for diagnostics
-				errors[alias] = err.Error()
-				metrics = nil
-			}
-			results[alias] = metrics
-
-			// Check lock status if we have a connection
-			// Always check for locks so monitor shows when hosts are busy
-			if metrics != nil {
-				info := c.checkLockStatus(alias)
-				if info != nil {
-					lockInfo[alias] = info
-				}
-			}
-			mu.Unlock()
-		}(alias)
-	}
-
-	wg.Wait()
-	return results, errors, lockInfo
-}
-
-// CollectOne gathers metrics from a single host.
-func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-	metrics, _, err := c.collectOneWithContext(ctx, alias)
-	return metrics, err
 }
 
 // CollectStreaming gathers metrics from all hosts, streaming results as each completes.
@@ -144,7 +102,7 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 			hostCtx, cancel := context.WithTimeout(ctx, c.timeout)
 			defer cancel()
 
-			metrics, latency, err := c.collectOneWithContext(hostCtx, alias)
+			metrics, hostLock, latency, err := c.collectOneWithContext(hostCtx, alias)
 
 			result := HostResult{
 				Alias:   alias,
@@ -156,9 +114,9 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 				result.Error = err
 			}
 
-			// Check lock status and get connection info if we got metrics
+			// Lock status rides along in the batched metrics output
 			if metrics != nil {
-				result.LockInfo = c.checkLockStatus(alias)
+				result.LockInfo = hostLock
 				result.ConnectedVia = c.pool.GetConnectedVia(alias)
 			}
 
@@ -175,43 +133,27 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 	return results
 }
 
-// checkLockStatus checks if the rr lock is held on the specified host.
-// Returns lock info if locked, nil otherwise.
+// lockDir returns the per-host rr lock directory to check on remote hosts.
 // With per-host locking, there's a single lock at /tmp/rr.lock per host.
-func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
-	client, err := c.pool.Get(alias)
-	if err != nil {
-		return nil
-	}
-
-	// Check for the per-host lock at /tmp/rr.lock
+func (c *Collector) lockDir() string {
 	baseDir := "/tmp"
 	if c.lockConfig != nil && c.lockConfig.Dir != "" {
 		baseDir = c.lockConfig.Dir
 	}
-	lockDir := baseDir + "/rr.lock"
+	return baseDir + "/rr.lock"
+}
 
-	// Check if lock directory exists and read its info
-	findCmd := fmt.Sprintf(
-		`if [ -d %q ] && [ -f %q/info.json ]; then cat %q/info.json; else exit 1; fi`,
-		lockDir, lockDir, lockDir,
-	)
-
-	// Use embedded ssh.Client's NewSession directly
-	session, err := client.Client.NewSession()
-	if err != nil {
-		return nil
-	}
-	defer session.Close()
-
-	output, err := session.Output(findCmd)
-	if err != nil {
-		// No locks found or error reading
+// parseLockSection parses the lock info.json payload from the batched metrics
+// output. Returns lock info if locked, nil otherwise (empty section = unlocked).
+func (c *Collector) parseLockSection(section string) *HostLockInfo {
+	section = strings.TrimSpace(section)
+	if section == "" {
+		// No lock held
 		return nil
 	}
 
 	// Parse the lock info
-	info, err := lock.ParseLockInfo(output)
+	info, err := lock.ParseLockInfo([]byte(section))
 	if err != nil {
 		return nil
 	}
@@ -234,20 +176,20 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 }
 
 // collectOneWithContext gathers metrics from a single host with context for timeout.
-// Returns the metrics, the SSH probe latency, and any error.
+// Returns the metrics, the lock status, the SSH probe latency, and any error.
 // The latency is measured using a lightweight echo command, not the metrics collection time.
-func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, time.Duration, error) {
+func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, *HostLockInfo, time.Duration, error) {
 	// Check for context cancellation early
 	select {
 	case <-ctx.Done():
-		return nil, 0, ctx.Err()
+		return nil, nil, 0, ctx.Err()
 	default:
 	}
 
 	// Get connection with platform detection
 	client, platform, err := c.pool.GetWithPlatform(alias)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
 	// First, measure actual SSH latency with a lightweight probe command.
@@ -258,14 +200,14 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 		probeLatency = 0
 	}
 
-	// Build and execute the batched metrics command
-	cmd := BuildMetricsCommand(platform)
+	// Build and execute the batched metrics command (includes lock status)
+	cmd := BuildMetricsCommand(platform, c.lockDir())
 
 	// Use embedded ssh.Client's NewSession directly for full session capabilities
 	session, err := client.Client.NewSession()
 	if err != nil {
 		c.pool.CloseOne(alias)
-		return nil, probeLatency, err
+		return nil, nil, probeLatency, err
 	}
 	defer session.Close()
 
@@ -284,13 +226,13 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
-		return nil, probeLatency, ctx.Err()
+		return nil, nil, probeLatency, ctx.Err()
 	case r := <-resultCh:
 		if r.err != nil {
-			return nil, probeLatency, r.err
+			return nil, nil, probeLatency, r.err
 		}
-		metrics, err := c.parseOutput(alias, platform, string(r.output))
-		return metrics, probeLatency, err
+		metrics, lockInfo := c.parseOutput(alias, platform, string(r.output))
+		return metrics, lockInfo, probeLatency, nil
 	}
 }
 
@@ -327,8 +269,8 @@ func (c *Collector) probeLatency(ctx context.Context, client *sshutil.Client) (t
 	}
 }
 
-// parseOutput parses the batched command output into HostMetrics.
-func (c *Collector) parseOutput(alias string, platform Platform, output string) (*HostMetrics, error) {
+// parseOutput parses the batched command output into HostMetrics and lock status.
+func (c *Collector) parseOutput(alias string, platform Platform, output string) (*HostMetrics, *HostLockInfo) {
 	metrics := &HostMetrics{
 		Timestamp: time.Now(),
 	}
@@ -336,20 +278,31 @@ func (c *Collector) parseOutput(alias string, platform Platform, output string) 
 	// Split output by separator
 	sections := strings.Split(output, OutputSeparator+"\n")
 
+	lockSection := linuxLockSection
 	switch platform {
 	case PlatformLinux:
-		return c.parseLinuxOutput(alias, metrics, sections)
+		metrics = c.parseLinuxOutput(alias, metrics, sections)
 	case PlatformDarwin:
-		return c.parseDarwinOutput(metrics, sections)
+		metrics = c.parseDarwinOutput(metrics, sections)
+		lockSection = darwinLockSection
 	default:
 		// Try Linux parsing as fallback
-		return c.parseLinuxOutput(alias, metrics, sections)
+		metrics = c.parseLinuxOutput(alias, metrics, sections)
 	}
+
+	// The lock payload is the last section on both platforms
+	var lockInfo *HostLockInfo
+	if len(sections) > lockSection {
+		lockInfo = c.parseLockSection(sections[lockSection])
+	}
+
+	return metrics, lockInfo
 }
 
 // parseLinuxOutput parses Linux metrics from the batched command output.
-// Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi, 5=ps aux
-func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, sections []string) (*HostMetrics, error) {
+// Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi,
+// 5=ps aux, 6=df, 7=/proc/diskstats, 8=hwmon temps, 9=uptime+kernel, 10=lock info (parsed in parseOutput)
+func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, sections []string) *HostMetrics {
 	if len(sections) >= 2 {
 		procStat := strings.TrimSpace(sections[0])
 		procLoadavg := strings.TrimSpace(sections[1])
@@ -392,12 +345,33 @@ func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, section
 		}
 	}
 
-	return metrics, nil
+	if len(sections) >= 7 {
+		if disk, ok := parseDF(strings.TrimSpace(sections[6])); ok {
+			metrics.Disk = disk
+		}
+	}
+
+	if len(sections) >= 8 {
+		readRate, writeRate := c.parseLinuxDiskIOWithDelta(alias, strings.TrimSpace(sections[7]), time.Now())
+		metrics.Disk.ReadBytesPerSec = readRate
+		metrics.Disk.WriteBytesPerSec = writeRate
+	}
+
+	if len(sections) >= 9 {
+		metrics.CPU.TempC = parseHwmonTemps(strings.TrimSpace(sections[8]))
+	}
+
+	if len(sections) >= 10 {
+		metrics.System = parseLinuxSystemInfo(strings.TrimSpace(sections[9]))
+	}
+
+	return metrics
 }
 
 // parseDarwinOutput parses macOS metrics from the batched command output.
-// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ioreg GPU, 4=ps aux
-func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (*HostMetrics, error) {
+// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ioreg GPU, 4=ps aux, 5=df,
+// 6=hw.ncpu, 7=boottime+kernel, 8=lock info (parsed in parseOutput)
+func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) *HostMetrics {
 	if len(sections) >= 1 {
 		topOutput := strings.TrimSpace(sections[0])
 		cpu, err := parseDarwinCPU(topOutput)
@@ -438,7 +412,23 @@ func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (
 		}
 	}
 
-	return metrics, nil
+	if len(sections) >= 6 {
+		if disk, ok := parseDF(strings.TrimSpace(sections[5])); ok {
+			metrics.Disk = disk
+		}
+	}
+
+	if len(sections) >= 7 {
+		if cores, err := strconv.Atoi(strings.TrimSpace(sections[6])); err == nil && cores > 0 {
+			metrics.CPU.Cores = cores
+		}
+	}
+
+	if len(sections) >= 8 {
+		metrics.System = parseDarwinSystemInfo(strings.TrimSpace(sections[7]), time.Now())
+	}
+
+	return metrics
 }
 
 // Close closes all connections in the pool.
@@ -455,68 +445,9 @@ func (c *Collector) Hosts() []string {
 	return aliases
 }
 
-// Inline parsing functions to avoid import cycle with parsers package
-
-// parseLinuxCPU parses CPU metrics from /proc/stat and /proc/loadavg output.
-func parseLinuxCPU(procStat, procLoadavg string) (*CPUMetrics, error) {
-	metrics := &CPUMetrics{}
-
-	scanner := bufio.NewScanner(strings.NewReader(procStat))
-	coreCount := 0
-	var totalJiffies, idleJiffies int64
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if strings.HasPrefix(line, "cpu") && len(line) > 3 && line[3] >= '0' && line[3] <= '9' {
-			coreCount++
-			continue
-		}
-
-		if strings.HasPrefix(line, "cpu ") {
-			fields := strings.Fields(line)
-			if len(fields) < 5 {
-				return nil, fmt.Errorf("invalid /proc/stat cpu line: %s", line)
-			}
-
-			for i := 1; i < len(fields); i++ {
-				val, err := strconv.ParseInt(fields[i], 10, 64)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse cpu field %d: %w", i, err)
-				}
-				totalJiffies += val
-
-				if i == 4 || i == 5 {
-					idleJiffies += val
-				}
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error scanning /proc/stat: %w", err)
-	}
-
-	if totalJiffies > 0 {
-		metrics.Percent = float64(totalJiffies-idleJiffies) / float64(totalJiffies) * 100
-	}
-	metrics.Cores = coreCount
-
-	if procLoadavg != "" {
-		fields := strings.Fields(strings.TrimSpace(procLoadavg))
-		if len(fields) >= 3 {
-			for i := 0; i < 3; i++ {
-				val, err := strconv.ParseFloat(fields[i], 64)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse loadavg field %d: %w", i, err)
-				}
-				metrics.LoadAvg[i] = val
-			}
-		}
-	}
-
-	return metrics, nil
-}
+// Parsers for the batched metrics command output. Delta-based parsers hang off
+// the Collector so they can reach the previous sample; the rest are free
+// functions.
 
 // parseLinuxCPUWithDelta calculates CPU usage from delta between two readings.
 // This gives instantaneous CPU usage rather than average-since-boot.
@@ -526,12 +457,16 @@ func (c *Collector) parseLinuxCPUWithDelta(alias, procStat, procLoadavg string) 
 	scanner := bufio.NewScanner(strings.NewReader(procStat))
 	coreCount := 0
 	var totalJiffies, idleJiffies int64
+	var coreJiffies []cpuJiffies
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		if strings.HasPrefix(line, "cpu") && len(line) > 3 && line[3] >= '0' && line[3] <= '9' {
 			coreCount++
+			if j, ok := parseCPUJiffies(strings.Fields(line)); ok {
+				coreJiffies = append(coreJiffies, j)
+			}
 			continue
 		}
 
@@ -566,6 +501,8 @@ func (c *Collector) parseLinuxCPUWithDelta(alias, procStat, procLoadavg string) 
 	c.mu.Lock()
 	prev, hasPrev := c.prevJiffies[alias]
 	c.prevJiffies[alias] = cpuJiffies{total: totalJiffies, idle: idleJiffies}
+	prevCores := c.prevCoreJiffies[alias]
+	c.prevCoreJiffies[alias] = coreJiffies
 	c.mu.Unlock()
 
 	if hasPrev && totalJiffies > prev.total {
@@ -574,8 +511,31 @@ func (c *Collector) parseLinuxCPUWithDelta(alias, procStat, procLoadavg string) 
 		if totalDelta > 0 {
 			metrics.Percent = float64(totalDelta-idleDelta) / float64(totalDelta) * 100
 		}
+	} else {
+		// No baseline yet: Percent would misleadingly read 0 until the next poll.
+		metrics.FirstSample = true
 	}
-	// If no previous reading, Percent stays 0 (will show correct on next poll)
+
+	// Per-core percentages from deltas. If the core count changed between
+	// samples (e.g. host swap behind an alias), skip this round; the freshly
+	// stored counters produce rates again on the next poll.
+	if len(coreJiffies) > 0 && len(prevCores) == len(coreJiffies) {
+		perCore := make([]float64, len(coreJiffies))
+		for i, cur := range coreJiffies {
+			totalDelta := cur.total - prevCores[i].total
+			if totalDelta <= 0 {
+				continue
+			}
+			idleDelta := cur.idle - prevCores[i].idle
+			pct := float64(totalDelta-idleDelta) / float64(totalDelta) * 100
+			if pct < 0 {
+				pct = 0
+			}
+			perCore[i] = pct
+		}
+		metrics.PerCore = perCore
+	}
+	// First sample (or core-count change) leaves PerCore empty
 
 	// Parse load averages
 	if procLoadavg != "" {
@@ -592,6 +552,214 @@ func (c *Collector) parseLinuxCPUWithDelta(alias, procStat, procLoadavg string) 
 	}
 
 	return metrics, nil
+}
+
+// parseCPUJiffies parses total and idle jiffies from a /proc/stat cpu line's fields.
+// fields[0] is the "cpuN" label; the rest are jiffy counters.
+func parseCPUJiffies(fields []string) (cpuJiffies, bool) {
+	if len(fields) < 5 {
+		return cpuJiffies{}, false
+	}
+	var j cpuJiffies
+	for i := 1; i < len(fields); i++ {
+		val, err := strconv.ParseInt(fields[i], 10, 64)
+		if err != nil {
+			return cpuJiffies{}, false
+		}
+		j.total += val
+		// idle is field 4, iowait is field 5 (same convention as the aggregate line)
+		if i == 4 || i == 5 {
+			j.idle += val
+		}
+	}
+	return j, true
+}
+
+// parseDF parses `df -P -k /` output into root filesystem usage.
+// POSIX -P output has fixed trailing columns, so fields are indexed from the
+// right to tolerate device names containing spaces.
+func parseDF(output string) (DiskMetrics, bool) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		n := len(fields)
+		if n < 6 || fields[0] == "Filesystem" {
+			continue
+		}
+		// Trailing columns: 1024-blocks, Used, Available, Capacity, Mounted on
+		totalKB, err1 := strconv.ParseInt(fields[n-5], 10, 64)
+		usedKB, err2 := strconv.ParseInt(fields[n-4], 10, 64)
+		percent, err3 := strconv.ParseFloat(strings.TrimSuffix(fields[n-2], "%"), 64)
+		if err1 != nil || err2 != nil || err3 != nil {
+			continue
+		}
+		return DiskMetrics{
+			UsedBytes:  usedKB * 1024,
+			TotalBytes: totalKB * 1024,
+			Percent:    percent,
+		}, true
+	}
+	return DiskMetrics{}, false
+}
+
+// diskDeviceRe matches whole-disk device names in /proc/diskstats.
+// Partitions (sda1, nvme0n1p2, mmcblk0p1) and virtual devices (loop, ram, dm)
+// are excluded so I/O isn't double-counted.
+var diskDeviceRe = regexp.MustCompile(`^(sd[a-z]+|vd[a-z]+|nvme\d+n\d+|mmcblk\d+)$`)
+
+// parseDiskstatsCounters sums cumulative read/written bytes across physical
+// whole-disk devices from /proc/diskstats output. Sector counts (fields 5 and 9)
+// are fixed 512-byte units regardless of the device's logical sector size.
+func parseDiskstatsCounters(output string) (readBytes, writeBytes int64, ok bool) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 10 || !diskDeviceRe.MatchString(fields[2]) {
+			continue
+		}
+		sectorsRead, err := strconv.ParseInt(fields[5], 10, 64)
+		if err != nil {
+			continue
+		}
+		sectorsWritten, err := strconv.ParseInt(fields[9], 10, 64)
+		if err != nil {
+			continue
+		}
+		readBytes += sectorsRead * 512
+		writeBytes += sectorsWritten * 512
+		ok = true
+	}
+	return readBytes, writeBytes, ok
+}
+
+// parseLinuxDiskIOWithDelta computes disk read/write bytes/sec from the delta
+// between consecutive /proc/diskstats samples, following the prevJiffies
+// pattern. The first sample for a host yields zero rates.
+func (c *Collector) parseLinuxDiskIOWithDelta(alias, diskstats string, now time.Time) (readRate, writeRate float64) {
+	readBytes, writeBytes, ok := parseDiskstatsCounters(diskstats)
+	if !ok {
+		return 0, 0
+	}
+
+	c.mu.Lock()
+	prev, hasPrev := c.prevDisk[alias]
+	c.prevDisk[alias] = diskSample{readBytes: readBytes, writeBytes: writeBytes, at: now}
+	c.mu.Unlock()
+
+	if !hasPrev {
+		return 0, 0
+	}
+	elapsed := now.Sub(prev.at).Seconds()
+	if elapsed <= 0 {
+		return 0, 0
+	}
+	if readBytes >= prev.readBytes {
+		readRate = float64(readBytes-prev.readBytes) / elapsed
+	}
+	if writeBytes >= prev.writeBytes {
+		writeRate = float64(writeBytes-prev.writeBytes) / elapsed
+	}
+	return readRate, writeRate
+}
+
+// parseHwmonTemps picks a CPU temperature from hwmon "name:millidegrees" lines.
+// Prefers CPU package sensors (coretemp on Intel, k10temp on AMD); if neither
+// is present, falls back to the max across all sensors that reported a value.
+// Returns 0 when no sensor is available.
+func parseHwmonTemps(output string) float64 {
+	var preferred, maxTemp float64
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		parts := strings.SplitN(scanner.Text(), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		valStr := strings.TrimSpace(parts[1])
+		if valStr == "" {
+			continue
+		}
+		val, err := strconv.ParseFloat(valStr, 64)
+		if err != nil {
+			continue
+		}
+		temp := val / 1000 // millidegrees C -> degrees C
+		if name == "coretemp" || name == "k10temp" {
+			if temp > preferred {
+				preferred = temp
+			}
+		}
+		if temp > maxTemp {
+			maxTemp = temp
+		}
+	}
+	if preferred > 0 {
+		return preferred
+	}
+	return maxTemp
+}
+
+// parseLinuxSystemInfo parses the combined /proc/uptime + uname -r section.
+// The command emits /proc/uptime first, so only the first non-empty line is
+// treated as the uptime: a float-sniffing heuristic would misread a short
+// kernel release like "6.8" as seconds-since-boot.
+func parseLinuxSystemInfo(section string) SystemInfo {
+	info := SystemInfo{}
+	scanner := bufio.NewScanner(strings.NewReader(section))
+	first := true
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if first {
+			first = false
+			if secs, err := strconv.ParseFloat(strings.Fields(line)[0], 64); err == nil {
+				info.Uptime = time.Duration(secs * float64(time.Second))
+				continue
+			}
+		}
+		if info.Kernel == "" {
+			info.Kernel = line
+		}
+	}
+	if info.Uptime > 0 || info.Kernel != "" {
+		info.OS = "Linux"
+	}
+	return info
+}
+
+// darwinBoottimeRe extracts the epoch seconds from `sysctl -n kern.boottime`
+// output, e.g. `{ sec = 1753837432, usec = 314159 } Tue Jul 29 16:03:52 2026`.
+var darwinBoottimeRe = regexp.MustCompile(`sec\s*=\s*(\d+)`)
+
+// parseDarwinSystemInfo parses the combined kern.boottime + uname -r section.
+// now is passed in so uptime math is testable.
+func parseDarwinSystemInfo(section string, now time.Time) SystemInfo {
+	info := SystemInfo{}
+	scanner := bufio.NewScanner(strings.NewReader(section))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if match := darwinBoottimeRe.FindStringSubmatch(line); len(match) > 1 {
+			if sec, err := strconv.ParseInt(match[1], 10, 64); err == nil {
+				boot := time.Unix(sec, 0)
+				if boot.Before(now) {
+					info.Uptime = now.Sub(boot)
+				}
+			}
+			continue
+		}
+		if info.Kernel == "" {
+			info.Kernel = line
+		}
+	}
+	if info.Uptime > 0 || info.Kernel != "" {
+		info.OS = "macOS"
+	}
+	return info
 }
 
 // parseLinuxMemory parses memory metrics from /proc/meminfo output.
@@ -787,6 +955,15 @@ func parseNvidiaSMI(output string) (*GPUMetrics, error) {
 	return metrics, nil
 }
 
+// Precompiled regexes for Apple Silicon GPU parsing (hot path: every tick per macOS host).
+var (
+	appleGPUModelRe      = regexp.MustCompile(`"model"\s*=\s*"([^"]+)"`)
+	appleGPUPerfRe       = regexp.MustCompile(`"PerformanceStatistics"\s*=\s*\{([^}]+)\}`)
+	appleGPUDeviceUtilRe = regexp.MustCompile(`"` + regexp.QuoteMeta("Device Utilization %") + `"\s*=\s*([\d.]+)`)
+	appleGPUInUseMemRe   = regexp.MustCompile(`"` + regexp.QuoteMeta("In use system memory") + `"\s*=\s*(\d+)`)
+	appleGPUAllocMemRe   = regexp.MustCompile(`"` + regexp.QuoteMeta("Alloc system memory") + `"\s*=\s*(\d+)`)
+)
+
 // parseAppleGPU parses GPU metrics from Apple Silicon ioreg output.
 // Expected input format (filtered grep output):
 //
@@ -804,28 +981,26 @@ func parseAppleGPU(output string) *GPUMetrics {
 	metrics := &GPUMetrics{}
 
 	// Parse model name: "model" = "Apple M4"
-	modelRe := regexp.MustCompile(`"model"\s*=\s*"([^"]+)"`)
-	if match := modelRe.FindStringSubmatch(output); len(match) > 1 {
+	if match := appleGPUModelRe.FindStringSubmatch(output); len(match) > 1 {
 		metrics.Name = match[1]
 	}
 
 	// Parse PerformanceStatistics
-	perfRe := regexp.MustCompile(`"PerformanceStatistics"\s*=\s*\{([^}]+)\}`)
-	if match := perfRe.FindStringSubmatch(output); len(match) > 1 {
+	if match := appleGPUPerfRe.FindStringSubmatch(output); len(match) > 1 {
 		stats := match[1]
 
 		// Device Utilization % - this is the main GPU utilization metric
-		if val := extractAppleGPUStat(stats, "Device Utilization %"); val >= 0 {
+		if val := extractAppleGPUStat(stats, appleGPUDeviceUtilRe); val >= 0 {
 			metrics.Percent = val
 		}
 
 		// In use system memory (bytes)
-		if val := extractAppleGPUStatInt(stats, "In use system memory"); val >= 0 {
+		if val := extractAppleGPUStatInt(stats, appleGPUInUseMemRe); val >= 0 {
 			metrics.MemoryUsed = val
 		}
 
 		// Alloc system memory (bytes) - use as total
-		if val := extractAppleGPUStatInt(stats, "Alloc system memory"); val >= 0 {
+		if val := extractAppleGPUStatInt(stats, appleGPUAllocMemRe); val >= 0 {
 			metrics.MemoryTotal = val
 		}
 	}
@@ -839,9 +1014,7 @@ func parseAppleGPU(output string) *GPUMetrics {
 }
 
 // extractAppleGPUStat extracts a float value from the PerformanceStatistics string.
-func extractAppleGPUStat(stats, key string) float64 {
-	escapedKey := regexp.QuoteMeta(key)
-	re := regexp.MustCompile(`"` + escapedKey + `"\s*=\s*([\d.]+)`)
+func extractAppleGPUStat(stats string, re *regexp.Regexp) float64 {
 	if match := re.FindStringSubmatch(stats); len(match) > 1 {
 		val, err := strconv.ParseFloat(match[1], 64)
 		if err == nil {
@@ -852,9 +1025,7 @@ func extractAppleGPUStat(stats, key string) float64 {
 }
 
 // extractAppleGPUStatInt extracts an int64 value from the PerformanceStatistics string.
-func extractAppleGPUStatInt(stats, key string) int64 {
-	escapedKey := regexp.QuoteMeta(key)
-	re := regexp.MustCompile(`"` + escapedKey + `"\s*=\s*(\d+)`)
+func extractAppleGPUStatInt(stats string, re *regexp.Regexp) int64 {
 	if match := re.FindStringSubmatch(stats); len(match) > 1 {
 		val, err := strconv.ParseInt(match[1], 10, 64)
 		if err == nil {
@@ -1118,6 +1289,13 @@ func parseProcesses(output string) ([]ProcessInfo, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		// Skip the shell running our own metrics batch; it carries a marker
+		// for exactly this purpose and isn't a process the user cares about.
+		if strings.Contains(line, selfProcessMarker) {
+			continue
+		}
+
 		fields := strings.Fields(line)
 		if len(fields) < 11 {
 			continue

@@ -6,6 +6,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRenderCardDivider(t *testing.T) {
@@ -189,7 +190,6 @@ func TestModel_renderHostLine(t *testing.T) {
 		status HostStatus
 	}{
 		{"idle", "server1", StatusIdleState},
-		{"slow", "server1", StatusSlowState},
 		{"unreachable", "server1", StatusUnreachableState},
 	}
 
@@ -364,7 +364,7 @@ func TestModel_renderMinimalMetricsLine(t *testing.T) {
 	}
 }
 
-func TestModel_renderCardTopProcess(t *testing.T) {
+func TestModel_renderCardTopProcesses(t *testing.T) {
 	hosts := map[string]config.Host{
 		"server1": {SSH: []string{"server1"}},
 	}
@@ -390,14 +390,49 @@ func TestModel_renderCardTopProcess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := m.renderCardTopProcess(tt.procs, tt.maxWidth)
+			result := m.renderCardTopProcesses(tt.procs, 0, tt.maxWidth)
 			if len(tt.procs) == 0 {
 				assert.Empty(t, result)
 			} else {
-				assert.NotEmpty(t, result)
+				assert.Len(t, result, 1) // short terminal: one process
+				assert.NotEmpty(t, result[0])
 			}
 		})
 	}
+}
+
+// TestModel_renderCardTopProcesses_Extended verifies tall terminals list more
+// of the already-collected process data.
+func TestModel_renderCardTopProcesses_Extended(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+
+	procs := []ProcessInfo{
+		{PID: 1, User: "root", CPU: 90.0, Command: "one"},
+		{PID: 2, User: "root", CPU: 50.0, Command: "two"},
+		{PID: 3, User: "root", CPU: 10.0, Command: "three"},
+		{PID: 4, User: "root", CPU: 5.0, Command: "four"},
+	}
+
+	m.height = HeightStandard - 1
+	require.False(t, m.CanShowExtendedInfo())
+	assert.Len(t, m.renderCardTopProcesses(procs, 0, 60), cardTopProcs)
+
+	m.height = HeightStandard
+	require.True(t, m.CanShowExtendedInfo())
+	assert.Len(t, m.renderCardTopProcesses(procs, 0, 60), cardTopProcsExtended)
+}
+
+// TestModel_cardGraphRows verifies the card graph grows on tall terminals.
+func TestModel_cardGraphRows(t *testing.T) {
+	m := Model{height: HeightStandard - 1}
+	assert.Equal(t, cardGraphHeight, m.cardGraphRows())
+
+	m.height = HeightStandard
+	assert.Equal(t, cardGraphHeightExtended, m.cardGraphRows())
 }
 
 func TestModel_renderCardNetworkLine(t *testing.T) {
@@ -424,6 +459,59 @@ func TestModel_renderCardNetworkLine(t *testing.T) {
 
 	result = m.renderCardNetworkLine("server1", 40)
 	assert.NotEmpty(t, result)
+}
+
+func TestModel_renderCardDiskLine(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+
+	// No disk data: hidden
+	result := m.renderCardDiskLine(DiskMetrics{}, 40)
+	assert.Empty(t, result)
+
+	// With disk data: DISK label plus usage
+	disk := DiskMetrics{
+		UsedBytes:  200 * 1024 * 1024 * 1024,
+		TotalBytes: 500 * 1024 * 1024 * 1024,
+		Percent:    42.0,
+	}
+	result = m.renderCardDiskLine(disk, 40)
+	assert.Contains(t, result, "DISK")
+	assert.Contains(t, result, "42.0%")
+}
+
+func TestModel_renderCard_DiskLine(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"server1"}},
+	}
+	collector := NewCollector(hosts)
+	m := NewModel(collector, time.Second, 0, nil)
+	m.width = 120
+	m.height = 40
+
+	// Full card without disk data has no DISK line
+	m.metrics["server1"] = &HostMetrics{
+		CPU: CPUMetrics{Percent: 50.0},
+		RAM: RAMMetrics{UsedBytes: 4000000000, TotalBytes: 8000000000},
+	}
+	m.status["server1"] = StatusIdleState
+	result := m.renderCard("server1", 40, false)
+	assert.NotContains(t, result, "DISK")
+
+	// Full card with disk data shows the DISK line (fresh cache: new result
+	// invalidates the body in the real flow)
+	delete(m.cardBodyCache, "server1")
+	m.metrics["server1"].Disk = DiskMetrics{
+		UsedBytes:  100 * 1024 * 1024 * 1024,
+		TotalBytes: 500 * 1024 * 1024 * 1024,
+		Percent:    20.0,
+	}
+	result = m.renderCard("server1", 40, false)
+	assert.Contains(t, result, "DISK")
+	assert.Contains(t, result, "20.0%")
 }
 
 func TestCardConstants(t *testing.T) {

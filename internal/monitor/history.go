@@ -155,25 +155,6 @@ func (h *History) GetLatencyHistory(alias string, count int) []float64 {
 	return hist.latency.getLast(count)
 }
 
-// GetNetworkHistory returns the last count network bytes values for the specified interface.
-// Returns bytesIn and bytesOut slices.
-func (h *History) GetNetworkHistory(alias, iface string, count int) (bytesIn, bytesOut []float64) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	hist, ok := h.hosts[alias]
-	if !ok {
-		return nil, nil
-	}
-
-	netHist, ok := hist.network[iface]
-	if !ok {
-		return nil, nil
-	}
-
-	return netHist.bytesIn.getLast(count), netHist.bytesOut.getLast(count)
-}
-
 // NetworkRate represents calculated network throughput for an interface.
 type NetworkRate struct {
 	Interface      string
@@ -444,20 +425,6 @@ func networkRateToPercent(bytesPerSec float64) float64 {
 	return bytesPerSec / 1024 * 5
 }
 
-// Clear removes all history for the specified host.
-func (h *History) Clear(alias string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	delete(h.hosts, alias)
-}
-
-// ClearAll removes all history.
-func (h *History) ClearAll() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.hosts = make(map[string]*hostHistory)
-}
-
 // Count returns the number of data points stored for a host's CPU metric.
 func (h *History) Count(alias string) int {
 	h.mu.RLock()
@@ -527,9 +494,4 @@ func (r *ringBuffer) getLast(count int) []float64 {
 	}
 
 	return result
-}
-
-// getAll returns all stored values in chronological order.
-func (r *ringBuffer) getAll() []float64 {
-	return r.getLast(r.count)
 }

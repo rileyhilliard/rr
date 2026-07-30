@@ -25,7 +25,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, "normal", cfg.Output.Verbosity)
 
 	// Monitor defaults
-	assert.Equal(t, "2s", cfg.Monitor.Interval)
+	assert.Equal(t, "1s", cfg.Monitor.Interval)
 	assert.Equal(t, 70, cfg.Monitor.Thresholds.CPU.Warning)
 	assert.Equal(t, 90, cfg.Monitor.Thresholds.CPU.Critical)
 	assert.Equal(t, 70, cfg.Monitor.Thresholds.RAM.Warning)
@@ -1219,6 +1219,19 @@ func TestValidateMonitor(t *testing.T) {
 			monitor: MonitorConfig{Interval: "1m30s"},
 			hosts:   validHost,
 			wantErr: false,
+		},
+		{
+			name:    "valid timeout",
+			monitor: MonitorConfig{Interval: "2s", Timeout: "15s"},
+			hosts:   validHost,
+			wantErr: false,
+		},
+		{
+			name:    "invalid timeout format",
+			monitor: MonitorConfig{Interval: "2s", Timeout: "8 seconds"},
+			hosts:   validHost,
+			wantErr: true,
+			errMsg:  "monitor.timeout",
 		},
 		{
 			name: "exclude with empty entry",

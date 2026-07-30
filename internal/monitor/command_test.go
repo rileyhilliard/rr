@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuildMetricsCommand_Linux(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformLinux)
+	cmd := BuildMetricsCommand(PlatformLinux, "/tmp/rr.lock")
 
 	// Should contain Linux-specific commands
 	assert.Contains(t, cmd, "/proc/stat")
@@ -17,13 +17,18 @@ func TestBuildMetricsCommand_Linux(t *testing.T) {
 	assert.Contains(t, cmd, "/proc/net/dev")
 	assert.Contains(t, cmd, "nvidia-smi")
 	assert.Contains(t, cmd, "ps aux")
+	assert.Contains(t, cmd, "df -P -k /")
+	assert.Contains(t, cmd, "/proc/diskstats")
+	assert.Contains(t, cmd, "/sys/class/hwmon")
+	assert.Contains(t, cmd, "/proc/uptime")
+	assert.Contains(t, cmd, "uname -r")
 
 	// Should use the output separator
 	assert.Contains(t, cmd, OutputSeparator)
 }
 
 func TestBuildMetricsCommand_Darwin(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformDarwin)
+	cmd := BuildMetricsCommand(PlatformDarwin, "/tmp/rr.lock")
 
 	// Should contain macOS-specific commands
 	assert.Contains(t, cmd, "top -l 1")
@@ -31,16 +36,48 @@ func TestBuildMetricsCommand_Darwin(t *testing.T) {
 	assert.Contains(t, cmd, "sysctl hw.memsize")
 	assert.Contains(t, cmd, "netstat -ib")
 	assert.Contains(t, cmd, "ps aux")
+	assert.Contains(t, cmd, "df -P -k /")
+	assert.Contains(t, cmd, "sysctl -n hw.ncpu")
+	assert.Contains(t, cmd, "sysctl -n kern.boottime")
+	assert.Contains(t, cmd, "uname -r")
 
 	// Should use the output separator
 	assert.Contains(t, cmd, OutputSeparator)
 }
 
 func TestBuildMetricsCommand_Unknown(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformUnknown)
+	cmd := BuildMetricsCommand(PlatformUnknown, "/tmp/rr.lock")
 
 	// Should default to Linux command
 	assert.Contains(t, cmd, "/proc/stat")
+}
+
+func TestBuildMetricsCommand_LockSection(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform Platform
+		lockDir  string
+	}{
+		{name: "linux default lock dir", platform: PlatformLinux, lockDir: "/tmp/rr.lock"},
+		{name: "linux configured lock dir", platform: PlatformLinux, lockDir: "/var/lock/rr.lock"},
+		{name: "darwin default lock dir", platform: PlatformDarwin, lockDir: "/tmp/rr.lock"},
+		{name: "darwin configured lock dir", platform: PlatformDarwin, lockDir: "/var/lock/rr.lock"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := BuildMetricsCommand(tt.platform, tt.lockDir)
+
+			// The lock read must be the last section
+			lockSection := `cat '` + tt.lockDir + `/info.json' 2>/dev/null || true`
+			assert.True(t, strings.HasSuffix(cmd, lockSection),
+				"lock section should be the final command, got: %s", cmd)
+
+			// The lock read must be guarded so a missing lock (cat exits nonzero)
+			// cannot abort the whole batched command
+			assert.Contains(t, cmd, lockSection)
+		})
+	}
 }
 
 func TestPlatformDetectCommand(t *testing.T) {
@@ -109,24 +146,27 @@ func TestOutputSeparator(t *testing.T) {
 }
 
 func TestBuildLinuxCommand_SectionCount(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformLinux)
+	cmd := BuildMetricsCommand(PlatformLinux, "/tmp/rr.lock")
 
 	// Count the number of sections by counting separators
-	// Linux command should have 5 separators (6 sections)
+	// Linux command should have 10 separators (11 sections, lock info last)
 	separatorCount := strings.Count(cmd, `echo "---"`)
-	assert.Equal(t, 5, separatorCount, "Linux command should have 5 separators for 6 sections")
+	assert.Equal(t, 10, separatorCount, "Linux command should have 10 separators for 11 sections")
+	assert.Equal(t, linuxLockSection, separatorCount, "lock section index should match separator count")
 }
 
 func TestBuildDarwinCommand_SectionCount(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformDarwin)
+	cmd := BuildMetricsCommand(PlatformDarwin, "/tmp/rr.lock")
 
-	// Darwin command should have 4 separators (5 sections: top, vm_stat, netstat, ioreg GPU, ps)
+	// Darwin command should have 8 separators (9 sections: top, vm_stat, netstat,
+	// ioreg GPU, ps, df, hw.ncpu, boottime+kernel, lock info)
 	separatorCount := strings.Count(cmd, `echo "---"`)
-	assert.Equal(t, 4, separatorCount, "Darwin command should have 4 separators for 5 sections")
+	assert.Equal(t, 8, separatorCount, "Darwin command should have 8 separators for 9 sections")
+	assert.Equal(t, darwinLockSection, separatorCount, "lock section index should match separator count")
 }
 
 func TestBuildMetricsCommand_GracefulGPUFailure(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformLinux)
+	cmd := BuildMetricsCommand(PlatformLinux, "/tmp/rr.lock")
 
 	// nvidia-smi should fail gracefully with "|| true"
 	assert.Contains(t, cmd, "nvidia-smi")
@@ -134,7 +174,7 @@ func TestBuildMetricsCommand_GracefulGPUFailure(t *testing.T) {
 }
 
 func TestBuildMetricsCommand_ProcessLimit(t *testing.T) {
-	cmd := BuildMetricsCommand(PlatformLinux)
+	cmd := BuildMetricsCommand(PlatformLinux, "/tmp/rr.lock")
 
 	// Should limit process output to top 16
 	assert.Contains(t, cmd, "head -16")
