@@ -73,7 +73,7 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[s
 			ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 			defer cancel()
 
-			metrics, _, err := c.collectOneWithContext(ctx, alias)
+			metrics, hostLock, _, err := c.collectOneWithContext(ctx, alias)
 
 			mu.Lock()
 			if err != nil {
@@ -83,13 +83,10 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[s
 			}
 			results[alias] = metrics
 
-			// Check lock status if we have a connection
-			// Always check for locks so monitor shows when hosts are busy
-			if metrics != nil {
-				info := c.checkLockStatus(alias)
-				if info != nil {
-					lockInfo[alias] = info
-				}
+			// Lock status is collected as part of the batched metrics command
+			// so monitor shows when hosts are busy
+			if metrics != nil && hostLock != nil {
+				lockInfo[alias] = hostLock
 			}
 			mu.Unlock()
 		}(alias)
@@ -103,7 +100,7 @@ func (c *Collector) Collect() (map[string]*HostMetrics, map[string]string, map[s
 func (c *Collector) CollectOne(alias string) (*HostMetrics, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
-	metrics, _, err := c.collectOneWithContext(ctx, alias)
+	metrics, _, _, err := c.collectOneWithContext(ctx, alias)
 	return metrics, err
 }
 
@@ -144,7 +141,7 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 			hostCtx, cancel := context.WithTimeout(ctx, c.timeout)
 			defer cancel()
 
-			metrics, latency, err := c.collectOneWithContext(hostCtx, alias)
+			metrics, hostLock, latency, err := c.collectOneWithContext(hostCtx, alias)
 
 			result := HostResult{
 				Alias:   alias,
@@ -156,9 +153,9 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 				result.Error = err
 			}
 
-			// Check lock status and get connection info if we got metrics
+			// Lock status rides along in the batched metrics output
 			if metrics != nil {
-				result.LockInfo = c.checkLockStatus(alias)
+				result.LockInfo = hostLock
 				result.ConnectedVia = c.pool.GetConnectedVia(alias)
 			}
 
@@ -175,43 +172,27 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 	return results
 }
 
-// checkLockStatus checks if the rr lock is held on the specified host.
-// Returns lock info if locked, nil otherwise.
+// lockDir returns the per-host rr lock directory to check on remote hosts.
 // With per-host locking, there's a single lock at /tmp/rr.lock per host.
-func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
-	client, err := c.pool.Get(alias)
-	if err != nil {
-		return nil
-	}
-
-	// Check for the per-host lock at /tmp/rr.lock
+func (c *Collector) lockDir() string {
 	baseDir := "/tmp"
 	if c.lockConfig != nil && c.lockConfig.Dir != "" {
 		baseDir = c.lockConfig.Dir
 	}
-	lockDir := baseDir + "/rr.lock"
+	return baseDir + "/rr.lock"
+}
 
-	// Check if lock directory exists and read its info
-	findCmd := fmt.Sprintf(
-		`if [ -d %q ] && [ -f %q/info.json ]; then cat %q/info.json; else exit 1; fi`,
-		lockDir, lockDir, lockDir,
-	)
-
-	// Use embedded ssh.Client's NewSession directly
-	session, err := client.Client.NewSession()
-	if err != nil {
-		return nil
-	}
-	defer session.Close()
-
-	output, err := session.Output(findCmd)
-	if err != nil {
-		// No locks found or error reading
+// parseLockSection parses the lock info.json payload from the batched metrics
+// output. Returns lock info if locked, nil otherwise (empty section = unlocked).
+func (c *Collector) parseLockSection(section string) *HostLockInfo {
+	section = strings.TrimSpace(section)
+	if section == "" {
+		// No lock held
 		return nil
 	}
 
 	// Parse the lock info
-	info, err := lock.ParseLockInfo(output)
+	info, err := lock.ParseLockInfo([]byte(section))
 	if err != nil {
 		return nil
 	}
@@ -234,20 +215,20 @@ func (c *Collector) checkLockStatus(alias string) *HostLockInfo {
 }
 
 // collectOneWithContext gathers metrics from a single host with context for timeout.
-// Returns the metrics, the SSH probe latency, and any error.
+// Returns the metrics, the lock status, the SSH probe latency, and any error.
 // The latency is measured using a lightweight echo command, not the metrics collection time.
-func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, time.Duration, error) {
+func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*HostMetrics, *HostLockInfo, time.Duration, error) {
 	// Check for context cancellation early
 	select {
 	case <-ctx.Done():
-		return nil, 0, ctx.Err()
+		return nil, nil, 0, ctx.Err()
 	default:
 	}
 
 	// Get connection with platform detection
 	client, platform, err := c.pool.GetWithPlatform(alias)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
 	// First, measure actual SSH latency with a lightweight probe command.
@@ -258,14 +239,14 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 		probeLatency = 0
 	}
 
-	// Build and execute the batched metrics command
-	cmd := BuildMetricsCommand(platform)
+	// Build and execute the batched metrics command (includes lock status)
+	cmd := BuildMetricsCommand(platform, c.lockDir())
 
 	// Use embedded ssh.Client's NewSession directly for full session capabilities
 	session, err := client.Client.NewSession()
 	if err != nil {
 		c.pool.CloseOne(alias)
-		return nil, probeLatency, err
+		return nil, nil, probeLatency, err
 	}
 	defer session.Close()
 
@@ -284,13 +265,13 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
-		return nil, probeLatency, ctx.Err()
+		return nil, nil, probeLatency, ctx.Err()
 	case r := <-resultCh:
 		if r.err != nil {
-			return nil, probeLatency, r.err
+			return nil, nil, probeLatency, r.err
 		}
-		metrics, err := c.parseOutput(alias, platform, string(r.output))
-		return metrics, probeLatency, err
+		metrics, lockInfo := c.parseOutput(alias, platform, string(r.output))
+		return metrics, lockInfo, probeLatency, nil
 	}
 }
 
@@ -327,8 +308,8 @@ func (c *Collector) probeLatency(ctx context.Context, client *sshutil.Client) (t
 	}
 }
 
-// parseOutput parses the batched command output into HostMetrics.
-func (c *Collector) parseOutput(alias string, platform Platform, output string) (*HostMetrics, error) {
+// parseOutput parses the batched command output into HostMetrics and lock status.
+func (c *Collector) parseOutput(alias string, platform Platform, output string) (*HostMetrics, *HostLockInfo) {
 	metrics := &HostMetrics{
 		Timestamp: time.Now(),
 	}
@@ -336,20 +317,30 @@ func (c *Collector) parseOutput(alias string, platform Platform, output string) 
 	// Split output by separator
 	sections := strings.Split(output, OutputSeparator+"\n")
 
+	lockSection := linuxLockSection
 	switch platform {
 	case PlatformLinux:
-		return c.parseLinuxOutput(alias, metrics, sections)
+		metrics = c.parseLinuxOutput(alias, metrics, sections)
 	case PlatformDarwin:
-		return c.parseDarwinOutput(metrics, sections)
+		metrics = c.parseDarwinOutput(metrics, sections)
+		lockSection = darwinLockSection
 	default:
 		// Try Linux parsing as fallback
-		return c.parseLinuxOutput(alias, metrics, sections)
+		metrics = c.parseLinuxOutput(alias, metrics, sections)
 	}
+
+	// The lock payload is the last section on both platforms
+	var lockInfo *HostLockInfo
+	if len(sections) > lockSection {
+		lockInfo = c.parseLockSection(sections[lockSection])
+	}
+
+	return metrics, lockInfo
 }
 
 // parseLinuxOutput parses Linux metrics from the batched command output.
-// Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi, 5=ps aux
-func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, sections []string) (*HostMetrics, error) {
+// Sections: 0=/proc/stat, 1=/proc/loadavg, 2=/proc/meminfo, 3=/proc/net/dev, 4=nvidia-smi, 5=ps aux, 6=lock info (parsed in parseOutput)
+func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, sections []string) *HostMetrics {
 	if len(sections) >= 2 {
 		procStat := strings.TrimSpace(sections[0])
 		procLoadavg := strings.TrimSpace(sections[1])
@@ -392,12 +383,12 @@ func (c *Collector) parseLinuxOutput(alias string, metrics *HostMetrics, section
 		}
 	}
 
-	return metrics, nil
+	return metrics
 }
 
 // parseDarwinOutput parses macOS metrics from the batched command output.
-// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ioreg GPU, 4=ps aux
-func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (*HostMetrics, error) {
+// Sections: 0=top, 1=vm_stat, 2=netstat, 3=ioreg GPU, 4=ps aux, 5=lock info (parsed in parseOutput)
+func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) *HostMetrics {
 	if len(sections) >= 1 {
 		topOutput := strings.TrimSpace(sections[0])
 		cpu, err := parseDarwinCPU(topOutput)
@@ -438,7 +429,7 @@ func (c *Collector) parseDarwinOutput(metrics *HostMetrics, sections []string) (
 		}
 	}
 
-	return metrics, nil
+	return metrics
 }
 
 // Close closes all connections in the pool.
@@ -787,6 +778,15 @@ func parseNvidiaSMI(output string) (*GPUMetrics, error) {
 	return metrics, nil
 }
 
+// Precompiled regexes for Apple Silicon GPU parsing (hot path: every tick per macOS host).
+var (
+	appleGPUModelRe      = regexp.MustCompile(`"model"\s*=\s*"([^"]+)"`)
+	appleGPUPerfRe       = regexp.MustCompile(`"PerformanceStatistics"\s*=\s*\{([^}]+)\}`)
+	appleGPUDeviceUtilRe = regexp.MustCompile(`"` + regexp.QuoteMeta("Device Utilization %") + `"\s*=\s*([\d.]+)`)
+	appleGPUInUseMemRe   = regexp.MustCompile(`"` + regexp.QuoteMeta("In use system memory") + `"\s*=\s*(\d+)`)
+	appleGPUAllocMemRe   = regexp.MustCompile(`"` + regexp.QuoteMeta("Alloc system memory") + `"\s*=\s*(\d+)`)
+)
+
 // parseAppleGPU parses GPU metrics from Apple Silicon ioreg output.
 // Expected input format (filtered grep output):
 //
@@ -804,28 +804,26 @@ func parseAppleGPU(output string) *GPUMetrics {
 	metrics := &GPUMetrics{}
 
 	// Parse model name: "model" = "Apple M4"
-	modelRe := regexp.MustCompile(`"model"\s*=\s*"([^"]+)"`)
-	if match := modelRe.FindStringSubmatch(output); len(match) > 1 {
+	if match := appleGPUModelRe.FindStringSubmatch(output); len(match) > 1 {
 		metrics.Name = match[1]
 	}
 
 	// Parse PerformanceStatistics
-	perfRe := regexp.MustCompile(`"PerformanceStatistics"\s*=\s*\{([^}]+)\}`)
-	if match := perfRe.FindStringSubmatch(output); len(match) > 1 {
+	if match := appleGPUPerfRe.FindStringSubmatch(output); len(match) > 1 {
 		stats := match[1]
 
 		// Device Utilization % - this is the main GPU utilization metric
-		if val := extractAppleGPUStat(stats, "Device Utilization %"); val >= 0 {
+		if val := extractAppleGPUStat(stats, appleGPUDeviceUtilRe); val >= 0 {
 			metrics.Percent = val
 		}
 
 		// In use system memory (bytes)
-		if val := extractAppleGPUStatInt(stats, "In use system memory"); val >= 0 {
+		if val := extractAppleGPUStatInt(stats, appleGPUInUseMemRe); val >= 0 {
 			metrics.MemoryUsed = val
 		}
 
 		// Alloc system memory (bytes) - use as total
-		if val := extractAppleGPUStatInt(stats, "Alloc system memory"); val >= 0 {
+		if val := extractAppleGPUStatInt(stats, appleGPUAllocMemRe); val >= 0 {
 			metrics.MemoryTotal = val
 		}
 	}
@@ -839,9 +837,7 @@ func parseAppleGPU(output string) *GPUMetrics {
 }
 
 // extractAppleGPUStat extracts a float value from the PerformanceStatistics string.
-func extractAppleGPUStat(stats, key string) float64 {
-	escapedKey := regexp.QuoteMeta(key)
-	re := regexp.MustCompile(`"` + escapedKey + `"\s*=\s*([\d.]+)`)
+func extractAppleGPUStat(stats string, re *regexp.Regexp) float64 {
 	if match := re.FindStringSubmatch(stats); len(match) > 1 {
 		val, err := strconv.ParseFloat(match[1], 64)
 		if err == nil {
@@ -852,9 +848,7 @@ func extractAppleGPUStat(stats, key string) float64 {
 }
 
 // extractAppleGPUStatInt extracts an int64 value from the PerformanceStatistics string.
-func extractAppleGPUStatInt(stats, key string) int64 {
-	escapedKey := regexp.QuoteMeta(key)
-	re := regexp.MustCompile(`"` + escapedKey + `"\s*=\s*(\d+)`)
+func extractAppleGPUStatInt(stats string, re *regexp.Regexp) int64 {
 	if match := re.FindStringSubmatch(stats); len(match) > 1 {
 		val, err := strconv.ParseInt(match[1], 10, 64)
 		if err == nil {
