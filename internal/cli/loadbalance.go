@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -18,7 +19,25 @@ type hostAttempt struct {
 	hostName   string
 	conn       *host.Connection
 	connErr    error
-	lockHolder string // Who holds the lock (if locked)
+	lockHolder string         // Who holds the lock (if locked)
+	lockInfo   *lock.LockInfo // Structured holder info (nil if unreadable)
+}
+
+// lockHolderDetail describes a lock holder in the result envelope.
+type lockHolderDetail struct {
+	Host        string  `json:"host"`
+	User        string  `json:"user,omitempty"`
+	Pid         int     `json:"pid,omitempty"`
+	Command     string  `json:"command,omitempty"`
+	AgeS        float64 `json:"age_s,omitempty"`
+	SameMachine bool    `json:"same_machine"`
+}
+
+// fallbackDetail explains a local fallback in the result envelope.
+type fallbackDetail struct {
+	Reason  string             `json:"reason"` // all_hosts_locked
+	WaitedS float64            `json:"waited_s,omitempty"`
+	Holders []lockHolderDetail `json:"holders,omitempty"`
 }
 
 // findAvailableHostResult contains the result of finding an available host.
@@ -26,7 +45,116 @@ type findAvailableHostResult struct {
 	conn       *host.Connection
 	lock       *lock.Lock
 	isLocal    bool
+	fellBack   bool          // isLocal because all hosts were locked
 	hostsState []hostAttempt // State of all hosts tried
+}
+
+// allLockedAction is the decision for the "every host is locked" scenario.
+type allLockedAction int
+
+const (
+	// actionWaitThenError waits for a lock then errors on timeout (fallback disabled for busy hosts).
+	actionWaitThenError allLockedAction = iota
+	// actionFallbackImmediately goes local right away (always mode, no local holders).
+	actionFallbackImmediately
+	// actionWaitThenFallback waits first, then goes local on timeout (always
+	// mode with a same-machine holder: the holder is likely the user's own
+	// run, so waiting briefly beats silently running locally).
+	actionWaitThenFallback
+)
+
+// resolveAllLockedAction decides what to do when every host is locked.
+func resolveAllLockedAction(mode config.LocalFallbackMode, holders []lockHolderDetail) allLockedAction {
+	if mode != config.LocalFallbackAlways {
+		return actionWaitThenError
+	}
+	for _, h := range holders {
+		if h.SameMachine {
+			return actionWaitThenFallback
+		}
+	}
+	return actionFallbackImmediately
+}
+
+// holderDetails converts locked-host attempts into envelope-ready holder info.
+func holderDetails(lockedHosts []hostAttempt) []lockHolderDetail {
+	details := make([]lockHolderDetail, 0, len(lockedHosts))
+	for _, a := range lockedHosts {
+		d := lockHolderDetail{Host: a.hostName}
+		if a.lockInfo != nil {
+			d.User = a.lockInfo.User
+			d.Pid = a.lockInfo.PID
+			d.Command = a.lockInfo.Command
+			d.AgeS = a.lockInfo.Age().Round(time.Second).Seconds()
+			d.SameMachine = a.lockInfo.SameMachine()
+		}
+		details = append(details, d)
+	}
+	return details
+}
+
+// describeHolders renders holder details for human-facing messages.
+func describeHolders(holders []lockHolderDetail) string {
+	parts := make([]string, 0, len(holders))
+	for _, h := range holders {
+		desc := h.Host
+		if h.Command != "" {
+			desc += fmt.Sprintf(": '%s'", h.Command)
+		}
+		if h.Pid != 0 {
+			desc += fmt.Sprintf(" (pid %d", h.Pid)
+			if h.SameMachine {
+				desc += ", this machine"
+			}
+			desc += ")"
+		}
+		parts = append(parts, desc)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// lockStealWarn surfaces lock-steal warnings from TryAcquire in the active
+// output mode, so steals during load-balanced host selection are as visible
+// as those from blocking Acquire.
+func lockStealWarn(msg string) {
+	if PrettyMode() {
+		ui.PrintWarning(msg)
+		return
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:    "phase",
+		Phase:   "connect",
+		Status:  "warn",
+		Details: map[string]interface{}{"message": msg},
+	})
+}
+
+// emitFallbackWarning makes a local fallback unmissable in both output modes.
+func emitFallbackWarning(holders []lockHolderDetail, waited time.Duration) {
+	if PrettyMode() {
+		msg := "Falling back to LOCAL execution - all remote hosts are locked"
+		if len(holders) > 0 {
+			msg += " (" + describeHolders(holders) + ")"
+		}
+		ui.PrintWarning(msg)
+		return
+	}
+
+	details := map[string]interface{}{
+		"local_fallback": true,
+		"reason":         "all_hosts_locked",
+		"holders":        holders,
+	}
+	if waited > 0 {
+		details["waited_s"] = waited.Seconds()
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:    "phase",
+		Phase:   "connect",
+		Status:  "warn",
+		Host:    "local",
+		Details: details,
+	})
 }
 
 // findAvailableHost tries to find a host that is both connectable and not locked.
@@ -95,7 +223,7 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 
 		// Try non-blocking lock acquisition
-		lck, err := lock.TryAcquire(conn, lockCfg, opts.Command)
+		lck, err := lock.TryAcquire(conn, lockCfg, opts.Command, lock.WithWarnFunc(lockStealWarn))
 		if err == nil {
 			// Got the lock
 			lck.StartHeartbeat()
@@ -108,7 +236,12 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 		if errors.Is(err, lock.ErrLocked) {
 			// Host is locked, record who holds it and try next
-			attempt.lockHolder = lock.GetLockHolder(conn, lockCfg)
+			attempt.lockInfo = lock.GetLockInfo(conn, lockCfg)
+			if attempt.lockInfo != nil {
+				attempt.lockHolder = attempt.lockInfo.Describe()
+			} else {
+				attempt.lockHolder = lock.GetLockHolder(conn, lockCfg)
+			}
 			lockedHosts = append(lockedHosts, attempt)
 			attempts = append(attempts, attempt)
 			// Keep connection open for potential round-robin
@@ -123,46 +256,89 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 	// Phase 2: All hosts tried - handle "all locked" scenario
 	if len(lockedHosts) > 0 {
-		// If local_fallback is enabled, go local immediately
-		if ctx.Resolved.Global.Defaults.LocalFallback {
-			// Close all locked host connections
+		mode := config.ResolveLocalFallbackMode(ctx.Resolved)
+		holders := holderDetails(lockedHosts)
+
+		switch resolveAllLockedAction(mode, holders) {
+		case actionFallbackImmediately:
 			for _, a := range lockedHosts {
 				if a.conn != nil {
 					a.conn.Close()
 				}
 			}
-			return &findAvailableHostResult{
-				conn: &host.Connection{
-					Name:    "local",
-					Alias:   "local",
-					IsLocal: true,
-				},
-				lock:       nil,
-				isLocal:    true,
-				hostsState: attempts,
-			}, nil
-		}
+			emitFallbackWarning(holders, 0)
+			ctx.AddResultDetail("fallback", fallbackDetail{
+				Reason:  "all_hosts_locked",
+				Holders: holders,
+			})
+			return localFallbackResult(attempts), nil
 
-		// Otherwise, round-robin wait for a host to become available
-		return roundRobinWait(ctx, lockedHosts, lockCfg, opts.Command, attempts)
+		case actionWaitThenFallback:
+			waitStart := time.Now()
+			result, err := roundRobinWait(ctx, lockedHosts, lockCfg, opts.Command, attempts, holders)
+			if err == nil {
+				return result, nil
+			}
+			// Wait exhausted (or connections lost): fall back, loudly
+			waited := time.Since(waitStart)
+			emitFallbackWarning(holders, waited)
+			ctx.AddResultDetail("fallback", fallbackDetail{
+				Reason:  "all_hosts_locked",
+				WaitedS: waited.Round(time.Second).Seconds(),
+				Holders: holders,
+			})
+			return localFallbackResult(attempts), nil
+
+		default:
+			// Fallback disabled for busy hosts: wait, then error
+			return roundRobinWait(ctx, lockedHosts, lockCfg, opts.Command, attempts, holders)
+		}
 	}
 
 	// No hosts could be connected to at all
 	return nil, buildConnectionError(attempts)
 }
 
+// localFallbackResult builds the local-execution result used when all hosts
+// are locked and fallback is allowed.
+func localFallbackResult(attempts []hostAttempt) *findAvailableHostResult {
+	return &findAvailableHostResult{
+		conn: &host.Connection{
+			Name:    "local",
+			Alias:   "local",
+			IsLocal: true,
+		},
+		lock:       nil,
+		isLocal:    true,
+		fellBack:   true,
+		hostsState: attempts,
+	}
+}
+
 // roundRobinWait cycles through locked hosts until one becomes available or timeout.
-func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, command string, allAttempts []hostAttempt) (*findAvailableHostResult, error) {
+func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, command string, allAttempts []hostAttempt, holders []lockHolderDetail) (*findAvailableHostResult, error) {
 	waitTimeout := lockCfg.WaitTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 1 * time.Minute // Default
 	}
 
+	waitMsg := waitMessage(holders, waitTimeout)
 	startTime := time.Now()
 	var spinner *ui.Spinner
 	if PrettyMode() {
-		spinner = ui.NewSpinner("Waiting for available host")
+		spinner = ui.NewSpinner(waitMsg)
 		spinner.Start()
+	} else {
+		WritePhaseEvent(PhaseEvent{
+			Type:   "phase",
+			Phase:  "connect",
+			Status: "waiting",
+			Details: map[string]interface{}{
+				"message":        waitMsg,
+				"holders":        holders,
+				"wait_timeout_s": waitTimeout.Seconds(),
+			},
+		})
 	}
 
 	for {
@@ -184,7 +360,7 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 				continue
 			}
 
-			lck, err := lock.TryAcquire(attempt.conn, lockCfg, command)
+			lck, err := lock.TryAcquire(attempt.conn, lockCfg, command, lock.WithWarnFunc(lockStealWarn))
 			if err == nil {
 				lck.StartHeartbeat()
 				if spinner != nil {
@@ -227,6 +403,20 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 	}
 }
 
+// waitMessage says exactly what the round-robin wait is waiting on.
+func waitMessage(holders []lockHolderDetail, timeout time.Duration) string {
+	for _, h := range holders {
+		if h.SameMachine {
+			desc := fmt.Sprintf("pid %d", h.Pid)
+			if h.Command != "" {
+				desc = fmt.Sprintf("pid %d: %s", h.Pid, h.Command)
+			}
+			return fmt.Sprintf("All hosts locked by your own runs (%s); waiting up to %s", desc, timeout)
+		}
+	}
+	return fmt.Sprintf("All hosts locked; waiting up to %s", timeout)
+}
+
 // buildConnectionError builds an error message for when no hosts could connect.
 func buildConnectionError(attempts []hostAttempt) error {
 	if len(attempts) == 0 {
@@ -267,7 +457,7 @@ func buildAllHostsLockedError(lockedHosts []hostAttempt, timeout time.Duration) 
 
 	return rrerrors.New(rrerrors.ErrLock,
 		fmt.Sprintf("All hosts are locked - timed out after %s", timeout),
-		fmt.Sprintf("Locked hosts: %v. Wait for them to finish or use --force-unlock if stale.", holders))
+		fmt.Sprintf("Locked hosts: %v. Wait for them to finish, or run 'rr unlock --all' if they're stuck.", holders))
 }
 
 // setupWorkflowLoadBalanced performs workflow setup with load balancing.

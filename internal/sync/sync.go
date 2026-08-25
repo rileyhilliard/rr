@@ -59,6 +59,12 @@ func buildSSHCmd() string {
 // - Exclude patterns prevent files from being synced
 // - Custom flags from config are appended
 func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer) error {
+	return SyncWithOptions(conn, localDir, cfg, progress, nil)
+}
+
+// SyncWithOptions is Sync with optional behavior (e.g. a warning callback
+// for provenance mismatches).
+func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer, opts *SyncOptions) error {
 	// Skip sync for local connections - we're already working with local files
 	if conn != nil && conn.IsLocal {
 		return nil
@@ -77,6 +83,9 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 	if err := ensureRemoteDir(conn); err != nil {
 		return err
 	}
+
+	// Warn if the remote dir was last synced from a different tree/machine
+	checkSourceMarker(conn, localDir, opts)
 
 	args, err := BuildArgs(conn, localDir, cfg)
 	if err != nil {
@@ -127,6 +136,9 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 		}
 	}
 
+	// Record where this sync came from (best-effort)
+	writeSourceMarker(conn, localDir)
+
 	return nil
 }
 
@@ -165,6 +177,10 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 
 	// Add progress info flag for parsing
 	args = append(args, "--info=progress2")
+
+	// Protect the provenance marker rr writes after each sync - it never
+	// exists locally, so --delete would remove it without this rule
+	args = append(args, fmt.Sprintf("--filter=P /%s", sourceMarkerFile))
 
 	// Add preserve patterns as filters (P = protect from deletion)
 	// These go BEFORE excludes so they protect paths that might otherwise be deleted

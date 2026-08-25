@@ -314,6 +314,8 @@ func TestExtractTaskName(t *testing.T) {
 		{"test-all-20240115-143022", "test-all"},
 		{"simple-20240115-143022", "simple"},
 		{"multi-part-name-20240115-143022", "multi-part-name"},
+		// Same-second collision suffix is ignored when grouping
+		{"test-all-20240115-143022.2", "test-all"},
 		{"no-timestamp", "no-timestamp"},
 		{"", ""},
 		// Timestamp-only input returns unchanged (no task name prefix to extract)

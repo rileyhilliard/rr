@@ -5,7 +5,108 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.25.0] - 2026-07-30
+
+Full product/architecture/performance round on `rr monitor`. Net: three inert config keys made functional, a metrics gap vs comparable tools closed, a scriptable snapshot mode, threshold alerts, large render speedups, and ~2,300 lines of dead code removed.
+
+### Added
+
+- **`rr monitor --once [--json]`** - One-shot fleet snapshot for scripts and agents. Double-samples delta-based sources (CPU%, network and disk rates) in a single SSH session, so the numbers are real on the first shot. `--json` emits a stable machine-readable document; without it you get a readable table.
+- **New monitor metrics** - Disk usage (all platforms) and disk I/O rates (Linux), CPU temperature (Linux hwmon, package sensor preferred), per-core CPU heat strip (Linux), and uptime/OS/kernel in the detail header. macOS core count is no longer hardcoded to 0.
+- **Threshold alerts** (`monitor.alerts`) - A metric crossing its critical threshold flashes the card border, adds a header badge, and rings the terminal bell; hysteresis (re-arm below warning) plus a per-host/metric cooldown prevent flapping. An optional `on_alert` hook runs locally with `RR_HOST`/`RR_METRIC`/`RR_VALUE` env vars (bounded at 10s) for wiring desktop notifications.
+- **Visualization** - Up to 4 grid columns on wide terminals; terminals 40+ rows tall get taller card graphs and top-3 processes per card; Peak/Avg stats under detail CPU/GPU graphs; `p` cycles process sort (CPU/MEM/PID) in detail view; first Linux CPU sample shows "warming up" instead of a bogus 0%.
+
+### Changed
+
+- **Monitor render path is much faster** - Per-color style caching plus run-length merging of same-color spans: sparklines ~30x faster, gradient bars ~148x, full dashboard frame ~2.9x with ~10x fewer allocations. Card bodies are cached per host and only re-rendered when that host reports new data.
+- **Half the SSH traffic per tick** - The lock check is folded into the batched metrics command: 2 sessions per host per tick instead of 4.
+- **`rr run`/`exec` race SSH aliases in parallel** - The monitor pool's parallel dial-with-preference strategy moved to `internal/host/dial.go` and now backs the host selector too: aliases are tried concurrently (earlier entries preferred within a 500ms grace window) instead of stacking serial timeouts, and a total failure aggregates every alias error into one actionable message.
+- **Monitor default interval standardized at 1s** - This was already the effective default via the flag; the config default now matches.
+- Monitor docs (ARCHITECTURE.md, configuration.md, package docs) rewritten to match shipped behavior; documented-but-nonexistent flags/config removed (`--no-gpu`, `metrics:`, `gpu_timeout`, `gpu_temp`).
+
+### Fixed
+
+- **`monitor.interval`, `monitor.exclude`, and `monitor.thresholds` now work** - All three were documented and validated but never applied. Thresholds drive both header and graph coloring; `--hosts` wins over `exclude` on conflict. `monitor.timeout` parse errors now surface at config load instead of silently falling back.
+- **Context-cancel leak in the collection loop** - Overlapping refresh rounds (e.g. pressing `r` mid-collection) now cancel independently instead of orphaning the earlier round's timer.
+- Selection highlight no longer lags one data tick behind when moving between cards.
+- rr's own metrics batch no longer appears in the top-processes list; header says "1 host" when it means one; a process's CPU% color accounts for core count (155% on a 10-core box isn't "critical").
+
+### Removed
+
+- Dead `internal/monitor/parsers/` subpackage (~1,300 lines, zero importers, a diverged duplicate of the live inline parsers), the legacy non-streaming collect path, five unused sparkline renderers, and the vestigial "slow" host status.
+
+## [0.24.0] - 2026-07-30
+
+### Breaking Changes
+
+- **`rr run`/`rr exec` now run in the subdirectory you invoked them from.** Previously every ad-hoc command executed at the project root regardless of your shell's location. This matches what every other tool does (`make`, `pytest`, `npm test` all use your cwd) and is what "minimal surprise" requires, but commands written against the old behavior change meaning:
+
+  ```bash
+  cd backend
+  rr run "make"                     # now needs backend/Makefile, not the root one
+  rr run "cat ../README.md"         # root-relative paths need ../
+  rr run --cwd . "make"             # explicit: restores the old behavior
+  ```
+
+  Note this cuts both ways: the old behavior silently ran a *different* Makefile than `cd backend && make` would locally. When a relative path fails, the `hint` detail names the directory it ran in and the fix. Named tasks are unaffected: `rr test` means the same thing from every directory.
+
+### Added
+
+- **Zero-test runs are called out** - A test run that collected nothing no longer looks identical to a clean suite: `details.no_tests` is set in the result envelope and pretty mode prints a warning. Exit codes are unchanged, so legitimate zero-test commands (`pytest --collect-only`, `go test -run NoMatch`, `jest --passWithNoTests`) keep working. Requires positive evidence in the output (a matched `no tests ran` / `collected 0 items` / `Tests no tests` line), never inference from the command string alone. Covers `rr run`/`rr exec`/tasks; parallel runs set `details.no_tests` to the list of subtask names that collected nothing.
+- **`details.remote_cwd`** reports the subdirectory a command ran in (see Breaking Changes above), for both remote and local execution, so `local_fallback` can't make one command mean two things. The `cd` is soft: a directory that wasn't synced falls back to the project root rather than failing.
+- **Relative-path failure hints** - When a relative path fails because it resolved from a different directory than you expected, the `hint` detail names both directories and the fix (the corrected path, or which `--cwd` to pass or drop). Only fires when the path actually exists in one location and not the other, so a genuine typo doesn't get an invented explanation.
+- **Pipe-swallowed exit codes are flagged** - A piped zero-test run sets `details.piped_exit_code` and the warning points at the cause: without `pipefail` the shell reports the last stage's status, so a failing runner exits 0. Enable propagation per host with `shell: "bash -o pipefail -c"` (bash, not sh: dash lacks `pipefail`). rr does not inject `pipefail` itself, since `cmd | grep -q pattern` tolerates upstream failure on purpose.
+
+### Fixed
+
+- **Jest/vitest runs get a test summary** - `JestFormatter` implemented neither `GetTestCounts` nor `GetTestFailures`, so `details.summary` was omitted for *every* JS/TS run, passing suites included. Now populated from the parsed counts.
+- **`--cwd` can no longer escape the project root on local runs** - The remote path rejected a traversing `--cwd`, but local and `local_fallback` execution applied it with only an existence check, so `rr run --local --cwd ../ "cat outside.txt"` ran outside the project and exited 0. Both paths now return the same structured error.
+- **`rr init` documents `local_fallback` accurately** - The generated template described it as a boolean; it takes `never` / `on-unreachable` / `always` (booleans still accepted).
+
+## [0.23.1] - 2026-07-26
+
+### Fixed
+
+- **Test summaries extract from quiet pytest output** - `details.summary` now parses the bare `5 passed in 4.20s` line that pytest `-q`/`-qq` emits (and filtered pipelines pass through); previously only the `==== ... ====` decorated summary was recognized, so quiet runs got no summary in the result envelope.
+- **Bad explicit `--config` no longer falls back silently** - `rr --config /bad/path.yaml tasks` errored from an empty directory but silently listed tasks from a discovered `.rr.yaml` when one existed; it now fails either way.
+- **Unknown task flags suggest `--`** - `rr test-opendata -k foo` died with a bare cobra "unknown shorthand flag" error; it now explains that rr parses flags first and suggests `rr <task> -- <args>` to pass flags through to the task.
+
+## [0.23.0] - 2026-07-26
+
+### Breaking Changes
+
+- **Task args are now shell-quoted** - Extra args appended to single-command tasks are quoted before hitting the remote shell, so `rr test "-k foo bar"` arrives as one argument. Remote glob/variable expansion of appended args no longer happens; put globs in the task's `run` string if you need them.
+- **Compound task commands reject blind arg appends** - A task whose `run` contains pipes, `&&`, redirections, `$()`, or backticks now errors when given extra args without an `{args}` placeholder. Previously the args silently landed on the last command in the pipeline (e.g. `grep` instead of `pytest`) and could produce false-green results. Add `{args}` (or `{args:-default}`) where the args belong.
+- **Worktree remote dirs move on upgrade** - `${PROJECT}` in a linked git worktree now expands to `repo@worktree-name` instead of colliding with the main checkout. First sync from an existing worktree is a cold sync into the new directory; the old shared mirror is left behind (clean it up manually, e.g. `rr run "rm -rf ~/rr/<old>"` semantics apply). Opt out with `sync.worktree_isolation: false`.
+- **Default excludes use bare patterns** - `.git/`, `.venv/`, `node_modules/` became `.git`, `.venv`, `node_modules` so linked worktrees (where `.git` is a file) and symlinked module dirs sync cleanly instead of failing with rsync exit 23. Bare patterns also match files with those names at any depth (e.g. a vendored fixture named `.git`). Custom `exclude` lists replace the defaults, so update yours too.
+- **`local_fallback: always` waits before falling back** - When all hosts are locked by live processes, rr now waits up to `lock.wait_timeout` for a host to free up before running locally (previously it fell back instantly and silently). Slower in that corner case, but honest.
+
+### Added
+
+- **`{args}` placeholders in tasks** - `run: pytest {args:-.} -n 4 | tail -20` substitutes shell-quoted CLI args exactly where you want them; `{args:-default}` supplies a default when no args are given; `{{args}}` escapes to a literal.
+- **Local path rewriting (on by default)** - `rr run`/`rr exec` rewrite absolute paths under the sync root to the remote project dir (tilde remote dirs become their `$HOME` form so rewrites expand after `=` and inside double quotes; single-quoted matches are left untouched); task args (including `forward_args` parallel tasks) rewrite to project-relative form. Rewrites are reported (`details.path_rewrites`); absolute paths outside the project draw a warning, and a leading `cd` into a local-only directory is rejected. Disable with `rewrite_paths: false` (global `defaults` or project).
+- **Failure hints** - A failed remote command whose stderr shows `No such file or directory` with a local-looking path, or `not a git repository`, gets an explanation of the local-to-remote mapping (pretty: after the status line; structured: `details.hint`).
+- **Run logs for single commands** - Every `rr run`/`rr exec`/task execution tees raw output to `~/.rr/logs/<name>-<timestamp>/output.log` (same retention as parallel logs) and reports `details.log_file`. Test summary (`details.summary`) and structured failures (`details.failures`) are extracted from the log - including in default structured mode.
+- **`--tail N`** on run/exec and task commands reprints the last N log lines after the result envelope.
+- **Broken-pipe tolerance** - SIGPIPE is ignored; when a consumer closes the pipe (`rr run ... | head`), rr stops writing to that stream instead of dying with exit 141, keeps logging, and notes `details.broken_pipe`. The ignored disposition is inherited by locally spawned commands (`--local`, local fallback), which then see EPIPE write errors instead of a SIGPIPE kill.
+- **Dead-lock reclaim** - Locks held by dead processes on the same machine (verified via a per-machine token, never hostname alone) are stolen automatically with a warning instead of forcing manual `rr unlock` forensics.
+- **Loud local fallback** - Falling back to local execution because hosts are locked now emits a warning event plus `details.fallback` (reason, wait time, per-host holders with pid/command/age) and repeats the warning after the pretty status line.
+- **Leading-arg validation** - `rr run m4-mini make test` and `rr run test-backend -k foo` now error with the correct invocation instead of shipping a nonsense command string to the remote.
+- **Sync provenance marker** - Each sync writes `.rr-source` (source path, hostname, branch, HEAD) on the remote and warns when a sync would overwrite a mirror owned by a different source tree or machine.
+- **Worktree visibility** - `rr status` shows which remote directory the current tree syncs to per host; `rr doctor` warns when a linked worktree shares the main checkout's remote dir.
+- **`local_fallback` modes** - `never` / `on-unreachable` / `always` replace the boolean (booleans still accepted: `true` = `always`, `false` = `never`); the project-level override now works on the all-hosts-locked path too.
+- **Richer lock errors and `rr unlock --all`** - Lock conflicts show holder, pid, command, and age; `rr unlock --all` scopes to project hosts, probes in parallel, and supports structured output.
+
+### Fixed
+
+- **Parallel-task arg rejection now points at `forward_args`** - The error for passing args to a non-forwarding parallel task explains `forward_args: true` + `{args}` placeholders and warns that forwarded filters can leave subtasks with zero collected tests (pytest exits 4/5).
+- **`lock.wait_timeout` default** was missing from config parsing; it now defaults to `1m`.
+- **Lock timeout errors** no longer suggest the nonexistent `--force-unlock` flag.
+
+### Documentation
+
+- `defaults.setup` is documented: it prepends to task commands **and** ad-hoc remote `rr run`/`rr exec` (it already behaved that way for run).
+- Worktree isolation, `{args}` placeholders, path rewriting, fallback modes, and the bare exclude patterns are covered in `docs/configuration.md` and the README.
 
 ## [0.22.3] - 2026-07-05
 

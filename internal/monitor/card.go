@@ -10,9 +10,40 @@ import (
 
 // Card layout constants
 const (
-	cardGraphHeight = 2  // braille graph rows
-	cardMinBarWidth = 10 // minimum graph width
+	cardGraphHeight         = 2  // braille graph rows
+	cardGraphHeightExtended = 4  // braille graph rows on tall terminals
+	cardMinBarWidth         = 10 // minimum graph width
+	cardTopProcs            = 1  // top processes listed on a full card
+	cardTopProcsExtended    = 3  // top processes listed on a tall terminal
 )
+
+// cardGraphRows returns the braille graph height for full cards. Tall terminals
+// get a taller graph since there's vertical room to spare.
+func (m Model) cardGraphRows() int {
+	if m.CanShowExtendedInfo() {
+		return cardGraphHeightExtended
+	}
+	return cardGraphHeight
+}
+
+// cardProcessCount returns how many top processes a full card lists. Tall
+// terminals show more of the already-collected process list.
+func (m Model) cardProcessCount() int {
+	if m.CanShowExtendedInfo() {
+		return cardTopProcsExtended
+	}
+	return cardTopProcs
+}
+
+// cpuWarmingUpText is shown in place of the CPU percentage until a real reading
+// is available. See CPUMetrics.Valid.
+const cpuWarmingUpText = "warming up"
+
+// renderCPUWarmingUp renders the dim placeholder shown instead of "0.0%" while
+// the first CPU sample is still being established.
+func renderCPUWarmingUp() string {
+	return lipgloss.NewStyle().Foreground(ColorTextMuted).Render(cpuWarmingUpText)
+}
 
 // genZErrorMessage converts a technical error message to gen-z themed text.
 func genZErrorMessage(err string) string {
@@ -141,6 +172,44 @@ func truncateErrorMsg(errMsg string, maxLen int) string {
 	return msg
 }
 
+// cachedCardBody returns the cached rendered body (graphs/metric sections) for
+// a host, invoking render on a cache miss. The body depends only on the host's
+// metrics, history, and the terminal dimensions (width sets the card width;
+// height selects graph rows and process count via CanShowExtendedInfo), so it
+// stays valid between results. Invalidation happens in model.go: per-host when
+// that host gets a new result, and wholesale on resize, which covers both
+// dimensions. Dynamic chrome (spinners, countdowns, selection border) is never
+// cached.
+func (m Model) cachedCardBody(host string, render func() string) string {
+	if m.cardBodyCache == nil {
+		return render()
+	}
+	if body, ok := m.cardBodyCache[host]; ok {
+		return body
+	}
+	body := render()
+	m.cardBodyCache[host] = body
+	return body
+}
+
+// cardStyle returns the border style for a host's card at the given width.
+// An alerting host flashes its border in the critical color; selection still
+// reads through because a selected card keeps the thick border, so a selected
+// alerting card is distinguishable from an unselected one.
+func (m Model) cardStyle(host string, width int, selected bool) lipgloss.Style {
+	style := CardStyle
+	if selected {
+		style = CardSelectedStyle
+	}
+	if m.IsFlashing(host) {
+		style = style.BorderForeground(ColorCritical)
+		if selected {
+			style = style.Border(lipgloss.ThickBorder())
+		}
+	}
+	return style.Width(width)
+}
+
 // renderCardLine renders a text line with symmetric padding and background fill.
 // Adds 1-space padding on each side for consistent card layout.
 func renderCardLine(content string, width int) string {
@@ -161,11 +230,8 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
 
-	// Choose card style based on selection
-	style := CardStyle.Width(width)
-	if selected {
-		style = CardSelectedStyle.Width(width)
-	}
+	// Choose card style based on selection and alert state
+	style := m.cardStyle(host, width, selected)
 
 	// width IS the content area (lipgloss Width sets content area, borders add to total)
 	innerWidth := width
@@ -279,49 +345,70 @@ func (m Model) renderCard(host string, width int, selected bool) string {
 			lines = append(lines, renderCardLine("", innerWidth))
 		}
 	} else {
-		// Divider after host name
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// CPU metrics with braille graph
-		cpuLines := m.renderCardCPUSection(host, metrics.CPU, innerWidth)
-		lines = append(lines, cpuLines...)
-
-		// GPU metrics with braille graph (if available)
-		if metrics.GPU != nil {
-			lines = append(lines, renderCardDivider(innerWidth))
-			gpuLines := m.renderCardGPUSection(host, metrics.GPU, innerWidth)
-			lines = append(lines, gpuLines...)
-		}
-
-		// Latency metrics with braille graph (if available)
-		latencyLines := m.renderCardLatencySection(host, innerWidth)
-		if len(latencyLines) > 0 {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, latencyLines...)
-		}
-
-		// RAM metrics with braille graph
-		lines = append(lines, renderCardDivider(innerWidth))
-		ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
-		lines = append(lines, ramLines...)
-
-		// Top process (with divider if present)
-		if len(metrics.Processes) > 0 {
-			lines = append(lines, renderCardDivider(innerWidth))
-			topLine := m.renderCardTopProcess(metrics.Processes, innerWidth)
-			lines = append(lines, renderCardLine(topLine, innerWidth))
-		}
-
-		// Network rates (with divider if present)
-		netLine := m.renderCardNetworkLine(host, innerWidth)
-		if netLine != "" {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, renderCardLine(netLine, innerWidth))
-		}
+		// Expensive metric body: cached per host, invalidated on new results
+		lines = append(lines, m.cachedCardBody(host, func() string {
+			return m.renderCardBody(host, metrics, innerWidth)
+		}))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderCardBody renders the metric sections of a full card: divider,
+// CPU/GPU/latency/RAM graphs, top process, and network rates.
+func (m Model) renderCardBody(host string, metrics *HostMetrics, innerWidth int) string {
+	var lines []string
+
+	// Divider after host name
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// CPU metrics with braille graph
+	cpuLines := m.renderCardCPUSection(host, metrics.CPU, innerWidth)
+	lines = append(lines, cpuLines...)
+
+	// GPU metrics with braille graph (if available)
+	if metrics.GPU != nil {
+		lines = append(lines, renderCardDivider(innerWidth))
+		gpuLines := m.renderCardGPUSection(host, metrics.GPU, innerWidth)
+		lines = append(lines, gpuLines...)
+	}
+
+	// Latency metrics with braille graph (if available)
+	latencyLines := m.renderCardLatencySection(host, innerWidth)
+	if len(latencyLines) > 0 {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, latencyLines...)
+	}
+
+	// RAM metrics with braille graph
+	lines = append(lines, renderCardDivider(innerWidth))
+	ramLines := m.renderCardRAMSection(host, metrics.RAM, innerWidth)
+	lines = append(lines, ramLines...)
+
+	// Top processes (with divider if present)
+	if len(metrics.Processes) > 0 {
+		lines = append(lines, renderCardDivider(innerWidth))
+		for _, procLine := range m.renderCardTopProcesses(metrics.Processes, metrics.CPU.Cores, innerWidth) {
+			lines = append(lines, renderCardLine(procLine, innerWidth))
+		}
+	}
+
+	// Network rates (with divider if present)
+	netLine := m.renderCardNetworkLine(host, innerWidth)
+	if netLine != "" {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, renderCardLine(netLine, innerWidth))
+	}
+
+	// Disk usage (with divider if present)
+	diskLine := m.renderCardDiskLine(metrics.Disk, innerWidth)
+	if diskLine != "" {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, renderCardLine(diskLine, innerWidth))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // renderHostLine renders the host name with status indicator and status text.
@@ -342,10 +429,6 @@ func (m Model) renderHostLine(host string, status HostStatus) string {
 	case StatusRunningState:
 		indicator, indicatorStyle = m.RunningSpinner() // Animated braille spinner with color cycling
 		statusText = m.renderRunningStatusText(host)
-	case StatusSlowState:
-		indicator = StatusIdle
-		indicatorStyle = StatusSlowStyle
-		statusText = StatusTextStyle.Render(" - slow")
 	case StatusUnreachableState:
 		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle
@@ -393,11 +476,17 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 
 	// Header line: "CPU" label + right-aligned percentage and load
 	label := LabelStyle.Render("CPU")
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
 	loadText := LabelStyle.Render(fmt.Sprintf("1m:%.1f", cpu.LoadAvg[0]))
 
-	// Right side content
-	rightContent := pctText + " " + loadText
+	// Right side content ("warming up" replaces the percentage until the first
+	// real delta is available)
+	var rightContent string
+	if cpu.Valid() {
+		pctText := thresholdStyle(cpu.Percent, m.thresholds.CPU).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
+		rightContent = pctText + " " + loadText
+	} else {
+		rightContent = renderCPUWarmingUp() + " " + loadText
+	}
 	rightWidth := lipgloss.Width(rightContent)
 
 	// Calculate padding for right alignment
@@ -417,14 +506,14 @@ func (m Model) renderCardCPUSection(host string, cpu CPUMetrics, lineWidth int) 
 	// Braille graph
 	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(cpuHistory) > 0 {
-		graph := RenderBrailleSparkline(cpuHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(cpuHistory, graphWidth, m.cardGraphRows(), ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
 		}
 	} else {
 		// Show gradient bar while collecting history
-		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, cpu.Percent, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -443,7 +532,7 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 
 	// Header line: "RAM" label + right-aligned percentage
 	label := LabelStyle.Render("RAM")
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	pctText := thresholdStyle(percent, m.thresholds.RAM).Render(fmt.Sprintf("%5.1f%%", percent))
 
 	// Calculate padding for right alignment
 	rightWidth := lipgloss.Width(pctText)
@@ -463,14 +552,14 @@ func (m Model) renderCardRAMSection(host string, ram RAMMetrics, lineWidth int) 
 	// Braille graph
 	ramHistory := m.history.GetRAMHistory(host, DefaultHistorySize)
 	if len(ramHistory) > 0 {
-		graph := RenderBrailleSparkline(ramHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(ramHistory, graphWidth, m.cardGraphRows(), ColorGraph, thresholdColorFunc(m.thresholds.RAM))
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
 		}
 	} else {
 		// Show gradient bar while collecting history
-		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, percent, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -485,7 +574,7 @@ func (m Model) renderCardGPUSection(host string, gpu *GPUMetrics, lineWidth int)
 
 	// Header line: "GPU" label + right-aligned percentage + temperature
 	label := LabelStyle.Render("GPU")
-	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
+	pctText := thresholdStyle(gpu.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
 
 	// Add temperature if available
 	var rightContent string
@@ -514,14 +603,14 @@ func (m Model) renderCardGPUSection(host string, gpu *GPUMetrics, lineWidth int)
 	// Braille graph
 	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
 	if len(gpuHistory) > 0 {
-		graph := RenderBrailleSparkline(gpuHistory, graphWidth, cardGraphHeight, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(gpuHistory, graphWidth, m.cardGraphRows(), ColorGraph, thresholdColorFunc(m.thresholds.GPU))
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
 		}
 	} else {
 		// Show gradient bar while collecting history
-		bar := RenderGradientBar(graphWidth, gpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, gpu.Percent, thresholdColorFunc(m.thresholds.GPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -571,7 +660,7 @@ func (m Model) renderCardLatencySection(host string, lineWidth int) []string {
 		smoothedHistory := SmoothWithMovingAverage(latencyHistory, 5)
 		// Use per-column coloring based on latency thresholds (green=fast, red=degraded)
 		// forceZeroMin=true so high latency shows high on the graph, not at the bottom
-		graph := RenderBrailleSparklineWithOptions(smoothedHistory, graphWidth, cardGraphHeight, ColorGraph, LatencyColor, true)
+		graph := RenderBrailleSparklineWithOptions(smoothedHistory, graphWidth, m.cardGraphRows(), ColorGraph, LatencyColor, true)
 		graphLines := strings.Split(graph, "\n")
 		for _, gl := range graphLines {
 			lines = append(lines, renderCardLine(gl, lineWidth))
@@ -609,15 +698,67 @@ func (m Model) renderCardNetworkLine(host string, lineWidth int) string {
 	return label + padding + rightContent
 }
 
-// renderCardTopProcess renders the top process by CPU in a single line.
-func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
-	if len(procs) == 0 {
+// renderCardDiskLine renders root filesystem usage in a single line.
+// Returns empty string when no disk data is available.
+func (m Model) renderCardDiskLine(disk DiskMetrics, lineWidth int) string {
+	if disk.TotalBytes == 0 {
 		return ""
 	}
+	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
+
+	label := LabelStyle.Render("DISK")
+	pctText := thresholdStyle(disk.Percent, diskThresholds).Render(fmt.Sprintf("%5.1f%%", disk.Percent))
+	usageText := LabelStyle.Render(formatBytes(disk.UsedBytes) + "/" + formatBytes(disk.TotalBytes))
+
+	// Right-align the usage
+	rightContent := pctText + " " + usageText
+	rightWidth := lipgloss.Width(rightContent)
+	padding := ""
+	if contentWidth > lipgloss.Width(label)+rightWidth {
+		padding = strings.Repeat(" ", contentWidth-lipgloss.Width(label)-rightWidth)
+	}
+
+	return label + padding + rightContent
+}
+
+// processCPUColor colors a per-process CPU percentage. ps sums across cores,
+// so a multithreaded process can legitimately exceed 100%; classify against
+// the host's total capacity instead, so one busy core on a big box doesn't
+// read as a critical host condition.
+func (m Model) processCPUColor(procCPU float64, cores int) lipgloss.Color {
+	share := procCPU
+	if cores > 1 {
+		share = procCPU / float64(cores)
+	}
+	return MetricColorWithThresholds(share, m.thresholds.CPU.Warning, m.thresholds.CPU.Critical)
+}
+
+// renderCardTopProcesses renders the top processes by CPU, one per line. The
+// count comes from cardProcessCount (tall terminals show more). Only the first
+// line carries the "TOP" label; the rest are indented under it.
+func (m Model) renderCardTopProcesses(procs []ProcessInfo, cores, maxWidth int) []string {
+	count := m.cardProcessCount()
+	if count > len(procs) {
+		count = len(procs)
+	}
+
+	lines := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		lines = append(lines, m.renderCardProcessLine(procs[i], cores, i, maxWidth))
+	}
+	return lines
+}
+
+// renderCardProcessLine renders one process row. rank 0 gets the "TOP" label;
+// later ranks are blank-labelled so they read as a continuation of the list.
+func (m Model) renderCardProcessLine(proc ProcessInfo, cores, rank, maxWidth int) string {
 	contentWidth := maxWidth - 2 // Account for 1-space padding each side in renderCardLine
 
-	label := LabelStyle.Render("TOP")
-	proc := procs[0]
+	labelText := "TOP"
+	if rank > 0 {
+		labelText = "   "
+	}
+	label := LabelStyle.Render(labelText)
 
 	// Extract command name (first path component or word)
 	cmd := proc.Command
@@ -628,8 +769,8 @@ func (m Model) renderCardTopProcess(procs []ProcessInfo, maxWidth int) string {
 		cmd = cmd[:idx]
 	}
 
-	// Format percentage with color
-	pctColor := MetricColor(proc.CPU)
+	// Format percentage with color scaled to host capacity
+	pctColor := m.processCPUColor(proc.CPU, cores)
 	pctText := lipgloss.NewStyle().Foreground(pctColor).Render(fmt.Sprintf("%.0f%%", proc.CPU))
 
 	// Truncate command if needed (leave room for label + padding + cmd(pct))
@@ -662,11 +803,8 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
 
-	// Choose card style based on selection
-	style := CardStyle.Width(width)
-	if selected {
-		style = CardSelectedStyle.Width(width)
-	}
+	// Choose card style based on selection and alert state
+	style := m.cardStyle(host, width, selected)
 
 	// width IS the content area (lipgloss Width sets content area, borders add to total)
 	innerWidth := width
@@ -746,34 +884,47 @@ func (m Model) renderCompactCard(host string, width int, selected bool) string {
 			}
 		}
 	} else {
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// CPU with single-row sparkline
-		cpuLines := m.renderCompactCPUSection(host, metrics.CPU, innerWidth)
-		lines = append(lines, cpuLines...)
-
-		// GPU with single-row sparkline (if available)
-		if metrics.GPU != nil {
-			lines = append(lines, renderCardDivider(innerWidth))
-			gpuLines := m.renderCompactGPUSection(host, metrics.GPU, innerWidth)
-			lines = append(lines, gpuLines...)
-		}
-
-		// Latency with single-row sparkline (if available)
-		latencyLines := m.renderCompactLatencySection(host, innerWidth)
-		if len(latencyLines) > 0 {
-			lines = append(lines, renderCardDivider(innerWidth))
-			lines = append(lines, latencyLines...)
-		}
-
-		// RAM with single-row sparkline
-		lines = append(lines, renderCardDivider(innerWidth))
-		ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
-		lines = append(lines, ramLines...)
+		// Expensive metric body: cached per host, invalidated on new results
+		lines = append(lines, m.cachedCardBody(host, func() string {
+			return m.renderCompactCardBody(host, metrics, innerWidth)
+		}))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderCompactCardBody renders the metric sections of a compact card:
+// divider plus single-row CPU/GPU/latency/RAM sparklines.
+func (m Model) renderCompactCardBody(host string, metrics *HostMetrics, innerWidth int) string {
+	var lines []string
+
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// CPU with single-row sparkline
+	cpuLines := m.renderCompactCPUSection(host, metrics.CPU, innerWidth)
+	lines = append(lines, cpuLines...)
+
+	// GPU with single-row sparkline (if available)
+	if metrics.GPU != nil {
+		lines = append(lines, renderCardDivider(innerWidth))
+		gpuLines := m.renderCompactGPUSection(host, metrics.GPU, innerWidth)
+		lines = append(lines, gpuLines...)
+	}
+
+	// Latency with single-row sparkline (if available)
+	latencyLines := m.renderCompactLatencySection(host, innerWidth)
+	if len(latencyLines) > 0 {
+		lines = append(lines, renderCardDivider(innerWidth))
+		lines = append(lines, latencyLines...)
+	}
+
+	// RAM with single-row sparkline
+	lines = append(lines, renderCardDivider(innerWidth))
+	ramLines := m.renderCompactRAMSection(host, metrics.RAM, innerWidth)
+	lines = append(lines, ramLines...)
+
+	return strings.Join(lines, "\n")
 }
 
 // renderCompactCPUSection renders CPU with a single-row braille graph for compact mode.
@@ -782,7 +933,10 @@ func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth in
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("CPU")
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
+	pctText := thresholdStyle(cpu.Percent, m.thresholds.CPU).Render(fmt.Sprintf("%5.1f%%", cpu.Percent))
+	if !cpu.Valid() {
+		pctText = renderCPUWarmingUp()
+	}
 
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
@@ -801,10 +955,10 @@ func (m Model) renderCompactCPUSection(host string, cpu CPUMetrics, lineWidth in
 
 	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(cpuHistory) > 0 {
-		graph := RenderBrailleSparkline(cpuHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(cpuHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, cpu.Percent, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -822,7 +976,7 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 	}
 
 	label := LabelStyle.Render("RAM")
-	pctText := MetricStyle(percent).Render(fmt.Sprintf("%5.1f%%", percent))
+	pctText := thresholdStyle(percent, m.thresholds.RAM).Render(fmt.Sprintf("%5.1f%%", percent))
 
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
@@ -841,10 +995,10 @@ func (m Model) renderCompactRAMSection(host string, ram RAMMetrics, lineWidth in
 
 	ramHistory := m.history.GetRAMHistory(host, DefaultHistorySize)
 	if len(ramHistory) > 0 {
-		graph := RenderBrailleSparkline(ramHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(ramHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, percent, thresholdColorFunc(m.thresholds.RAM))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -857,7 +1011,7 @@ func (m Model) renderCompactGPUSection(host string, gpu *GPUMetrics, lineWidth i
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("GPU")
-	pctText := MetricStyle(gpu.Percent).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
+	pctText := thresholdStyle(gpu.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%5.1f%%", gpu.Percent))
 
 	// Right-aligned percentage (no temp in compact mode for space)
 	rightWidth := lipgloss.Width(pctText)
@@ -876,10 +1030,10 @@ func (m Model) renderCompactGPUSection(host string, gpu *GPUMetrics, lineWidth i
 
 	gpuHistory := m.history.GetGPUHistory(host, DefaultHistorySize)
 	if len(gpuHistory) > 0 {
-		graph := RenderBrailleSparkline(gpuHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(gpuHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.GPU))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, gpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, gpu.Percent, thresholdColorFunc(m.thresholds.GPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -936,7 +1090,10 @@ func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth in
 	contentWidth := lineWidth - 2 // Account for 1-space padding each side in renderCardLine
 
 	label := LabelStyle.Render("CPU:")
-	pctText := MetricStyle(cpu.Percent).Render(fmt.Sprintf("%3.0f%%", cpu.Percent))
+	pctText := thresholdStyle(cpu.Percent, m.thresholds.CPU).Render(fmt.Sprintf("%3.0f%%", cpu.Percent))
+	if !cpu.Valid() {
+		pctText = renderCPUWarmingUp()
+	}
 
 	// Right-aligned percentage
 	rightWidth := lipgloss.Width(pctText)
@@ -955,10 +1112,10 @@ func (m Model) renderMinimalCPUSection(host string, cpu CPUMetrics, lineWidth in
 
 	cpuHistory := m.history.GetCPUHistory(host, DefaultHistorySize)
 	if len(cpuHistory) > 0 {
-		graph := RenderBrailleSparkline(cpuHistory, graphWidth, 1, ColorGraph)
+		graph := RenderBrailleSparklineWithColorFunc(cpuHistory, graphWidth, 1, ColorGraph, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(graph, lineWidth))
 	} else {
-		bar := RenderGradientBar(graphWidth, cpu.Percent, ColorGraph)
+		bar := RenderGradientBarWithColorFunc(graphWidth, cpu.Percent, thresholdColorFunc(m.thresholds.CPU))
 		lines = append(lines, renderCardLine(bar, lineWidth))
 	}
 
@@ -971,11 +1128,8 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 	metrics := m.metrics[host]
 	status := m.status[host]
 
-	// Choose card style based on selection
-	style := CardStyle.Width(width)
-	if selected {
-		style = CardSelectedStyle.Width(width)
-	}
+	// Choose card style based on selection and alert state
+	style := m.cardStyle(host, width, selected)
 
 	// width IS the content area (lipgloss Width sets content area, borders add to total)
 	innerWidth := width
@@ -999,21 +1153,34 @@ func (m Model) renderMinimalCard(host string, width int, selected bool) string {
 		}
 		lines = append(lines, renderCardLine(LabelStyle.Render(placeholder), innerWidth))
 	} else {
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// CPU with single-row sparkline
-		cpuLines := m.renderMinimalCPUSection(host, metrics.CPU, innerWidth)
-		lines = append(lines, cpuLines...)
-
-		lines = append(lines, renderCardDivider(innerWidth))
-
-		// RAM as text only (keep it minimal)
-		metricsLine := m.renderMinimalMetricsLine(metrics, contentWidth)
-		lines = append(lines, renderCardLine(metricsLine, innerWidth))
+		// Expensive metric body: cached per host, invalidated on new results
+		lines = append(lines, m.cachedCardBody(host, func() string {
+			return m.renderMinimalCardBody(host, metrics, innerWidth, contentWidth)
+		}))
 	}
 
 	content := strings.Join(lines, "\n")
 	return style.Render(content)
+}
+
+// renderMinimalCardBody renders the metric sections of a minimal card:
+// CPU sparkline plus a text metrics line.
+func (m Model) renderMinimalCardBody(host string, metrics *HostMetrics, innerWidth, contentWidth int) string {
+	var lines []string
+
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// CPU with single-row sparkline
+	cpuLines := m.renderMinimalCPUSection(host, metrics.CPU, innerWidth)
+	lines = append(lines, cpuLines...)
+
+	lines = append(lines, renderCardDivider(innerWidth))
+
+	// RAM as text only (keep it minimal)
+	metricsLine := m.renderMinimalMetricsLine(metrics, contentWidth)
+	lines = append(lines, renderCardLine(metricsLine, innerWidth))
+
+	return strings.Join(lines, "\n")
 }
 
 // renderMinimalHostLine renders the hostname, truncating if necessary.
@@ -1031,9 +1198,6 @@ func (m Model) renderMinimalHostLine(host string, status HostStatus, maxWidth in
 		indicatorStyle = StatusIdleStyle
 	case StatusRunningState:
 		indicator, indicatorStyle = m.RunningSpinner() // Animated braille spinner
-	case StatusSlowState:
-		indicator = StatusIdle
-		indicatorStyle = StatusSlowStyle
 	case StatusUnreachableState:
 		indicator = StatusUnreachable
 		indicatorStyle = StatusUnreachableStyle
@@ -1058,14 +1222,14 @@ func (m Model) renderMinimalMetricsLine(metrics *HostMetrics, width int) string 
 		ramPct = float64(metrics.RAM.UsedBytes) / float64(metrics.RAM.TotalBytes) * 100
 	}
 
-	cpuText := MetricStyle(cpuPct).Render(fmt.Sprintf("%.0f%%", cpuPct))
-	ramText := MetricStyle(ramPct).Render(fmt.Sprintf("%.0f%%", ramPct))
+	cpuText := thresholdStyle(cpuPct, m.thresholds.CPU).Render(fmt.Sprintf("%.0f%%", cpuPct))
+	ramText := thresholdStyle(ramPct, m.thresholds.RAM).Render(fmt.Sprintf("%.0f%%", ramPct))
 
 	// Include GPU if available
 	hasGPU := metrics.GPU != nil
 	var gpuText string
 	if hasGPU {
-		gpuText = MetricStyle(metrics.GPU.Percent).Render(fmt.Sprintf("%.0f%%", metrics.GPU.Percent))
+		gpuText = thresholdStyle(metrics.GPU.Percent, m.thresholds.GPU).Render(fmt.Sprintf("%.0f%%", metrics.GPU.Percent))
 	}
 
 	// Choose format based on available width and GPU presence
