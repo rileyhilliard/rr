@@ -2,8 +2,10 @@ package output
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"sync"
+	"syscall"
 )
 
 // LineBuffer provides line-buffering for streaming data.
@@ -67,6 +69,20 @@ type StreamHandler struct {
 	// Limited to prevent memory issues with large output.
 	stderrCapture []byte
 	maxCapture    int
+
+	// tee receives raw (unformatted) copies of both streams. Tee write
+	// errors are never fatal.
+	tee io.Writer
+
+	// writers tracks the streamWriters created from this handler so Flush
+	// can drain their partial-line buffers after execution.
+	writers []*streamWriter
+
+	// Broken-pipe state per stream: once a consumer closes its end (e.g.
+	// `rr run ... | head`), further writes to that stream are suppressed
+	// instead of failing the run. The tee keeps receiving output.
+	stdoutBroken bool
+	stderrBroken bool
 }
 
 // NewStreamHandler creates a handler that writes to the given stdout/stderr.
@@ -85,19 +101,69 @@ func (h *StreamHandler) SetFormatter(f Formatter) {
 	h.formatter = f
 }
 
+// SetTee directs raw copies of both streams to w (typically a log file).
+func (h *StreamHandler) SetTee(w io.Writer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tee = w
+}
+
+// BrokenPipe reports whether a consumer closed stdout or stderr mid-run.
+func (h *StreamHandler) BrokenPipe() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.stdoutBroken || h.stderrBroken
+}
+
+// teeLine writes a raw line to the tee, ignoring errors. Caller holds mu.
+func (h *StreamHandler) teeLine(line string) {
+	if h.tee != nil {
+		_, _ = h.tee.Write([]byte(line + "\n"))
+	}
+}
+
+// isBrokenPipe reports whether err means the consumer closed its end.
+func isBrokenPipe(err error) bool {
+	return err != nil && (errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe))
+}
+
 // Stdout returns a writer that processes lines for stdout.
 func (h *StreamHandler) Stdout() io.Writer {
-	return &streamWriter{
+	w := &streamWriter{
 		handler:  h,
 		isStderr: false,
 	}
+	h.trackWriter(w)
+	return w
 }
 
 // Stderr returns a writer that processes lines for stderr.
 func (h *StreamHandler) Stderr() io.Writer {
-	return &streamWriter{
+	w := &streamWriter{
 		handler:  h,
 		isStderr: true,
+	}
+	h.trackWriter(w)
+	return w
+}
+
+func (h *StreamHandler) trackWriter(w *streamWriter) {
+	h.mu.Lock()
+	h.writers = append(h.writers, w)
+	h.mu.Unlock()
+}
+
+// Flush drains any partial (newline-less) final line buffered in the
+// writers created from this handler, so it reaches the output and the tee
+// before the log file is read back. Call after command execution completes.
+func (h *StreamHandler) Flush() {
+	h.mu.Lock()
+	writers := make([]*streamWriter, len(h.writers))
+	copy(writers, h.writers)
+	h.mu.Unlock()
+
+	for _, w := range writers {
+		_ = w.Flush()
 	}
 }
 
@@ -128,6 +194,11 @@ func (h *StreamHandler) WriteStdout(line string) error {
 	defer h.mu.Unlock()
 
 	h.stdoutLines++
+	h.teeLine(line)
+
+	if h.stdoutBroken {
+		return nil
+	}
 
 	processedLine := line
 	if h.formatter != nil {
@@ -135,6 +206,10 @@ func (h *StreamHandler) WriteStdout(line string) error {
 	}
 
 	_, err := h.stdout.Write([]byte(processedLine + "\n"))
+	if isBrokenPipe(err) {
+		h.stdoutBroken = true
+		return nil
+	}
 	return err
 }
 
@@ -144,6 +219,7 @@ func (h *StreamHandler) WriteStderr(line string) error {
 	defer h.mu.Unlock()
 
 	h.stderrLines++
+	h.teeLine(line)
 
 	// Capture stderr content for post-execution analysis (limited)
 	if len(h.stderrCapture) < h.maxCapture {
@@ -155,12 +231,20 @@ func (h *StreamHandler) WriteStderr(line string) error {
 		h.stderrCapture = append(h.stderrCapture, lineBytes...)
 	}
 
+	if h.stderrBroken {
+		return nil
+	}
+
 	processedLine := line
 	if h.formatter != nil {
 		processedLine = h.formatter.ProcessLine(line)
 	}
 
 	_, err := h.stderr.Write([]byte(processedLine + "\n"))
+	if isBrokenPipe(err) {
+		h.stderrBroken = true
+		return nil
+	}
 	return err
 }
 
@@ -171,10 +255,14 @@ func (h *StreamHandler) GetStderrCapture() string {
 	return string(h.stderrCapture)
 }
 
-// streamWriter wraps the handler to implement io.Writer.
+// streamWriter wraps the handler to implement io.Writer. Writes are
+// serialized with a mutex: parallel dependency stages share one writer
+// across concurrently running tasks, and the line buffer must not be
+// mutated from two goroutines at once.
 type streamWriter struct {
 	handler    *StreamHandler
 	isStderr   bool
+	mu         sync.Mutex
 	lineBuffer LineBuffer
 }
 
@@ -183,7 +271,9 @@ type streamWriter struct {
 func (w *streamWriter) Write(p []byte) (n int, err error) {
 	n = len(p)
 
+	w.mu.Lock()
 	lines := w.lineBuffer.ProcessBytes(p)
+	w.mu.Unlock()
 	for _, line := range lines {
 		if w.isStderr {
 			if err := w.handler.WriteStderr(line); err != nil {
@@ -201,7 +291,10 @@ func (w *streamWriter) Write(p []byte) (n int, err error) {
 
 // Flush writes any remaining buffered content.
 func (w *streamWriter) Flush() error {
-	if line := w.lineBuffer.Flush(); line != "" {
+	w.mu.Lock()
+	line := w.lineBuffer.Flush()
+	w.mu.Unlock()
+	if line != "" {
 		if w.isStderr {
 			return w.handler.WriteStderr(line)
 		}

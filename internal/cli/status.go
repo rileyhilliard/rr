@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	gosync "sync"
 	"time"
 
@@ -23,8 +24,37 @@ func init() {
 
 // StatusOutput represents the JSON output for status command.
 type StatusOutput struct {
-	Hosts    []HostStatus `json:"hosts"`
-	Selected *Selected    `json:"selected,omitempty"`
+	Hosts    []HostStatus    `json:"hosts"`
+	Selected *Selected       `json:"selected,omitempty"`
+	Project  *ProjectMapping `json:"project,omitempty"`
+}
+
+// ProjectMapping answers "where will this tree sync?" per host.
+type ProjectMapping struct {
+	LocalRoot        string            `json:"local_root,omitempty"`
+	Worktree         string            `json:"worktree,omitempty"`
+	IsLinkedWorktree bool              `json:"is_linked_worktree"`
+	RemoteDirs       map[string]string `json:"remote_dirs"`
+}
+
+// buildProjectMapping resolves the current tree's remote directory on every
+// configured host, reflecting worktree isolation.
+func buildProjectMapping(globalCfg *config.GlobalConfig) *ProjectMapping {
+	wt := config.DetectWorktree()
+	m := &ProjectMapping{
+		IsLinkedWorktree: wt.IsLinked,
+		Worktree:         wt.Name,
+		RemoteDirs:       make(map[string]string, len(globalCfg.Hosts)),
+	}
+	if wt.TopLevel != "" {
+		m.LocalRoot = wt.TopLevel
+	} else if cwd, err := os.Getwd(); err == nil {
+		m.LocalRoot = cwd
+	}
+	for name := range globalCfg.Hosts {
+		m.RemoteDirs[name] = config.ExpandRemote(globalCfg.Hosts[name].Dir)
+	}
+	return m
 }
 
 // HostStatus represents a single host's status.
@@ -68,12 +98,15 @@ func statusCommand() error {
 	// Determine which host would be selected (first healthy host)
 	selected := findSelectedHost(results)
 
+	// Where does this tree sync? (reflects worktree isolation)
+	mapping := buildProjectMapping(globalCfg)
+
 	// JSON output: explicit --json flag, or default structured mode (not --pretty)
 	if statusJSON || MachineMode() {
-		return outputStatusJSON(results, selected)
+		return outputStatusJSON(results, selected, mapping)
 	}
 
-	return outputStatusText(results, selected)
+	return outputStatusText(results, selected, mapping)
 }
 
 // probeResult holds the result of probing a single host.
@@ -125,10 +158,11 @@ func findSelectedHost(results map[string]probeResult) *Selected {
 
 // outputStatusJSON outputs status in JSON format.
 // When MachineMode() is enabled, wraps output in the standard JSON envelope.
-func outputStatusJSON(results map[string]probeResult, selected *Selected) error {
+func outputStatusJSON(results map[string]probeResult, selected *Selected, mapping *ProjectMapping) error {
 	output := StatusOutput{
 		Hosts:    make([]HostStatus, 0, len(results)),
 		Selected: selected,
+		Project:  mapping,
 	}
 
 	for name, result := range results {
@@ -170,7 +204,7 @@ func outputStatusJSON(results map[string]probeResult, selected *Selected) error 
 }
 
 // outputStatusText outputs status in human-readable format using a table.
-func outputStatusText(results map[string]probeResult, selected *Selected) error {
+func outputStatusText(results map[string]probeResult, selected *Selected, mapping *ProjectMapping) error {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 
@@ -221,6 +255,23 @@ func outputStatusText(results map[string]probeResult, selected *Selected) error 
 		)
 	} else {
 		fmt.Printf("Selected: %s\n", errorStyle.Render("none (no reachable hosts)"))
+	}
+
+	// Show where this tree syncs (worktree-aware)
+	if mapping != nil && len(mapping.RemoteDirs) > 0 {
+		fmt.Println()
+		treeDesc := "This tree"
+		if mapping.IsLinkedWorktree {
+			treeDesc = fmt.Sprintf("This worktree (%s)", mapping.Worktree)
+		}
+		hostNames := make([]string, 0, len(mapping.RemoteDirs))
+		for name := range mapping.RemoteDirs {
+			hostNames = append(hostNames, name)
+		}
+		sort.Strings(hostNames)
+		for _, name := range hostNames {
+			fmt.Printf("%s syncs to: %s\n", treeDesc, mutedStyle.Render(fmt.Sprintf("%s:%s", name, mapping.RemoteDirs[name])))
+		}
 	}
 
 	return nil

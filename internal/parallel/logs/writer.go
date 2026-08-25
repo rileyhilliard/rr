@@ -59,15 +59,29 @@ func NewLogWriter(baseDir, taskName string) (*LogWriter, error) {
 		baseDir = filepath.Join(home, baseDir[1:])
 	}
 
-	// Create timestamp-based directory name
+	if err := os.MkdirAll(baseDir, 0o700); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			"Can't create log directory "+baseDir,
+			"Check your permissions.")
+	}
+
+	// Create timestamp-based directory name. The timestamp has one-second
+	// resolution, so two runs of the same task in the same second would
+	// share (and clobber) a directory - on collision, retry with a numeric
+	// suffix until an unused name is found.
 	timestamp := time.Now().Format("20060102-150405")
 	taskDir := filepath.Join(baseDir, fmt.Sprintf("%s-%s", taskName, timestamp))
-
-	// Create the directory
-	if err := os.MkdirAll(taskDir, 0755); err != nil {
-		return nil, errors.WrapWithCode(err, errors.ErrConfig,
-			"Can't create log directory "+taskDir,
-			"Check your permissions for "+baseDir+".")
+	for suffix := 2; ; suffix++ {
+		err := os.Mkdir(taskDir, 0o700)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) || suffix > 1000 {
+			return nil, errors.WrapWithCode(err, errors.ErrConfig,
+				"Can't create log directory "+taskDir,
+				"Check your permissions for "+baseDir+".")
+		}
+		taskDir = filepath.Join(baseDir, fmt.Sprintf("%s-%s.%d", taskName, timestamp, suffix))
 	}
 
 	return &LogWriter{
@@ -100,6 +114,28 @@ func (w *LogWriter) WriteTask(taskName string, taskIndex int, output []byte) err
 // taskLogFilename returns the log filename for a task with its index.
 func taskLogFilename(taskName string, taskIndex int) string {
 	return fmt.Sprintf("%s_%d.log", sanitizeFilename(taskName), taskIndex)
+}
+
+// TaskLogPath returns the full path of a task's log inside a run directory.
+func TaskLogPath(runDir, taskName string, taskIndex int) string {
+	return filepath.Join(runDir, taskLogFilename(taskName, taskIndex))
+}
+
+// OpenRunLog creates a run directory under baseDir (same layout and
+// retention as parallel runs) and returns an open output.log for streaming
+// a single run's raw output, plus its path. The caller owns closing the
+// file.
+func OpenRunLog(baseDir, name string) (*os.File, string, error) {
+	w, err := NewLogWriter(baseDir, name)
+	if err != nil {
+		return nil, "", err
+	}
+	path := filepath.Join(w.Dir(), "output.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, "", err
+	}
+	return f, path, nil
 }
 
 // WriteSummary writes summary.json with all results.

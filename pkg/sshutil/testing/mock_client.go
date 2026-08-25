@@ -241,7 +241,7 @@ func (m *MockClient) handleMkdir(cmd string) ([]byte, []byte, int, error) {
 	parent := filepath.Dir(path)
 	if parent != "" && parent != "/" && parent != "." {
 		if !m.fs.IsDir(parent) {
-			return nil, []byte(fmt.Sprintf("mkdir: cannot create directory '%s': No such file or directory", path)), 1, nil
+			return nil, []byte(fmt.Sprintf("mkdir: cannot create directory %q: No such file or directory", path)), 1, nil
 		}
 	}
 

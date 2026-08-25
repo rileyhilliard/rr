@@ -62,7 +62,7 @@ hosts:
       - linux
 
 defaults:
-  local_fallback: false
+  local_fallback: never
   probe_timeout: 2s
 ```
 
@@ -72,8 +72,9 @@ defaults:
 |-------|------|---------|-------------|
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
 | `hosts` | map | `{}` | Remote host definitions (see below). |
-| `defaults.local_fallback` | bool | `false` | Run locally if no hosts are reachable. |
+| `defaults.local_fallback` | string | `never` | When to run locally: `never`, `on-unreachable` (hosts down or unconfigured), or `always` (also when every host is locked). Booleans still work: `true` = `always`, `false` = `never`. |
 | `defaults.probe_timeout` | duration | `2s` | How long to wait when testing SSH connectivity. |
+| `defaults.rewrite_paths` | bool | `true` | Rewrite local absolute paths in commands and task args to their remote equivalents before running. |
 
 ### Host fields
 
@@ -134,6 +135,13 @@ dir: ~/projects/${PROJECT}
 # Expands to: ~/projects/myapp
 ```
 
+**Git worktrees:** in a linked worktree, `${PROJECT}` expands to
+`<repo>@<worktree-name>` (e.g. `myapp@myapp-featurex`), so each worktree
+syncs to its own remote directory instead of clobbering the main checkout's
+mirror. The main checkout keeps its plain name. Expect a cold first sync per
+worktree, and remember `preserve`d directories (like `.venv`) start empty in
+the new remote dir. Disable per project with `sync.worktree_isolation: false`.
+
 ## Project config (.rr.yaml)
 
 The project config lives in your project root and contains settings that can be shared with your team.
@@ -162,11 +170,11 @@ hosts:
 
 sync:
   exclude:
-    - .git/
-    - .venv/
+    - .git # bare pattern: .git is a file in linked worktrees
+    - .venv
     - __pycache__/
     - "*.pyc"
-    - node_modules/
+    - node_modules
     - .mypy_cache/
     - .pytest_cache/
     - .DS_Store
@@ -228,6 +236,9 @@ monitor:
 | `version` | int | `1` | Config schema version. Currently must be `1`. |
 | `host` | string | - | Single host reference (from global config). |
 | `hosts` | list | all global hosts | List of host references for load balancing. |
+| `local_fallback` | string | global setting | Overrides `defaults.local_fallback`: `never`, `on-unreachable`, or `always`. |
+| `rewrite_paths` | bool | global setting | Overrides `defaults.rewrite_paths`. |
+| `defaults` | object | - | Project defaults applied to every task (see below). |
 | `require` | list | `[]` | Tools that must exist on remote hosts. |
 | `sync` | object | see below | File synchronization settings. |
 | `lock` | object | see below | Distributed lock settings. |
@@ -236,6 +247,23 @@ monitor:
 | `monitor` | object | see below | Resource monitoring dashboard settings. |
 
 **Note:** Use either `host` (singular) or `hosts` (plural), not both. If neither is specified, all hosts from your global config are available for load balancing.
+
+### Project defaults
+
+Settings under `defaults` apply to everything the project runs:
+
+```yaml
+defaults:
+  setup:
+    - source ~/rr-env.sh
+  env:
+    CI: "1"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `defaults.setup` | list | `[]` | Commands prepended (with `&&`) before every remote command. Applies to tasks **and** ad-hoc `rr run` / `rr exec` on remote hosts. Not applied to local runs. |
+| `defaults.env` | map | `{}` | Environment variables for all tasks. Overrides host env; overridden by task env. |
 
 ## Host resolution order
 
@@ -254,6 +282,64 @@ hosts:
   - gpu-box      # Tried first (highest priority)
   - mini-server  # Tried second
   - backup-host  # Tried last (lowest priority)
+```
+
+## Working directory
+
+`rr run` and `rr exec` preserve the subdirectory you invoked them from, so relative paths keep the meaning they have locally:
+
+```bash
+cd backend
+rr run "pytest tests/test_api.py"   # runs in <remote dir>/backend
+```
+
+The offset is reported as `remote_cwd` in the result envelope. It applies to local execution too, so a command means the same thing whether or not a remote host answered. If the directory wasn't synced (it matches a `sync.exclude` pattern, for instance), the command falls back to the project root rather than failing.
+
+`--cwd` overrides the offset:
+
+```bash
+rr run --cwd backend "pytest tests/"   # explicit, ignores where you are
+```
+
+**Named tasks do not get an offset.** `rr test` means the same thing from every directory, since task commands are project-scoped and often embed their own `cd` (see [Tasks](#tasks)).
+
+This changed in the release noted in the CHANGELOG: ad-hoc commands used to run at the project root no matter where you were. If you relied on that, `--cwd .` restores it.
+
+When a relative path fails because it resolved differently than you expected, `rr` says so in the result `hint`, naming the directory it ran in and the fix. The hint needs the failing path to appear in stderr, so tools that report a missing file without naming it (`make` says only "no makefile found") fail without one.
+
+## Exit codes and pipes
+
+`rr` reports the exit code the remote command returned, unchanged. If your command pipes its output, the shell reports only the **last** stage's status, so a failing test runner can still exit 0:
+
+```bash
+rr run "pytest tests/ | tail -20"    # exit code comes from tail, not pytest
+```
+
+`rr` won't rewrite your command's semantics, since `cmd | grep -q pattern` tolerates upstream failure on purpose. Two things help:
+
+- When a piped run collects zero tests, `rr` warns and sets `details.piped_exit_code` so the misleading exit code is visible.
+- To propagate the failure, enable `pipefail` through the host's `shell` field:
+
+  ```yaml
+  hosts:
+    mini:
+      shell: "bash -o pipefail -c"
+  ```
+
+  Note `bash`, not `sh`: `dash` (Debian/Ubuntu's `/bin/sh`) doesn't support `pipefail`.
+
+The same trap applies one level up, where no host config can reach it. Piping `rr` itself discards `rr`'s exit code:
+
+```bash
+rr test | tail -8          # exit code comes from tail; a failed suite reports 0
+set -o pipefail            # in your shell or script, before the pipe
+rr test | tail -8          # exit code comes from rr
+```
+
+Use `--tail N` instead of an external pager when you only want the end of the output; it prints after the result envelope and keeps the exit code intact:
+
+```bash
+rr test --tail 20
 ```
 
 ## Sync
@@ -280,6 +366,7 @@ sync:
 | `exclude` | list | see below | Patterns for files not sent to remote. |
 | `preserve` | list | see below | Patterns for files not deleted on remote. |
 | `flags` | list | `[]` | Extra flags passed to rsync. |
+| `worktree_isolation` | bool | `true` | Give each linked git worktree its own remote directory (`${PROJECT}` becomes `repo@worktree`). |
 
 ### Default excludes
 
@@ -287,17 +374,26 @@ If you don't specify `exclude`, these patterns are used:
 
 ```yaml
 exclude:
-  - .git/
-  - .venv/
-  - __pycache__/
+  - .git # bare patterns for .git/.venv/node_modules: in linked
+  - .venv # worktrees .git is a file, and node_modules may be a
+  - __pycache__/ # symlink - dir-only patterns miss those (rsync exit 23)
   - "*.pyc"
-  - node_modules/
+  - node_modules
   - .mypy_cache/
   - .pytest_cache/
   - .ruff_cache/
   - .DS_Store
   - "*.log"
+  - .claude/
+  - .cursor/
+  - .aider/
+  - .copilot/
 ```
+
+**Your `exclude` list replaces the defaults** - it isn't merged. If you
+maintain your own list, prefer the bare `.git` / `.venv` / `node_modules`
+patterns so linked worktrees sync cleanly. Note a bare pattern also matches
+files with that name at any depth (e.g. a vendored fixture named `.git`).
 
 ### Default preserves
 
@@ -357,8 +453,9 @@ When multiple hosts are configured, `rr` distributes work automatically:
 
 1. Tries each host with a non-blocking lock check
 2. If a host is locked, immediately tries the next host
-3. If all hosts are locked and `local_fallback: true`, runs locally immediately
-4. If all hosts are locked and `local_fallback: false`, round-robins through hosts until one becomes available (up to `wait_timeout`)
+3. Locks held by dead processes on this machine are reclaimed automatically
+4. If all hosts are locked, `rr` waits up to `wait_timeout` for one to free up
+5. When the wait runs out: `local_fallback: always` runs locally with a loud warning (and `details.fallback` in structured output); other modes fail with the lock holders listed
 
 ```yaml
 lock:
@@ -389,6 +486,26 @@ tasks:
 ```
 
 Run with: `rr test`
+
+### Passing extra arguments
+
+Extra CLI args flow into single-command tasks. Use an `{args}` placeholder
+to control where they land - essential for pipelines, where appended args
+would bind to the last command instead of the one you mean:
+
+```yaml
+tasks:
+  test:
+    run: pytest {args:-tests/} -n 4 | tail -20
+```
+
+- `rr test tests/foo.py -k bond` runs `pytest 'tests/foo.py' '-k' 'bond' -n 4 | tail -20`
+- `rr test` with no args uses the `{args:-default}` default: `pytest tests/ -n 4 | tail -20`
+- Args are shell-quoted before substitution
+- Without a placeholder, args are appended (quoted) to simple commands;
+  compound commands (pipes, `&&`, redirections, `$()`) reject extra args
+  and tell you where to add `{args}`
+- Write `{{args}}` for a literal `{args}` in the command
 
 ### Multi-step task
 
@@ -827,49 +944,67 @@ output:
 
 ## Monitor
 
-Controls the resource monitoring dashboard (`rr monitor`).
+Controls the resource monitoring dashboard (`rr monitor`). Monitor settings live in the project config (`.rr.yaml`), not in `~/.rr/config.yaml`.
 
 ```yaml
 monitor:
-  interval: 2s
+  interval: 1s
+  timeout: 8s
   thresholds:
     cpu:
       warning: 70
       critical: 90
     ram:
-      warning: 80
-      critical: 95
+      warning: 70
+      critical: 90
     gpu:
       warning: 70
       critical: 90
   exclude:
     - slow-host
+  alerts:
+    enabled: false
+    bell: true
+    flash: true
+    cooldown: 60s
+    on_alert: ""
 ```
 
 ### Monitor fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `interval` | duration | `2s` | Time between metric updates. |
-| `thresholds` | object | see below | Threshold settings for metric coloring. |
-| `exclude` | list | `[]` | Host names to exclude from the monitor. |
+| `interval` | duration | `1s` | Time between metric updates. Minimum `500ms`. |
+| `timeout` | duration | `8s` | Per-host connect and collect timeout. |
+| `thresholds` | object | see below | Warning and critical percentages for metric coloring. |
+| `exclude` | list | `[]` | Host names to hide from the dashboard. |
+| `alerts` | object | see below | Threshold alerting (bell, card flash, hook). |
+
+**Interval precedence:** the `--interval` flag wins over `monitor.interval`, which wins over the `1s` default. An invalid or sub-500ms value in config is an error, not a silent fallback.
+
+```bash
+rr monitor                    # uses monitor.interval, or 1s if unset
+rr monitor --interval=2s      # flag wins regardless of config
+```
 
 ### Thresholds
 
-Each metric type (CPU, RAM, GPU) has warning and critical thresholds that control the color coding in the dashboard:
+Each metric type (CPU, RAM, GPU) has warning and critical percentages. They drive both the numeric readouts and the sparkline/bar coloring in the dashboard, plus the colored cells in `rr monitor --once`:
 
-- Below warning: Green (healthy)
-- Warning to critical: Yellow (warning)
-- Above critical: Red (critical)
+- Below warning: healthy
+- Warning to critical: warning
+- At or above critical: critical
 
 | Threshold | Default | Description |
 |-----------|---------|-------------|
-| `cpu.warning` | `70` | CPU percentage for yellow color. |
-| `cpu.critical` | `90` | CPU percentage for red color. |
-| `ram.warning` | `70` | RAM percentage for yellow color. |
-| `ram.critical` | `90` | RAM percentage for red color. |
-| `gpu.warning` | `70` | GPU percentage for yellow color. |
-| `gpu.critical` | `90` | GPU percentage for red color. |
+| `cpu.warning` | `70` | CPU percentage that turns the value warning-colored. |
+| `cpu.critical` | `90` | CPU percentage that turns the value critical-colored. |
+| `ram.warning` | `70` | RAM percentage for warning color. |
+| `ram.critical` | `90` | RAM percentage for critical color. |
+| `gpu.warning` | `70` | GPU percentage for warning color. |
+| `gpu.critical` | `90` | GPU percentage for critical color. |
+
+Unset (or zero) values fall back to 70/90. Disk usage is not configurable: it uses a fixed 80/95 pair, since `df` capacity normally sits high and the shared defaults would flag every healthy host.
 
 ### Excluding hosts
 
@@ -885,6 +1020,51 @@ monitor:
     - dev-machine
     - staging-server
 ```
+
+Excluded hosts stay fully usable for `rr run`, `rr exec` and `rr sync`. Exclusion applies after `--hosts` filtering, and `--hosts` wins, so you can still pull up an excluded host on demand:
+
+```bash
+rr monitor                          # staging-server hidden
+rr monitor --hosts=staging-server   # staging-server shown
+```
+
+If the exclude list empties the host set, the command errors instead of opening an empty dashboard.
+
+### Alerts
+
+Alerting is off by default. Turn it on to get notified when a host crosses its critical threshold.
+
+```yaml
+monitor:
+  alerts:
+    enabled: true
+    bell: true
+    flash: true
+    cooldown: 5m
+    on_alert: 'terminal-notifier -title "rr" -message "$RR_HOST $RR_METRIC at $RR_VALUE%"'
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Turns threshold alerting on. |
+| `bell` | bool | `true` | Rings the terminal bell when an alert fires. |
+| `flash` | bool | `true` | Draws the alerting host's card border in the critical color. |
+| `cooldown` | duration | `60s` | Minimum time between re-fires for the same host and metric. Use `0s` to fire on every crossing. |
+| `on_alert` | string | `""` | Shell command run locally when an alert fires. |
+
+**When an alert fires:** a metric fires once when it crosses its `critical` threshold, and does not fire again until it drops back below `warning`. That hysteresis keeps a host hovering at the critical line from alerting on every sample. The cooldown is a second guard on top of it.
+
+The header shows a count of active alerts whenever anything is firing, regardless of the `bell` and `flash` settings.
+
+**`on_alert` hook:** runs on your machine (the one running `rr`), not the remote host, via `sh -c`. `rr` sets these variables in the hook's environment (note that `RR_HOST` here is the alerting host, unrelated to the `RR_HOST` input `rr init` reads):
+
+| Variable | Value |
+|----------|-------|
+| `RR_HOST` | Name of the host that alerted |
+| `RR_METRIC` | `cpu`, `ram`, or `gpu` |
+| `RR_VALUE` | The metric value, to one decimal place |
+
+Hook failures are ignored. There's nowhere safe to print an error inside a full-screen TUI, and a broken hook shouldn't take down the dashboard, so test your command outside `rr monitor` first.
 
 ## Environment variables
 

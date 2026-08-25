@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/monitor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +15,7 @@ func TestMonitorConfigParsing(t *testing.T) {
 	t.Run("default monitor config", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 
-		assert.Equal(t, "2s", cfg.Monitor.Interval)
+		assert.Equal(t, "1s", cfg.Monitor.Interval)
 		assert.Equal(t, 70, cfg.Monitor.Thresholds.CPU.Warning)
 		assert.Equal(t, 90, cfg.Monitor.Thresholds.CPU.Critical)
 		assert.Equal(t, 70, cfg.Monitor.Thresholds.RAM.Warning)
@@ -177,28 +178,39 @@ func TestMonitorConfigValidation(t *testing.T) {
 }
 
 func TestThresholdApplication(t *testing.T) {
-	// Test that threshold values can be used to determine metric severity
-	t.Run("threshold values determine color", func(t *testing.T) {
-		thresholds := config.ThresholdValues{Warning: 70, Critical: 90}
+	// Exercise the monitor coloring code with configured thresholds and assert
+	// severity-class transitions (healthy -> warning -> critical) rather than
+	// exact colors, so palette changes don't churn this test.
+	t.Run("class transitions follow configured boundaries", func(t *testing.T) {
+		thresholds := config.ThresholdValues{Warning: 60, Critical: 85}
 
-		// Below warning
-		assert.True(t, 50 < thresholds.Warning)
-		// At warning
-		assert.True(t, 75 >= thresholds.Warning && 75 < thresholds.Critical)
-		// At critical
-		assert.True(t, 95 >= thresholds.Critical)
+		healthy := monitor.MetricColorWithThresholds(0, thresholds.Warning, thresholds.Critical)
+
+		// Just below warning is still the healthy class
+		assert.Equal(t, healthy, monitor.MetricColorWithThresholds(59.9, thresholds.Warning, thresholds.Critical))
+
+		// At warning the class changes
+		warning := monitor.MetricColorWithThresholds(60, thresholds.Warning, thresholds.Critical)
+		assert.NotEqual(t, healthy, warning)
+
+		// Just below critical is still the warning class
+		assert.Equal(t, warning, monitor.MetricColorWithThresholds(84.9, thresholds.Warning, thresholds.Critical))
+
+		// At critical the class changes again
+		critical := monitor.MetricColorWithThresholds(85, thresholds.Warning, thresholds.Critical)
+		assert.NotEqual(t, warning, critical)
+		assert.NotEqual(t, healthy, critical)
 	})
 
-	t.Run("custom thresholds differ from defaults", func(t *testing.T) {
-		defaultThresholds := config.ThresholdValues{Warning: 70, Critical: 90}
-		customThresholds := config.ThresholdValues{Warning: 50, Critical: 75}
+	t.Run("same value classifies differently under different thresholds", func(t *testing.T) {
+		// 75% is warning-class with defaults (70/90) but healthy-class with
+		// relaxed thresholds (80/95)
+		defaultClass := monitor.MetricColorWithThresholds(75, 70, 90)
+		relaxedClass := monitor.MetricColorWithThresholds(75, 80, 95)
+		assert.NotEqual(t, defaultClass, relaxedClass)
 
-		// 60% is warning with custom, healthy with default
-		assert.True(t, 60 >= customThresholds.Warning && 60 < customThresholds.Critical)
-		assert.True(t, 60 < defaultThresholds.Warning)
-
-		// 80% is critical with custom, warning with default
-		assert.True(t, 80 >= customThresholds.Critical)
-		assert.True(t, 80 >= defaultThresholds.Warning && 80 < defaultThresholds.Critical)
+		// The relaxed classification matches the healthy anchor
+		healthy := monitor.MetricColorWithThresholds(0, 80, 95)
+		assert.Equal(t, healthy, relaxedClass)
 	})
 }

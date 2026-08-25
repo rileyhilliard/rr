@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -44,12 +46,32 @@ type WorkflowContext struct {
 	Reporter     PhaseReporter
 	StartTime    time.Time
 
+	// SubdirOffset is the caller's directory relative to the project root
+	// ("backend", "backend/api"), empty when invoked from the root itself.
+	// WorkDir is the project root regardless - it's the right sync root and
+	// remote dir - but relative paths in a command were written against the
+	// caller's cwd, so ad-hoc run/exec cd into this offset first.
+	SubdirOffset string
+
+	// ResultDetails accumulates extra keys (fallback, log_file, summary,
+	// hint, path_rewrites, ...) merged into the final result envelope's
+	// details map. Use AddResultDetail; nil until first write.
+	ResultDetails map[string]interface{}
+
 	// Internal state
 	selector   *host.Selector
 	signalChan chan os.Signal
 	ctx        context.Context
 	cancel     context.CancelFunc
 	closeOnce  sync.Once
+}
+
+// AddResultDetail records an extra key for the final result envelope.
+func (w *WorkflowContext) AddResultDetail(key string, value interface{}) {
+	if w.ResultDetails == nil {
+		w.ResultDetails = make(map[string]interface{})
+	}
+	w.ResultDetails[key] = value
 }
 
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
@@ -152,6 +174,7 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 		// Use project root if available, otherwise fall back to cwd
 		if ctx.Resolved != nil && ctx.Resolved.ProjectRoot != "" {
 			ctx.WorkDir = ctx.Resolved.ProjectRoot
+			ctx.SubdirOffset = subdirOffset(ctx.WorkDir)
 		} else {
 			var err error
 			ctx.WorkDir, err = os.Getwd()
@@ -163,6 +186,35 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 		}
 	}
 	return nil
+}
+
+// subdirOffset returns the current directory relative to projectRoot, or "" when
+// the caller is at the root, the offset can't be determined, or it escapes the
+// root. Both paths are symlink-resolved first: on macOS os.Getwd() reports
+// /private/var while a discovered project root may be /var, and a naive
+// filepath.Rel across that boundary yields a bogus "../../.." traversal.
+func subdirOffset(projectRoot string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Clean(r)
+		}
+		return filepath.Clean(p)
+	}
+
+	rel, err := filepath.Rel(resolve(projectRoot), resolve(cwd))
+	if err != nil || rel == "." || rel == "" {
+		return ""
+	}
+	// A ".." component means cwd isn't under the project root at all.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 // setupHostSelector creates and configures the host selector.
@@ -213,7 +265,7 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 		uiHosts[i] = ui.HostInfo{
 			Name: h.Name,
 			SSH:  h.SSH,
-			Dir:  h.Dir,
+			Dir:  config.ExpandRemote(h.Dir),
 			Tags: h.Tags,
 		}
 	}
@@ -296,6 +348,24 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 	reporter := ctx.GetReporter()
 	reporter.PhaseStart("connect")
 
+	// Local fallback (hosts unreachable) must be visible in structured
+	// output too, not just in the pretty connection display.
+	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
+		if event.Type == host.EventLocalFallback {
+			WritePhaseEvent(PhaseEvent{
+				Type:   "phase",
+				Phase:  "connect",
+				Status: "warn",
+				Host:   "local",
+				Details: map[string]interface{}{
+					"local_fallback": true,
+					"reason":         "hosts_unreachable",
+					"message":        event.Message,
+				},
+			})
+		}
+	})
+
 	var err error
 	if opts.Tag != "" {
 		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)
@@ -362,7 +432,7 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 		return err
 	}
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions())
 	if err != nil {
 		reporter.PhaseFailed("sync", err)
 		return err
@@ -370,6 +440,29 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 
 	reporter.PhaseComplete("sync", ctx.Conn.Name, time.Since(syncStart))
 	return nil
+}
+
+// structuredSyncOptions surfaces sync warnings as phase events.
+func structuredSyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			WritePhaseEvent(PhaseEvent{
+				Type:    "phase",
+				Phase:   "sync",
+				Status:  "warn",
+				Details: w.Details,
+			})
+		},
+	}
+}
+
+// prettySyncOptions surfaces sync warnings as printed warnings.
+func prettySyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			ui.PrintWarning(w.Message)
+		},
+	}
 }
 
 // resolveSyncConfig returns the sync config to use, falling back to defaults.
@@ -395,7 +488,7 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter, prettySyncOptions())
 	if err != nil {
 		syncProgress.Fail()
 		return err
@@ -419,7 +512,7 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
 
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, prettySyncOptions())
 	if err != nil {
 		syncSpinner.Fail()
 		return err

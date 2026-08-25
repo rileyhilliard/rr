@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/ui"
@@ -19,7 +20,12 @@ type PhaseReporter interface {
 	Divider()
 	ThinDivider()
 	CommandPrompt(command string)
-	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration)
+	// CommandComplete emits the final result. extra carries additional
+	// result details (fallback, log_file, summary, ...): the structured
+	// reporter merges them into the envelope's details map, the pretty
+	// reporter re-prints the fallback warning from them. Pass nil when
+	// there is nothing extra.
+	CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{})
 }
 
 // NewPhaseReporter returns a StructuredReporter (default) or PrettyReporter
@@ -69,8 +75,50 @@ func (r *PrettyReporter) CommandPrompt(command string) {
 	r.pd.CommandPrompt(command)
 }
 
-func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration) {
+func (r *PrettyReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	renderFinalStatus(r.pd, exitCode, totalDuration, execDuration, host)
+	repeatFallbackWarning(extra)
+	warnNoTests(extra)
+}
+
+// warnNoTests prints a warning when the test runner executed nothing. Exit
+// codes stay untouched, so without this a zero-test run is visually
+// indistinguishable from a clean suite.
+func warnNoTests(details map[string]interface{}) {
+	if noTests, ok := details["no_tests"].(bool); !ok || !noTests {
+		return
+	}
+	// Deliberately says nothing about where relative paths resolve: that
+	// depends on the offset and on --cwd, and details.remote_cwd already
+	// reports the answer. Stale directory advice is worse than none.
+	msg := "No tests ran - the runner collected zero tests. " +
+		"Check the path or filter you passed."
+	if tasks, ok := details["no_tests_tasks"].([]string); ok && len(tasks) > 0 {
+		msg = fmt.Sprintf("No tests ran in: %s. Check the path or filter passed to those subtasks.",
+			strings.Join(tasks, ", "))
+	}
+	// A pipe is why the exit code can't be trusted here: the shell reports the
+	// last stage's status, so a runner that failed upstream still exits 0.
+	if piped, ok := details["piped_exit_code"].(bool); ok && piped {
+		msg += " The command pipes its output, so the exit code came from the last stage, not the runner - " +
+			"set shell: \"bash -o pipefail -c\" on the host to propagate it."
+	}
+	ui.PrintWarning(msg)
+}
+
+// repeatFallbackWarning re-prints the local-fallback warning after the final
+// status line - readers of the output tail must not mistake a local run for
+// a remote one. No-op when the run didn't fall back.
+func repeatFallbackWarning(details map[string]interface{}) {
+	fb, ok := details["fallback"].(fallbackDetail)
+	if !ok {
+		return
+	}
+	msg := "Ran LOCALLY - all remote hosts were locked"
+	if len(fb.Holders) > 0 {
+		msg += " (" + describeHolders(fb.Holders) + ")"
+	}
+	ui.PrintWarning(msg)
 }
 
 // StructuredReporter emits JSON events to stderr. stdout is left clean
@@ -136,10 +184,16 @@ func (r *StructuredReporter) CommandPrompt(command string) {
 	})
 }
 
-func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration) {
+func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDuration, execDuration time.Duration, extra map[string]interface{}) {
 	status := "success"
 	if exitCode != 0 {
 		status = "failed"
+	}
+	details := map[string]interface{}{
+		"exec_duration_s": execDuration.Seconds(),
+	}
+	for k, v := range extra {
+		details[k] = v
 	}
 	WritePhaseEvent(PhaseEvent{
 		Type:     "result",
@@ -147,9 +201,7 @@ func (r *StructuredReporter) CommandComplete(exitCode int, host string, totalDur
 		ExitCode: &exitCode,
 		Host:     host,
 		Duration: totalDuration.Seconds(),
-		Details: map[string]interface{}{
-			"exec_duration_s": execDuration.Seconds(),
-		},
+		Details:  details,
 	})
 }
 

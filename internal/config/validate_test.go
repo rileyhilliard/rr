@@ -819,3 +819,18 @@ func TestFlattenParallelTasks(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHost_ExpandableVariablesAllowed(t *testing.T) {
+	err := validateHost("mini", Host{
+		SSH: []string{"mini.local"},
+		Dir: "~/rr/${PROJECT}",
+	})
+	assert.NoError(t, err, "standard variables expand at use sites and must validate")
+
+	err = validateHost("mini", Host{
+		SSH: []string{"mini.local"},
+		Dir: "~/rr/${BOGUS_VAR}",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpanded variable")
+}

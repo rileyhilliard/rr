@@ -3,6 +3,7 @@ package monitor
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -101,6 +102,56 @@ func TestKeys_ViewBindings(t *testing.T) {
 	assert.NotNil(t, keys.Expand)
 	assert.NotNil(t, keys.Collapse)
 	assert.NotNil(t, keys.ToggleHelp)
+}
+
+func TestProcSortOrder_String(t *testing.T) {
+	tests := []struct {
+		order  ProcSortOrder
+		expect string
+	}{
+		{ProcSortByCPU, "by CPU"},
+		{ProcSortByMemory, "by MEM"},
+		{ProcSortByPID, "by PID"},
+		{ProcSortOrder(99), "by CPU"}, // Unknown defaults to CPU
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expect, func(t *testing.T) {
+			assert.Equal(t, tt.expect, tt.order.String())
+		})
+	}
+}
+
+func TestProcSortOrder_Next(t *testing.T) {
+	// The 'p' key cycles CPU -> MEM -> CPU
+	assert.Equal(t, ProcSortByMemory, ProcSortByCPU.Next())
+	assert.Equal(t, ProcSortByCPU, ProcSortByMemory.Next())
+}
+
+func TestHandleKeyMsg_CycleProcSort(t *testing.T) {
+	m := &Model{viewMode: ViewDetail}
+
+	// 'p' cycles the process sort in the detail view
+	handled, _ := m.HandleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	assert.True(t, handled)
+	assert.Equal(t, ProcSortByMemory, m.procSortOrder)
+
+	handled, _ = m.HandleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	assert.True(t, handled)
+	assert.Equal(t, ProcSortByCPU, m.procSortOrder)
+}
+
+func TestHandleKeyMsg_CycleProcSort_ListViewIgnored(t *testing.T) {
+	// 'p' is detail-view only; the list view must not consume it
+	m := &Model{viewMode: ViewList}
+
+	handled, _ := m.HandleKeyMsg(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	assert.False(t, handled)
+	assert.Equal(t, ProcSortByCPU, m.procSortOrder)
+}
+
+func TestKeys_CycleProcSortBinding(t *testing.T) {
+	assert.NotNil(t, keys.CycleProcSort)
 }
 
 func TestSortOrder_CycleComplete(t *testing.T) {

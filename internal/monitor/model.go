@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/config"
 )
 
 // HostStatus represents the connection state of a host.
@@ -17,7 +18,6 @@ const (
 	StatusConnectingState HostStatus = iota
 	StatusIdleState                  // Online, not running any task
 	StatusRunningState               // Online, actively running a task (locked)
-	StatusSlowState
 	StatusUnreachableState
 )
 
@@ -57,8 +57,6 @@ func (s HostStatus) String() string {
 		return "idle"
 	case StatusRunningState:
 		return "running"
-	case StatusSlowState:
-		return "slow"
 	case StatusUnreachableState:
 		return "offline"
 	default:
@@ -84,15 +82,17 @@ type Model struct {
 	height     int
 	lastUpdate time.Time
 	interval   time.Duration
-	timeout    time.Duration // Per-host collection timeout
+	timeout    time.Duration          // Per-host collection timeout
+	thresholds config.ThresholdConfig // Metric severity thresholds for coloring
 	quitting   bool
 	sortOrder  SortOrder
-	viewMode   ViewMode
-	showHelp   bool
+	// procSortOrder controls the detail view's process table ordering ('p')
+	procSortOrder ProcSortOrder
+	viewMode      ViewMode
+	showHelp      bool
 
 	// Streaming collection state
-	resultsChan <-chan HostResult // Channel for receiving streaming results
-	collecting  bool              // Whether a collection cycle is in progress
+	collecting bool // Whether a collection cycle is in progress
 
 	// Animation state
 	spinnerFrame int // Current frame for connecting spinner animation
@@ -101,6 +101,18 @@ type Model struct {
 	detailViewport viewport.Model
 	listViewport   viewport.Model
 	viewportReady  bool
+
+	// alerts holds the threshold alert state machine. Shared across Model
+	// copies like cardBodyCache; Update runs on a single goroutine.
+	alerts *alertTracker
+
+	// cardBodyCache holds the expensive rendered card body (graphs/metric
+	// sections) per host alias. Entries are invalidated when that host gets a
+	// new result and the whole cache is cleared on resize. Dynamic chrome
+	// (spinners, countdowns, selection border) is rendered fresh every frame
+	// and composed around the cached body. The map is shared across Model
+	// copies; Bubble Tea calls Update/View on a single goroutine.
+	cardBodyCache map[string]string
 }
 
 // tickMsg signals a periodic refresh.
@@ -109,15 +121,10 @@ type tickMsg time.Time
 // spinnerTickMsg signals a spinner animation frame update.
 type spinnerTickMsg time.Time
 
-// metricsMsg carries new metrics from the collector (batched, all hosts).
-type metricsMsg struct {
-	metrics  map[string]*HostMetrics
-	errors   map[string]string        // Connection errors per host
-	lockInfo map[string]*HostLockInfo // Lock status per host
-	time     time.Time
-}
-
 // hostResultMsg carries metrics from a single host (for streaming updates).
+// It also carries this collection round's channel and cancel func so the next
+// poll stays tied to its own round (overlapping rounds via manual refresh must
+// not clobber each other's state).
 type hostResultMsg struct {
 	alias        string
 	metrics      *HostMetrics  // nil on error
@@ -126,12 +133,16 @@ type hostResultMsg struct {
 	connectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
 	latency      time.Duration // round-trip time for metrics collection
 	time         time.Time
+	results      <-chan HostResult  // this round's channel, for continued polling
+	cancel       context.CancelFunc // this round's context cancel
 }
 
 // collectStartedMsg signals that collection has started and provides the results channel.
 // This allows state mutations to happen in Update instead of inside the async goroutine.
+// cancel releases the round's context resources once the channel closes.
 type collectStartedMsg struct {
 	results <-chan HostResult
+	cancel  context.CancelFunc
 }
 
 // HostConnectionState tracks connection attempts and errors per host.
@@ -154,11 +165,35 @@ const (
 // spinnerInterval is the animation frame rate for the connecting spinner
 const spinnerInterval = 150 * time.Millisecond
 
-// NewModel creates a new dashboard model with the given collector.
+// NewModel creates a new dashboard model with the given collector and default
+// metric severity thresholds (warning 70, critical 90).
 // hostOrder is the priority order from config (default host first, then fallbacks).
 // If nil, hosts are sorted alphabetically.
 // timeout is the per-host collection timeout (0 uses default of 8s).
 func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder []string) Model {
+	return NewModelWithThresholds(collector, interval, timeout, hostOrder, config.ThresholdConfig{})
+}
+
+// NewModelWithThresholds creates a dashboard model with configured metric
+// severity thresholds and alerting turned off. Zero or negative threshold
+// values fall back to the defaults (warning 70, critical 90).
+func NewModelWithThresholds(collector *Collector, interval, timeout time.Duration, hostOrder []string, thresholds config.ThresholdConfig) Model {
+	return NewModelWithOptions(collector, interval, timeout, hostOrder, ModelOptions{Thresholds: thresholds})
+}
+
+// ModelOptions carries the configurable dashboard settings that come from
+// project config. Zero values fall back to defaults.
+type ModelOptions struct {
+	// Thresholds are the per-metric warning/critical severity levels.
+	Thresholds config.ThresholdConfig
+
+	// Alerts controls threshold alerting (disabled when Enabled is false).
+	Alerts config.AlertsConfig
+}
+
+// NewModelWithOptions creates a dashboard model with configured thresholds and
+// threshold alerting.
+func NewModelWithOptions(collector *Collector, interval, timeout time.Duration, hostOrder []string, opts ModelOptions) Model {
 	hosts := collector.Hosts()
 
 	// Store the original config order for default sorting
@@ -199,21 +234,25 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 	collector.SetTimeout(timeout)
 
 	m := Model{
-		hosts:     hosts, // Will be sorted by sortHosts
-		hostOrder: configOrder,
-		metrics:   make(map[string]*HostMetrics),
-		status:    status,
-		errors:    make(map[string]string),
-		lockInfo:  make(map[string]*HostLockInfo),
-		connState: connState,
-		sshAlias:  make(map[string]string),
-		latency:   make(map[string]time.Duration),
-		selected:  -1, // No selection yet; prevents sortHosts from preserving random initial order
-		collector: collector,
-		history:   NewHistory(DefaultHistorySize),
-		interval:  interval,
-		timeout:   timeout,
-		sortOrder: SortByDefault, // Start with default sort (online first, config order)
+		hosts:      hosts, // Will be sorted by sortHosts
+		hostOrder:  configOrder,
+		metrics:    make(map[string]*HostMetrics),
+		status:     status,
+		errors:     make(map[string]string),
+		lockInfo:   make(map[string]*HostLockInfo),
+		connState:  connState,
+		sshAlias:   make(map[string]string),
+		latency:    make(map[string]time.Duration),
+		selected:   -1, // No selection yet; prevents sortHosts from preserving random initial order
+		collector:  collector,
+		history:    NewHistory(DefaultHistorySize),
+		interval:   interval,
+		timeout:    timeout,
+		thresholds: normalizeThresholds(opts.Thresholds),
+		sortOrder:  SortByDefault, // Start with default sort (online first, config order)
+
+		alerts:        newAlertTracker(opts.Alerts),
+		cardBodyCache: make(map[string]string),
 	}
 
 	// Apply initial sort
@@ -225,6 +264,48 @@ func NewModel(collector *Collector, interval, timeout time.Duration, hostOrder [
 	}
 
 	return m
+}
+
+// normalizeThresholds fills in default warning/critical values for any
+// threshold that is unset (zero or negative).
+func normalizeThresholds(t config.ThresholdConfig) config.ThresholdConfig {
+	t.CPU = normalizeThresholdValues(t.CPU)
+	t.RAM = normalizeThresholdValues(t.RAM)
+	t.GPU = normalizeThresholdValues(t.GPU)
+	return t
+}
+
+// normalizeThresholdValues replaces unset (zero or negative) values with the
+// default warning (70) and critical (90) thresholds.
+func normalizeThresholdValues(v config.ThresholdValues) config.ThresholdValues {
+	if v.Warning <= 0 {
+		v.Warning = int(WarningThreshold)
+	}
+	if v.Critical <= 0 {
+		v.Critical = int(CriticalThreshold)
+	}
+	return v
+}
+
+// diskThresholds are the fixed severity thresholds for disk usage coloring.
+// df capacity percent has different semantics than CPU/RAM load (reserved
+// blocks, steadily high usage is normal), so v1 uses a fixed 80/95 warn/crit
+// pair instead of the configurable metric thresholds.
+var diskThresholds = config.ThresholdValues{Warning: 80, Critical: 95}
+
+// thresholdStyle returns the severity style for a percentage using the given
+// per-metric thresholds.
+func thresholdStyle(percent float64, t config.ThresholdValues) lipgloss.Style {
+	return MetricStyleWithThresholds(percent, t.Warning, t.Critical)
+}
+
+// thresholdColorFunc returns a ColorFunc that colors values using the given
+// per-metric thresholds. Used to keep graph coloring consistent with the
+// scalar metric text.
+func thresholdColorFunc(t config.ThresholdValues) ColorFunc {
+	return func(value float64) lipgloss.Color {
+		return MetricColorWithThresholds(value, t.Warning, t.Critical)
+	}
 }
 
 // Init starts the tick timer and triggers an initial metrics collection.
@@ -287,6 +368,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.listViewport.Height = viewportHeight
 		}
 
+		// Card bodies are rendered for a specific width/layout and height
+		// (graph rows and process count follow CanShowExtendedInfo); drop them
+		// all so cards re-render at the new dimensions
+		clear(m.cardBodyCache)
+
 		// Update viewport content based on current view (dimensions changed)
 		if m.viewMode == ViewDetail {
 			m.updateDetailViewportContent()
@@ -300,21 +386,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		// Advance spinner animation frame (use large cycle to allow text animation to complete)
 		m.spinnerFrame = (m.spinnerFrame + 1) % 10000
-		return m, m.spinnerTickCmd()
-
-	case metricsMsg:
-		m.lastUpdate = msg.time
-		m.updateMetrics(msg.metrics, msg.errors, msg.lockInfo)
-		// Update viewport content based on current view
-		if m.viewMode == ViewDetail {
-			m.updateDetailViewportContent()
-		} else {
+		// Refresh list content so dynamic chrome (spinners, backoff countdowns,
+		// running durations) stays fresh even when no results are arriving.
+		// Card bodies are cached, so this only re-renders chrome. The detail
+		// view's chrome lives outside its viewport and is already re-rendered
+		// on every View call.
+		if m.viewMode == ViewList {
 			m.updateListViewportContent()
 		}
+		return m, m.spinnerTickCmd()
 
 	case collectStartedMsg:
 		// Collection started - set up state and begin polling
-		m.resultsChan = msg.results
 		m.collecting = true
 
 		// Mark collection start time for hosts that aren't yet connected
@@ -326,30 +409,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Start polling for results
-		return m, pollResultsCmd(m.resultsChan)
+		return m, pollResultsCmd(msg.results, msg.cancel)
 
 	case hostResultMsg:
 		// Check if this is a completion signal (empty alias means channel closed)
 		if msg.alias == "" {
 			m.collecting = false
-			m.resultsChan = nil
+			// Re-sort once per collection round (statuses/metrics may have
+			// changed) instead of on every per-host result
+			m.sortHosts()
+			if m.viewMode == ViewList {
+				m.updateListViewportContent()
+			}
 			return m, nil
 		}
 
 		// Update this specific host's state immediately
 		m.lastUpdate = msg.time
 		m.updateHostResult(msg)
-		// Update viewport content based on current view
+
+		// Evaluate threshold alerts on this host's fresh metrics. Done before
+		// the viewport regen below so a newly firing card flashes this frame.
+		alertCmd := m.evaluateAlerts(msg)
+
+		// Update viewport content based on current view. The detail view only
+		// shows the selected host, so skip regen for other hosts' results.
 		if m.viewMode == ViewDetail {
-			m.updateDetailViewportContent()
+			if msg.alias == m.SelectedHost() {
+				m.updateDetailViewportContent()
+			}
 		} else {
 			m.updateListViewportContent()
 		}
 
-		// Continue polling for more results if we have an active channel
-		if m.resultsChan != nil {
-			return m, pollResultsCmd(m.resultsChan)
+		// Continue polling this round's channel for more results
+		if msg.results != nil {
+			return m, tea.Batch(alertCmd, pollResultsCmd(msg.results, msg.cancel))
 		}
+		return m, alertCmd
 	}
 
 	return m, nil
@@ -413,25 +510,25 @@ func (m Model) collectCmd() tea.Cmd {
 	return func() tea.Msg {
 		// Create a background context for the collection cycle.
 		// Note: We don't defer cancel() here because CollectStreamingHosts spawns
-		// goroutines that need the context to remain valid. The context will be
-		// garbage collected after the timeout expires. This is acceptable because:
-		// 1. The timeout is bounded (timeout * numHosts+1)
-		// 2. Collection typically completes well before the timeout
-		// 3. The timer overhead is minimal
+		// goroutines that need the context to remain valid. Instead, cancel is
+		// carried alongside the results channel and invoked by pollResultsCmd
+		// when this round's channel closes, releasing the timeout timer promptly.
 		ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Duration(numHosts+1))
-		_ = cancel // Context cleanup happens via timeout; see comment above
 
 		// Start streaming collection for only the non-backoff hosts
 		resultsChan := collector.CollectStreamingHosts(ctx, hostsToCollect)
 
 		// Return the channel to Update for safe state setup
-		return collectStartedMsg{results: resultsChan}
+		return collectStartedMsg{results: resultsChan, cancel: cancel}
 	}
 }
 
 // pollResultsCmd returns a command that polls for the next streaming result.
-// Takes the channel as a parameter to avoid data races (no Model field access in goroutine).
-func pollResultsCmd(results <-chan HostResult) tea.Cmd {
+// Takes the channel as a parameter to avoid data races (no Model field access
+// in goroutine). cancel belongs to the same collection round as the channel
+// and is invoked once the channel closes, so overlapping rounds (e.g. manual
+// refresh mid-collection) each clean up their own context.
+func pollResultsCmd(results <-chan HostResult, cancel context.CancelFunc) tea.Cmd {
 	if results == nil {
 		return nil
 	}
@@ -440,7 +537,10 @@ func pollResultsCmd(results <-chan HostResult) tea.Cmd {
 		// Simple channel receive (not select with single case)
 		result, ok := <-results
 		if !ok {
-			// Channel closed, collection complete - signal via nil result
+			// Channel closed, collection complete - release this round's context
+			if cancel != nil {
+				cancel()
+			}
 			return hostResultMsg{time: time.Now()} // Empty msg signals completion
 		}
 
@@ -457,49 +557,20 @@ func pollResultsCmd(results <-chan HostResult) tea.Cmd {
 			connectedVia: result.ConnectedVia,
 			latency:      result.Latency,
 			time:         time.Now(),
+			results:      results,
+			cancel:       cancel,
 		}
-	}
-}
-
-// updateMetrics updates the model with new metrics and determines host status.
-func (m *Model) updateMetrics(newMetrics map[string]*HostMetrics, newErrors map[string]string, newLockInfo map[string]*HostLockInfo) {
-	for alias, metrics := range newMetrics {
-		if metrics == nil {
-			m.status[alias] = StatusUnreachableState
-			// Store error message if available
-			if errMsg, ok := newErrors[alias]; ok {
-				m.errors[alias] = errMsg
-			}
-			// Clear lock info for unreachable hosts
-			delete(m.lockInfo, alias)
-			continue
-		}
-
-		m.metrics[alias] = metrics
-		m.history.Push(alias, metrics)
-
-		// Update lock info
-		if lockInfo, ok := newLockInfo[alias]; ok && lockInfo != nil {
-			m.lockInfo[alias] = lockInfo
-		} else {
-			delete(m.lockInfo, alias)
-		}
-
-		// Determine status based on lock state and collection latency
-		if lockInfo, ok := m.lockInfo[alias]; ok && lockInfo.IsLocked {
-			m.status[alias] = StatusRunningState
-		} else {
-			m.status[alias] = StatusIdleState
-		}
-
-		// Clear any previous error
-		delete(m.errors, alias)
 	}
 }
 
 // updateHostResult updates the model state for a single host result (streaming mode).
+// Sorting is deferred to the end of the collection round (see the completion
+// sentinel in Update) so a round costs one sort instead of one per host.
 func (m *Model) updateHostResult(msg hostResultMsg) {
 	alias := msg.alias
+
+	// This host has new data: drop its cached card body so it re-renders
+	delete(m.cardBodyCache, alias)
 
 	// Update connection state based on result
 	if state, ok := m.connState[alias]; ok {
@@ -535,7 +606,6 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 			m.errors[alias] = msg.error
 		}
 		delete(m.lockInfo, alias)
-		m.sortHosts()
 		return
 	}
 
@@ -570,9 +640,49 @@ func (m *Model) updateHostResult(msg hostResultMsg) {
 
 	// Clear any previous error
 	delete(m.errors, alias)
+}
 
-	// Re-sort hosts since status may have changed
-	m.sortHosts()
+// evaluateAlerts feeds a host result through the alert state machine and
+// returns the command carrying any new alert's side effects (bell, hook).
+// Alert state is dropped for hosts that lost their metrics, so an unreachable
+// host stops flashing instead of latching on stale data.
+//
+// No card cache invalidation is needed: the border is composed outside the
+// cached body (see renderCard), so a flashing card re-renders its chrome on
+// the next frame regardless.
+func (m *Model) evaluateAlerts(msg hostResultMsg) tea.Cmd {
+	if !m.alerts.Enabled() {
+		return nil
+	}
+
+	if msg.metrics == nil {
+		m.alerts.Clear(msg.alias)
+		return nil
+	}
+
+	events := m.alerts.Evaluate(msg.alias, msg.metrics, m.thresholds)
+	return m.alerts.alertEffectsCmd(events)
+}
+
+// AlertsEnabled reports whether threshold alerting is turned on.
+func (m Model) AlertsEnabled() bool {
+	return m.alerts.Enabled()
+}
+
+// AlertCount returns the number of host+metric pairs currently alerting.
+func (m Model) AlertCount() int {
+	return m.alerts.FiringCount()
+}
+
+// IsAlerting reports whether the host has any metric currently alerting.
+func (m Model) IsAlerting(host string) bool {
+	return m.alerts.Firing(host)
+}
+
+// IsFlashing reports whether the host's card should render its alert border.
+// Always false when monitor.alerts.flash is off.
+func (m Model) IsFlashing(host string) bool {
+	return m.alerts.Flashing(host)
 }
 
 // OnlineCount returns the number of hosts that are online (idle or running).

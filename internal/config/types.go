@@ -24,13 +24,47 @@ type GlobalConfig struct {
 	Logs     LogsConfig      `yaml:"logs" mapstructure:"logs"`
 }
 
+// LocalFallbackMode controls when rr falls back to local execution.
+type LocalFallbackMode string
+
+const (
+	// LocalFallbackNever disables local fallback entirely.
+	LocalFallbackNever LocalFallbackMode = "never"
+	// LocalFallbackOnUnreachable falls back only when hosts are down or
+	// unconfigured; hosts that are merely busy (locked) cause a wait/error.
+	LocalFallbackOnUnreachable LocalFallbackMode = "on-unreachable"
+	// LocalFallbackAlways falls back when hosts are unreachable OR all locked.
+	LocalFallbackAlways LocalFallbackMode = "always"
+)
+
+// Enabled reports whether any form of local fallback is allowed.
+func (m LocalFallbackMode) Enabled() bool {
+	return m == LocalFallbackOnUnreachable || m == LocalFallbackAlways
+}
+
+// Valid reports whether the mode is one of the recognized values.
+func (m LocalFallbackMode) Valid() bool {
+	switch m {
+	case LocalFallbackNever, LocalFallbackOnUnreachable, LocalFallbackAlways:
+		return true
+	}
+	return false
+}
+
 // GlobalDefaults contains default settings for host selection and connection.
 type GlobalDefaults struct {
 	// ProbeTimeout is how long to wait when probing SSH hosts.
 	ProbeTimeout time.Duration `yaml:"probe_timeout" mapstructure:"probe_timeout"`
 
-	// LocalFallback allows falling back to local execution when no hosts are available.
-	LocalFallback bool `yaml:"local_fallback" mapstructure:"local_fallback"`
+	// LocalFallback controls falling back to local execution: never,
+	// on-unreachable, or always. Booleans are accepted for backwards
+	// compatibility (true = always, false = never).
+	LocalFallback LocalFallbackMode `yaml:"local_fallback" mapstructure:"local_fallback"`
+
+	// RewritePaths controls rewriting local absolute paths in commands and
+	// task args to their remote equivalents before execution. Unset means
+	// enabled; set to false to pass paths through untouched.
+	RewritePaths *bool `yaml:"rewrite_paths,omitempty" mapstructure:"rewrite_paths"`
 }
 
 // ProjectDefaults contains default settings applied to all tasks in a project.
@@ -49,16 +83,18 @@ type ProjectDefaults struct {
 // Config represents the project-level .rr.yaml configuration file.
 // This is shareable with the team and doesn't contain host connection details.
 type Config struct {
-	Version       int                   `yaml:"version" mapstructure:"version"`
-	Host          string                `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
-	Hosts         []string              `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
-	LocalFallback *bool                 `yaml:"local_fallback,omitempty" mapstructure:"local_fallback"`
-	Defaults      ProjectDefaults       `yaml:"defaults" mapstructure:"defaults"`
-	Sync          SyncConfig            `yaml:"sync" mapstructure:"sync"`
-	Lock          LockConfig            `yaml:"lock" mapstructure:"lock"`
-	Tasks         map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
-	Output        OutputConfig          `yaml:"output" mapstructure:"output"`
-	Monitor       MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
+	Version       int                `yaml:"version" mapstructure:"version"`
+	Host          string             `yaml:"host,omitempty" mapstructure:"host"`   // Single host reference (backwards compat)
+	Hosts         []string           `yaml:"hosts,omitempty" mapstructure:"hosts"` // Multiple host references for load balancing
+	LocalFallback *LocalFallbackMode `yaml:"local_fallback,omitempty" mapstructure:"local_fallback"`
+	RewritePaths  *bool              `yaml:"rewrite_paths,omitempty" mapstructure:"rewrite_paths"` // overrides defaults.rewrite_paths
+
+	Defaults ProjectDefaults       `yaml:"defaults" mapstructure:"defaults"`
+	Sync     SyncConfig            `yaml:"sync" mapstructure:"sync"`
+	Lock     LockConfig            `yaml:"lock" mapstructure:"lock"`
+	Tasks    map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
+	Output   OutputConfig          `yaml:"output" mapstructure:"output"`
+	Monitor  MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
 
 	// Require lists tools that must be available on remote hosts.
 	// Checked before sync; uses built-in installers when available.
@@ -129,6 +165,11 @@ type SyncConfig struct {
 	// lockfile changes. Prevents stale install directories (node_modules, .venv,
 	// etc.) from being used after a lockfile update.
 	Invalidations []LockfileInvalidation `yaml:"invalidations" mapstructure:"invalidations"`
+
+	// WorktreeIsolation gives each linked git worktree its own remote
+	// directory (${PROJECT} becomes "<repo>@<worktree>"). Defaults to true;
+	// set false to share the main checkout's remote directory.
+	WorktreeIsolation *bool `yaml:"worktree_isolation,omitempty" mapstructure:"worktree_isolation"`
 }
 
 // LockConfig controls the distributed lock behavior to prevent concurrent executions.
@@ -399,6 +440,32 @@ type MonitorConfig struct {
 
 	// Exclude lists host names to exclude from the monitor dashboard.
 	Exclude []string `yaml:"exclude" mapstructure:"exclude"`
+
+	// Alerts controls threshold alerting (bell, card flash, command hook).
+	Alerts AlertsConfig `yaml:"alerts" mapstructure:"alerts"`
+}
+
+// AlertsConfig controls threshold alerting in the monitor dashboard.
+// An alert fires when a metric crosses its configured critical threshold and
+// re-arms only after the metric falls back below the warning threshold.
+type AlertsConfig struct {
+	// Enabled turns threshold alerting on. Default false.
+	Enabled bool `yaml:"enabled" mapstructure:"enabled"`
+
+	// Bell rings the terminal bell when a new alert fires. Default true.
+	Bell bool `yaml:"bell" mapstructure:"bell"`
+
+	// Flash renders an alerting host's card border in the critical color.
+	// Default true.
+	Flash bool `yaml:"flash" mapstructure:"flash"`
+
+	// Cooldown is the minimum time between re-fires for the same host and
+	// metric (e.g., "60s", "5m"). Default "60s".
+	Cooldown string `yaml:"cooldown" mapstructure:"cooldown"`
+
+	// OnAlert is an optional local shell command run when an alert fires.
+	// It receives RR_HOST, RR_METRIC, and RR_VALUE in its environment.
+	OnAlert string `yaml:"on_alert" mapstructure:"on_alert"`
 }
 
 // ThresholdConfig defines warning and critical thresholds for metrics.
@@ -443,7 +510,7 @@ func DefaultGlobalConfig() *GlobalConfig {
 		Hosts:   make(map[string]Host),
 		Defaults: GlobalDefaults{
 			ProbeTimeout:  2 * time.Second,
-			LocalFallback: false,
+			LocalFallback: LocalFallbackNever,
 		},
 		Logs: LogsConfig{
 			Dir:      "~/.rr/logs",
@@ -459,12 +526,17 @@ func DefaultConfig() *Config {
 		Host:    "",
 		Sync: SyncConfig{
 			RespectGitignore: true,
+			// Bare patterns (no trailing slash) for .git, .venv, and
+			// node_modules: in git worktrees .git is a FILE and
+			// node_modules may be a symlink. Dir-only patterns miss those
+			// and rsync then fails replacing a remote dir with a file
+			// (partial transfer, exit 23).
 			Exclude: []string{
-				".git/",
-				".venv/",
+				".git",
+				".venv",
 				"__pycache__/",
 				"*.pyc",
-				"node_modules/",
+				"node_modules",
 				".mypy_cache/",
 				".pytest_cache/",
 				".ruff_cache/",
@@ -506,7 +578,7 @@ func DefaultConfig() *Config {
 			Verbosity: "normal",
 		},
 		Monitor: MonitorConfig{
-			Interval: "2s",
+			Interval: "1s",
 			Timeout:  "8s",
 			Thresholds: ThresholdConfig{
 				CPU: ThresholdValues{Warning: 70, Critical: 90},
@@ -514,6 +586,12 @@ func DefaultConfig() *Config {
 				GPU: ThresholdValues{Warning: 70, Critical: 90},
 			},
 			Exclude: []string{},
+			Alerts: AlertsConfig{
+				Enabled:  false,
+				Bell:     true,
+				Flash:    true,
+				Cooldown: "60s",
+			},
 		},
 	}
 }

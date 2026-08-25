@@ -51,7 +51,10 @@ type StepHandler interface {
 
 // ExecuteTask runs a task on the given connection.
 // Handles both single-command tasks (Run field) and multi-step tasks (Steps field).
-// Extra args are appended to single-command tasks (not supported for multi-step).
+// Extra args replace {args} placeholders in single-command tasks, or are
+// appended (shell-quoted) when the command is simple. Compound commands
+// (pipes, &&, redirections) without a placeholder reject extra args, since a
+// blind append would bind them to the wrong command.
 func ExecuteTask(ctx context.Context, conn *host.Connection, task *config.TaskConfig, args []string, env map[string]string, workDir string, stdout, stderr io.Writer, opts *TaskExecOptions) (*TaskResult, error) {
 	if task == nil {
 		return nil, errors.New(errors.ErrExec,
@@ -66,10 +69,9 @@ func ExecuteTask(ctx context.Context, conn *host.Connection, task *config.TaskCo
 
 	// Single-command task
 	if task.Run != "" {
-		cmd := task.Run
-		// Append extra args if provided
-		if len(args) > 0 {
-			cmd = cmd + " " + strings.Join(args, " ")
+		cmd, err := ApplyTaskArgs(task.Run, args)
+		if err != nil {
+			return nil, err
 		}
 		exitCode, err := executeCommand(ctx, conn, cmd, env, workDir, opts.SetupCommands, stdout, stderr)
 		if err != nil {
@@ -89,6 +91,24 @@ func ExecuteTask(ctx context.Context, conn *host.Connection, task *config.TaskCo
 	}
 
 	return executeSteps(ctx, conn, task.Steps, env, workDir, opts, stdout, stderr)
+}
+
+// ApplyTaskArgs merges extra CLI args into a task's run command.
+// Placeholders ({args} / {args:-default}) are substituted with shell-quoted
+// args wherever they appear. Without a placeholder, args are appended
+// (shell-quoted) only when the command is simple; compound commands error
+// because appended args would bind to the last command in the pipeline.
+func ApplyTaskArgs(run string, args []string) (string, error) {
+	cmd, hadPlaceholder := config.ExpandArgs(run, args)
+	if hadPlaceholder || len(args) == 0 {
+		return cmd, nil
+	}
+	if util.IsCompoundCommand(run) {
+		return "", errors.New(errors.ErrConfig,
+			"This task is a compound command (pipes, &&, or redirections), so extra arguments would land on the last command in the pipeline instead of the one you mean",
+			"Add an {args} placeholder where the arguments belong, e.g.: pytest {args:-.} -n 4 | grep ...")
+	}
+	return cmd + " " + util.ShellQuoteJoin(args), nil
 }
 
 // executeSteps runs multiple steps in sequence.

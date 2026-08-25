@@ -11,6 +11,8 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/util"
@@ -65,6 +67,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 			"Failed to flatten parallel tasks",
 			"Check for circular references or missing tasks.")
 	}
+
+	rewriteForwardArgs(resolved, task, &opts)
 
 	// Build TaskInfo for each flattened subtask
 	tasks, err := buildSubtaskInfos(resolved.Project, task, flattenedNames, opts.Args)
@@ -191,26 +195,47 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		writeTaskLogs(logWriter, result, taskName)
 	}
 
+	logDir := ""
+	if logWriter != nil {
+		logDir = logWriter.Dir()
+	}
+
 	if PrettyMode() {
-		logDir := ""
-		if logWriter != nil {
-			logDir = logWriter.Dir()
-		}
 		parallel.RenderSummary(result, logDir)
+		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+			warnNoTests(map[string]interface{}{
+				"no_tests":       true,
+				"no_tests_tasks": noTests,
+			})
+		}
 	} else {
 		exitCode := 0
 		if result.Failed > 0 {
 			exitCode = 1
 		}
+		details := map[string]interface{}{
+			"total":  result.Passed + result.Failed,
+			"passed": result.Passed,
+			"failed": result.Failed,
+		}
+		if logDir != "" {
+			details["log_dir"] = logDir
+		}
+		if result.Failed > 0 {
+			details["failures"] = extractTaskFailures(result, logDir)
+		}
+		// no_tests stays a bool here as it is for single runs - one key, one
+		// type, so consumers can branch on it without sniffing. The subtask
+		// names go in their own field.
+		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+			details["no_tests"] = true
+			details["no_tests_tasks"] = noTests
+		}
 		WritePhaseEvent(PhaseEvent{
 			Type:     "result",
 			Status:   map[bool]string{true: "success", false: "failed"}[result.Failed == 0],
 			ExitCode: &exitCode,
-			Details: map[string]interface{}{
-				"total":  result.Passed + result.Failed,
-				"passed": result.Passed,
-				"failed": result.Failed,
-			},
+			Details:  details,
 		})
 	}
 
@@ -220,9 +245,100 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 	return 0
 }
 
+const maxOutputTailLines = 20
+const maxFailureMessageLen = 500
+
+// tasksWithoutTests names the subtasks whose runner collected zero tests.
+// Sharded suites make this easy to miss: the aggregate says "3 passed" while
+// one shard's path filter matched nothing. Reported per subtask, never fatal -
+// forwarded filters (forward_args) legitimately leave some shards empty.
+func tasksWithoutTests(result *parallel.Result) []string {
+	var names []string
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		if formatters.DetectNoTests(tr.Command, tr.Output) {
+			names = append(names, tr.TaskName)
+		}
+	}
+	return names
+}
+
+// extractTaskFailures builds structured failure info for machine-mode output.
+// When logDir is non-empty, each failure carries the path of its saved log.
+func extractTaskFailures(result *parallel.Result, logDir string) []map[string]interface{} {
+	var failures []map[string]interface{}
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		if tr.Success() {
+			continue
+		}
+		entry := map[string]interface{}{
+			"task":      tr.TaskName,
+			"host":      tr.Host,
+			"exit_code": tr.ExitCode,
+		}
+		if tr.Error != nil {
+			entry["error"] = tr.Error.Error()
+		}
+		if logDir != "" {
+			entry["log_file"] = logs.TaskLogPath(logDir, tr.TaskName, tr.TaskIndex)
+		}
+
+		parsed := formatters.ExtractFailures(tr.Command, tr.Output)
+		if len(parsed) > 0 {
+			tests := make([]map[string]string, 0, len(parsed))
+			for _, f := range parsed {
+				tf := map[string]string{"name": f.TestName}
+				if f.File != "" {
+					loc := f.File
+					if f.Line > 0 {
+						loc += ":" + util.Itoa(f.Line)
+					}
+					tf["file"] = loc
+				}
+				if f.Message != "" {
+					msg := f.Message
+					if len(msg) > maxFailureMessageLen {
+						msg = msg[:maxFailureMessageLen] + "..."
+					}
+					tf["message"] = msg
+				}
+				tests = append(tests, tf)
+			}
+			entry["tests"] = tests
+		} else if len(tr.Output) > 0 {
+			lines := strings.Split(strings.TrimSpace(string(tr.Output)), "\n")
+			start := 0
+			if len(lines) > maxOutputTailLines {
+				start = len(lines) - maxOutputTailLines
+			}
+			entry["output_tail"] = strings.Join(lines[start:], "\n")
+		}
+		failures = append(failures, entry)
+	}
+	return failures
+}
+
+// rewriteForwardArgs rewrites local absolute path args to project-relative
+// form so they resolve after each worker cds into its host's project dir.
+// Skipped for --local runs, where local paths are already correct.
+func rewriteForwardArgs(resolved *config.ResolvedConfig, task *config.TaskConfig, opts *ParallelTaskOptions) {
+	if !task.ForwardArgs || len(opts.Args) == 0 || opts.Local ||
+		resolved.ProjectRoot == "" || !config.ResolveRewritePaths(resolved) {
+		return
+	}
+	rewritten, n := RewriteArgsToRelative(opts.Args, resolved.ProjectRoot)
+	if n > 0 {
+		opts.Args = rewritten
+		announcePathRewrites(n, resolved.ProjectRoot, ".")
+	}
+}
+
 // buildSubtaskInfos constructs the TaskInfo list for each flattened subtask name.
-// When forwardTask.ForwardArgs is true and args are provided, they are appended to
-// each subtask's run command. Multi-step subtasks cannot accept forwarded args.
+// When forwardTask.ForwardArgs is true, args are substituted into each
+// subtask's {args} placeholder or appended (shell-quoted) to simple commands.
+// {args:-default} defaults apply even when no args are forwarded.
+// Multi-step subtasks cannot accept forwarded args.
 func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flattenedNames []string, args []string) ([]parallel.TaskInfo, error) {
 	tasks := make([]parallel.TaskInfo, 0, len(flattenedNames))
 	for i, subtaskName := range flattenedNames {
@@ -236,17 +352,23 @@ func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flat
 			cmd = buildStepsCommand(subtask.Steps)
 		}
 
-		if forwardTask.ForwardArgs && len(args) > 0 {
-			if len(subtask.Steps) > 0 {
+		if forwardTask.ForwardArgs && len(args) > 0 && len(subtask.Steps) > 0 {
+			return nil, errors.New(errors.ErrConfig,
+				fmt.Sprintf("subtask '%s' uses steps and cannot accept forwarded args", subtaskName),
+				"remove forward_args from the parent task or convert the subtask to a single run command")
+		}
+
+		if subtask.Run != "" {
+			forwarded := args
+			if !forwardTask.ForwardArgs {
+				forwarded = nil // still expands {args:-default} placeholders
+			}
+			cmd, err = exec.ApplyTaskArgs(subtask.Run, forwarded)
+			if err != nil {
 				return nil, errors.New(errors.ErrConfig,
-					fmt.Sprintf("subtask '%s' uses steps and cannot accept forwarded args", subtaskName),
-					"remove forward_args from the parent task or convert the subtask to a single run command")
+					fmt.Sprintf("subtask '%s' is a compound command and has no {args} placeholder for forwarded args", subtaskName),
+					"Add an {args} placeholder to the subtask's run command where the arguments belong.")
 			}
-			quoted := make([]string, len(args))
-			for i, a := range args {
-				quoted[i] = util.ShellQuote(a)
-			}
-			cmd = cmd + " " + strings.Join(quoted, " ")
 		}
 
 		tasks = append(tasks, parallel.TaskInfo{

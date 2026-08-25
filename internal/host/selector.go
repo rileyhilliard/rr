@@ -197,70 +197,26 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 	return firstName, s.hosts[firstName], nil
 }
 
-// connect establishes an SSH connection to the given alias.
-func (s *Selector) connect(hostName, sshAlias string, host config.Host) (*Connection, error) {
-	// ProbeAndConnect does a single SSH handshake and returns both the client
-	// and the measured latency, avoiding the previous double-handshake overhead.
-	client, latency, err := ProbeAndConnect(sshAlias, s.timeout)
+// trySSHAliases attempts to connect using the host's SSH aliases.
+// All aliases are dialed in parallel with earlier aliases preferred (see
+// DialAliases), so a dead first alias no longer stacks serial timeouts.
+// Returns the winning connection, or an aggregated error if all fail.
+func (s *Selector) trySSHAliases(hostName string, host config.Host) (*Connection, error) {
+	result, err := DialAliases(hostName, host.SSH, DialOptions{
+		Timeout: s.timeout,
+		OnEvent: s.eventHandler,
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	return &Connection{
 		Name:    hostName,
-		Alias:   sshAlias,
-		Client:  client,
+		Alias:   result.Alias,
+		Client:  result.Client,
 		Host:    host,
-		Latency: latency,
+		Latency: result.Latency,
 	}, nil
-}
-
-// trySSHAliases attempts to connect using each SSH alias in order.
-// Returns the first successful connection, or an error if all fail.
-// This implements the fallback chain pattern: try each alias until one works.
-func (s *Selector) trySSHAliases(hostName string, host config.Host) (*Connection, error) {
-	var lastErr error
-	var failedAliases []string
-
-	for i, sshAlias := range host.SSH {
-		s.emit(ConnectionEvent{
-			Type:    EventTrying,
-			Alias:   sshAlias,
-			Message: fmt.Sprintf("trying alias %s", sshAlias),
-		})
-
-		conn, err := s.connect(hostName, sshAlias, host)
-		if err == nil {
-			msg := fmt.Sprintf("connected via %s", sshAlias)
-			if i > 0 {
-				msg = fmt.Sprintf("connected via %s (fallback)", sshAlias)
-			}
-			s.emit(ConnectionEvent{
-				Type:    EventConnected,
-				Alias:   sshAlias,
-				Message: msg,
-				Latency: conn.Latency,
-			})
-			return conn, nil
-		}
-
-		errMsg := "connection failed"
-		if probeErr, ok := err.(*ProbeError); ok {
-			errMsg = probeErr.Reason.String()
-		}
-		s.emit(ConnectionEvent{
-			Type:    EventFailed,
-			Alias:   sshAlias,
-			Message: errMsg,
-			Error:   err,
-		})
-		failedAliases = append(failedAliases, sshAlias)
-		lastErr = err
-	}
-
-	return nil, errors.WrapWithCode(lastErr, errors.ErrSSH,
-		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(failedAliases)),
-		"The remote might be offline, or there could be a network/firewall issue.")
 }
 
 // isConnectionAlive checks if the cached connection is still usable.
@@ -528,7 +484,7 @@ func (s *Selector) HostInfo() []HostInfoItem {
 		items = append(items, HostInfoItem{
 			Name: name,
 			SSH:  s.hosts[name].SSH,
-			Dir:  s.hosts[name].Dir,
+			Dir:  config.ExpandRemote(s.hosts[name].Dir),
 			Tags: s.hosts[name].Tags,
 		})
 	}

@@ -22,17 +22,22 @@ func NewConnectionCache() *ConnectionCache {
 // Returns nil if no cached connection exists or if the cached connection is dead.
 func (c *ConnectionCache) Get(hostName string) *Connection {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	conn, ok := c.conns[hostName]
+	c.mu.Unlock()
 	if !ok {
 		return nil
 	}
 
-	// Verify connection is still alive
+	// The liveness check is a network round trip, so it runs outside the
+	// lock - a laggy host would otherwise serialize every other Get.
 	if !c.isAlive(conn) {
 		conn.Close()
-		delete(c.conns, hostName)
+		c.mu.Lock()
+		// Only delete our entry; it may have been replaced while unlocked.
+		if current, ok := c.conns[hostName]; ok && current == conn {
+			delete(c.conns, hostName)
+		}
+		c.mu.Unlock()
 		return nil
 	}
 
@@ -97,18 +102,19 @@ func (c *ConnectionCache) Hosts() []string {
 }
 
 // isAlive checks if a connection is still usable.
+//
+// Uses SSH's "keepalive@openssh.com" request instead of creating a new session
+// because NewSession() adds 100-200ms of overhead per check. The keepalive
+// request is just a single packet exchange on the existing connection, making
+// it fast enough to call on every Get() without noticeable delay.
 func (c *ConnectionCache) isAlive(conn *Connection) bool {
 	if conn == nil || conn.Client == nil {
 		return false
 	}
 
-	// Try to create a session as a quick health check
-	session, err := conn.Client.NewSession()
-	if err != nil {
-		return false
-	}
-	_ = session.Close()
-	return true
+	// wantReply=true ensures we get a response confirming the connection works.
+	_, _, err := conn.Client.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
 }
 
 // Global connection cache for use across the application.

@@ -282,6 +282,11 @@ collected 0 items
 
 	results := f.GetResults()
 	assert.Empty(t, results)
+
+	// Zero counts alone can't distinguish "ran nothing" from "nothing failed",
+	// which is what let a broken path filter report success. RanNothing is the
+	// signal that separates them.
+	assert.True(t, f.RanNothing(), "pytest reported no tests ran")
 }
 
 func TestPytestMultipleFailures(t *testing.T) {
@@ -483,4 +488,67 @@ tests/test_example.py::test_two PASSED                                   [100%]
 	assert.Equal(t, 0, failed)
 	assert.Equal(t, 0, skipped)
 	assert.Equal(t, 0, errors)
+}
+
+func TestPytestRanNothing(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  bool
+	}{
+		{
+			name:  "decorated no tests ran",
+			lines: []string{"collected 0 items", "===== no tests ran in 0.05s ====="},
+			want:  true,
+		},
+		{
+			name:  "bare no tests ran from quiet mode",
+			lines: []string{"no tests ran in 0.05s"},
+			want:  true,
+		},
+		{
+			name:  "collected zero items alone",
+			lines: []string{"collected 0 items"},
+			want:  true,
+		},
+		{
+			name:  "collect-only collected tests but ran none",
+			lines: []string{"collected 12 items", "12 tests collected in 0.01s"},
+			want:  false,
+		},
+		{
+			name:  "passing run",
+			lines: []string{"collected 3 items", "===== 3 passed in 0.10s ====="},
+			want:  false,
+		},
+		{
+			name:  "all skipped still ran the collection",
+			lines: []string{"collected 3 items", "===== 3 skipped in 0.05s ====="},
+			want:  false,
+		},
+		{
+			name:  "no pytest output at all",
+			lines: []string{"building..."},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NewPytestFormatter()
+			for _, line := range tt.lines {
+				f.ProcessLine(line)
+			}
+			assert.Equal(t, tt.want, f.RanNothing())
+		})
+	}
+}
+
+func TestPytestRanNothingResetClears(t *testing.T) {
+	f := NewPytestFormatter()
+	f.ProcessLine("no tests ran in 0.05s")
+	require.True(t, f.RanNothing())
+
+	f.Reset()
+	assert.False(t, f.RanNothing(), "Reset must clear the no-tests state")
 }

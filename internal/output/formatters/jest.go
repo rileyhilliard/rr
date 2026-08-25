@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -49,6 +50,10 @@ type JestFormatter struct {
 	testsFailed  int
 	testsTotal   int
 	duration     string
+
+	// noTestsRan is set by an explicit zero-collection message: vitest's
+	// "Tests  no tests" summary, or jest's / vitest's "No tests found".
+	noTestsRan bool
 }
 
 // NewJestFormatter creates a Jest output formatter.
@@ -84,6 +89,14 @@ var (
 	// Summary lines
 	jestSuiteSummaryPattern = regexp.MustCompile(`Test Suites:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total`)
 	jestTestSummaryPattern  = regexp.MustCompile(`Tests:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total`)
+
+	// Vitest prints a colon-less summary and, when nothing was collected,
+	// the literal "no tests" where a count would be: "Tests  no tests".
+	// Neither summary pattern above matches that form.
+	jestNoTestsPattern = regexp.MustCompile(`^\s*Tests\s+no tests\s*$`)
+	// jest prints no summary at all when it matches nothing, so its only
+	// signal is this message; vitest emits the "No test files found" variant.
+	jestNoTestsFoundPattern = regexp.MustCompile(`(?i)^\s*No test(?:s| files) found`)
 	jestTimeSummaryPattern  = regexp.MustCompile(`Time:\s+(.+)`)
 
 	// Stack trace indicator (line starting with "at ")
@@ -101,6 +114,12 @@ func (f *JestFormatter) ProcessLine(line string) string {
 			jestTestSummaryPattern.MatchString(line) {
 			f.finishFailure()
 		}
+	}
+
+	// Explicit zero-collection: vitest's summary line, or the "No tests found"
+	// message that is jest's only signal (it prints no summary in that case).
+	if jestNoTestsPattern.MatchString(line) || jestNoTestsFoundPattern.MatchString(line) {
+		f.noTestsRan = true
 	}
 
 	// PASS suite line
@@ -285,6 +304,59 @@ func (f *JestFormatter) GetTestResults() []JestTestResult {
 	return f.tests
 }
 
+// GetTestFailures implements output.TestSummaryProvider.
+// Returns the list of test failures collected during processing.
+func (f *JestFormatter) GetTestFailures() []output.TestFailure {
+	if f.inFailure {
+		f.finishFailure()
+	}
+
+	failures := make([]output.TestFailure, 0, len(f.failures))
+	for _, fail := range f.failures {
+		name := fail.TestName
+		if fail.SuiteName != "" && name != "" {
+			name = fail.SuiteName + " > " + name
+		} else if name == "" {
+			name = fail.SuiteName
+		}
+
+		message := fail.ErrorMessage
+		if message == "" {
+			message = fail.StackTrace
+		}
+
+		failures = append(failures, output.TestFailure{
+			TestName: name,
+			File:     fail.SuiteName,
+			Message:  message,
+		})
+	}
+	return failures
+}
+
+// GetTestCounts implements output.TestSummaryProvider.
+// Counts come from the summary line when present; otherwise they are derived
+// from the individual test results seen in the stream (vitest's compact
+// reporter prints per-test lines but a summary rr can't parse).
+func (f *JestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
+	if f.testsTotal > 0 || f.testsPassed > 0 || f.testsFailed > 0 {
+		skipped = f.testsTotal - f.testsPassed - f.testsFailed
+		if skipped < 0 {
+			skipped = 0
+		}
+		return f.testsPassed, f.testsFailed, skipped, 0
+	}
+
+	for _, t := range f.tests {
+		if t.Passed {
+			passed++
+		} else {
+			failed++
+		}
+	}
+	return passed, failed, 0, 0
+}
+
 // Reset clears all accumulated state.
 func (f *JestFormatter) Reset() {
 	f.suites = nil
@@ -299,6 +371,23 @@ func (f *JestFormatter) Reset() {
 	f.testsFailed = 0
 	f.testsTotal = 0
 	f.duration = ""
+	f.noTestsRan = false
+}
+
+// RanNothing implements output.NoTestsReporter.
+//
+// True only when the reporter explicitly said no tests ran - vitest's
+// "Tests  no tests", or jest's / vitest's "No tests found". A zero or absent
+// summary is not evidence on its own: plenty of non-test output scores as jest,
+// and jest prints no summary at all when it finds nothing.
+func (f *JestFormatter) RanNothing() bool {
+	if len(f.tests) > 0 {
+		return false
+	}
+	if f.testsPassed+f.testsFailed+f.testsTotal > 0 {
+		return false
+	}
+	return f.noTestsRan
 }
 
 // bulletPoint is used in summary output.
