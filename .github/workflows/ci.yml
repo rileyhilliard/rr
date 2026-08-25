@@ -124,7 +124,7 @@ jobs:
           cache: true
 
       - name: Cache govulncheck
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/go/bin/govulncheck
           key: govulncheck-${{ runner.os }}-v1.3.0
@@ -146,7 +146,7 @@ jobs:
           cache: true
 
       - name: Cache Docker image
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /tmp/docker-cache
           key: docker-openssh-server-${{ runner.os }}
