@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -256,7 +257,7 @@ func TestExecuteTask(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := exec.ExecuteTask(conn, task, nil, nil, conn.Host.Dir, &stdout, &stderr, nil)
+	result, err := exec.ExecuteTask(context.Background(), conn, task, nil, nil, conn.Host.Dir, &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -275,7 +276,7 @@ func TestExecuteTaskWithArgs(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := exec.ExecuteTask(conn, task, []string{"arg1", "arg2"}, nil, conn.Host.Dir, &stdout, &stderr, nil)
+	result, err := exec.ExecuteTask(context.Background(), conn, task, []string{"arg1", "arg2"}, nil, conn.Host.Dir, &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -299,7 +300,7 @@ func TestExecuteTaskWithEnv(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := exec.ExecuteTask(conn, task, nil, env, conn.Host.Dir, &stdout, &stderr, nil)
+	result, err := exec.ExecuteTask(context.Background(), conn, task, nil, env, conn.Host.Dir, &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -322,7 +323,7 @@ func TestExecuteMultiStepTask(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := exec.ExecuteTask(conn, task, nil, nil, conn.Host.Dir, &stdout, &stderr, nil)
+	result, err := exec.ExecuteTask(context.Background(), conn, task, nil, nil, conn.Host.Dir, &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -343,7 +344,7 @@ func TestExecuteTaskFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := exec.ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := exec.ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err, "ExecuteTask should not return error for command failure")
 	assert.NotNil(t, result)
@@ -363,7 +364,7 @@ func TestExecuteTaskWithSetupCommands(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := exec.ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, opts)
+	result, err := exec.ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, opts)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)

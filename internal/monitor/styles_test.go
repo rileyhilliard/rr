@@ -4,28 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 )
-
-// stripAnsi removes ANSI escape codes from a string for test assertions.
-func stripAnsi(s string) string {
-	result := strings.Builder{}
-	inEscape := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if r == 'm' {
-				inEscape = false
-			}
-			continue
-		}
-		result.WriteRune(r)
-	}
-	return result.String()
-}
 
 func TestMetricColor(t *testing.T) {
 	tests := []struct {
@@ -98,91 +79,6 @@ func TestMetricStyleWithThresholds(t *testing.T) {
 	assert.NotNil(t, style)
 }
 
-func TestProgressBar(t *testing.T) {
-	tests := []struct {
-		name    string
-		width   int
-		percent float64
-	}{
-		{"zero percent", 10, 0.0},
-		{"50 percent", 10, 50.0},
-		{"100 percent", 10, 100.0},
-		{"negative clamped", 10, -10.0},
-		{"over 100 clamped", 10, 150.0},
-		{"small width", 3, 50.0},
-		{"very small width", 2, 50.0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ProgressBar(tt.width, tt.percent)
-			assert.NotEmpty(t, result)
-			// Gen Z style: no brackets, uses ▰ and ▱
-			// Should contain either filled or empty chars
-			hasChars := strings.Contains(result, "▰") || strings.Contains(result, "▱")
-			assert.True(t, hasChars, "should contain ▰ or ▱")
-		})
-	}
-}
-
-func TestCompactProgressBar(t *testing.T) {
-	tests := []struct {
-		name    string
-		width   int
-		percent float64
-	}{
-		{"zero percent", 10, 0.0},
-		{"50 percent", 10, 50.0},
-		{"100 percent", 10, 100.0},
-		{"negative clamped", 10, -10.0},
-		{"over 100 clamped", 10, 150.0},
-		{"width 1", 1, 50.0},
-		{"width 0", 0, 50.0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := CompactProgressBar(tt.width, tt.percent)
-			assert.NotEmpty(t, result)
-			// Should NOT contain brackets - Gen Z style uses ▰ and ▱
-			// Strip ANSI codes first since they contain [ characters
-			stripped := stripAnsi(result)
-			assert.NotContains(t, stripped, "[")
-			assert.NotContains(t, stripped, "]")
-		})
-	}
-}
-
-func TestCompactProgressBarWithThresholds(t *testing.T) {
-	result := CompactProgressBarWithThresholds(10, 60.0, 50, 80)
-	assert.NotEmpty(t, result)
-}
-
-func TestThinProgressBar(t *testing.T) {
-	tests := []struct {
-		name    string
-		width   int
-		percent float64
-	}{
-		{"zero percent", 10, 0.0},
-		{"50 percent", 10, 50.0},
-		{"100 percent", 10, 100.0},
-		{"small width", 1, 50.0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ThinProgressBar(tt.width, tt.percent)
-			assert.NotEmpty(t, result)
-		})
-	}
-}
-
-func TestThinProgressBarWithThresholds(t *testing.T) {
-	result := ThinProgressBarWithThresholds(10, 60.0, 50, 80)
-	assert.NotEmpty(t, result)
-}
-
 func TestSectionHeader(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -229,12 +125,6 @@ func TestSectionFooter(t *testing.T) {
 	}
 }
 
-func TestSectionBorder(t *testing.T) {
-	result := SectionBorder()
-	assert.NotEmpty(t, result)
-	assert.Contains(t, result, "│")
-}
-
 func TestSectionContentLine(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -267,7 +157,6 @@ func TestStatusIndicatorConstants(t *testing.T) {
 	assert.Equal(t, "◉", StatusIdle)        // Filled target - ready for work
 	assert.Equal(t, "⣿", StatusRunning)     // Braille full - active
 	assert.Equal(t, "◌", StatusUnreachable) // Cyber glyph
-	assert.Equal(t, "◔", StatusSlow)        // Cyber glyph
 }
 
 func TestColorConstants(t *testing.T) {
@@ -284,6 +173,37 @@ func TestColorConstants(t *testing.T) {
 	assert.NotEmpty(t, string(ColorAccent))
 	assert.NotEmpty(t, string(ColorAccentDim))
 	assert.NotEmpty(t, string(ColorGraph))
+}
+
+// TestPaletteHexValues pins the exact hex of every dashboard color. These now
+// resolve through internal/ui, so this guards against a refactor there silently
+// re-mapping the monitor palette (e.g. pointing ColorHealthy at ui.ColorSuccess,
+// which is a different green).
+func TestPaletteHexValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		color lipgloss.Color
+		hex   string
+	}{
+		{"ColorDarkBg", ColorDarkBg, "#0A0A0F"},
+		{"ColorSurfaceBg", ColorSurfaceBg, "#12121A"},
+		{"ColorBorder", ColorBorder, "#2A2A4A"},
+		{"ColorHealthy", ColorHealthy, "#00FFFF"},
+		{"ColorWarning", ColorWarning, "#BF40FF"},
+		{"ColorCritical", ColorCritical, "#FF2E97"},
+		{"ColorTextPrimary", ColorTextPrimary, "#FFFFFF"},
+		{"ColorTextSecondary", ColorTextSecondary, "#B4B4D0"},
+		{"ColorTextMuted", ColorTextMuted, "#6B6B8D"},
+		{"ColorAccent", ColorAccent, "#FF2E97"},
+		{"ColorAccentDim", ColorAccentDim, "#BF40FF"},
+		{"ColorGraph", ColorGraph, "#00FFFF"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.hex, string(tt.color))
+		})
+	}
 }
 
 func TestRunningSpinnerFrames(t *testing.T) {

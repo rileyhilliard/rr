@@ -2,6 +2,7 @@ package exec
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -26,7 +27,7 @@ func TestExecuteTask_SingleCommand(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -43,7 +44,7 @@ func TestExecuteTask_SingleCommandWithArgs(t *testing.T) {
 	args := []string{"world", "foo"}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, args, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, args, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -59,7 +60,7 @@ func TestExecuteTask_SingleCommandWithEnv(t *testing.T) {
 	env := map[string]string{"MY_VAR": "test_value"}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, env, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, env, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -73,7 +74,7 @@ func TestExecuteTask_SingleCommandFailure(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err) // No error - command ran but returned non-zero
 	assert.Equal(t, 42, result.ExitCode)
@@ -91,7 +92,7 @@ func TestExecuteTask_MultiStepAllPassing(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.ExitCode)
@@ -119,7 +120,7 @@ func TestExecuteTask_MultiStepFailureWithStop(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ExitCode)
@@ -146,7 +147,7 @@ func TestExecuteTask_MultiStepFailureWithContinue(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.ExitCode)   // Final exit code is from failed step
@@ -175,7 +176,7 @@ func TestExecuteTask_MultiStepMixedOnFail(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.ExitCode)   // Exit code from step3
@@ -203,7 +204,7 @@ func TestExecuteTask_StepNamesDefault(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	require.Len(t, result.StepResults, 3)
@@ -224,7 +225,7 @@ func TestExecuteTask_OnFailDefaults(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.NoError(t, err)
 	require.Len(t, result.StepResults, 4)
@@ -240,7 +241,7 @@ func TestExecuteTask_NilTask(t *testing.T) {
 	conn := createLocalConn()
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, nil, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, nil, nil, nil, "", &stdout, &stderr, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -252,7 +253,7 @@ func TestExecuteTask_EmptyTask(t *testing.T) {
 	task := &config.TaskConfig{}
 
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
 
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -389,4 +390,95 @@ func TestBuildRemoteCommand_SetupCommands(t *testing.T) {
 	// Should include setup command before main command ($ is escaped to prevent outer shell expansion)
 	assert.Contains(t, result, "export PATH=/opt/go/bin:\\$PATH")
 	assert.Contains(t, result, "go test")
+}
+
+func TestApplyTaskArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		run      string
+		args     []string
+		expected string
+		wantErr  bool
+	}{
+		{
+			name:     "no args returns run unchanged",
+			run:      "pytest | grep -v PASS",
+			args:     nil,
+			expected: "pytest | grep -v PASS",
+		},
+		{
+			name:     "simple command appends quoted",
+			run:      "pytest tests/",
+			args:     []string{"-k", "a b"},
+			expected: "pytest tests/ '-k' 'a b'",
+		},
+		{
+			name:     "placeholder in pipeline",
+			run:      "pytest {args:-.} -n 4 | grep -v PASS",
+			args:     []string{"tests/foo.py"},
+			expected: "pytest 'tests/foo.py' -n 4 | grep -v PASS",
+		},
+		{
+			name:     "placeholder default without args",
+			run:      "pytest {args:-.} -n 4 | grep -v PASS",
+			args:     nil,
+			expected: "pytest . -n 4 | grep -v PASS",
+		},
+		{
+			name:    "compound without placeholder errors",
+			run:     "pytest | grep -v PASS",
+			args:    []string{"tests/foo.py"},
+			wantErr: true,
+		},
+		{
+			name:    "redirection without placeholder errors",
+			run:     "pytest --tb=short 2>&1",
+			args:    []string{"tests/foo.py"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ApplyTaskArgs(tt.run, tt.args)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "{args}")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestExecuteTask_ArgsPlaceholder(t *testing.T) {
+	conn := createLocalConn()
+	task := &config.TaskConfig{
+		Run: "echo start {args:-default} end",
+	}
+
+	var stdout, stderr bytes.Buffer
+	result, err := ExecuteTask(context.Background(), conn, task, []string{"middle"}, nil, "", &stdout, &stderr, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, stdout.String(), "start middle end")
+
+	stdout.Reset()
+	result, err = ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Contains(t, stdout.String(), "start default end")
+}
+
+func TestExecuteTask_CompoundCommandRejectsArgs(t *testing.T) {
+	conn := createLocalConn()
+	task := &config.TaskConfig{
+		Run: "echo a | grep a",
+	}
+
+	var stdout, stderr bytes.Buffer
+	_, err := ExecuteTask(context.Background(), conn, task, []string{"extra"}, nil, "", &stdout, &stderr, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compound command")
 }

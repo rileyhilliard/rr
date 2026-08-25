@@ -95,7 +95,7 @@ func doctorCommand() error {
 	}
 
 	// Machine mode implies JSON output - run checks without progress display
-	if doctorJSON || machineMode {
+	if doctorJSON || MachineMode() {
 		results := doctor.RunAll(checks)
 		if doctorFix {
 			results = attemptFixes(checks, results)
@@ -224,6 +224,9 @@ func collectChecks(cfgPath string, _ *config.Config, globalCfg *config.GlobalCon
 	// Host connectivity checks (if global config with hosts exists)
 	if globalCfg != nil && len(globalCfg.Hosts) > 0 {
 		checks = append(checks, doctor.NewHostsChecks(globalCfg.Hosts)...)
+
+		// Which remote dir does this tree sync to? (worktree-aware)
+		checks = append(checks, &doctor.WorktreeMappingCheck{Hosts: globalCfg.Hosts})
 	}
 
 	// Dependency checks (local always, remote if connected)
@@ -249,7 +252,7 @@ func attemptFixes(checks []doctor.Check, results []doctor.CheckResult) []doctor.
 }
 
 // outputDoctorJSON outputs results in JSON format.
-// When machineMode is enabled, wraps output in the standard JSON envelope.
+// When MachineMode() is enabled, wraps output in the standard JSON envelope.
 func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error {
 	// Group by category
 	grouped := make(map[string][]doctor.CheckResult)
@@ -286,7 +289,7 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 	}
 
 	// Use envelope wrapper in machine mode
-	if machineMode {
+	if MachineMode() {
 		return WriteJSONSuccess(os.Stdout, output)
 	}
 

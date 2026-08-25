@@ -131,6 +131,9 @@ func TestFindSelectedHost(t *testing.T) {
 }
 
 func TestOutputStatusJSON(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	tests := []struct {
 		name     string
 		results  map[string]probeResult
@@ -235,7 +238,7 @@ func TestOutputStatusJSON(t *testing.T) {
 			os.Stdout = w
 
 			// Run the function
-			outputErr := outputStatusJSON(tt.results, tt.selected)
+			outputErr := outputStatusJSON(tt.results, tt.selected, nil)
 			require.NoError(t, outputErr)
 
 			// Restore stdout and read captured output
@@ -328,7 +331,7 @@ func TestOutputStatusText(t *testing.T) {
 			os.Stdout = w
 
 			// Run the function
-			outputErr := outputStatusText(tt.results, tt.selected)
+			outputErr := outputStatusText(tt.results, tt.selected, nil)
 			require.NoError(t, outputErr)
 
 			// Restore stdout and read captured output

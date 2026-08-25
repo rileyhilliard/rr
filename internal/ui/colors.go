@@ -14,6 +14,12 @@ func DisableColors() {
 	lipgloss.SetColorProfile(termenv.Ascii)
 }
 
+// EnableColors re-enables color output by detecting the terminal's color profile.
+// Used by commands like 'monitor' that are always interactive TUI.
+func EnableColors() {
+	lipgloss.SetColorProfile(termenv.ColorProfile())
+}
+
 // Electric Synthwave color palette - Gen Z dopamine-inducing neons
 // Primary accent colors
 const (
@@ -45,6 +51,19 @@ const (
 	ColorPrimary   lipgloss.Color = "#FFFFFF" // Pure white
 	ColorSecondary lipgloss.Color = "#B4B4D0" // Lavender gray
 	ColorMuted     lipgloss.Color = "#6B6B8D" // Purple-gray
+)
+
+// Monitor dashboard theme.
+//
+// The dashboard reuses the shared backgrounds, borders, and text colors above,
+// but maps severity to its own gradient: cyan (chill) -> purple (spicy) ->
+// hot pink (main character energy). That mapping is deliberate and differs from
+// the CLI's success/warning/error semantics, so it lives here as its own block
+// rather than aliasing ColorSuccess/ColorWarning/ColorError.
+const (
+	MonitorHealthy  lipgloss.Color = ColorNeonCyan   // Neon cyan - chill vibes
+	MonitorWarning  lipgloss.Color = ColorNeonPurple // Neon purple - getting spicy
+	MonitorCritical lipgloss.Color = ColorNeonPink   // Hot pink - main character energy
 )
 
 // Gradient colors for animations and progress bars

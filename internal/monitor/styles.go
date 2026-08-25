@@ -4,31 +4,35 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/rileyhilliard/rr/internal/ui"
 )
 
-// Dashboard color palette - Gen Z Electric Synthwave
+// Dashboard color palette - Gen Z Electric Synthwave.
+// Shared base colors (backgrounds, border, text) come from internal/ui; the
+// severity colors come from the monitor theme block there, which maps severity
+// to cyan/purple/pink rather than the CLI's green/amber/red.
 const (
 	// Background colors (glassmorphism-inspired)
-	ColorDarkBg    = lipgloss.Color("#0A0A0F") // Deep void
-	ColorSurfaceBg = lipgloss.Color("#12121A") // Dark surface
-	ColorBorder    = lipgloss.Color("#2A2A4A") // Glass border (purple tint)
+	ColorDarkBg    = ui.ColorDeepVoid    // Deep void
+	ColorSurfaceBg = ui.ColorDarkSurface // Dark surface
+	ColorBorder    = ui.ColorGlassBorder // Glass border (purple tint)
 
 	// Semantic colors for metrics - gen-z synthwave gradient
-	ColorHealthy  = lipgloss.Color("#00FFFF") // Neon cyan - chill vibes
-	ColorWarning  = lipgloss.Color("#BF40FF") // Neon purple - getting spicy
-	ColorCritical = lipgloss.Color("#FF2E97") // Hot pink - main character energy
+	ColorHealthy  = ui.MonitorHealthy  // Neon cyan - chill vibes
+	ColorWarning  = ui.MonitorWarning  // Neon purple - getting spicy
+	ColorCritical = ui.MonitorCritical // Hot pink - main character energy
 
 	// Text colors
-	ColorTextPrimary   = lipgloss.Color("#FFFFFF") // Pure white
-	ColorTextSecondary = lipgloss.Color("#B4B4D0") // Lavender gray
-	ColorTextMuted     = lipgloss.Color("#6B6B8D") // Purple-gray
+	ColorTextPrimary   = ui.ColorPrimary   // Pure white
+	ColorTextSecondary = ui.ColorSecondary // Lavender gray
+	ColorTextMuted     = ui.ColorMuted     // Purple-gray
 
 	// Accent colors - neon pink primary, cyan secondary
-	ColorAccent    = lipgloss.Color("#FF2E97") // Neon pink
-	ColorAccentDim = lipgloss.Color("#BF40FF") // Neon purple
+	ColorAccent    = ui.ColorNeonPink   // Neon pink
+	ColorAccentDim = ui.ColorNeonPurple // Neon purple
 
 	// Graph colors
-	ColorGraph = lipgloss.Color("#00FFFF") // Neon cyan
+	ColorGraph = ui.ColorNeonCyan // Neon cyan
 )
 
 // Thresholds for metric severity levels
@@ -99,9 +103,6 @@ var (
 	StatusRunningStyle = lipgloss.NewStyle().
 				Foreground(ColorWarning)
 
-	StatusSlowStyle = lipgloss.NewStyle().
-			Foreground(ColorWarning)
-
 	StatusUnreachableStyle = lipgloss.NewStyle().
 				Foreground(ColorCritical)
 
@@ -119,7 +120,6 @@ const (
 	StatusIdle        = "◉" // Filled target - ready for work
 	StatusRunning     = "⣿" // Braille full (used as fallback when animation not available)
 	StatusUnreachable = "◌" // Dashed circle
-	StatusSlow        = "◔" // Partially filled
 )
 
 // ConnectingSpinnerFrames are the animation frames for the connecting state
@@ -252,116 +252,6 @@ func GPUTempStyle(temp int) lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(GPUTempColor(temp))
 }
 
-// ProgressBar renders a progress bar with the given width and percentage.
-// Uses bracketless Gen Z style with threshold-based coloring.
-func ProgressBar(width int, percent float64) string {
-	if width < 1 {
-		width = 1
-	}
-
-	// Clamp percentage to 0-100
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
-	// Calculate filled portion
-	filled := int(percent / 100.0 * float64(width))
-	if filled > width {
-		filled = width
-	}
-
-	// Build the bar with Gen Z style characters
-	bar := ""
-	for i := 0; i < width; i++ {
-		if i < filled {
-			bar += "▰"
-		} else {
-			bar += "▱"
-		}
-	}
-
-	// Apply color based on percentage
-	barStyle := lipgloss.NewStyle().Foreground(MetricColor(percent))
-
-	return barStyle.Render(bar)
-}
-
-// CompactProgressBar renders a minimal progress bar without brackets.
-func CompactProgressBar(width int, percent float64) string {
-	return CompactProgressBarWithThresholds(width, percent, int(WarningThreshold), int(CriticalThreshold))
-}
-
-// CompactProgressBarWithThresholds renders a minimal progress bar using custom thresholds.
-func CompactProgressBarWithThresholds(width int, percent float64, warning, critical int) string {
-	if width < 1 {
-		width = 1
-	}
-
-	// Clamp percentage to 0-100
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
-	filled := int(percent / 100.0 * float64(width))
-	if filled > width {
-		filled = width
-	}
-
-	bar := ""
-	for i := 0; i < width; i++ {
-		if i < filled {
-			bar += "▰"
-		} else {
-			bar += "▱"
-		}
-	}
-
-	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical)).Render(bar)
-}
-
-// ThinProgressBar renders a minimal line-based progress bar using thin characters.
-// Uses ━ for filled segments and ─ for empty segments.
-func ThinProgressBar(width int, percent float64) string {
-	return ThinProgressBarWithThresholds(width, percent, int(WarningThreshold), int(CriticalThreshold))
-}
-
-// ThinProgressBarWithThresholds renders a thin progress bar with custom thresholds.
-func ThinProgressBarWithThresholds(width int, percent float64, warning, critical int) string {
-	if width < 1 {
-		width = 1
-	}
-
-	// Clamp percentage to 0-100
-	if percent < 0 {
-		percent = 0
-	}
-	if percent > 100 {
-		percent = 100
-	}
-
-	filled := int(percent / 100.0 * float64(width))
-	if filled > width {
-		filled = width
-	}
-
-	bar := ""
-	for i := 0; i < width; i++ {
-		if i < filled {
-			bar += "━"
-		} else {
-			bar += "─"
-		}
-	}
-
-	return lipgloss.NewStyle().Foreground(MetricColorWithThresholds(percent, warning, critical)).Render(bar)
-}
-
 // SectionHeader renders a section header with the title on the left and value on the right.
 // Format: ╭─ Title ────────────────────────────────────── Value ╮
 func SectionHeader(title, value string, width int) string {
@@ -409,11 +299,6 @@ func SectionFooter(width int) string {
 
 	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	return borderStyle.Render("╰" + middle + "╯")
-}
-
-// SectionBorder renders the left border character for section content.
-func SectionBorder() string {
-	return lipgloss.NewStyle().Foreground(ColorBorder).Render("│")
 }
 
 // SectionContentLine renders a content line with left and right borders, properly padded to width.

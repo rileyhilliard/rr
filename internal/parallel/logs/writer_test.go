@@ -27,6 +27,19 @@ func TestNewLogWriter(t *testing.T) {
 	assert.True(t, strings.HasPrefix(writer.Dir(), tmpDir))
 }
 
+func TestNewLogWriter_SameSecondRunsGetDistinctDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	a, err := NewLogWriter(tmpDir, "test-task")
+	require.NoError(t, err)
+	b, err := NewLogWriter(tmpDir, "test-task")
+	require.NoError(t, err)
+
+	assert.NotEqual(t, a.Dir(), b.Dir())
+	assert.DirExists(t, a.Dir())
+	assert.DirExists(t, b.Dir())
+}
+
 func TestNewLogWriter_TildeExpansion(t *testing.T) {
 	// Skip if HOME not set
 	home := os.Getenv("HOME")
@@ -192,4 +205,26 @@ func TestTaskLogFilename(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestOpenRunLog(t *testing.T) {
+	base := t.TempDir()
+
+	f, path, err := OpenRunLog(base, "run")
+	require.NoError(t, err)
+	defer f.Close()
+
+	_, err = f.WriteString("hello\n")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hello\n", string(data))
+	assert.Equal(t, "output.log", filepath.Base(path))
+	assert.Contains(t, filepath.Dir(path), "run-")
+}
+
+func TestTaskLogPath(t *testing.T) {
+	runDir := filepath.Join("logs", "run-1")
+	assert.Equal(t, filepath.Join(runDir, "test-py_2.log"), TaskLogPath(runDir, "test-py", 2))
 }

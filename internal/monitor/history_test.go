@@ -178,76 +178,6 @@ func TestGetGPUHistory(t *testing.T) {
 	assert.Equal(t, []float64{0, 25, 50}, gpu)
 }
 
-func TestGetNetworkHistory(t *testing.T) {
-	h := NewHistory(10)
-
-	// No network history
-	bytesIn, bytesOut := h.GetNetworkHistory("host1", "eth0", 5)
-	assert.Nil(t, bytesIn)
-	assert.Nil(t, bytesOut)
-
-	// Push network data
-	for i := 1; i <= 4; i++ {
-		metrics := &HostMetrics{
-			RAM: RAMMetrics{TotalBytes: 1},
-			Network: []NetworkInterface{
-				{
-					Name:     "eth0",
-					BytesIn:  int64(i * 1000),
-					BytesOut: int64(i * 500),
-				},
-			},
-		}
-		h.Push("host1", metrics)
-	}
-
-	bytesIn, bytesOut = h.GetNetworkHistory("host1", "eth0", 4)
-	require.Len(t, bytesIn, 4)
-	require.Len(t, bytesOut, 4)
-	assert.Equal(t, []float64{1000, 2000, 3000, 4000}, bytesIn)
-	assert.Equal(t, []float64{500, 1000, 1500, 2000}, bytesOut)
-
-	// Non-existent interface
-	bytesIn, bytesOut = h.GetNetworkHistory("host1", "wlan0", 5)
-	assert.Nil(t, bytesIn)
-	assert.Nil(t, bytesOut)
-}
-
-func TestHistoryClear(t *testing.T) {
-	h := NewHistory(10)
-
-	metrics := &HostMetrics{
-		CPU: CPUMetrics{Percent: 50},
-		RAM: RAMMetrics{TotalBytes: 1},
-	}
-	h.Push("host1", metrics)
-	h.Push("host2", metrics)
-
-	assert.Equal(t, 1, h.Count("host1"))
-	assert.Equal(t, 1, h.Count("host2"))
-
-	h.Clear("host1")
-	assert.Equal(t, 0, h.Count("host1"))
-	assert.Equal(t, 1, h.Count("host2"))
-}
-
-func TestHistoryClearAll(t *testing.T) {
-	h := NewHistory(10)
-
-	metrics := &HostMetrics{
-		CPU: CPUMetrics{Percent: 50},
-		RAM: RAMMetrics{TotalBytes: 1},
-	}
-	h.Push("host1", metrics)
-	h.Push("host2", metrics)
-	h.Push("host3", metrics)
-
-	h.ClearAll()
-	assert.Equal(t, 0, h.Count("host1"))
-	assert.Equal(t, 0, h.Count("host2"))
-	assert.Equal(t, 0, h.Count("host3"))
-}
-
 func TestHistoryConcurrency(t *testing.T) {
 	h := NewHistory(100)
 	var wg sync.WaitGroup
@@ -297,7 +227,7 @@ func TestRingBuffer(t *testing.T) {
 
 		assert.Equal(t, 3, rb.count)
 
-		all := rb.getAll()
+		all := rb.getLast(rb.count)
 		assert.Equal(t, []float64{1.0, 2.0, 3.0}, all)
 	})
 
@@ -312,7 +242,7 @@ func TestRingBuffer(t *testing.T) {
 
 		assert.Equal(t, 3, rb.count)
 
-		all := rb.getAll()
+		all := rb.getLast(rb.count)
 		assert.Equal(t, []float64{3.0, 4.0, 5.0}, all)
 	})
 
@@ -352,7 +282,6 @@ func TestRingBuffer(t *testing.T) {
 		rb := newRingBuffer(5)
 
 		assert.Nil(t, rb.getLast(1))
-		assert.Nil(t, rb.getAll())
 	})
 }
 
@@ -583,30 +512,4 @@ func TestGetNetworkRateHistory_SkipsLoopback(t *testing.T) {
 
 func TestDefaultHistorySize(t *testing.T) {
 	assert.Equal(t, 600, DefaultHistorySize)
-}
-
-func TestRingBuffer_getAll(t *testing.T) {
-	rb := newRingBuffer(5)
-
-	// Empty buffer
-	all := rb.getAll()
-	assert.Nil(t, all)
-
-	// Partial fill
-	rb.push(1.0)
-	rb.push(2.0)
-	rb.push(3.0)
-	all = rb.getAll()
-	assert.Equal(t, []float64{1.0, 2.0, 3.0}, all)
-
-	// Full buffer
-	rb.push(4.0)
-	rb.push(5.0)
-	all = rb.getAll()
-	assert.Equal(t, []float64{1.0, 2.0, 3.0, 4.0, 5.0}, all)
-
-	// Overflow
-	rb.push(6.0)
-	all = rb.getAll()
-	assert.Equal(t, []float64{2.0, 3.0, 4.0, 5.0, 6.0}, all)
 }

@@ -219,6 +219,7 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 		if err != nil {
 			return err
 		}
+		hostLock.StartHeartbeat()
 		w.hostLock = hostLock
 	}
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // RunOptions holds options for the run command.
@@ -31,10 +34,13 @@ type RunOptions struct {
 	SkipRequirements bool          // If true, skip requirement checks
 	DryRun           bool          // If true, show what would be done without doing it
 	WorkingDir       string        // Override local working directory
+	RemoteCWD        string        // Subdirectory to cd into on remote before running (relative to host.Dir)
 	Quiet            bool          // If true, minimize output (no individual connection attempts)
 	Local            bool          // If true, force local execution (skip remote hosts)
 	Pull             []string      // Patterns to pull from remote after command completes
 	PullDest         string        // Destination directory for pulled files
+	Tail             int           // Print the last N lines of the run log after completion
+	LogName          string        // Run log directory prefix (defaults to "run")
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -59,39 +65,71 @@ func Run(opts RunOptions) (int, error) {
 	defer wf.Close()
 
 	// Phase 4: Execute command
-	wf.PhaseDisplay.Divider()
+	wf.Reporter.Divider()
+	wf.Reporter.CommandPrompt(opts.Command)
+	if PrettyMode() {
+		fmt.Println()
+	}
 
-	// Show the command being run
-	wf.PhaseDisplay.CommandPrompt(opts.Command)
-	fmt.Println()
-
-	// Set up output streaming
+	// Set up output streaming - in structured mode, pass raw stdout/stderr
 	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
-	streamHandler.SetFormatter(output.NewGenericFormatter())
+	if PrettyMode() {
+		streamHandler.SetFormatter(output.NewGenericFormatter())
+	}
+
+	// Tee raw output into a per-run log file (best-effort).
+	logName := opts.LogName
+	if logName == "" {
+		logName = "run"
+	}
+	logPath, closeLog := setupRunLog(wf, logName, streamHandler)
+	defer closeLog()
 
 	execStart := time.Now()
 	var exitCode int
+	remoteProjectDir := ""
 
 	if wf.Conn.IsLocal {
-		// Local execution
-		exitCode, err = exec.ExecuteLocal(opts.Command, wf.WorkDir, streamHandler.Stdout(), streamHandler.Stderr())
-	} else {
-		// Remote execution - build command with shell config, setup commands, and working directory
-		// Prepend project defaults setup to the command for consistency with task execution
-		cmd := opts.Command
-		if len(wf.Resolved.Project.Defaults.Setup) > 0 {
-			cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+		// Validate here rather than in localRunDir: an escaping --cwd must fail
+		// the run the same way it does remotely, not quietly fall back.
+		offset, offsetErr := validatedRunOffset(wf, opts)
+		if offsetErr != nil {
+			wf.Reporter.PhaseFailed("exec", offsetErr)
+			return 1, offsetErr
 		}
-		fullCmd := exec.BuildRemoteCommand(cmd, &wf.Conn.Host)
-		exitCode, err = wf.Conn.Client.ExecStream(fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
+		// Report the offset here too: a local (or fallback) run applies the same
+		// subdirectory, and a consumer can't tell which directory was used
+		// otherwise. Only for an inferred offset, though - reportAutoCWD's
+		// reason is "matched_invocation_dir", which would be a false claim for
+		// a directory the user named with --cwd.
+		if offset != "" && opts.RemoteCWD == "" {
+			reportAutoCWD(wf, offset)
+		}
+		// Run in the directory just validated rather than recomputing it:
+		// localRunDir re-stats and degrades to the project root, so a second
+		// computation could silently discard an explicit --cwd that passed
+		// validation a moment ago.
+		exitCode, err = exec.ExecuteLocal(opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
+	} else {
+		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
+		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
+		if cmdErr != nil {
+			return 1, cmdErr
+		}
+		exitCode, err = wf.Conn.Client.ExecStreamContext(wf.Context(), fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
 	}
 	execDuration := time.Since(execStart)
+	streamHandler.Flush()
+
+	if wf.Context().Err() != nil {
+		return 130, nil
+	}
 
 	if err != nil {
 		return 1, err
 	}
 
-	// Release lock early if command completed (wf.Close() will also release, but early release is cleaner)
+	// Release lock early
 	if wf.Lock != nil {
 		wf.Lock.Release() //nolint:errcheck // Lock release errors are non-fatal
 	}
@@ -105,81 +143,294 @@ func Run(opts RunOptions) (int, error) {
 		ExecutePullPhase(wf, pullItems, opts.PullDest)
 	}
 
-	// Check for command-not-found and other special exit codes
-	failureExplained := false
+	// Post-failure hint: detect local-machine assumptions (paths that only
+	// exist here, git commands against the synced snapshot).
+	failureHint := ""
 	if exitCode != 0 {
-		// Check for command not found (exit code 127)
-		// Pass SSH client for PATH probing if available (remote execution only)
-		var sshClient exec.SSHExecer
-		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
-			sshClient = wf.Conn.Client
+		stderr := streamHandler.GetStderrCapture()
+		if !wf.Conn.IsLocal {
+			failureHint = buildFailureHint(opts.Command, stderr, wf.WorkDir, remoteProjectDir, wf.Conn.Name)
 		}
-
-		// Try to detect a missing tool error
-		missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
-		if missingTool != nil {
-			failureExplained = true
-			// Show the error message
-			fmt.Println()
-			fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
-			fmt.Println(missingTool.Suggestion)
-
-			// Offer interactive fix if we're on a remote host with SSH client
-			if !wf.Conn.IsLocal && wf.Conn.Client != nil {
-				// Get config path for potential updates
-				configPath, _ := config.Find(Config())
-				if configPath != "" {
-					fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
-					if fixResult != nil && fixResult.ShouldRetry {
-						// User wants to retry - show final status then indicate retry
-						wf.PhaseDisplay.ThinDivider()
-						renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
-
-						// Close current workflow and retry
-						wf.Close()
-						return Run(opts)
-					}
-				}
-			}
-		} else if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
-			// Check for test failures and render summary if available
-			failures := provider.GetTestFailures()
-			if len(failures) > 0 {
-				failureExplained = true
-				passed, failed, skipped, errors := provider.GetTestCounts()
-				summary := &ui.TestSummary{
-					Passed:   passed,
-					Failed:   failed,
-					Skipped:  skipped,
-					Errors:   errors,
-					Failures: make([]ui.TestFailure, len(failures)),
-				}
-				for i, f := range failures {
-					summary.Failures[i] = ui.TestFailure{
-						TestName: f.TestName,
-						File:     f.File,
-						Line:     f.Line,
-						Message:  f.Message,
-					}
-				}
-				fmt.Println()
-				fmt.Print(ui.FormatDivider(ui.DividerWidth))
-				fmt.Println()
-				fmt.Print(ui.RenderSummary(summary, exitCode))
-			}
+		// A relative path that resolves from the caller's directory but not
+		// from wherever the command ran is rr's own doing - it moved the cwd.
+		// Both candidates are on this machine, so the check is local either
+		// way, and it applies equally to an explicit --cwd.
+		if failureHint == "" {
+			failureHint = buildRelativePathHint(stderr, wf.WorkDir, wf.SubdirOffset, effectiveRunOffset(wf, opts))
+		}
+		if failureHint != "" {
+			wf.AddResultDetail("hint", failureHint)
 		}
 	}
 
-	// Show final status
+	// Record test summary/failures from the run log and note broken pipes.
+	attachRunOutcome(wf, opts.Command, logPath, exitCode)
+	if streamHandler.BrokenPipe() {
+		wf.AddResultDetail("broken_pipe", true)
+	}
+
+	// In structured mode, emit result and return - no decorations
+	if !PrettyMode() {
+		wf.Reporter.CommandComplete(exitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
+		printLogTail(logPath, opts.Tail)
+		return exitCode, nil
+	}
+
+	// Pretty mode: check for failures, test summaries, etc.
+	failureExplained, retry := explainRunFailure(wf, opts, streamHandler, exitCode, execDuration)
+	if retry {
+		wf.Close()
+		return Run(opts)
+	}
+
 	wf.PhaseDisplay.ThinDivider()
 	renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
+	repeatFallbackWarning(wf.ResultDetails)
+	warnNoTests(wf.ResultDetails)
 
-	// Show contextual help for unexplained failures
-	if exitCode != 0 && !failureExplained {
+	if failureHint != "" {
+		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
+	} else if exitCode != 0 && !failureExplained {
 		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
 	}
 
+	printLogTail(logPath, opts.Tail)
+
 	return exitCode, nil
+}
+
+// explainRunFailure renders pretty-mode failure explanations: missing-tool
+// detection (with optional auto-fix) and parsed test summaries. Returns
+// whether the failure was explained and whether the caller should retry the
+// whole run after a successful tool fix.
+func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *output.StreamHandler, exitCode int, execDuration time.Duration) (explained, retry bool) {
+	if exitCode == 0 {
+		return false, false
+	}
+
+	var sshClient exec.SSHExecer
+	if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+		sshClient = wf.Conn.Client
+	}
+
+	missingTool := exec.DetectMissingTool(opts.Command, streamHandler.GetStderrCapture(), exitCode, sshClient, wf.Conn.Name)
+	if missingTool != nil {
+		fmt.Println()
+		fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
+		fmt.Println(missingTool.Suggestion)
+
+		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+			configPath, _ := config.Find(Config())
+			if configPath != "" {
+				fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
+				if fixResult != nil && fixResult.ShouldRetry {
+					wf.PhaseDisplay.ThinDivider()
+					renderFinalStatus(wf.PhaseDisplay, exitCode, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
+					return true, true
+				}
+			}
+		}
+		return true, false
+	}
+
+	if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
+		failures := provider.GetTestFailures()
+		if len(failures) > 0 {
+			passed, failed, skipped, errors := provider.GetTestCounts()
+			summary := &ui.TestSummary{
+				Passed:   passed,
+				Failed:   failed,
+				Skipped:  skipped,
+				Errors:   errors,
+				Failures: make([]ui.TestFailure, len(failures)),
+			}
+			for i, f := range failures {
+				summary.Failures[i] = ui.TestFailure{
+					TestName: f.TestName,
+					File:     f.File,
+					Line:     f.Line,
+					Message:  f.Message,
+				}
+			}
+			fmt.Println()
+			fmt.Print(ui.FormatDivider(ui.DividerWidth))
+			fmt.Println()
+			fmt.Print(ui.RenderSummary(summary, exitCode))
+			return true, false
+		}
+	}
+
+	return false, false
+}
+
+// buildRemoteRunCommand prepares a command for remote execution: local path
+// rewriting, foreign-path checks, project setup prepends, and --cwd handling.
+func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDir string) (string, error) {
+	cmd := opts.Command
+
+	// Rewrite local absolute paths to their remote equivalents so commands
+	// authored against the local checkout work on the mirror.
+	if config.ResolveRewritePaths(wf.Resolved) {
+		rewritten, n := RewriteLocalPaths(cmd, wf.WorkDir, remoteProjectDir)
+		if n > 0 {
+			cmd = rewritten
+			reportPathRewrites(wf, n, wf.WorkDir, remoteProjectDir)
+		}
+		if err := checkForeignPaths(wf, cmd, remoteProjectDir); err != nil {
+			return "", err
+		}
+	}
+
+	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
+		cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+	}
+
+	// --cwd prepends a cd into a subdirectory of the remote project root.
+	// Reject paths that escape the project root via ../ traversal.
+	if opts.RemoteCWD != "" {
+		resolved := path.Join(remoteProjectDir, opts.RemoteCWD)
+		if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' escapes the remote project root", opts.RemoteCWD),
+				"use a path relative to the project root without '..' components")
+		}
+		subdir := util.ShellQuotePreserveTilde(resolved)
+		cmd = fmt.Sprintf("cd %s && %s", subdir, cmd)
+	} else if offset := autoSubdirOffset(wf); offset != "" {
+		// No explicit --cwd: mirror the caller's subdirectory so relative paths
+		// in the command mean what they meant locally. rr executes at the
+		// project root, which silently changes every relative path otherwise.
+		resolved := path.Join(remoteProjectDir, offset)
+		// Same guard the explicit --cwd branch applies. subdirOffset already
+		// rejects ".." escapes, but two paths reach this cd and only validating
+		// one of them is how the next refactor introduces a hole.
+		if !strings.HasPrefix(resolved+"/", remoteProjectDir+"/") {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("subdirectory '%s' escapes the remote project root", offset),
+				"run rr from inside the project, or pass --cwd with a path under the project root")
+		}
+		subdir := util.ShellQuotePreserveTilde(resolved)
+		// Soft cd: the offset may not exist remotely (excluded from sync), and
+		// this is implicit, so it must never turn a working command into a
+		// failure. An explicit --cwd above still hard-fails.
+		//
+		// The braces and the trailing && both matter. BuildRemoteCommand joins
+		// setup commands and the mandatory `cd <project dir>` with &&, and `||`
+		// binds looser than `&&`, so a bare `cd X || true` would swallow the
+		// failure of everything to its left - running the command in $HOME with
+		// a half-built environment and calling it success. Grouping confines
+		// `|| true` to this cd, and joining with && keeps the earlier chain fatal.
+		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", subdir, cmd)
+		reportAutoCWD(wf, offset)
+	}
+
+	return exec.BuildRemoteCommand(cmd, &wf.Conn.Host), nil
+}
+
+// autoSubdirOffset returns the caller's subdirectory offset to apply to an
+// ad-hoc remote command, or "" when none should apply.
+//
+// Named tasks never reach here - they declare their own directories
+// (docs/configuration.md shows "run: cd backend && pytest"), so an offset would
+// double up, and their args are already rewritten relative to the project root.
+//
+// The offset may not exist remotely (e.g. invoked from inside node_modules/,
+// which sync excludes); the soft cd at the call site absorbs that rather than
+// re-deriving rsync's exclude semantics here.
+func autoSubdirOffset(wf *WorkflowContext) string {
+	return wf.SubdirOffset
+}
+
+// localRunDir picks the working directory for a local (--local or fallback) run.
+//
+// It applies the same subdirectory offset as the remote path, so a command means
+// the same thing either way. Without this, `local_fallback` would make identical
+// invocations behave differently depending on whether a host happened to answer.
+// Falls back to the project root when the offset doesn't resolve.
+func localRunDir(wf *WorkflowContext, opts RunOptions) string {
+	return offsetRunDir(wf, effectiveRunOffset(wf, opts))
+}
+
+// offsetRunDir resolves an already-computed offset to an absolute directory.
+// Callers that have validated an offset use this instead of localRunDir so the
+// directory is derived once - re-deriving it re-stats the path and can degrade
+// to the project root, discarding an explicit --cwd that already passed.
+func offsetRunDir(wf *WorkflowContext, offset string) string {
+	if offset == "" {
+		return wf.WorkDir
+	}
+	return filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+}
+
+// effectiveRunOffset returns the project-root-relative directory the command
+// runs in: an explicit --cwd wins over the caller's subdirectory. Returns ""
+// when neither applies or the directory doesn't exist locally, matching the
+// soft cd's fallback to the project root.
+func effectiveRunOffset(wf *WorkflowContext, opts RunOptions) string {
+	offset, err := validatedRunOffset(wf, opts)
+	if err != nil {
+		return ""
+	}
+	return offset
+}
+
+// validatedRunOffset is effectiveRunOffset with the traversal check surfaced,
+// so the local path can reject an escaping --cwd instead of silently running
+// outside the project. Same guard the remote path applies in
+// buildRemoteRunCommand - an identical invocation must not be an error on one
+// and a silent escape on the other.
+func validatedRunOffset(wf *WorkflowContext, opts RunOptions) (string, error) {
+	offset := opts.RemoteCWD
+	explicit := offset != ""
+	if !explicit {
+		offset = autoSubdirOffset(wf)
+	}
+	if offset == "" {
+		return "", nil
+	}
+
+	dir := filepath.Join(wf.WorkDir, filepath.FromSlash(offset))
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(dir+sep, wf.WorkDir+sep) {
+		if explicit {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' escapes the project root", opts.RemoteCWD),
+				"use a path relative to the project root without '..' components")
+		}
+		return "", nil
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		// Explicit --cwd is a direct request: the remote path emits a hard
+		// `cd X && cmd`, so a missing directory fails there. Silently running
+		// at the root here would ignore the flag and report success.
+		if explicit {
+			return "", errors.New(errors.ErrConfig,
+				fmt.Sprintf("--cwd '%s' doesn't exist in the project", opts.RemoteCWD),
+				"check the path, or omit --cwd to run at the project root")
+		}
+		// An implicit offset is rr's inference, not the user's instruction, so
+		// it falls back to the root instead - matching the remote soft cd.
+		return "", nil
+	}
+	return offset, nil
+}
+
+// reportAutoCWD records the implicit working directory so the behavior is
+// visible rather than magic, mirroring how path rewrites are reported.
+func reportAutoCWD(wf *WorkflowContext, offset string) {
+	wf.AddResultDetail("remote_cwd", offset)
+	if PrettyMode() {
+		return
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:   "phase",
+		Phase:  "exec",
+		Status: "info",
+		Details: map[string]interface{}{
+			"remote_cwd": offset,
+			"reason":     "matched_invocation_dir",
+		},
+	})
 }
 
 // renderFinalStatus displays the final execution status line.
@@ -286,15 +537,36 @@ func mapProbeErrorToStatus(err error) ui.ConnectionStatus {
 	return ui.StatusFailed
 }
 
-// runCommand is the actual implementation called by the cobra command.
-func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipRequirementsFlag bool, repeatCount int, pullPatterns []string, pullDest string) error {
+// runCmdFlags carries the cobra flag values for run/exec into the shared
+// command implementation.
+type runCmdFlags struct {
+	Verb             string // "run" or "exec" - used in messages and validation
+	Host             string
+	Tag              string
+	ProbeTimeout     string
+	Local            bool
+	SkipRequirements bool
+	SkipSync         bool // exec: don't sync before running
+	Repeat           int
+	Pull             []string
+	PullDest         string
+	RemoteCWD        string
+	Tail             int
+}
+
+// runCommand is the shared implementation behind 'rr run' and 'rr exec'.
+func runCommand(args []string, f runCmdFlags) error {
 	if len(args) == 0 {
 		return errors.New(errors.ErrExec,
 			"What should I run?",
-			"Usage: rr run <command>  (e.g., rr run \"make test\")")
+			fmt.Sprintf("Usage: rr %s <command>  (e.g., rr %s \"make test\")", f.Verb, f.Verb))
 	}
 
-	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
+	if err := validateLeadingArg(args, f.Verb); err != nil {
+		return err
+	}
+
+	probeTimeout, err := ParseProbeTimeout(f.ProbeTimeout)
 	if err != nil {
 		return err
 	}
@@ -303,8 +575,8 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 	cmd := strings.Join(args, " ")
 
 	// If --repeat is specified, use parallel execution
-	if repeatCount > 1 {
-		exitCode, err := runRepeated(cmd, repeatCount, hostFlag, tagFlag, localFlag)
+	if f.Repeat > 1 {
+		exitCode, err := runRepeated(cmd, f.Repeat, f.Host, f.Tag, f.Local)
 		if err != nil {
 			return err
 		}
@@ -316,14 +588,18 @@ func runCommand(args []string, hostFlag, tagFlag, probeTimeoutFlag string, local
 
 	exitCode, err := Run(RunOptions{
 		Command:          cmd,
-		Host:             hostFlag,
-		Tag:              tagFlag,
+		Host:             f.Host,
+		Tag:              f.Tag,
 		ProbeTimeout:     probeTimeout,
-		SkipRequirements: skipRequirementsFlag,
+		SkipSync:         f.SkipSync,
+		SkipRequirements: f.SkipRequirements,
 		Quiet:            Quiet(),
-		Local:            localFlag,
-		Pull:             pullPatterns,
-		PullDest:         pullDest,
+		Local:            f.Local,
+		Pull:             f.Pull,
+		PullDest:         f.PullDest,
+		RemoteCWD:        f.RemoteCWD,
+		Tail:             f.Tail,
+		LogName:          f.Verb,
 	})
 
 	if err != nil {

@@ -2,8 +2,11 @@ package lock
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -17,13 +20,23 @@ import (
 type AcquireOption func(*acquireOptions)
 
 type acquireOptions struct {
-	logger logger.Logger
+	logger   logger.Logger
+	warnFunc func(msg string)
 }
 
 // WithLogger sets the logger for lock operations.
 func WithLogger(l logger.Logger) AcquireOption {
 	return func(o *acquireOptions) {
 		o.logger = l
+	}
+}
+
+// WithWarnFunc sets a callback for user-visible warnings during lock acquisition
+// (e.g. stale lock stolen). Callers in structured-output mode should emit a
+// phase event; callers in pretty mode can write to stderr directly.
+func WithWarnFunc(fn func(msg string)) AcquireOption {
+	return func(o *acquireOptions) {
+		o.warnFunc = fn
 	}
 }
 
@@ -42,6 +55,10 @@ type Lock struct {
 	Dir  string    // The lock directory path on the remote
 	Info *LockInfo // Info about the lock holder (us)
 	conn *host.Connection
+
+	heartbeatStop chan struct{}
+	heartbeatDone chan struct{}
+	heartbeatMu   sync.Mutex
 }
 
 // Acquire attempts to acquire a distributed lock on the remote host.
@@ -118,19 +135,43 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		elapsed := time.Since(startTime)
 		if elapsed > cfg.Timeout {
 			// Try to read who holds the lock for a better error message
-			holder := readLockHolder(conn.Client, infoFile)
+			holder := describeLockHolder(conn.Client, infoFile)
 			log.Debug("timeout after %d iterations, elapsed=%s, holder=%s", iteration, elapsed, holder)
 			return nil, errors.New(errors.ErrLock,
 				fmt.Sprintf("Lock timeout after %s - someone else is using this remote", cfg.Timeout),
-				fmt.Sprintf("Held by: %s. Wait for them to finish or use --force-unlock if it's stale.", holder))
+				fmt.Sprintf("Lock holder: %s. Wait for it to finish or run 'rr unlock %s' if it's stuck.", holder, conn.Name))
+		}
+
+		// Fast path: lock held by a process on this machine that is no
+		// longer running (killed rr run) - steal immediately instead of
+		// waiting out the stale threshold.
+		if holderInfo, infoErr := readLockInfo(conn.Client, infoFile); infoErr == nil && holderInfo.IsDeadLocalHolder() {
+			log.Debug("detected dead local holder (pid %d), attempting removal", holderInfo.PID)
+			if stealDeadHolderLock(conn.Client, lockDir, infoFile, holderInfo) {
+				msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
+				log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
+				if options.warnFunc != nil {
+					options.warnFunc(msg)
+				} else {
+					fmt.Fprintln(os.Stderr, msg)
+				}
+				continue
+			}
 		}
 
 		// Check for stale lock
 		if isLockStale(conn.Client, infoFile, cfg.Stale) {
 			log.Debug("detected stale lock, attempting removal")
+			holder := readLockHolder(conn.Client, infoFile)
 			// Remove stale lock
 			if err := forceRemove(conn.Client, lockDir); err == nil {
-				log.Debug("stale lock removed successfully")
+				log.Warn("stale lock on %s stolen (holder: %s)", conn.Name, holder)
+				msg := fmt.Sprintf("Warning: stealing stale lock on %s (holder: %s)", conn.Name, holder)
+				if options.warnFunc != nil {
+					options.warnFunc(msg)
+				} else {
+					fmt.Fprintln(os.Stderr, msg)
+				}
 				// Stale lock removed, try again immediately
 				continue
 			}
@@ -249,6 +290,23 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 		}
 	}
 
+	// Fast path: lock held by a dead process on this machine - remove it
+	// immediately instead of waiting out the stale threshold.
+	if holderInfo, infoErr := readLockInfo(conn.Client, infoFile); infoErr == nil && holderInfo.IsDeadLocalHolder() {
+		log.Debug("TryAcquire: detected dead local holder (pid %d), attempting removal", holderInfo.PID)
+		if stealDeadHolderLock(conn.Client, lockDir, infoFile, holderInfo) {
+			msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
+			log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
+			if options.warnFunc != nil {
+				options.warnFunc(msg)
+			} else {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+		} else {
+			log.Debug("TryAcquire: dead-holder lock not removed (holder changed or removal failed)")
+		}
+	}
+
 	// Check for stale lock and remove it first
 	if isLockStale(conn.Client, infoFile, cfg.Stale) {
 		log.Debug("TryAcquire: detected stale lock, attempting removal")
@@ -356,12 +414,104 @@ func GetLockHolder(conn *host.Connection, cfg config.LockConfig) string {
 	return readLockHolder(conn.Client, infoFile)
 }
 
+// GetLockInfo returns structured information about the current lock holder.
+// Returns nil if no lock is held or the info file is unreadable.
+func GetLockInfo(conn *host.Connection, cfg config.LockConfig) *LockInfo {
+	if !IsLocked(conn, cfg) {
+		return nil
+	}
+
+	baseDir := cfg.Dir
+	if baseDir == "" {
+		baseDir = "/tmp"
+	}
+	infoFile := filepath.Join(baseDir, "rr.lock", "info.json")
+
+	info, err := readLockInfo(conn.Client, infoFile)
+	if err != nil {
+		return nil
+	}
+	return info
+}
+
+// StartHeartbeat spawns a goroutine that touches the info.json file every 30
+// seconds to prove the lock holder is still alive. Stale detection uses the
+// file's mtime, so regular touches keep the lock from being stolen.
+// Idempotent: no-op if already running.
+func (l *Lock) StartHeartbeat() {
+	if l == nil || l.conn == nil || l.conn.Client == nil {
+		return
+	}
+
+	l.heartbeatMu.Lock()
+	defer l.heartbeatMu.Unlock()
+
+	if l.heartbeatStop != nil {
+		return
+	}
+
+	l.heartbeatStop = make(chan struct{})
+	l.heartbeatDone = make(chan struct{})
+	stopCh := l.heartbeatStop
+	doneCh := l.heartbeatDone
+	infoFile := filepath.Join(l.Dir, "info.json")
+
+	go func() {
+		defer close(doneCh)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		consecutiveFailures := 0
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				touchCmd := fmt.Sprintf("touch %q", infoFile)
+				_, _, _, err := l.conn.Client.Exec(touchCmd)
+				if err != nil {
+					consecutiveFailures++
+					debugf("heartbeat touch failed (%d consecutive): %v", consecutiveFailures, err)
+					if consecutiveFailures >= 3 {
+						debugf("heartbeat stopping after %d consecutive failures", consecutiveFailures)
+						return
+					}
+				} else {
+					consecutiveFailures = 0
+				}
+			}
+		}
+	}()
+}
+
+// StopHeartbeat stops the heartbeat goroutine. Idempotent and safe for
+// concurrent calls.
+func (l *Lock) StopHeartbeat() {
+	if l == nil {
+		return
+	}
+
+	l.heartbeatMu.Lock()
+	if l.heartbeatStop == nil {
+		l.heartbeatMu.Unlock()
+		return
+	}
+	stop := l.heartbeatStop
+	done := l.heartbeatDone
+	l.heartbeatStop = nil
+	l.heartbeatMu.Unlock()
+
+	close(stop)
+	<-done
+}
+
 // Release removes the lock, allowing others to acquire it.
 func (l *Lock) Release() error {
 	if l == nil || l.conn == nil || l.conn.Client == nil {
 		return nil // Nothing to release
 	}
 
+	l.StopHeartbeat()
 	return forceRemove(l.conn.Client, l.Dir)
 }
 
@@ -424,8 +574,12 @@ func LockDir(cfg config.LockConfig) string {
 //
 // Stale detection prevents orphaned locks from permanently blocking the remote.
 // If a process crashes or loses network before releasing, the lock would persist
-// forever without this mechanism. We use the timestamp in info.json rather than
-// file mtime because mtime can be affected by file copies and NFS quirks.
+// forever without this mechanism.
+//
+// Primary check: file mtime via stat. With heartbeat enabled, the holder
+// touches info.json every 30s, so mtime reflects when the holder was last
+// alive. Falls back to the Started timestamp in info.json for backwards
+// compatibility with locks created before heartbeat support.
 //
 // We err on the side of "not stale" when we can't read the file - better to
 // wait for a lock that might be legitimate than to break into an active one.
@@ -434,13 +588,31 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 		return false
 	}
 
-	// Read the info file and check the started time
+	// Try mtime-based check first (works with heartbeat)
+	statCmd := fmt.Sprintf(
+		`f=%q; if [ -f "$f" ]; then stat -c "%%Y" "$f" 2>/dev/null || stat -f "%%m" "$f" 2>/dev/null || echo 0; else echo 0; fi`,
+		infoFile,
+	)
+	stdout, _, exitCode, err := client.Exec(statCmd)
+	debugf("isLockStale: stat cmd exitCode=%d, err=%v, stdout=%q", exitCode, err, string(stdout))
+
+	if err == nil && exitCode == 0 {
+		mtimeStr := strings.TrimSpace(string(stdout))
+		if mtime, parseErr := strconv.ParseInt(mtimeStr, 10, 64); parseErr == nil && mtime > 0 {
+			age := time.Since(time.Unix(mtime, 0))
+			isStale := age > staleThreshold
+			debugf("isLockStale: mtime-based age=%s, threshold=%s, isStale=%v", age, staleThreshold, isStale)
+			return isStale
+		}
+	}
+
+	// Fallback: parse info.json and check Started timestamp
 	catCmd := fmt.Sprintf("cat %q", infoFile)
-	stdout, _, exitCode, err := client.Exec(catCmd)
-	debugf("isLockStale: cmd=%q, exitCode=%d, err=%v", catCmd, exitCode, err)
+	stdout, _, exitCode, err = client.Exec(catCmd)
+	debugf("isLockStale: fallback cat cmd=%q, exitCode=%d, err=%v", catCmd, exitCode, err)
 	if err != nil || exitCode != 0 {
 		debugf("isLockStale: cannot read info file, assuming not stale")
-		return false // Can't read, assume not stale
+		return false
 	}
 
 	info, err := ParseLockInfo(stdout)
@@ -450,8 +622,30 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 	}
 
 	isStale := info.Age() > staleThreshold
-	debugf("isLockStale: age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
+	debugf("isLockStale: fallback age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
 	return isStale
+}
+
+// readLockInfo reads and parses the lock info file.
+func readLockInfo(client sshutil.SSHClient, infoFile string) (*LockInfo, error) {
+	stdout, _, exitCode, err := client.Exec(fmt.Sprintf("cat %q 2>/dev/null", infoFile))
+	if err != nil {
+		return nil, err
+	}
+	if exitCode != 0 {
+		return nil, errors.New(errors.ErrLock, "lock info file not readable", "")
+	}
+	return ParseLockInfo(stdout)
+}
+
+// describeLockHolder returns a rich holder description (command, age,
+// same-machine) when the info file parses, falling back to the basic
+// user@host string otherwise.
+func describeLockHolder(client sshutil.SSHClient, infoFile string) string {
+	if info, err := readLockInfo(client, infoFile); err == nil {
+		return info.Describe()
+	}
+	return readLockHolder(client, infoFile)
 }
 
 // readLockHolder reads the lock info file and returns a description of the holder.
@@ -468,6 +662,28 @@ func readLockHolder(client sshutil.SSHClient, infoFile string) string {
 	}
 
 	return info.String()
+}
+
+// stealDeadHolderLock removes a lock previously observed to be held by a
+// dead local process, re-reading the info file immediately before removal
+// and aborting if the holder changed in the meantime. This narrows the
+// window where the dead holder's lock is released and re-acquired by a live
+// process between the liveness check and the rm -rf, which would steal a
+// live lock. Returns true when the lock was removed.
+func stealDeadHolderLock(client sshutil.SSHClient, lockDir, infoFile string, prev *LockInfo) bool {
+	current, err := readLockInfo(client, infoFile)
+	if err != nil || !sameHolder(prev, current) || !current.IsDeadLocalHolder() {
+		return false
+	}
+	return forceRemove(client, lockDir) == nil
+}
+
+// sameHolder reports whether two lock info snapshots describe the same
+// holder.
+func sameHolder(a, b *LockInfo) bool {
+	return a.PID == b.PID && a.Started.Equal(b.Started) &&
+		a.MachineToken == b.MachineToken &&
+		a.Hostname == b.Hostname && a.User == b.User
 }
 
 // forceRemove removes a directory and all its contents.

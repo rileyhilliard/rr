@@ -2,9 +2,85 @@ package monitor
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
+
+// surfaceStyleCache caches graph cell styles keyed by foreground color and
+// the active color profile. The color set is small and fixed (gradient
+// palette, threshold colors, and custom ColorFunc outputs), so caching avoids
+// re-building a lipgloss.Style and its ANSI sequences for every rendered
+// cell. sync.Map keeps reads lock-free on the hot path. The profile is part
+// of the key because the pre-rendered ANSI sequences differ per profile, and
+// tests (or a renderer swap) can change it after the cache is warm.
+var surfaceStyleCache sync.Map // surfaceStyleKey -> cachedSurfaceStyle
+
+// surfaceStyleKey identifies a cached style entry.
+type surfaceStyleKey struct {
+	profile termenv.Profile
+	color   lipgloss.Color
+}
+
+// cachedSurfaceStyle holds a graph cell style plus its pre-rendered ANSI
+// escape prefix/suffix, so styling a run of characters is plain string
+// concatenation instead of a full lipgloss render.
+type cachedSurfaceStyle struct {
+	style     lipgloss.Style
+	prefix    string
+	suffix    string
+	sequenced bool // prefix/suffix extraction succeeded
+}
+
+// styleProbe is a marker that never appears in graph output, used to split a
+// rendered string into its ANSI prefix and suffix.
+const styleProbe = "\x00"
+
+// surfaceStyle returns the cached style entry for the given foreground color
+// on the standard graph surface background.
+func surfaceStyle(color lipgloss.Color) cachedSurfaceStyle {
+	key := surfaceStyleKey{profile: lipgloss.ColorProfile(), color: color}
+	if cached, ok := surfaceStyleCache.Load(key); ok {
+		return cached.(cachedSurfaceStyle)
+	}
+	style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
+	entry := cachedSurfaceStyle{style: style}
+	rendered := style.Render(styleProbe)
+	if idx := strings.Index(rendered, styleProbe); idx >= 0 {
+		entry.prefix = rendered[:idx]
+		entry.suffix = rendered[idx+len(styleProbe):]
+		entry.sequenced = true
+	}
+	surfaceStyleCache.Store(key, entry)
+	return entry
+}
+
+// render writes s styled with the cached ANSI sequences to b, falling back to
+// a full lipgloss render if sequence extraction failed.
+func (c cachedSurfaceStyle) render(b *strings.Builder, s string) {
+	if c.sequenced {
+		b.WriteString(c.prefix)
+		b.WriteString(s)
+		b.WriteString(c.suffix)
+		return
+	}
+	b.WriteString(c.style.Render(s))
+}
+
+// renderColorRuns writes chars to b, merging consecutive characters that share
+// the same color into a single styled segment. This collapses hundreds of
+// per-character style renders (and ANSI escape pairs) into one per run.
+// chars and colors must be the same length.
+func renderColorRuns(b *strings.Builder, chars []rune, colors []lipgloss.Color) {
+	runStart := 0
+	for i := 1; i <= len(chars); i++ {
+		if i == len(chars) || colors[i] != colors[runStart] {
+			surfaceStyle(colors[runStart]).render(b, string(chars[runStart:i]))
+			runStart = i
+		}
+	}
+}
 
 // Braille character rendering for high-resolution terminal graphs.
 //
@@ -21,9 +97,6 @@ import (
 // bit 4 = dot 5, bit 5 = dot 6, bit 6 = dot 7, bit 7 = dot 8
 
 const brailleBase = '\u2800'
-
-// sparklineBlocks are block characters for 8-level vertical resolution (lowest to highest).
-var sparklineBlocks = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
 // findMinMax returns the minimum and maximum values in a slice.
 // For percentage data (all values 0-100), returns fixed range 0-100.
@@ -178,161 +251,74 @@ func RenderBrailleSparklineWithOptions(data []float64, width, height int, baseCo
 		}
 	}
 
-	// Convert grid to string with per-column coloring based on data values
+	// Determine the color for each character column once (colors depend only
+	// on column data, so they are identical across rows)
+	colColors := make([]lipgloss.Color, width)
+	for colIdx := range colColors {
+		switch {
+		case colorFunc != nil:
+			// Custom color function provided
+			colColors[colIdx] = colorFunc(colMaxValues[colIdx])
+		case isPercentage:
+			// Default: use metric gradient for percentage data
+			colColors[colIdx] = MetricColor(colMaxValues[colIdx])
+		default:
+			// Default: use base color for non-percentage data
+			colColors[colIdx] = baseColor
+		}
+	}
+
+	// Convert grid to string, merging same-colored runs into single segments
 	var lines []string
 	for _, row := range grid {
 		var lineBuilder strings.Builder
-		for colIdx, char := range row {
-			// Determine color based on max value at this column
-			var color lipgloss.Color
-			if colorFunc != nil {
-				// Custom color function provided
-				color = colorFunc(colMaxValues[colIdx])
-			} else if isPercentage {
-				// Default: use metric gradient for percentage data
-				color = MetricColor(colMaxValues[colIdx])
-			} else {
-				// Default: use base color for non-percentage data
-				color = baseColor
-			}
-
-			// Apply both foreground and background color
-			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
-			lineBuilder.WriteString(style.Render(string(char)))
-		}
+		renderColorRuns(&lineBuilder, row, colColors)
 		lines = append(lines, lineBuilder.String())
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-// RenderMiniSparkline renders a single-row sparkline using block characters.
-// This is more compact than braille and good for inline display in cards.
-//
-// Parameters:
-//   - data: values to plot
-//   - width: number of characters
-func RenderMiniSparkline(data []float64, width int) string {
-	if len(data) == 0 || width <= 0 {
+// RenderCoreHeatStrip renders one small colored block per CPU core, btop-style.
+// Each core is a single cell colored by colorFunc(percent); when colorFunc is
+// nil the default MetricColor thresholds apply. maxWidth caps the number of
+// cells rendered (excess cores are dropped). Same-colored runs are merged via
+// the cached surface styles.
+func RenderCoreHeatStrip(perCore []float64, maxWidth int, colorFunc ColorFunc) string {
+	if len(perCore) == 0 || maxWidth <= 0 {
 		return ""
 	}
-
-	minVal, maxVal, _ := findMinMax(data)
-	resampled := resampleData(data, width)
-
-	var result strings.Builder
-	for _, val := range resampled {
-		normalized := normalizeValue(val, minVal, maxVal)
-		idx := clampInt(int(normalized*float64(len(sparklineBlocks)-1)), len(sparklineBlocks)-1)
-		result.WriteRune(sparklineBlocks[idx])
+	n := len(perCore)
+	if n > maxWidth {
+		n = maxWidth
 	}
 
+	chars := make([]rune, n)
+	colors := make([]lipgloss.Color, n)
+	for i := 0; i < n; i++ {
+		chars[i] = '▰'
+		if colorFunc != nil {
+			colors[i] = colorFunc(perCore[i])
+		} else {
+			colors[i] = MetricColor(perCore[i])
+		}
+	}
+
+	var result strings.Builder
+	renderColorRuns(&result, chars, colors)
 	return result.String()
-}
-
-// RenderColoredMiniSparkline renders a sparkline with threshold-based coloring.
-func RenderColoredMiniSparkline(data []float64, width int) string {
-	sparkline := RenderMiniSparkline(data, width)
-	if len(data) == 0 {
-		return sparkline
-	}
-
-	// Color based on the most recent value
-	lastVal := data[len(data)-1]
-	color := MetricColor(lastVal)
-	return lipgloss.NewStyle().Foreground(color).Render(sparkline)
-}
-
-// RenderCleanSparkline renders a single-row sparkline with a consistent accent color.
-// This provides a cleaner, less noisy visualization than multi-row braille graphs.
-// Each character represents one data point using block characters (▁▂▃▄▅▆▇█).
-func RenderCleanSparkline(data []float64, width int, color lipgloss.Color) string {
-	if len(data) == 0 || width <= 0 {
-		return ""
-	}
-
-	// Always use percentage range for clean sparklines
-	minVal, maxVal := 0.0, 100.0
-	resampled := resampleData(data, width)
-
-	var result strings.Builder
-	for _, val := range resampled {
-		normalized := normalizeValue(val, minVal, maxVal)
-		idx := clampInt(int(normalized*float64(len(sparklineBlocks)-1)), len(sparklineBlocks)-1)
-		result.WriteRune(sparklineBlocks[idx])
-	}
-
-	return lipgloss.NewStyle().Foreground(color).Render(result.String())
-}
-
-// RenderTimeSeriesGraph renders a multi-row time series graph showing historical data.
-// Each column represents one time point, rendered vertically with block characters.
-// Height is the number of rows (typically 3-5 for good visibility).
-func RenderTimeSeriesGraph(data []float64, width, height int, color lipgloss.Color) string {
-	if len(data) == 0 || width <= 0 || height <= 0 {
-		return ""
-	}
-
-	// Always use percentage range
-	minVal, maxVal := 0.0, 100.0
-	resampled := resampleData(data, width)
-
-	rows := make([]strings.Builder, height)
-	fillChars := []rune{'█', '▓', '▒', '░'}
-
-	for col, val := range resampled {
-		normalized := normalizeValue(val, minVal, maxVal)
-		if normalized > 1 {
-			normalized = 1
-		}
-		if normalized < 0 {
-			normalized = 0
-		}
-
-		// Calculate how many rows should be filled (from bottom up)
-		filledRows := int(normalized * float64(height))
-
-		// For each row (0 = top, height-1 = bottom)
-		for row := 0; row < height; row++ {
-			// Row from bottom: height-1-row
-			rowFromBottom := height - 1 - row
-
-			if rowFromBottom < filledRows {
-				// This row is filled
-				// Use gradient: bottom rows are brighter
-				charIdx := 0
-				if filledRows > 0 {
-					// Gradient based on position within filled area
-					gradientPos := float64(rowFromBottom) / float64(filledRows)
-					charIdx = int(gradientPos * float64(len(fillChars)-1))
-					if charIdx >= len(fillChars) {
-						charIdx = len(fillChars) - 1
-					}
-				}
-				rows[row].WriteRune(fillChars[charIdx])
-			} else if rowFromBottom == filledRows && col > 0 {
-				// Partial fill at the top - use lighter char
-				rows[row].WriteRune('░')
-			} else {
-				// Empty
-				rows[row].WriteRune(' ')
-			}
-		}
-	}
-
-	// Convert rows to styled strings
-	var lines []string
-	style := lipgloss.NewStyle().Foreground(color)
-	for _, row := range rows {
-		lines = append(lines, style.Render(row.String()))
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 // RenderGradientBar renders a horizontal bar with gradient fill.
 // Colors transition from green to yellow to red based on position.
 func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
+	return RenderGradientBarWithColorFunc(width, percent, nil)
+}
+
+// RenderGradientBarWithColorFunc renders a horizontal gradient bar with custom coloring.
+// If colorFunc is provided, it's called with each cell's position percentage to determine color.
+// If colorFunc is nil, falls back to the default MetricColor thresholds.
+func RenderGradientBarWithColorFunc(width int, percent float64, colorFunc ColorFunc) string {
 	if width < 1 {
 		width = 1
 	}
@@ -350,34 +336,28 @@ func RenderGradientBar(width int, percent float64, _ lipgloss.Color) string {
 		filled = width
 	}
 
-	var result strings.Builder
+	chars := make([]rune, width)
+	colors := make([]lipgloss.Color, width)
 	for i := 0; i < width; i++ {
 		if i < filled {
 			// Color based on position in the bar (gradient effect)
 			posPercent := float64(i+1) / float64(width) * 100
-			color := MetricColor(posPercent)
-			style := lipgloss.NewStyle().Foreground(color).Background(ColorSurfaceBg)
-			result.WriteString(style.Render("▰"))
+			if colorFunc != nil {
+				colors[i] = colorFunc(posPercent)
+			} else {
+				colors[i] = MetricColor(posPercent)
+			}
+			chars[i] = '▰'
 		} else {
 			// Empty portion - use muted color
-			style := lipgloss.NewStyle().Foreground(ColorTextMuted).Background(ColorSurfaceBg)
-			result.WriteString(style.Render("▱"))
+			colors[i] = ColorTextMuted
+			chars[i] = '▱'
 		}
 	}
 
+	var result strings.Builder
+	renderColorRuns(&result, chars, colors)
 	return result.String()
-}
-
-// RenderBrailleSparklineWithScale renders a sparkline and returns the max value used for scaling.
-// This is useful for non-percentage data where the scale isn't obvious.
-func RenderBrailleSparklineWithScale(data []float64, width, height int, baseColor lipgloss.Color) (string, float64) {
-	if len(data) == 0 || width <= 0 || height <= 0 {
-		return "", 0
-	}
-
-	_, maxVal, _ := findMinMax(data)
-	graph := RenderBrailleSparkline(data, width, height, baseColor)
-	return graph, maxVal
 }
 
 // RenderGraphWithYAxis renders a braille sparkline with y-axis labels on the left.

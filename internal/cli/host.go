@@ -33,6 +33,7 @@ var (
 type HostListOutput struct {
 	Hosts       []HostConfigInfo `json:"hosts"`
 	DefaultHost string           `json:"default_host,omitempty"`
+	Config      string           `json:"config,omitempty"`
 }
 
 // HostConfigInfo represents a single host in JSON output.
@@ -212,7 +213,7 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 	}
 
 	// Output result
-	if machineMode {
+	if MachineMode() {
 		return WriteJSONSuccess(os.Stdout, map[string]interface{}{
 			"name":        hostAddName,
 			"ssh_aliases": sshAliases,
@@ -327,7 +328,7 @@ func hostRemove(name string) error {
 func hostList() error {
 	cfg, globalPath, err := loadGlobalConfig()
 	if err != nil {
-		if hostListJSON || machineMode {
+		if hostListJSON || MachineMode() {
 			return WriteJSONFromError(os.Stdout, err)
 		}
 		return err
@@ -347,8 +348,8 @@ func hostList() error {
 	}
 
 	// JSON/machine mode output
-	if hostListJSON || machineMode {
-		return outputHostListJSON(cfg, hostOrder)
+	if hostListJSON || MachineMode() {
+		return outputHostListJSON(cfg, hostOrder, globalPath)
 	}
 
 	// Human-readable output
@@ -358,9 +359,10 @@ func hostList() error {
 // outputHostListJSON outputs hosts in JSON format with envelope.
 // hostOrder specifies the priority order from project config (if available).
 // The default host is the first valid host from hostOrder, falling back to alphabetical.
-func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string) error {
+func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string, globalPath string) error {
 	output := HostListOutput{
-		Hosts: make([]HostConfigInfo, 0, len(cfg.Hosts)),
+		Hosts:  make([]HostConfigInfo, 0, len(cfg.Hosts)),
+		Config: globalPath,
 	}
 
 	// Sort host names for consistent output
@@ -399,7 +401,7 @@ func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string) error {
 	}
 
 	// Use envelope wrapper in machine mode, plain JSON for --json
-	if machineMode {
+	if MachineMode() {
 		return WriteJSONSuccess(os.Stdout, output)
 	}
 

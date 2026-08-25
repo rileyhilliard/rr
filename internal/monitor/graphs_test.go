@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -378,47 +379,6 @@ func TestRenderBrailleSparkline_LowValuesNotPinkInShortGraphs(t *testing.T) {
 	}
 }
 
-func TestRenderMiniSparkline(t *testing.T) {
-	tests := []struct {
-		name      string
-		data      []float64
-		width     int
-		wantEmpty bool
-	}{
-		{
-			name:      "empty data",
-			data:      []float64{},
-			width:     10,
-			wantEmpty: true,
-		},
-		{
-			name:      "zero width",
-			data:      []float64{50},
-			width:     0,
-			wantEmpty: true,
-		},
-		{
-			name:      "valid input",
-			data:      []float64{10, 50, 90},
-			width:     5,
-			wantEmpty: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := RenderMiniSparkline(tt.data, tt.width)
-			if tt.wantEmpty {
-				assert.Empty(t, result)
-			} else {
-				assert.NotEmpty(t, result)
-				// Result should be exactly width characters
-				assert.Len(t, []rune(result), tt.width)
-			}
-		})
-	}
-}
-
 func TestRenderGradientBar(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -460,80 +420,33 @@ func TestRenderGradientBar(t *testing.T) {
 	}
 }
 
-func TestRenderCleanSparkline(t *testing.T) {
-	data := []float64{0, 25, 50, 75, 100}
-	result := RenderCleanSparkline(data, 5, ColorGraph)
-
-	assert.NotEmpty(t, result)
-}
-
-func TestRenderTimeSeriesGraph(t *testing.T) {
+func TestRenderCoreHeatStrip(t *testing.T) {
 	tests := []struct {
 		name      string
-		data      []float64
-		width     int
-		height    int
-		wantEmpty bool
+		perCore   []float64
+		maxWidth  int
+		wantCells int
 	}{
-		{
-			name:      "empty data",
-			data:      []float64{},
-			width:     10,
-			height:    4,
-			wantEmpty: true,
-		},
-		{
-			name:      "valid input",
-			data:      []float64{25, 50, 75, 100},
-			width:     10,
-			height:    4,
-			wantEmpty: false,
-		},
+		{"empty per-core", nil, 40, 0},
+		{"zero width", []float64{10, 20}, 0, 0},
+		{"one cell per core", []float64{10, 50, 90, 99}, 40, 4},
+		{"capped at max width", []float64{1, 2, 3, 4, 5, 6, 7, 8}, 4, 4},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := RenderTimeSeriesGraph(tt.data, tt.width, tt.height, ColorGraph)
-			if tt.wantEmpty {
+			result := RenderCoreHeatStrip(tt.perCore, tt.maxWidth, thresholdColorFunc(config.ThresholdValues{Warning: 70, Critical: 90}))
+			if tt.wantCells == 0 {
 				assert.Empty(t, result)
-			} else {
-				assert.NotEmpty(t, result)
-				lines := strings.Split(result, "\n")
-				assert.Len(t, lines, tt.height)
+				return
 			}
+			assert.Equal(t, tt.wantCells, strings.Count(result, "▰"))
 		})
 	}
 }
 
-func TestRenderColoredMiniSparkline(t *testing.T) {
-	// Test with data ending in different severity levels
-	tests := []struct {
-		name string
-		data []float64
-	}{
-		{
-			name: "healthy range",
-			data: []float64{10, 20, 30},
-		},
-		{
-			name: "warning range",
-			data: []float64{10, 50, 75},
-		},
-		{
-			name: "critical range",
-			data: []float64{10, 50, 95},
-		},
-		{
-			name: "empty data",
-			data: []float64{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := RenderColoredMiniSparkline(tt.data, 5)
-			// Just verify it doesn't panic
-			_ = result
-		})
-	}
+func TestRenderCoreHeatStrip_NilColorFunc(t *testing.T) {
+	// nil colorFunc falls back to default MetricColor thresholds
+	result := RenderCoreHeatStrip([]float64{10, 95}, 10, nil)
+	assert.Equal(t, 2, strings.Count(result, "▰"))
 }

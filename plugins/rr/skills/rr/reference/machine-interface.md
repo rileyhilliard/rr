@@ -1,32 +1,52 @@
-# Machine Interface (LLM/CI Mode)
+# Structured Output (Agent/CI Mode)
 
-Use `--machine` (or `-m`) for structured JSON output with consistent envelope format.
+rr defaults to structured output. Phase events are emitted as JSON lines to stderr. Command stdout/stderr passes through undecorated to stdout/stderr. No flags needed.
 
-## Global Flag
+Use `--pretty` / `-p` to opt into human-readable output with spinners and colors.
 
-```bash
-rr --machine <command>   # JSON output with success/error envelope
-rr -m doctor             # Short form
+The `--machine` / `-m` flag is kept for backward compatibility but is now a no-op.
+
+## Phase Events (stderr)
+
+During `rr run` or `rr <task>`, phase events are emitted as JSON lines to stderr:
+
+```json
+{"type":"phase","phase":"connect","status":"started","ts":"2026-01-15T10:30:00Z"}
+{"type":"phase","phase":"connect","status":"complete","host":"m4-mini","duration_s":0.5,"ts":"..."}
+{"type":"phase","phase":"sync","status":"started","ts":"..."}
+{"type":"phase","phase":"sync","status":"complete","host":"m4-mini","duration_s":2.1,"ts":"..."}
+{"type":"phase","phase":"lock","status":"started","ts":"..."}
+{"type":"phase","phase":"lock","status":"complete","host":"m4-mini","duration_s":0.1,"ts":"..."}
+{"type":"phase","phase":"exec","status":"started","details":{"command":"make test"},"ts":"..."}
 ```
 
-## Commands with JSON Output
+After the command finishes:
+```json
+{"type":"result","status":"success","exit_code":0,"host":"m4-mini","duration_s":12.3,"details":{"exec_duration_s":10.1},"ts":"..."}
+```
 
-| Command | Purpose |
-|---------|---------|
-| `rr doctor --machine` | Full diagnostic with structured results |
-| `rr status --machine` | Host connectivity check |
-| `rr tasks --machine` | List available tasks |
-| `rr host list --machine` | List configured hosts |
+## Phase Event Schema
 
-## JSON Envelope Format
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | `"phase"` or `"result"` |
+| `phase` | string | `"connect"`, `"sync"`, `"lock"`, `"exec"`, `"pull"` |
+| `status` | string | `"started"`, `"complete"`, `"failed"`, `"skipped"` |
+| `host` | string | Host name (on complete/failed) |
+| `duration_s` | float | Duration in seconds (on complete) |
+| `exit_code` | int | Process exit code (on result) |
+| `error` | string | Error message (on failed) |
+| `details` | object | Additional context (varies by phase) |
+| `ts` | string | RFC3339 timestamp |
 
-All `--machine` output follows this structure:
+## Informational Commands (JSON Envelope)
 
-**Success:**
+Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to stdout:
+
 ```json
 {
   "success": true,
-  "data": { /* command-specific output */ },
+  "data": { /* command-specific */ },
   "error": null
 }
 ```
@@ -61,6 +81,10 @@ All `--machine` output follows this structure:
 | `DEPENDENCY_MISSING` | Required tool not found | Install missing dependency |
 | `REQUIREMENTS_FAILED` | Required tools missing | Install tools or use --skip-requirements |
 
+## Exit Code Contract
+
+The process exit code always matches the remote command's exit code. JSON events are supplementary metadata on stderr, not the primary signal.
+
 ## Non-Interactive Commands
 
 For CI/automation, use flag-based commands:
@@ -81,10 +105,10 @@ rr init --non-interactive --host dev-box
 ## Troubleshooting Decision Tree
 
 ```
-1. Run: rr doctor --machine
-2. Parse: response.success
+1. Run: rr doctor
+2. Parse JSON output: check .success field
    - true  -> Setup OK
-   - false -> Check response.error.code
+   - false -> Check .error.code
 
 3. Based on error.code:
 
@@ -100,7 +124,6 @@ rr init --non-interactive --host dev-box
      -> Or: ssh-copy-id <hostname>
 
    SSH_HOST_KEY:
-     -> Inform user about host key verification
      -> Run: ssh -o StrictHostKeyChecking=accept-new <hostname> exit
 
    LOCK_HELD:
@@ -112,38 +135,29 @@ rr init --non-interactive --host dev-box
      -> Install tools or run with --skip-requirements
 ```
 
+## Parsing Phase Events
+
+```bash
+# Run command and capture phase events from stderr
+rr run "make test" 2>events.jsonl
+
+# Check result
+tail -1 events.jsonl | jq '.exit_code'
+
+# Get execution duration
+tail -1 events.jsonl | jq '.details.exec_duration_s'
+```
+
 ## When to Use rr vs Local Execution
 
 ```text
-IF .rr.yaml exists AND rr status --machine shows healthy hosts:
+IF .rr.yaml exists AND rr status shows healthy hosts:
   -> Use rr for tests, builds, remote commands
 
 IF no .rr.yaml OR all hosts unhealthy:
   -> Check if local_fallback is enabled in config
   -> If yes: rr will run locally automatically
-  -> If no: run commands locally with Bash tool
+  -> If no: run commands locally
 ```
 
-## Example: Parsing Doctor Output
-
-```bash
-result=$(rr doctor --machine 2>&1)
-success=$(echo "$result" | jq -r '.success')
-
-if [ "$success" = "true" ]; then
-  echo "All checks passed"
-else
-  code=$(echo "$result" | jq -r '.error.code')
-  suggestion=$(echo "$result" | jq -r '.error.suggestion')
-  echo "Error: $code"
-  echo "Fix: $suggestion"
-fi
-```
-
-## Example: Checking Host Status
-
-```bash
-rr status --machine | jq '.data.hosts[] | select(.healthy == false) | .name'
-```
-
-Returns names of unhealthy hosts.
+For the most current flag and command details, run `rr --help` or `rr <command> --help`.

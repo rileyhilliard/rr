@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -13,15 +15,15 @@ import (
 )
 
 func TestMachineMode_DefaultValue(t *testing.T) {
-	// Reset to default
-	oldMode := machineMode
-	defer func() { machineMode = oldMode }()
+	oldPretty := prettyMode
+	defer func() { prettyMode = oldPretty }()
 
-	machineMode = false
-	assert.False(t, MachineMode())
-
-	machineMode = true
+	// MachineMode() returns !prettyMode (structured output is default)
+	prettyMode = false
 	assert.True(t, MachineMode())
+
+	prettyMode = true
+	assert.False(t, MachineMode())
 }
 
 func TestWriteJSONSuccess_BasicData(t *testing.T) {
@@ -127,11 +129,18 @@ func TestWriteJSONError_NoSuggestion(t *testing.T) {
 	assert.Nil(t, env.Error.Details)
 }
 
+func assertExitOne(t *testing.T, err error) {
+	t.Helper()
+	code, ok := errors.GetExitCode(err)
+	require.True(t, ok, "expected an ExitError, got %v", err)
+	assert.Equal(t, 1, code)
+}
+
 func TestWriteJSONFromError_NilError(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := WriteJSONFromError(&buf, nil)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -146,7 +155,7 @@ func TestWriteJSONFromError_GenericError(t *testing.T) {
 
 	goErr := fmt.Errorf("something went wrong")
 	err := WriteJSONFromError(&buf, goErr)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -163,7 +172,7 @@ func TestWriteJSONFromError_StructuredError(t *testing.T) {
 
 	rrErr := errors.New(errors.ErrConfig, "Config file not found", "Run 'rr init' to create one")
 	err := WriteJSONFromError(&buf, rrErr)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -182,7 +191,7 @@ func TestWriteJSONFromError_WrappedStructuredError(t *testing.T) {
 	innerErr := errors.New(errors.ErrSSH, "Connection refused", "Check if SSH server is running")
 	wrappedErr := fmt.Errorf("failed to connect: %w", innerErr)
 	err := WriteJSONFromError(&buf, wrappedErr)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -525,5 +534,81 @@ func TestErrorCodes_Format(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// captureStderr captures os.Stderr output during fn execution.
+// Uses defer to restore os.Stderr even if fn panics.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() {
+		os.Stderr = old
+		r.Close()
+	}()
+	fn()
+	w.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	return buf.String()
+}
+
+func TestWritePhaseEvent_SuppressPhasesBehavior(t *testing.T) {
+	tests := []struct {
+		name         string
+		suppress     bool
+		event        PhaseEvent
+		wantEmpty    bool
+		wantContains string
+	}{
+		{
+			name:      "phase event suppressed when flag set",
+			suppress:  true,
+			event:     PhaseEvent{Type: "phase", Phase: "connect", Status: "started"},
+			wantEmpty: true,
+		},
+		{
+			name:      "sync phase event suppressed when flag set",
+			suppress:  true,
+			event:     PhaseEvent{Type: "phase", Phase: "sync", Status: "started"},
+			wantEmpty: true,
+		},
+		{
+			name:         "result event not suppressed even when flag set",
+			suppress:     true,
+			event:        PhaseEvent{Type: "result", Status: "success"},
+			wantEmpty:    false,
+			wantContains: `"type":"result"`,
+		},
+		{
+			name:      "phase event emitted when flag not set",
+			suppress:  false,
+			event:     PhaseEvent{Type: "phase", Phase: "connect", Status: "started"},
+			wantEmpty: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			old := suppressPhases
+			defer func() { suppressPhases = old }()
+			suppressPhases = tt.suppress
+
+			output := captureStderr(t, func() {
+				WritePhaseEvent(tt.event)
+			})
+
+			if tt.wantEmpty {
+				assert.Empty(t, output)
+			} else {
+				assert.NotEmpty(t, output)
+			}
+			if tt.wantContains != "" {
+				assert.Contains(t, output, tt.wantContains)
+			}
+		})
 	}
 }

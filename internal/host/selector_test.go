@@ -158,6 +158,7 @@ func TestNewSelector(t *testing.T) {
 	selector := NewSelector(hosts)
 	if selector == nil {
 		t.Fatal("NewSelector returned nil")
+		return
 	}
 
 	if selector.timeout != DefaultProbeTimeout {

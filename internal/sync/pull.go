@@ -151,13 +151,9 @@ func BuildPullArgs(conn *host.Connection, patterns []string, localDest string, e
 		"-az", // archive mode, compress
 	}
 
-	// Use SSH ControlMaster to reuse existing connections
-	sshCmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
-		controlSocketDir)
-	if SSHConfigFile != "" {
-		sshCmd = fmt.Sprintf("%s -F %q", sshCmd, SSHConfigFile)
-	}
-	args = append(args, "-e", sshCmd)
+	// Use SSH with ControlMaster for connection reuse and user's SSH config
+	// for ProxyCommand, IdentityFile, and other host-specific settings.
+	args = append(args, "-e", buildSSHCmd())
 
 	// Add progress info flag for parsing
 	args = append(args, "--info=progress2")

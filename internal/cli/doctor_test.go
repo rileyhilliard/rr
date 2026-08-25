@@ -1343,6 +1343,10 @@ func TestRenderDepsCategory_EmptyIndices(t *testing.T) {
 }
 
 func TestOutputDoctorJSON_GroupsByCategory(t *testing.T) {
+	// Use pretty mode to get plain JSON output (not wrapped in envelope)
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	checks := []doctor.Check{
 		&mockCheck{name: "config_exists", category: "CONFIG"},
 		&mockCheck{name: "ssh_agent", category: "SSH"},
@@ -1381,6 +1385,9 @@ func TestOutputDoctorJSON_GroupsByCategory(t *testing.T) {
 }
 
 func TestOutputDoctorJSON_Summary(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	checks := []doctor.Check{
 		&mockCheck{name: "check1", category: "TEST"},
 		&mockCheck{name: "check2", category: "TEST"},
@@ -1409,6 +1416,9 @@ func TestOutputDoctorJSON_Summary(t *testing.T) {
 }
 
 func TestOutputDoctorJSON_AllPass(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	checks := []doctor.Check{
 		&mockCheck{name: "check1", category: "TEST"},
 		&mockCheck{name: "check2", category: "TEST"},
@@ -1434,6 +1444,9 @@ func TestOutputDoctorJSON_AllPass(t *testing.T) {
 }
 
 func TestOutputDoctorJSON_PreservesCategoryOrder(t *testing.T) {
+	prettyMode = true
+	defer func() { prettyMode = false }()
+
 	checks := []doctor.Check{
 		&mockCheck{name: "ssh1", category: "SSH"},
 		&mockCheck{name: "config1", category: "CONFIG"},

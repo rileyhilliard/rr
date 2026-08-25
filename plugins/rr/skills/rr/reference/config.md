@@ -135,10 +135,15 @@ tasks:
 
 ### Sync Configuration
 
-| Field | Purpose |
-|-------|---------|
-| `exclude` | Patterns to skip during sync (rsync exclude) |
-| `preserve` | Patterns to preserve on remote (don't delete) |
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `exclude` | see below | Patterns to skip during sync (rsync exclude) |
+| `preserve` | `[]` | Patterns to preserve on remote (don't delete) |
+| `respect_gitignore` | `true` | Apply `.gitignore` patterns as rsync excludes |
+
+Default excludes include `.git/`, `.claude/`, `.cursor/`, `.aider/`, `.copilot/`, `.venv/`, `node_modules/`, `__pycache__/`, and others.
+
+When `respect_gitignore` is true, rsync reads `.gitignore` files in each directory and applies those patterns as excludes. Explicit `.rr.yaml` excludes take precedence (first-match-wins).
 
 ### Lock Configuration
 
@@ -146,6 +151,9 @@ tasks:
 |-------|---------|---------|
 | `enabled` | `true` | Enable distributed locking |
 | `timeout` | `5m` | Lock acquisition timeout |
+| `stale` | `3m` | Time without heartbeat before lock is considered dead |
+
+Locks are refreshed every 30 seconds via heartbeat. A lock without a heartbeat update for the `stale` duration is automatically reclaimed.
 
 ## Variable Expansion
 

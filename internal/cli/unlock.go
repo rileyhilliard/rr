@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -17,7 +19,15 @@ import (
 // UnlockOptions holds options for the unlock command.
 type UnlockOptions struct {
 	Host string // Specific host to unlock (empty for default or picker)
-	All  bool   // Unlock all configured hosts
+	All  bool   // Unlock all hosts in the project (or all global hosts)
+}
+
+// hostUnlockOutcome records the result of unlocking a single host.
+type hostUnlockOutcome struct {
+	Host   string `json:"host"`
+	Status string `json:"status"` // released | not_locked | failed
+	Holder string `json:"holder,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // unlockCommand releases the lock on one or more remote hosts.
@@ -51,11 +61,8 @@ func unlockCommand(opts UnlockOptions) error {
 	var hostsToUnlock []string
 
 	if opts.All {
-		// Unlock all configured hosts
-		for name := range globalCfg.Hosts {
-			hostsToUnlock = append(hostsToUnlock, name)
-		}
-		sort.Strings(hostsToUnlock)
+		// Unlock the project's hosts; all global hosts when no project scopes them
+		hostsToUnlock = hostsForUnlockAll(globalCfg)
 	} else if opts.Host != "" {
 		// Specific host provided
 		if _, exists := globalCfg.Hosts[opts.Host]; !exists {
@@ -77,7 +84,13 @@ func unlockCommand(opts UnlockOptions) error {
 				hostsToUnlock = []string{name}
 			}
 		} else {
-			// Multiple hosts - show picker
+			// Multiple hosts - show picker (pretty mode only; structured
+			// callers must name a host or pass --all)
+			if !PrettyMode() {
+				return errors.New(errors.ErrConfig,
+					"Multiple hosts configured - specify which to unlock",
+					"Use 'rr unlock <host>' or 'rr unlock --all'.")
+			}
 			selectedHost, err := pickHostForUnlock(globalCfg)
 			if err != nil {
 				return err
@@ -90,35 +103,56 @@ func unlockCommand(opts UnlockOptions) error {
 		}
 	}
 
-	// Process each host
+	// Process hosts concurrently - each needs its own SSH probe
+	showSpinner := PrettyMode() && len(hostsToUnlock) == 1
+	outcomes := make([]hostUnlockOutcome, len(hostsToUnlock))
+	var wg sync.WaitGroup
+	for i, hostName := range hostsToUnlock {
+		wg.Add(1)
+		go func(i int, hostName string) {
+			defer wg.Done()
+			outcomes[i] = unlockHost(hostName, globalCfg.Hosts[hostName], lockCfg, showSpinner)
+		}(i, hostName)
+	}
+	wg.Wait()
+
 	var successCount, notLockedCount, failCount int
-
-	for _, hostName := range hostsToUnlock {
-		hostCfg := globalCfg.Hosts[hostName]
-		result := unlockHost(hostName, hostCfg, lockCfg)
-
-		switch result {
-		case unlockResultSuccess:
+	for _, o := range outcomes {
+		switch o.Status {
+		case "released":
 			successCount++
-		case unlockResultNotLocked:
+		case "not_locked":
 			notLockedCount++
-		case unlockResultFailed:
+		case "failed":
 			failCount++
 		}
 	}
 
-	// Summary for --all
-	if opts.All && len(hostsToUnlock) > 1 {
-		fmt.Println()
-		if successCount > 0 {
-			fmt.Printf("Released locks on %d host(s)\n", successCount)
+	if PrettyMode() {
+		for _, o := range outcomes {
+			printUnlockOutcome(o)
 		}
-		if notLockedCount > 0 {
-			fmt.Printf("%d host(s) had no lock\n", notLockedCount)
+
+		// Summary for --all
+		if opts.All && len(hostsToUnlock) > 1 {
+			fmt.Println()
+			if successCount > 0 {
+				fmt.Printf("Released locks on %d host(s)\n", successCount)
+			}
+			if notLockedCount > 0 {
+				fmt.Printf("%d host(s) had no lock\n", notLockedCount)
+			}
+			if failCount > 0 {
+				fmt.Printf("%d host(s) failed\n", failCount)
+			}
 		}
-		if failCount > 0 {
-			fmt.Printf("%d host(s) failed\n", failCount)
-		}
+	} else {
+		_ = WriteJSONSuccess(os.Stdout, map[string]interface{}{
+			"hosts":      outcomes,
+			"released":   successCount,
+			"not_locked": notLockedCount,
+			"failed":     failCount,
+		})
 	}
 
 	if failCount > 0 {
@@ -130,32 +164,50 @@ func unlockCommand(opts UnlockOptions) error {
 	return nil
 }
 
-type unlockResult int
+// hostsForUnlockAll returns the hosts --all should target: the project's
+// resolved host list when a project config scopes them, otherwise every
+// global host.
+func hostsForUnlockAll(globalCfg *config.GlobalConfig) []string {
+	if resolved, err := config.LoadResolved(Config()); err == nil && resolved.ProjectRoot != "" {
+		if names, _, err := config.ResolveHosts(resolved, ""); err == nil && len(names) > 0 {
+			sorted := append([]string(nil), names...)
+			sort.Strings(sorted)
+			return sorted
+		}
+	}
 
-const (
-	unlockResultSuccess unlockResult = iota
-	unlockResultNotLocked
-	unlockResultFailed
-)
+	var names []string
+	for name := range globalCfg.Hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // unlockHost attempts to release the lock on a single host.
-func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig) unlockResult {
+func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig, showSpinner bool) hostUnlockOutcome {
+	outcome := hostUnlockOutcome{Host: hostName}
+
 	if len(hostCfg.SSH) == 0 {
-		fmt.Printf("%s %s: no SSH connections configured\n", ui.SymbolFail, hostName)
-		return unlockResultFailed
+		outcome.Status = "failed"
+		outcome.Error = "no SSH connections configured"
+		return outcome
 	}
 
 	// Get lock directory path
 	lockDir := lock.LockDir(lockCfg)
 
-	// Try to connect using the first available SSH alias
-	spinner := ui.NewSpinner(fmt.Sprintf("Connecting to %s", hostName))
-	spinner.Start()
+	var spinner *ui.Spinner
+	if showSpinner {
+		spinner = ui.NewSpinner(fmt.Sprintf("Connecting to %s", hostName))
+		spinner.Start()
+	}
 
+	// Try to connect using the first available SSH alias
 	var conn *host.Connection
 	var connErr error
 	for _, sshAlias := range hostCfg.SSH {
-		client, latency, err := host.ProbeAndConnect(sshAlias, 10*time.Second)
+		client, latency, err := host.ProbeAndConnect(sshAlias, 5*time.Second)
 		if err == nil {
 			conn = &host.Connection{
 				Name:    hostName,
@@ -170,35 +222,56 @@ func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig)
 	}
 
 	if conn == nil {
-		spinner.Fail()
-		fmt.Printf("  Could not connect: %v\n", connErr)
-		return unlockResultFailed
+		if spinner != nil {
+			spinner.Fail()
+		}
+		outcome.Status = "failed"
+		outcome.Error = fmt.Sprintf("could not connect: %v", connErr)
+		return outcome
 	}
 	defer conn.Close()
-	spinner.Success()
+	if spinner != nil {
+		spinner.Success()
+	}
 
 	// Check if lock exists
 	if !lock.IsLocked(conn, lockCfg) {
-		fmt.Printf("%s %s: no lock held\n", ui.SymbolPending, hostName)
-		return unlockResultNotLocked
+		outcome.Status = "not_locked"
+		return outcome
 	}
 
 	// Get lock holder info before releasing
-	holder := lock.GetLockHolder(conn, lockCfg)
+	if info := lock.GetLockInfo(conn, lockCfg); info != nil {
+		outcome.Holder = info.Describe()
+	} else {
+		outcome.Holder = lock.GetLockHolder(conn, lockCfg)
+	}
 
 	// Release the lock
-	err := lock.ForceRelease(conn, lockDir)
-	if err != nil {
-		fmt.Printf("%s %s: failed to release lock: %v\n", ui.SymbolFail, hostName, err)
-		return unlockResultFailed
+	if err := lock.ForceRelease(conn, lockDir); err != nil {
+		outcome.Status = "failed"
+		outcome.Error = fmt.Sprintf("failed to release lock: %v", err)
+		return outcome
 	}
 
-	if holder != "" && holder != "unknown" {
-		fmt.Printf("%s %s: lock released (was held by %s)\n", ui.SymbolSuccess, hostName, holder)
-	} else {
-		fmt.Printf("%s %s: lock released\n", ui.SymbolSuccess, hostName)
+	outcome.Status = "released"
+	return outcome
+}
+
+// printUnlockOutcome renders one host's unlock result in pretty mode.
+func printUnlockOutcome(o hostUnlockOutcome) {
+	switch o.Status {
+	case "released":
+		if o.Holder != "" && o.Holder != "unknown" {
+			fmt.Printf("%s %s: lock released (was held by %s)\n", ui.SymbolSuccess, o.Host, o.Holder)
+		} else {
+			fmt.Printf("%s %s: lock released\n", ui.SymbolSuccess, o.Host)
+		}
+	case "not_locked":
+		fmt.Printf("%s %s: no lock held\n", ui.SymbolPending, o.Host)
+	default:
+		fmt.Printf("%s %s: %s\n", ui.SymbolFail, o.Host, o.Error)
 	}
-	return unlockResultSuccess
 }
 
 // pickHostForUnlock shows a host picker for the unlock command.

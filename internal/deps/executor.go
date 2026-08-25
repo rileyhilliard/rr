@@ -271,7 +271,7 @@ func (e *Executor) executeParallel(ctx context.Context, stage Stage) (*StageResu
 }
 
 // executeTask runs a single task.
-func (e *Executor) executeTask(_ context.Context, taskName string) *TaskExecutionResult {
+func (e *Executor) executeTask(ctx context.Context, taskName string) *TaskExecutionResult {
 	start := time.Now()
 	result := &TaskExecutionResult{
 		TaskName: taskName,
@@ -311,7 +311,7 @@ func (e *Executor) executeTask(_ context.Context, taskName string) *TaskExecutio
 		SetupCommands: e.opts.SetupCommands,
 	}
 
-	taskResult, err := exec.ExecuteTask(e.conn, &task, nil, mergedEnv, e.opts.WorkDir, e.opts.Stdout, e.opts.Stderr, execOpts)
+	taskResult, err := exec.ExecuteTask(ctx, e.conn, &task, nil, mergedEnv, e.opts.WorkDir, e.opts.Stdout, e.opts.Stderr, execOpts)
 	result.Duration = time.Since(start)
 
 	if err != nil {

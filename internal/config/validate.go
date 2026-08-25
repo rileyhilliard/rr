@@ -114,6 +114,13 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your task dependencies in .rr.yaml.")
 	}
 
+	// Validate local_fallback mode when set
+	if cfg.LocalFallback != nil && !cfg.LocalFallback.Valid() {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Invalid local_fallback value '%s'", *cfg.LocalFallback),
+			"Use never, on-unreachable, always, or a boolean (true = always, false = never).")
+	}
+
 	return nil
 }
 
@@ -153,6 +160,13 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 		if err := validateHost(name, cfg.Hosts[name]); err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
 		}
+	}
+
+	// Validate local_fallback mode when set (empty means "use default")
+	if cfg.Defaults.LocalFallback != "" && !cfg.Defaults.LocalFallback.Valid() {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Invalid defaults.local_fallback value '%s'", cfg.Defaults.LocalFallback),
+			"Use never, on-unreachable, always, or a boolean (true = always, false = never).")
 	}
 
 	return nil
@@ -229,8 +243,10 @@ func validateHost(name string, host Host) error {
 		return fmt.Errorf("host '%s' needs a 'dir' - that's where your code will sync to", name)
 	}
 
-	// Validate remote path (allows ~ for remote shell expansion)
-	if err := validateRemotePath(name, "dir", host.Dir); err != nil {
+	// Validate remote path (allows ~ for remote shell expansion). Host dirs
+	// keep ${PROJECT}-style variables until use sites expand them, so
+	// validate the expanded form; variables rr can't expand still surface.
+	if err := validateRemotePath(name, "dir", ExpandRemote(host.Dir)); err != nil {
 		return err
 	}
 
@@ -379,9 +395,6 @@ func validateLock(lock LockConfig) error {
 	if lock.Stale < 0 {
 		return fmt.Errorf("lock.stale can't be negative - that doesn't make sense")
 	}
-	if lock.Enabled && lock.Timeout > 0 && lock.Stale > 0 && lock.Timeout > lock.Stale {
-		return fmt.Errorf("lock.timeout (%v) is longer than lock.stale (%v) - you'd timeout before the lock expires", lock.Timeout, lock.Stale)
-	}
 	return nil
 }
 
@@ -392,6 +405,13 @@ func validateMonitorConfig(monitor MonitorConfig) error {
 	if monitor.Interval != "" {
 		if _, err := time.ParseDuration(monitor.Interval); err != nil {
 			return fmt.Errorf("monitor.interval '%s' doesn't look like a valid duration - try something like '2s', '5s', or '1m'", monitor.Interval)
+		}
+	}
+
+	// Validate timeout format if specified
+	if monitor.Timeout != "" {
+		if _, err := time.ParseDuration(monitor.Timeout); err != nil {
+			return fmt.Errorf("monitor.timeout '%s' doesn't look like a valid duration - try something like '8s' or '15s'", monitor.Timeout)
 		}
 	}
 
@@ -411,6 +431,29 @@ func validateMonitorConfig(monitor MonitorConfig) error {
 		if strings.TrimSpace(excluded) == "" {
 			return fmt.Errorf("monitor.exclude has an empty entry - remove it or add a host name")
 		}
+	}
+
+	if err := validateAlerts(monitor.Alerts); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateAlerts checks the monitor alerts configuration.
+// on_alert is free-form (it runs through 'sh -c'), so only the cooldown is
+// checked for shape.
+func validateAlerts(alerts AlertsConfig) error {
+	if alerts.Cooldown == "" {
+		return nil
+	}
+
+	cooldown, err := time.ParseDuration(alerts.Cooldown)
+	if err != nil {
+		return fmt.Errorf("monitor.alerts.cooldown '%s' doesn't look like a valid duration - try something like '60s' or '5m'", alerts.Cooldown)
+	}
+	if cooldown < 0 {
+		return fmt.Errorf("monitor.alerts.cooldown can't be negative (got '%s') - use '0s' to re-fire on every crossing", alerts.Cooldown)
 	}
 
 	return nil

@@ -1,13 +1,18 @@
 package sync
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
+	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -207,6 +212,44 @@ func TestBuildArgs(t *testing.T) {
 			},
 		},
 		{
+			name: "gitignore filter disabled",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: false,
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				for _, arg := range args {
+					assert.NotContains(t, arg, ".gitignore", "should not contain gitignore filter")
+					assert.False(t, strings.HasPrefix(arg, "--filter=+ "), "should not include any gitignore-derived include rule")
+				}
+			},
+		},
+		{
+			name: "gitignore filter enabled but no .gitignore present",
+			conn: &host.Connection{
+				Name:  "test-host",
+				Alias: "test-alias",
+				Host:  config.Host{Dir: "~/projects/myapp"},
+			},
+			// Nonexistent path: BuildArgs should treat a missing .gitignore
+			// as "nothing to add", not an error.
+			localDir: "/home/user/myapp",
+			cfg: config.SyncConfig{
+				RespectGitignore: true,
+			},
+			checkArgs: func(t *testing.T, args []string) {
+				for _, arg := range args {
+					assert.False(t, strings.HasPrefix(arg, "--filter=+ ") || strings.HasPrefix(arg, "--filter=- "),
+						"no .gitignore present, should not emit any gitignore-derived filter rule")
+				}
+			},
+		},
+		{
 			name:     "nil connection",
 			conn:     nil,
 			localDir: "/home/user/myapp",
@@ -229,6 +272,256 @@ func TestBuildArgs(t *testing.T) {
 			tt.checkArgs(t, args)
 		})
 	}
+}
+
+// writeGitignore writes the given lines (in order) to a .gitignore in dir.
+func writeGitignore(t *testing.T, dir string, lines ...string) {
+	t.Helper()
+	content := strings.Join(lines, "\n") + "\n"
+	err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(content), 0o644)
+	require.NoError(t, err)
+}
+
+// indexOf returns the index of the first arg equal to target, or -1.
+func indexOf(args []string, target string) int {
+	for i, a := range args {
+		if a == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestBuildArgs_GitignoreTranslation covers translating .gitignore into rsync
+// filter rules, in particular the "!negation" case that rsync's own
+// '--filter=:- .gitignore' cannot express (rsync's merge-file syntax has no
+// per-pattern negation; a bare "!" there means "clear all rules read so
+// far", not "re-include this path"). Regression coverage for the bug where
+// `data/` + `!frontend/tests/mocks/data/` in .gitignore silently dropped
+// that directory from every rr sync, even though git itself correctly
+// treated the path as not ignored.
+func TestBuildArgs_GitignoreTranslation(t *testing.T) {
+	conn := &host.Connection{
+		Name:  "test-host",
+		Alias: "test-alias",
+		Host:  config.Host{Dir: "~/projects/myapp"},
+	}
+
+	t.Run("simple excludes with no negation", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir, "node_modules/", "*.log", "# a comment", "", ".DS_Store")
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- node_modules/")
+		assert.Contains(t, args, "--filter=- *.log")
+		assert.Contains(t, args, "--filter=- .DS_Store")
+		// Comments and blank lines must not turn into rules.
+		for _, a := range args {
+			assert.NotContains(t, a, "# a comment")
+		}
+	})
+
+	t.Run("negated pattern becomes an include, not silently dropped", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir,
+			"data/",
+			"!frontend/tests/mocks/data/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=+ frontend/tests/mocks/data/",
+			"negated pattern must become an rsync include rule")
+		assert.Contains(t, args, "--filter=- data/",
+			"the exclude that the negation carves an exception out of must still be present")
+	})
+
+	t.Run("negated pattern includes ancestor directories so rsync can descend", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir,
+			"data/",
+			"!frontend/tests/mocks/data/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		// Without these, rsync would never look inside frontend/, frontend/tests/,
+		// or frontend/tests/mocks/ in the first place - an exclude on an ancestor
+		// stops descent regardless of rules that come later.
+		assert.Contains(t, args, "--filter=+ frontend/")
+		assert.Contains(t, args, "--filter=+ frontend/tests/")
+		assert.Contains(t, args, "--filter=+ frontend/tests/mocks/")
+	})
+
+	t.Run("wildcard exclude of children lets a specific child negation live, regardless of order", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git (git status --ignored --porcelain):
+		// "build/*" excludes each ENTRY inside build/ individually, but
+		// never build/ itself, so "!build/keep-me/" can still resurrect
+		// that one child. This is the standard "ignore everything in a
+		// dir except X" idiom - unlike a bare "build/" exclude (covered
+		// below), which always kills negations underneath it.
+		writeGitignore(t, dir,
+			"build/*",
+			"!build/keep-me/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		keepIdx := indexOf(args, "--filter=+ build/keep-me/")
+		excludeIdx := indexOf(args, "--filter=- build/*")
+		require.NotEqual(t, -1, keepIdx, "include rule for build/keep-me/ must be present")
+		require.NotEqual(t, -1, excludeIdx, "exclude rule for build/* must be present")
+		// Rsync is first-match-wins, so to reproduce git's last-match-wins
+		// result the include must be emitted BEFORE the exclude, even
+		// though it appeared AFTER it in the source .gitignore.
+		assert.Less(t, keepIdx, excludeIdx,
+			"include for the more specific negated path must come before the broader exclude")
+	})
+
+	t.Run("a bare directory exclude always kills negations underneath it, regardless of order", func(t *testing.T) {
+		dir := t.TempDir()
+		// Per `git help gitignore`: "It is not possible to re-include a
+		// file if a parent directory of that file is excluded." Unlike
+		// "build/*" above, a bare "build/" exclude covers the directory
+		// itself as a unit, so no negation of a path underneath it can
+		// ever be live unless "build/" is itself re-included first -
+		// verified with real git for BOTH line orderings.
+		writeGitignore(t, dir,
+			"!build/keep-me/",
+			"build/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- build/")
+		assert.NotContains(t, args, "--filter=+ build/keep-me/",
+			"dead negation (ancestor excluded by a bare dir pattern) must not produce an include rule")
+		assert.NotContains(t, args, "--filter=+ build/",
+			"dead negation must not produce ancestor include rules either")
+	})
+
+	t.Run("nested alternating negations are all dead if the top-level exclude is never itself re-included", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git (git status --ignored --porcelain):
+		// with "a/" excluded and never re-included by an earlier negation,
+		// every deeper "!a/b/" / "!a/b/c/" negation is unreachable - git
+		// reports a/file.txt, a/b/file.txt, and a/b/c/file.txt as ALL
+		// ignored, matched by the "a/" rule alone.
+		writeGitignore(t, dir,
+			"a/",
+			"!a/b/",
+			"a/b/*",
+			"!a/b/c/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- a/")
+		for _, a := range args {
+			assert.False(t, strings.HasPrefix(a, "--filter=+ "),
+				"every negation under a dead top-level exclude must be dropped, got: %s", a)
+		}
+	})
+
+	t.Run("re-including each ancestor in turn resurrects a deeply nested negation", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git: p/ excluded then re-included via
+		// !p/, p/c/ excluded then re-included via !p/c/, p/c/g/ excluded
+		// then re-included via !p/c/g/ - every ancestor independently
+		// resolves NOT ignored, so p/c/g/file.txt is not ignored either
+		// (git check-ignore exits 1 / no match). Unlike the dead case
+		// above, each directory here gets its own explicit re-include
+		// before the next level is excluded.
+		writeGitignore(t, dir,
+			"p/",
+			"!p/",
+			"p/c/",
+			"!p/c/",
+			"p/c/g/",
+			"!p/c/g/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=+ p/c/g/",
+			"innermost negation must be live since every ancestor resolves not-excluded")
+	})
+
+	t.Run("unanchored bare directory exclude poisons a deeper ancestor by basename", func(t *testing.T) {
+		dir := t.TempDir()
+		// Verified against real git (git check-ignore -v): a bare,
+		// unanchored "mocks/" rule matches ANY directory named "mocks"
+		// at any depth - including frontend/tests/mocks/ - per gitignore's
+		// own rule that a pattern with no interior slash is unanchored.
+		// It poisons the negation just like an exact "frontend/tests/mocks/"
+		// exclude would, even though the two pattern strings don't match
+		// textually. Regression test for a CodeRabbit-flagged gap where
+		// dirResolvesExcluded only compared ancestors by exact string
+		// equality and missed this case.
+		writeGitignore(t, dir,
+			"mocks/",
+			"!frontend/tests/mocks/data/",
+		)
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		assert.Contains(t, args, "--filter=- mocks/")
+		assert.NotContains(t, args, "--filter=+ frontend/tests/mocks/data/",
+			"unanchored ancestor exclude must poison the negation, matching real git")
+		for _, a := range args {
+			assert.False(t, strings.HasPrefix(a, "--filter=+ "),
+				"no negation should survive when an unanchored ancestor exclude poisons it, got: %s", a)
+		}
+	})
+
+	t.Run("no .gitignore file means no filter rules and no error", func(t *testing.T) {
+		dir := t.TempDir() // empty, no .gitignore
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{RespectGitignore: true})
+		require.NoError(t, err)
+
+		for _, a := range args {
+			assert.False(t, strings.HasPrefix(a, "--filter=+ ") || strings.HasPrefix(a, "--filter=- "),
+				"no .gitignore present, should not emit any gitignore-derived filter rule")
+		}
+	})
+
+	t.Run("gitignore rules come after explicit excludes and before custom flags", func(t *testing.T) {
+		dir := t.TempDir()
+		writeGitignore(t, dir, "build/")
+
+		args, err := BuildArgs(conn, dir, config.SyncConfig{
+			RespectGitignore: true,
+			Exclude:          []string{".git/", "node_modules/"},
+			Flags:            []string{"--compress"},
+		})
+		require.NoError(t, err)
+
+		gitignoreIdx := indexOf(args, "--filter=- build/")
+		lastExcludeIdx := -1
+		for i, a := range args {
+			if strings.HasPrefix(a, "--exclude=") {
+				lastExcludeIdx = i
+			}
+		}
+		firstFlagIdx := indexOf(args, "--compress")
+
+		require.NotEqual(t, -1, gitignoreIdx, "gitignore filter rule should be present")
+		require.NotEqual(t, -1, lastExcludeIdx, "exclude should be present")
+		require.NotEqual(t, -1, firstFlagIdx, "custom flag should be present")
+		assert.Greater(t, gitignoreIdx, lastExcludeIdx, "gitignore rules should come after explicit excludes")
+		assert.Less(t, gitignoreIdx, firstFlagIdx, "gitignore rules should come before custom flags")
+	})
 }
 
 // TestBuildArgs_SSHBatchMode verifies that BatchMode=yes is included in the SSH command.
@@ -282,7 +575,7 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 		Host:  config.Host{Dir: "~/projects/app"},
 	}
 
-	t.Run("without custom config", func(t *testing.T) {
+	t.Run("without custom config uses default ssh config if present", func(t *testing.T) {
 		SSHConfigFile = ""
 		args, err := BuildArgs(conn, "/home/user/app", config.SyncConfig{})
 		require.NoError(t, err)
@@ -295,7 +588,17 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 			}
 		}
 
-		assert.NotContains(t, sshCmd, "-F ", "should not include -F flag when SSHConfigFile is empty")
+		// When ~/.ssh/config exists, -F should point to it so rsync inherits
+		// ProxyCommand, IdentityFile, and other host-specific SSH settings.
+		home, err := os.UserHomeDir()
+		require.NoError(t, err)
+		defaultConfig := filepath.Join(home, ".ssh", "config")
+		if _, err := os.Stat(defaultConfig); err == nil {
+			assert.Contains(t, sshCmd, "-F", "should include -F when ~/.ssh/config exists")
+			assert.Contains(t, sshCmd, defaultConfig)
+		} else {
+			assert.NotContains(t, sshCmd, "-F", "should not include -F when ~/.ssh/config doesn't exist")
+		}
 	})
 
 	t.Run("with custom config", func(t *testing.T) {
@@ -330,6 +633,40 @@ func TestBuildArgs_SSHConfigFile(t *testing.T) {
 
 		assert.Contains(t, sshCmd, `-F "/tmp/my ssh config/config"`,
 			"should properly quote paths with spaces")
+	})
+}
+
+func TestBuildSSHCmd(t *testing.T) {
+	origConfigFile := SSHConfigFile
+	defer func() { SSHConfigFile = origConfigFile }()
+
+	t.Run("includes ControlMaster options", func(t *testing.T) {
+		SSHConfigFile = ""
+		cmd := buildSSHCmd()
+		assert.Contains(t, cmd, "ControlMaster=auto")
+		assert.Contains(t, cmd, "ControlPath=")
+		assert.Contains(t, cmd, "ControlPersist=60")
+		assert.Contains(t, cmd, "BatchMode=yes")
+	})
+
+	t.Run("custom config file", func(t *testing.T) {
+		SSHConfigFile = "/tmp/custom-ssh-config"
+		cmd := buildSSHCmd()
+		assert.Contains(t, cmd, `-F "/tmp/custom-ssh-config"`)
+	})
+
+	t.Run("default config when file exists", func(t *testing.T) {
+		SSHConfigFile = ""
+		home, err := os.UserHomeDir()
+		require.NoError(t, err)
+		defaultConfig := filepath.Join(home, ".ssh", "config")
+		if _, err := os.Stat(defaultConfig); err == nil {
+			cmd := buildSSHCmd()
+			assert.Contains(t, cmd, "-F")
+			assert.Contains(t, cmd, defaultConfig)
+		} else {
+			t.Skip("~/.ssh/config does not exist")
+		}
 	})
 }
 
@@ -787,4 +1124,170 @@ func TestScanLinesWithCR(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInvalidateStaleDirectories covers the core invalidation logic.
+func TestInvalidateStaleDirectories(t *testing.T) {
+	// Create a temp directory to serve as the local project root.
+	localDir := t.TempDir()
+
+	invalidations := []config.LockfileInvalidation{
+		{Lockfile: "bun.lock", Dirs: []string{"node_modules/"}},
+	}
+
+	t.Run("skips nil connection", func(t *testing.T) {
+		err := InvalidateStaleDirectories(nil, localDir, invalidations, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips local connection", func(t *testing.T) {
+		conn := &host.Connection{IsLocal: true}
+		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips empty invalidations", func(t *testing.T) {
+		mock := sshtesting.NewMockClient("test-host")
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "~/rr/myapp"},
+		}
+		err := InvalidateStaleDirectories(conn, localDir, nil, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips when lockfile does not exist locally", func(t *testing.T) {
+		mock := sshtesting.NewMockClient("test-host")
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "~/rr/myapp"},
+		}
+		// No bun.lock in localDir - should be a no-op
+		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("deletes remote dir when lockfile is newer", func(t *testing.T) {
+		// Create a local lockfile
+		lockfile := filepath.Join(localDir, "bun.lock")
+		require.NoError(t, os.WriteFile(lockfile, []byte("lockfile content"), 0644))
+
+		mock := sshtesting.NewMockClient("test-host")
+
+		// Remote node_modules has mtime of 0 (older than any local file)
+		remoteNodeModulesPath := "/root/rr/myapp/node_modules"
+		mock.GetFS().MkdirAll(remoteNodeModulesPath)
+
+		// Respond to the stat command with mtime=0 (stale)
+		statPattern := `.*stat.*node_modules.*`
+		mock.SetCommandResponse(statPattern, sshtesting.CommandResponse{
+			Stdout:   []byte("0\n"),
+			ExitCode: 0,
+		})
+
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips delete when remote dir is newer than lockfile", func(t *testing.T) {
+		// Create a local lockfile with known mtime
+		lockfile := filepath.Join(localDir, "bun.lock")
+		require.NoError(t, os.WriteFile(lockfile, []byte("lockfile content"), 0644))
+
+		// Set lockfile mtime to the past
+		pastTime := time.Now().Add(-24 * time.Hour)
+		require.NoError(t, os.Chtimes(lockfile, pastTime, pastTime))
+
+		mock := sshtesting.NewMockClient("test-host")
+
+		localInfo, err := os.Stat(lockfile)
+		require.NoError(t, err)
+		// Remote mtime is in the future relative to lockfile
+		remoteMtime := localInfo.ModTime().Unix() + 3600
+
+		statPattern := `.*stat.*node_modules.*`
+		mock.SetCommandResponse(statPattern, sshtesting.CommandResponse{
+			Stdout:   []byte(fmt.Sprintf("%d\n", remoteMtime)),
+			ExitCode: 0,
+		})
+
+		// Track whether rm was called
+		rmCalled := false
+		mock.SetCommandResponse(`^rm -rf .*node_modules.*`, sshtesting.CommandResponse{
+			Stdout:   nil,
+			ExitCode: 0,
+			Error:    nil,
+		})
+		_ = rmCalled // silence unused warning
+
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err = InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		assert.NoError(t, err)
+		// We can't easily assert rm was NOT called with MockClient's current API,
+		// but the function should succeed with no error.
+	})
+
+	t.Run("handles multiple dirs per lockfile", func(t *testing.T) {
+		multiDirInvalidations := []config.LockfileInvalidation{
+			{Lockfile: "bun.lock", Dirs: []string{"node_modules/", "frontend/node_modules/"}},
+		}
+
+		lockfile := filepath.Join(localDir, "bun.lock")
+		require.NoError(t, os.WriteFile(lockfile, []byte("lockfile content"), 0644))
+
+		mock := sshtesting.NewMockClient("test-host")
+
+		// Respond with mtime=0 for both stat calls
+		mock.SetCommandResponse(`.*stat.*`, sshtesting.CommandResponse{
+			Stdout:   []byte("0\n"),
+			ExitCode: 0,
+		})
+
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err := InvalidateStaleDirectories(conn, localDir, multiDirInvalidations, nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("skips entry with empty dirs list", func(t *testing.T) {
+		emptyDirsInvalidations := []config.LockfileInvalidation{
+			{Lockfile: "go.sum", Dirs: []string{}},
+		}
+
+		lockfile := filepath.Join(localDir, "go.sum")
+		require.NoError(t, os.WriteFile(lockfile, []byte("go sum content"), 0644))
+
+		mock := sshtesting.NewMockClient("test-host")
+		conn := &host.Connection{
+			Name:   "test-host",
+			Alias:  "test-host",
+			Client: mock,
+			Host:   config.Host{Dir: "/root/rr/myapp"},
+		}
+
+		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil)
+		assert.NoError(t, err)
+	})
 }

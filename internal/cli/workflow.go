@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -40,35 +43,98 @@ type WorkflowContext struct {
 	Lock         *lock.Lock
 	WorkDir      string
 	PhaseDisplay *ui.PhaseDisplay
+	Reporter     PhaseReporter
 	StartTime    time.Time
+
+	// SubdirOffset is the caller's directory relative to the project root
+	// ("backend", "backend/api"), empty when invoked from the root itself.
+	// WorkDir is the project root regardless - it's the right sync root and
+	// remote dir - but relative paths in a command were written against the
+	// caller's cwd, so ad-hoc run/exec cd into this offset first.
+	SubdirOffset string
+
+	// ResultDetails accumulates extra keys (fallback, log_file, summary,
+	// hint, path_rewrites, ...) merged into the final result envelope's
+	// details map. Use AddResultDetail; nil until first write.
+	ResultDetails map[string]interface{}
 
 	// Internal state
 	selector   *host.Selector
 	signalChan chan os.Signal
+	ctx        context.Context
+	cancel     context.CancelFunc
 	closeOnce  sync.Once
 }
 
+// AddResultDetail records an extra key for the final result envelope.
+func (w *WorkflowContext) AddResultDetail(key string, value interface{}) {
+	if w.ResultDetails == nil {
+		w.ResultDetails = make(map[string]interface{})
+	}
+	w.ResultDetails[key] = value
+}
+
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
+// Instead of calling os.Exit, it cancels the workflow context so in-flight
+// commands (like remote SSH sessions) can send SIGINT to the remote process
+// before the connection is torn down.
 func (w *WorkflowContext) setupSignalHandler() {
-	w.signalChan = make(chan os.Signal, 1)
+	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.signalChan = make(chan os.Signal, 2)
 	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		sig, ok := <-w.signalChan
+		_, ok := <-w.signalChan
 		if !ok {
 			// Channel was closed by Close(), not a signal
 			return
 		}
-		// Received actual signal, clean up and exit
-		_ = sig
+		// Cancel context first so in-flight SSH commands can clean up
+		w.cancel()
+
+		// Second signal force-quits immediately (users expect double Ctrl+C to kill)
+		go func() {
+			_, ok := <-w.signalChan
+			if !ok {
+				return
+			}
+			os.Exit(130)
+		}()
+
 		w.Close()
-		os.Exit(130) // 128 + SIGINT(2) = 130, standard exit code for Ctrl+C
 	}()
+}
+
+// GetReporter returns the workflow's phase reporter, lazily initializing if needed.
+func (w *WorkflowContext) GetReporter() PhaseReporter {
+	if w.Reporter != nil {
+		return w.Reporter
+	}
+	if w.PhaseDisplay != nil {
+		w.Reporter = NewPhaseReporter(w.PhaseDisplay)
+		return w.Reporter
+	}
+	w.Reporter = &StructuredReporter{}
+	return w.Reporter
+}
+
+// Context returns the workflow's cancellable context. This context is cancelled
+// when the user sends SIGINT/SIGTERM, allowing callers to propagate cancellation
+// to remote commands.
+func (w *WorkflowContext) Context() context.Context {
+	if w.ctx == nil {
+		return context.Background()
+	}
+	return w.ctx
 }
 
 // Close releases workflow resources. Safe to call multiple times.
 func (w *WorkflowContext) Close() {
 	w.closeOnce.Do(func() {
+		// Cancel context to signal in-flight operations
+		if w.cancel != nil {
+			w.cancel()
+		}
 		// Stop listening for signals
 		if w.signalChan != nil {
 			signal.Stop(w.signalChan)
@@ -108,6 +174,7 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 		// Use project root if available, otherwise fall back to cwd
 		if ctx.Resolved != nil && ctx.Resolved.ProjectRoot != "" {
 			ctx.WorkDir = ctx.Resolved.ProjectRoot
+			ctx.SubdirOffset = subdirOffset(ctx.WorkDir)
 		} else {
 			var err error
 			ctx.WorkDir, err = os.Getwd()
@@ -119,6 +186,35 @@ func setupWorkDir(ctx *WorkflowContext, opts WorkflowOptions) error {
 		}
 	}
 	return nil
+}
+
+// subdirOffset returns the current directory relative to projectRoot, or "" when
+// the caller is at the root, the offset can't be determined, or it escapes the
+// root. Both paths are symlink-resolved first: on macOS os.Getwd() reports
+// /private/var while a discovered project root may be /var, and a naive
+// filepath.Rel across that boundary yields a bogus "../../.." traversal.
+func subdirOffset(projectRoot string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Clean(r)
+		}
+		return filepath.Clean(p)
+	}
+
+	rel, err := filepath.Rel(resolve(projectRoot), resolve(cwd))
+	if err != nil || rel == "." || rel == "" {
+		return ""
+	}
+	// A ".." component means cwd isn't under the project root at all.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(rel)
 }
 
 // setupHostSelector creates and configures the host selector.
@@ -169,7 +265,7 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 		uiHosts[i] = ui.HostInfo{
 			Name: h.Name,
 			SSH:  h.SSH,
-			Dir:  h.Dir,
+			Dir:  config.ExpandRemote(h.Dir),
 			Tags: h.Tags,
 		}
 	}
@@ -186,19 +282,27 @@ func selectHostInteractively(ctx *WorkflowContext, preferredHost string, quiet b
 
 // connectPhase handles the connection phase of the workflow.
 func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	connDisplay := ui.NewConnectionDisplay(os.Stdout)
-	connDisplay.SetQuiet(opts.Quiet)
-	connDisplay.Start()
+	connectStart := time.Now()
 
 	// Resolve preferred host using resolution order
 	preferredHost := opts.Host
 	if preferredHost == "" {
-		// Use config.ResolveHost to get the host following resolution order
 		hostName, _, err := config.ResolveHost(ctx.Resolved, "")
 		if err == nil {
 			preferredHost = hostName
 		}
 	}
+
+	if PrettyMode() {
+		return connectPhasePretty(ctx, opts, preferredHost, connectStart)
+	}
+	return connectPhaseStructured(ctx, opts, preferredHost, connectStart)
+}
+
+func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHost string, _ time.Time) error {
+	connDisplay := ui.NewConnectionDisplay(os.Stdout)
+	connDisplay.SetQuiet(opts.Quiet)
+	connDisplay.Start()
 
 	// Interactive host selection
 	var err error
@@ -207,10 +311,8 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return err
 	}
 
-	// Track connection status for output
 	var usedLocalFallback bool
 
-	// Set up event handler for connection progress
 	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
 		case host.EventFailed:
@@ -223,7 +325,6 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		}
 	})
 
-	// Connect - either by tag or by host/default
 	if opts.Tag != "" {
 		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)
 	} else {
@@ -234,7 +335,6 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return err
 	}
 
-	// Show connection result
 	if usedLocalFallback {
 		connDisplay.SuccessLocal()
 	} else {
@@ -244,39 +344,151 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	return nil
 }
 
+func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferredHost string, connectStart time.Time) error {
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("connect")
+
+	// Local fallback (hosts unreachable) must be visible in structured
+	// output too, not just in the pretty connection display.
+	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
+		if event.Type == host.EventLocalFallback {
+			WritePhaseEvent(PhaseEvent{
+				Type:   "phase",
+				Phase:  "connect",
+				Status: "warn",
+				Host:   "local",
+				Details: map[string]interface{}{
+					"local_fallback": true,
+					"reason":         "hosts_unreachable",
+					"message":        event.Message,
+				},
+			})
+		}
+	})
+
+	var err error
+	if opts.Tag != "" {
+		ctx.Conn, err = ctx.selector.SelectByTag(opts.Tag)
+	} else {
+		ctx.Conn, err = ctx.selector.Select(preferredHost)
+	}
+	if err != nil {
+		reporter.PhaseFailed("connect", err)
+		return err
+	}
+
+	host := ctx.Conn.Name
+	if ctx.Conn.IsLocal {
+		host = "local"
+	}
+	reporter.PhaseComplete("connect", host, time.Since(connectStart))
+	return nil
+}
+
 // syncPhase handles the file sync phase of the workflow.
 func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
+	reporter := ctx.GetReporter()
+
 	if ctx.Conn.IsLocal {
-		ctx.PhaseDisplay.RenderSkipped("Sync", "local")
+		reporter.PhaseSkipped("sync", "local")
 		return nil
 	}
 	if opts.SkipSync {
-		ctx.PhaseDisplay.RenderSkipped("Sync", "skipped")
+		reporter.PhaseSkipped("sync", "skipped")
 		return nil
 	}
 
 	syncStart := time.Now()
 
+	if !PrettyMode() {
+		return syncStructured(ctx, syncStart)
+	}
 	if !opts.Quiet {
 		return syncWithProgress(ctx, syncStart)
 	}
 	return syncQuiet(ctx, syncStart)
 }
 
+// syncStructured syncs files without UI and emits structured events.
+func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("sync")
+
+	syncCfg := resolveSyncConfig(ctx)
+
+	invalidationNotify := func(dir, lockfile string) {
+		WritePhaseEvent(PhaseEvent{
+			Type:   "phase",
+			Phase:  "sync",
+			Status: "invalidated",
+			Details: map[string]interface{}{
+				"dir":      dir,
+				"lockfile": lockfile,
+			},
+		})
+	}
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, invalidationNotify); err != nil {
+		reporter.PhaseFailed("sync", err)
+		return err
+	}
+
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions())
+	if err != nil {
+		reporter.PhaseFailed("sync", err)
+		return err
+	}
+
+	reporter.PhaseComplete("sync", ctx.Conn.Name, time.Since(syncStart))
+	return nil
+}
+
+// structuredSyncOptions surfaces sync warnings as phase events.
+func structuredSyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			WritePhaseEvent(PhaseEvent{
+				Type:    "phase",
+				Phase:   "sync",
+				Status:  "warn",
+				Details: w.Details,
+			})
+		},
+	}
+}
+
+// prettySyncOptions surfaces sync warnings as printed warnings.
+func prettySyncOptions() *rrsync.SyncOptions {
+	return &rrsync.SyncOptions{
+		Warn: func(w rrsync.SyncWarning) {
+			ui.PrintWarning(w.Message)
+		},
+	}
+}
+
+// resolveSyncConfig returns the sync config to use, falling back to defaults.
+func resolveSyncConfig(ctx *WorkflowContext) config.SyncConfig {
+	if ctx.Resolved.Project != nil {
+		return ctx.Resolved.Project.Sync
+	}
+	return config.DefaultConfig().Sync
+}
+
 // syncWithProgress syncs files with progress bar display.
 func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
+	syncCfg := resolveSyncConfig(ctx)
+
+	// Delete stale remote directories when lockfiles have changed before syncing.
+	// Pretty mode: nil notify falls back to fmt.Printf in sync package.
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, nil); err != nil {
+		return err
+	}
+
 	syncProgress := ui.NewInlineProgress("Syncing files", os.Stdout)
 	syncProgress.SetUseFakeProgress(false) // Use real rsync progress
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
 	syncProgress.Start()
 
-	// Use project sync config if available, otherwise use defaults
-	syncCfg := config.DefaultConfig().Sync
-	if ctx.Resolved.Project != nil {
-		syncCfg = ctx.Resolved.Project.Sync
-	}
-
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, progressWriter, prettySyncOptions())
 	if err != nil {
 		syncProgress.Fail()
 		return err
@@ -289,16 +501,18 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 
 // syncQuiet syncs files with minimal output (spinner only).
 func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
+	syncCfg := resolveSyncConfig(ctx)
+
+	// Delete stale remote directories when lockfiles have changed before syncing.
+	// Pretty mode: nil notify falls back to fmt.Printf in sync package.
+	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, nil); err != nil {
+		return err
+	}
+
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
 
-	// Use project sync config if available, otherwise use defaults
-	syncCfg := config.DefaultConfig().Sync
-	if ctx.Resolved.Project != nil {
-		syncCfg = ctx.Resolved.Project.Sync
-	}
-
-	err := rrsync.Sync(ctx.Conn, ctx.WorkDir, syncCfg, nil)
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, prettySyncOptions())
 	if err != nil {
 		syncSpinner.Fail()
 		return err
@@ -311,7 +525,6 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 
 // lockPhase handles the lock acquisition phase of the workflow.
 func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	// Use project lock config if available, otherwise use defaults
 	lockCfg := config.DefaultConfig().Lock
 	if ctx.Resolved.Project != nil {
 		lockCfg = ctx.Resolved.Project.Lock
@@ -322,18 +535,45 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	}
 
 	lockStart := time.Now()
-	lockSpinner := ui.NewSpinner("Acquiring lock")
-	lockSpinner.Start()
+
+	if PrettyMode() {
+		lockSpinner := ui.NewSpinner("Acquiring lock")
+		lockSpinner.Start()
+
+		var err error
+		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
+		if err != nil {
+			lockSpinner.Fail()
+			return err
+		}
+
+		ctx.Lock.StartHeartbeat()
+		lockSpinner.Success()
+		ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+		return nil
+	}
+
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("lock")
+
+	stealWarn := func(msg string) {
+		WritePhaseEvent(PhaseEvent{
+			Type:    "phase",
+			Phase:   "lock",
+			Status:  "warn",
+			Details: map[string]interface{}{"message": msg},
+		})
+	}
 
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(stealWarn))
 	if err != nil {
-		lockSpinner.Fail()
+		reporter.PhaseFailed("lock", err)
 		return err
 	}
 
-	lockSpinner.Success()
-	ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
+	ctx.Lock.StartHeartbeat()
+	reporter.PhaseComplete("lock", ctx.Conn.Name, time.Since(lockStart))
 	return nil
 }
 
@@ -354,9 +594,11 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 		return nil, err
 	}
 
+	pd := ui.NewPhaseDisplay(os.Stdout)
 	ctx := &WorkflowContext{
 		StartTime:    time.Now(),
-		PhaseDisplay: ui.NewPhaseDisplay(os.Stdout),
+		PhaseDisplay: pd,
+		Reporter:     NewPhaseReporter(pd),
 	}
 
 	// Set up signal handler early to ensure cleanup on Ctrl+C
@@ -424,18 +666,29 @@ func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest str
 	}
 
 	pullStart := time.Now()
-	spinner := ui.NewSpinner("Pulling files")
-	spinner.Start()
-
 	pullOpts := rrsync.PullOptions{
 		Patterns:    pullItems,
 		DefaultDest: dest,
 	}
 
+	if !PrettyMode() {
+		reporter := wf.GetReporter()
+		reporter.PhaseStart("pull")
+		pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
+		if pullErr != nil {
+			reporter.PhaseFailed("pull", pullErr)
+		} else {
+			reporter.PhaseComplete("pull", wf.Conn.Name, time.Since(pullStart))
+		}
+		return
+	}
+
+	spinner := ui.NewSpinner("Pulling files")
+	spinner.Start()
+
 	pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
 	if pullErr != nil {
 		spinner.Fail()
-		// Don't fail the overall command for pull errors, just warn
 		fmt.Printf("\n%s Pull failed: %s\n", ui.SymbolFail, pullErr.Error())
 	} else {
 		spinner.Success()
@@ -477,7 +730,7 @@ func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	// Filter to missing requirements
 	missing := require.FilterMissing(results)
 	if len(missing) == 0 {
-		if !opts.Quiet {
+		if PrettyMode() && !opts.Quiet {
 			ctx.PhaseDisplay.RenderSuccess("Requirements verified", 0)
 		}
 		return nil
