@@ -40,6 +40,21 @@ type TestSummaryProvider interface {
 	GetTestCounts() (passed, failed, skipped, errors int)
 }
 
+// NoTestsReporter is an optional interface for formatters that can distinguish
+// "the runner explicitly reported collecting nothing" from "we parsed no
+// results". Without it, a run that executed zero tests is indistinguishable
+// from one where nothing failed, which lets a broken path filter or a bad
+// working directory report success.
+//
+// Implementations must only report true on positive evidence in the *output*
+// (pytest's "no tests ran", a zero "collected" line, jest's zero totals).
+// Command-string framework detection is not evidence: "pip install pytest"
+// scores as pytest but says nothing about tests.
+type NoTestsReporter interface {
+	// RanNothing reports whether the runner ran no tests at all.
+	RanNothing() bool
+}
+
 // GenericFormatter provides simple passthrough with error highlighting.
 type GenericFormatter struct {
 	errorStyle lipgloss.Style

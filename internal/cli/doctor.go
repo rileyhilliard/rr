@@ -224,6 +224,9 @@ func collectChecks(cfgPath string, _ *config.Config, globalCfg *config.GlobalCon
 	// Host connectivity checks (if global config with hosts exists)
 	if globalCfg != nil && len(globalCfg.Hosts) > 0 {
 		checks = append(checks, doctor.NewHostsChecks(globalCfg.Hosts)...)
+
+		// Which remote dir does this tree sync to? (worktree-aware)
+		checks = append(checks, &doctor.WorktreeMappingCheck{Hosts: globalCfg.Hosts})
 	}
 
 	// Dependency checks (local always, remote if connected)

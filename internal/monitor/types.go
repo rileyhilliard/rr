@@ -8,6 +8,7 @@ type HostMetrics struct {
 	CPU       CPUMetrics
 	RAM       RAMMetrics
 	GPU       *GPUMetrics // nil if no GPU
+	Disk      DiskMetrics
 	Network   []NetworkInterface
 	Processes []ProcessInfo
 	System    SystemInfo
@@ -18,6 +19,26 @@ type CPUMetrics struct {
 	Percent float64
 	Cores   int
 	LoadAvg [3]float64
+	PerCore []float64 // Per-core usage percentages (Linux only; empty on first sample)
+	TempC   float64   // CPU temperature in Celsius (0 = unavailable)
+	// FirstSample is set by the collector when no delta baseline existed yet,
+	// so Percent misleadingly reads 0. Only Linux CPU usage is delta-based;
+	// macOS reads instantaneous usage from `top` and never sets this.
+	FirstSample bool
+}
+
+// Valid reports whether Percent reflects a real measurement.
+func (c CPUMetrics) Valid() bool {
+	return !c.FirstSample
+}
+
+// DiskMetrics contains root filesystem usage and disk I/O rates.
+type DiskMetrics struct {
+	UsedBytes        int64
+	TotalBytes       int64
+	Percent          float64
+	ReadBytesPerSec  float64 // Linux only; 0 on first sample or when unavailable
+	WriteBytesPerSec float64 // Linux only; 0 on first sample or when unavailable
 }
 
 // RAMMetrics contains memory usage information.
@@ -82,6 +103,15 @@ type HostResult struct {
 	LockInfo     *HostLockInfo // Lock status (nil if not checked or error)
 	ConnectedVia string        // SSH alias used to connect (e.g., "m4-tailscale")
 	Latency      time.Duration // Actual SSH round-trip latency (from a lightweight probe)
+	Platform     Platform      // Detected remote platform (populated by CollectSnapshot)
+	NetRates     *NetRates     // Aggregate network throughput (CollectSnapshot only; the TUI derives rates from History)
+}
+
+// NetRates holds aggregate network throughput across all non-loopback
+// interfaces, in bytes per second.
+type NetRates struct {
+	RxBytesPerSec float64
+	TxBytesPerSec float64
 }
 
 // Duration returns how long the lock has been held.

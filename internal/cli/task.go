@@ -58,6 +58,7 @@ type TaskOptions struct {
 	Local        bool          // If true, force local execution (skip remote hosts)
 	SkipDeps     bool          // If true, skip dependencies and run only this task
 	From         string        // If set, start from this task in the dependency chain
+	Tail         int           // Print the last N lines of the run log after completion
 }
 
 // RunTask executes a named task from the configuration.
@@ -105,7 +106,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	if len(opts.Args) > 0 && len(task.Steps) > 0 {
 		return 1, errors.New(errors.ErrConfig,
 			"Can't pass arguments to multi-step tasks",
-			"Arguments are only supported for tasks with a single 'run' command.")
+			"Arguments (and {args} placeholders) are only supported for tasks with a single 'run' command.")
 	}
 
 	// If task has dependencies and we're not skipping them, use dependency executor
@@ -129,12 +130,31 @@ func RunTask(opts TaskOptions) (int, error) {
 		streamHandler.SetFormatter(output.NewGenericFormatter())
 	}
 
+	// Tee raw output into a per-run log file (best-effort).
+	logPath, closeLog := setupRunLog(wf, opts.TaskName, streamHandler)
+	defer closeLog()
+
 	execStart := time.Now()
 
 	// Get remote directory for task execution
 	remoteDir := ""
 	if !wf.Conn.IsLocal {
 		remoteDir = config.ExpandRemote(wf.Conn.Host.Dir)
+	}
+
+	// Rewrite local absolute paths in args to project-relative form; task
+	// execution cds into the remote project dir, so relative paths resolve
+	// there. Remaining local-only paths get a warning.
+	taskArgs := opts.Args
+	if !wf.Conn.IsLocal && len(taskArgs) > 0 && config.ResolveRewritePaths(wf.Resolved) {
+		rewritten, n := RewriteArgsToRelative(taskArgs, wf.WorkDir)
+		if n > 0 {
+			taskArgs = rewritten
+			reportPathRewrites(wf, n, wf.WorkDir, ".")
+		}
+		if err := checkForeignPaths(wf, strings.Join(taskArgs, " "), remoteDir); err != nil {
+			return 1, err
+		}
 	}
 
 	// Get merged setup commands (host + project defaults)
@@ -154,8 +174,9 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Execute the task
-	result, err := exec.ExecuteTask(wf.Context(), wf.Conn, task, opts.Args, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr(), execOpts)
+	result, err := exec.ExecuteTask(wf.Context(), wf.Conn, task, taskArgs, mergedEnv, remoteDir, streamHandler.Stdout(), streamHandler.Stderr(), execOpts)
 	execDuration := time.Since(execStart)
+	streamHandler.Flush()
 
 	// If cancelled by signal, return standard Ctrl+C exit code
 	if wf.Context().Err() != nil {
@@ -174,12 +195,35 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Pull files if task has pull config
 	ExecutePullPhase(wf, task.Pull, "")
 
+	// Post-failure hint: detect local-machine assumptions (paths that only
+	// exist here, git commands against the synced snapshot).
+	failureHint := ""
+	if result.ExitCode != 0 && !wf.Conn.IsLocal {
+		failureHint = buildFailureHint(task.Run, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
+		if failureHint != "" {
+			wf.AddResultDetail("hint", failureHint)
+		}
+	}
+
+	// Record test summary/failures from the run log and note broken pipes.
+	attachRunOutcome(wf, task.Run, logPath, result.ExitCode)
+	if streamHandler.BrokenPipe() {
+		wf.AddResultDetail("broken_pipe", true)
+	}
+
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
 		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		repeatFallbackWarning(wf.ResultDetails)
+		warnNoTests(wf.ResultDetails)
+		if failureHint != "" {
+			fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
+		}
 	} else {
-		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+		wf.Reporter.CommandComplete(result.ExitCode, wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}
+
+	printLogTail(logPath, opts.Tail)
 
 	return result.ExitCode, nil
 }
@@ -259,6 +303,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 
 	result, err := executor.Execute(ctx, plan)
 	execDuration := time.Since(execStart)
+	streamHandler.Flush()
 
 	if err != nil {
 		return 1, err
@@ -275,8 +320,14 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
 		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		repeatFallbackWarning(wf.ResultDetails)
+		// No warnNoTests here: deps.TaskExecutionResult carries only a name,
+		// exit code, and duration - no command or output for a formatter to
+		// read - so nothing ever sets no_tests on this path. Calling it would
+		// be dead code that reads as coverage. Surfacing zero-test subtasks in
+		// dependency chains needs output capture plumbed through the executor.
 	} else {
-		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration)
+		wf.Reporter.CommandComplete(result.ExitCode(), wf.Conn.Name, time.Since(wf.StartTime), execDuration, wf.ResultDetails)
 	}
 
 	return result.ExitCode(), nil
@@ -480,8 +531,19 @@ func renderTaskSummary(_ *ui.PhaseDisplay, result *exec.TaskResult, taskName str
 
 // ListTasks displays all available tasks from the configuration.
 func ListTasks() error {
-	// Find and load config
-	cfgPath, err := config.Find("")
+	// Find and load config, honoring an explicit --config flag: a bad
+	// explicit path must error rather than silently falling back to a
+	// discovered .rr.yaml.
+	cfgPath, err := config.Find(Config())
+	if err == nil && cfgPath == "" {
+		notFound := errors.New(errors.ErrConfig,
+			"No .rr.yaml found in this directory or parent directories",
+			"Run 'rr init' to create one, or check you're in the right directory.")
+		if tasksJSON || MachineMode() {
+			return WriteJSONFromError(os.Stdout, notFound)
+		}
+		return notFound
+	}
 	if err != nil {
 		if tasksJSON || MachineMode() {
 			return WriteJSONFromError(os.Stdout, errors.WrapWithCode(err, errors.ErrConfig,
@@ -640,6 +702,21 @@ func RegisterTaskCommands(cfg *config.Config) {
 }
 
 // createTaskCommand creates a cobra command for a task.
+// taskFlagErrorFunc turns cobra's unknown-flag errors on generated task
+// commands into a hint about the '--' separator: flag-looking task args
+// (pytest's -k, -x, ...) hit rr's own flag parser first and die with
+// "unknown shorthand flag" unless they come after '--'.
+func taskFlagErrorFunc(name string) func(*cobra.Command, error) error {
+	return func(_ *cobra.Command, err error) error {
+		if err == nil || !strings.Contains(err.Error(), "unknown") {
+			return err
+		}
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			"rr parses flags before the task sees them",
+			fmt.Sprintf("Put task flags after '--' so they pass through: rr %s -- <args>", name))
+	}
+}
+
 func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	// Check if this is a parallel task
 	if config.IsParallelTask(&task) {
@@ -653,13 +730,14 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	var skipDepsFlag bool
 	var fromFlag string
 	var repeatFlag int
+	var tailFlag int
 
 	cmd := &cobra.Command{
 		Use:   name + " [args...]",
 		Short: task.Description,
 		Long:  buildTaskLongDescription(name, task),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag, repeatFlag)
+			return runTaskCommand(name, args, hostFlag, tagFlag, probeTimeoutFlag, localFlag, skipDepsFlag, fromFlag, repeatFlag, tailFlag)
 		},
 	}
 
@@ -674,12 +752,15 @@ func createTaskCommand(name string, task config.TaskConfig) *cobra.Command {
 	cmd.Flags().StringVar(&probeTimeoutFlag, "probe-timeout", "", "SSH probe timeout (e.g., 5s, 2m)")
 	cmd.Flags().BoolVar(&localFlag, "local", false, "force local execution (skip remote hosts)")
 	cmd.Flags().IntVar(&repeatFlag, "repeat", 0, "run task N times in parallel across available hosts (for flake detection)")
+	cmd.Flags().IntVar(&tailFlag, "tail", 0, "print the last N lines of the run log after completion")
 
 	// Add dependency flags if task has dependencies
 	if config.HasDependencies(&task) {
 		cmd.Flags().BoolVar(&skipDepsFlag, "skip-deps", false, "skip dependencies, run only this task")
 		cmd.Flags().StringVar(&fromFlag, "from", "", "start from this task in the dependency chain")
 	}
+
+	cmd.SetFlagErrorFunc(taskFlagErrorFunc(name))
 
 	return cmd
 }
@@ -711,7 +792,9 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 			if len(args) > 0 && !task.ForwardArgs {
 				return errors.New(errors.ErrConfig,
 					fmt.Sprintf("parallel task '%s' doesn't accept extra arguments (got: %s)", name, strings.Join(args, " ")),
-					fmt.Sprintf("use 'rr run \"<command> %s\"' for ad-hoc runs with custom args", strings.Join(args, " ")))
+					fmt.Sprintf("Set 'forward_args: true' on the task and add {args} placeholders to subtask commands where the arguments belong. "+
+						"Note: forwarded test filters may leave some subtasks with zero matching tests (pytest exits 4/5). "+
+						"For a one-off, use 'rr run \"<command> %s\"'.", strings.Join(args, " ")))
 			}
 			return runParallelTaskCommand(name, ParallelTaskOptions{
 				TaskName:    name,
@@ -748,6 +831,10 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 	cmd.Flags().IntVar(&maxParallelFlag, "max-parallel", 0, "limit concurrent task execution (0 = unlimited)")
 	cmd.Flags().BoolVar(&noLogsFlag, "no-logs", false, "don't save output to log files")
 	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "show execution plan without running")
+
+	if task.ForwardArgs {
+		cmd.SetFlagErrorFunc(taskFlagErrorFunc(name))
+	}
 
 	return cmd
 }
@@ -852,7 +939,7 @@ func buildParallelTaskLongDescription(name string, task config.TaskConfig) strin
 }
 
 // runTaskCommand is the implementation for task commands.
-func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string, repeatCount int) error {
+func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTimeoutFlag string, localFlag, skipDepsFlag bool, fromFlag string, repeatCount, tailCount int) error {
 	probeTimeout, err := ParseProbeTimeout(probeTimeoutFlag)
 	if err != nil {
 		return err
@@ -885,6 +972,7 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 		Local:        localFlag,
 		SkipDeps:     skipDepsFlag,
 		From:         fromFlag,
+		Tail:         tailCount,
 	})
 
 	if err != nil {

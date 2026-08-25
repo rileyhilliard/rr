@@ -4,7 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // ExpandTilde replaces ~ or ~/path with the user's home directory.
@@ -97,6 +102,41 @@ func ExpandRemote(s string) string {
 	return result
 }
 
+// argsPlaceholderRe matches {{args}} (escaped literal), {args}, and
+// {args:-default}. Defaults cannot contain '}' - the match stops at the
+// first closing brace.
+var argsPlaceholderRe = regexp.MustCompile(`\{\{args\}\}|\{args(:-([^}]*))?\}`)
+
+// ExpandArgs substitutes {args} / {args:-default} placeholders in a task run
+// string. Extra args are shell-quoted before substitution. With no args,
+// {args} becomes empty and {args:-default} inserts the default verbatim
+// (author-controlled, not quoted). {{args}} escapes to the literal {args}.
+// The second return value reports whether any (unescaped) placeholder was
+// found, so callers can decide between substitution and legacy append.
+func ExpandArgs(run string, args []string) (string, bool) {
+	if !strings.Contains(run, "{args") && !strings.Contains(run, "{{args}}") {
+		return run, false
+	}
+
+	found := false
+	quoted := util.ShellQuoteJoin(args)
+	result := argsPlaceholderRe.ReplaceAllStringFunc(run, func(m string) string {
+		if m == "{{args}}" {
+			return "{args}"
+		}
+		found = true
+		if len(args) > 0 {
+			return quoted
+		}
+		sub := argsPlaceholderRe.FindStringSubmatch(m)
+		if len(sub) > 2 {
+			return sub[2] // default value (empty for bare {args})
+		}
+		return ""
+	})
+	return result, found
+}
+
 // ExpandHost expands variables in a Host configuration.
 // Uses ExpandRemote for Dir since it's a remote path.
 func ExpandHost(h Host) Host {
@@ -104,20 +144,133 @@ func ExpandHost(h Host) Host {
 	return h
 }
 
-// getProject returns the project name for ${PROJECT} expansion.
-// Priority: git repo name > directory name.
-func getProject() string {
-	// Try git repo name first
-	if name := getGitRepoName(); name != "" {
-		return name
+// WorktreeInfo describes the git worktree containing the current directory.
+type WorktreeInfo struct {
+	IsLinked bool   // true when this is a linked worktree, not the main checkout
+	Name     string // sanitized worktree directory basename (linked only)
+	TopLevel string // absolute path of the worktree root
+}
+
+// projectFacts caches the git-derived facts behind ${PROJECT}. Only the
+// facts are cached, never the final name: the worktree-isolation flag is
+// read per call because global config loads (and could expand strings)
+// before the project config that carries sync.worktree_isolation is
+// available.
+type projectFacts struct {
+	baseName string
+	worktree WorktreeInfo
+}
+
+var (
+	projectFactsOnce  sync.Once
+	projectFactsValue projectFacts
+
+	// worktreeIsolationDisabled: zero value (false) means isolation is ON,
+	// so the default applies before any config is loaded.
+	worktreeIsolationDisabled atomic.Bool
+)
+
+// SetWorktreeIsolation enables or disables per-worktree remote directories.
+// Call after loading the project config; safe to call at any time because
+// the final project name is computed per expansion.
+func SetWorktreeIsolation(enabled bool) {
+	worktreeIsolationDisabled.Store(!enabled)
+}
+
+// resetProjectCache clears cached git facts. Test hook only.
+func resetProjectCache() {
+	projectFactsOnce = sync.Once{}
+	projectFactsValue = projectFacts{}
+	worktreeIsolationDisabled.Store(false)
+}
+
+// DetectWorktree reports whether the current directory is inside a linked
+// git worktree. Returns the zero value outside a git repository.
+func DetectWorktree() WorktreeInfo {
+	cmd := exec.Command("git", "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return WorktreeInfo{}
 	}
 
-	// Fallback to current directory name
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "project"
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 3 {
+		return WorktreeInfo{}
 	}
-	return filepath.Base(cwd)
+
+	gitDir, err := filepath.Abs(strings.TrimSpace(lines[0]))
+	if err != nil {
+		return WorktreeInfo{}
+	}
+	commonDir, err := filepath.Abs(strings.TrimSpace(lines[1]))
+	if err != nil {
+		return WorktreeInfo{}
+	}
+	topLevel := strings.TrimSpace(lines[2])
+
+	if gitDir == commonDir {
+		// Main checkout: --git-dir and --git-common-dir are the same .git
+		return WorktreeInfo{TopLevel: topLevel}
+	}
+
+	return WorktreeInfo{
+		IsLinked: true,
+		Name:     sanitizeWorktreeName(filepath.Base(topLevel)),
+		TopLevel: topLevel,
+	}
+}
+
+// sanitizeWorktreeName restricts a worktree basename to filesystem- and
+// shell-safe characters for use in remote directory names.
+func sanitizeWorktreeName(name string) string {
+	var b strings.Builder
+	for _, c := range name {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '.', c == '_', c == '-':
+			b.WriteRune(c)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	const maxLen = 40
+	s := b.String()
+	if len(s) > maxLen {
+		s = s[:maxLen]
+	}
+	return s
+}
+
+// loadProjectFacts computes and caches the repo name and worktree info.
+func loadProjectFacts() projectFacts {
+	projectFactsOnce.Do(func() {
+		facts := projectFacts{worktree: DetectWorktree()}
+
+		// Try git repo name first
+		if name := getGitRepoName(); name != "" {
+			facts.baseName = name
+		} else if cwd, err := os.Getwd(); err == nil {
+			facts.baseName = filepath.Base(cwd)
+		} else {
+			facts.baseName = "project"
+		}
+
+		projectFactsValue = facts
+	})
+	return projectFactsValue
+}
+
+// getProject returns the project name for ${PROJECT} expansion.
+// Priority: git repo name > directory name. In a linked git worktree with
+// worktree isolation enabled (the default), the name is suffixed with the
+// worktree basename ("repo@branch-dir") so each worktree syncs to its own
+// remote directory instead of clobbering the main checkout's.
+func getProject() string {
+	facts := loadProjectFacts()
+	if facts.worktree.IsLinked && !worktreeIsolationDisabled.Load() && facts.worktree.Name != "" {
+		return facts.baseName + "@" + facts.worktree.Name
+	}
+	return facts.baseName
 }
 
 // getGitRepoName extracts the repository name from git remote origin.

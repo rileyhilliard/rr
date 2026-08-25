@@ -59,6 +59,12 @@ func buildSSHCmd() string {
 // - Exclude patterns prevent files from being synced
 // - Custom flags from config are appended
 func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer) error {
+	return SyncWithOptions(conn, localDir, cfg, progress, nil)
+}
+
+// SyncWithOptions is Sync with optional behavior (e.g. a warning callback
+// for provenance mismatches).
+func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer, opts *SyncOptions) error {
 	// Skip sync for local connections - we're already working with local files
 	if conn != nil && conn.IsLocal {
 		return nil
@@ -77,6 +83,9 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 	if err := ensureRemoteDir(conn); err != nil {
 		return err
 	}
+
+	// Warn if the remote dir was last synced from a different tree/machine
+	checkSourceMarker(conn, localDir, opts)
 
 	args, err := BuildArgs(conn, localDir, cfg)
 	if err != nil {
@@ -127,6 +136,9 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 		}
 	}
 
+	// Record where this sync came from (best-effort)
+	writeSourceMarker(conn, localDir)
+
 	return nil
 }
 
@@ -166,6 +178,10 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	// Add progress info flag for parsing
 	args = append(args, "--info=progress2")
 
+	// Protect the provenance marker rr writes after each sync - it never
+	// exists locally, so --delete would remove it without this rule
+	args = append(args, fmt.Sprintf("--filter=P /%s", sourceMarkerFile))
+
 	// Add preserve patterns as filters (P = protect from deletion)
 	// These go BEFORE excludes so they protect paths that might otherwise be deleted
 	for _, pattern := range cfg.Preserve {
@@ -185,7 +201,11 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	// Respect .gitignore patterns as additional excludes. Placed after explicit
 	// preserves and excludes so .rr.yaml rules take precedence (rsync is first-match-wins).
 	if cfg.RespectGitignore {
-		args = append(args, "--filter=:- .gitignore")
+		gitignoreArgs, err := gitignoreFilterArgs(localDir)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, gitignoreArgs...)
 	}
 
 	// Add custom flags from config
@@ -195,6 +215,241 @@ func BuildArgs(conn *host.Connection, localDir string, cfg config.SyncConfig) ([
 	args = append(args, localDir, remoteDest)
 
 	return args, nil
+}
+
+// gitignoreFilterArgs reads the top-level .gitignore in localDir and
+// translates it into rsync --filter rules.
+//
+// This exists because rsync's own .gitignore support (--filter=':- .gitignore')
+// has no concept of git's "!pattern" negation. Rsync's merge-file format
+// only understands a bare "!" as "clear every rule read so far" - it is not
+// per-pattern and does not mean "re-include this path". So a .gitignore
+// containing an unanchored "data/" exclude followed by
+// "!frontend/tests/mocks/data/" to carve out an exception (a completely
+// normal, common pattern) would silently drop that path from every sync,
+// with git itself reporting the path as NOT ignored the whole time -
+// making the discrepancy very hard to spot.
+//
+// Git resolves a .gitignore with "last matching pattern wins" (top to
+// bottom). Rsync's filter list is "first matching rule wins". To reproduce
+// git's semantics we emit rules in REVERSED file order, with each
+// "!pattern" line becoming an rsync include ("+") and every other line
+// becoming an exclude ("-").
+//
+// There's one more wrinkle, straight from `git help gitignore`: "It is not
+// possible to re-include a file if a parent directory of that file is
+// excluded." Whether a negation is actually reachable depends on
+// resolving EVERY ancestor directory independently, root to leaf, and
+// stopping the moment one resolves as excluded - deeper patterns never
+// get a say once that happens. Concretely (all verified against real
+// git):
+//
+//   - A bare directory-unit exclude ("build/") always kills a negation of
+//     anything underneath, in EITHER file order, unless "build/" is
+//     itself separately re-included by its own "!build/" line.
+//   - A wildcard exclude of a directory's children ("build/*") does NOT
+//     poison the directory itself, so "!build/keep-me/" can still live -
+//     provided it comes after "build/*" in the file (ordinary
+//     last-match-wins).
+//   - This nests: "a/" excluded then "!a/" re-included then "a/b/"
+//     excluded then "!a/b/" re-included means a/b/anything is NOT
+//     ignored, because each ancestor resolves independently once its own
+//     parent is clear.
+//
+// We approximate full git resolution with a bounded check scoped to what
+// this function actually needs (only NEGATED lines can possibly need
+// rescuing from an rsync exclude): for a "!pattern" line, walk pattern's
+// ancestors root to leaf. An ancestor is "poisoned" if the LAST bare
+// directory-unit pattern for that exact ancestor, anywhere earlier in the
+// file, is an exclude with no later re-include for that same ancestor.
+// The negation is dead the moment any ancestor is poisoned. This covers
+// arbitrarily deep nesting without a full gitignore glob matcher, at the
+// cost of only comparing bare directory-unit patterns exactly (not
+// wildcards) - sufficient because a wildcard exclude can never poison an
+// ancestor per the rule above.
+//
+// Live negations still need their ancestor directories explicitly
+// included, or rsync will never descend far enough to see the file - an
+// exclude on an ancestor directory prevents rsync from looking inside it
+// at all, independent of the poisoned-ancestor check above.
+//
+// Scope: only the repo-root .gitignore is read, matching what rsync's
+// previous ':- .gitignore' invocation covered. Nested per-directory
+// .gitignore files are not merged; if that's needed later, extend this to
+// walk the tree the way git itself does.
+func gitignoreFilterArgs(localDir string) ([]string, error) {
+	path := filepath.Join(localDir, ".gitignore")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, errors.WrapWithCode(err, errors.ErrSync,
+			"Couldn't read .gitignore",
+			"Check the file's permissions or disable respect_gitignore in .rr.yaml.")
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		lines = append(lines, trimmed)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, errors.WrapWithCode(err, errors.ErrSync,
+			"Couldn't read .gitignore",
+			"Check the file's permissions or disable respect_gitignore in .rr.yaml.")
+	}
+
+	var args []string
+	seenIncludes := make(map[string]bool)
+
+	// Reversed file order: git's last-matching-pattern-wins becomes
+	// rsync's first-matching-rule-wins.
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+
+		negated := strings.HasPrefix(line, "!")
+		pattern := line
+		if negated {
+			pattern = line[1:]
+		}
+		pattern = unescapeGitignorePattern(pattern)
+
+		if negated {
+			if anyAncestorPoisoned(pattern, lines) {
+				// Dead negation: an ancestor directory resolves excluded
+				// per git's own rules. Git can never resurrect this path
+				// either, so emit nothing.
+				continue
+			}
+			for _, parent := range ancestorDirs(pattern) {
+				if seenIncludes[parent] {
+					continue
+				}
+				seenIncludes[parent] = true
+				args = append(args, fmt.Sprintf("--filter=+ %s", parent))
+			}
+			if !seenIncludes[pattern] {
+				seenIncludes[pattern] = true
+				args = append(args, fmt.Sprintf("--filter=+ %s", pattern))
+			}
+		} else {
+			args = append(args, fmt.Sprintf("--filter=- %s", pattern))
+		}
+	}
+
+	return args, nil
+}
+
+// unescapeGitignorePattern strips gitignore's backslash-escape from a
+// literal leading "!" or "#" so rsync sees the intended literal character.
+func unescapeGitignorePattern(pattern string) string {
+	if strings.HasPrefix(pattern, "\\!") || strings.HasPrefix(pattern, "\\#") {
+		return pattern[1:]
+	}
+	return pattern
+}
+
+// anyAncestorPoisoned reports whether any ancestor directory of pattern
+// resolves to excluded, per git's rule that a directory-unit exclude with
+// no later re-include for that exact directory poisons everything
+// beneath it regardless of deeper negations. Ancestors are checked root
+// to leaf so a poisoned parent short-circuits before a clear grandparent
+// could otherwise be mistaken for permission to descend.
+func anyAncestorPoisoned(pattern string, lines []string) bool {
+	for _, ancestor := range ancestorDirs(pattern) {
+		if dirResolvesExcluded(ancestor, lines) {
+			return true
+		}
+	}
+	return false
+}
+
+// dirResolvesExcluded reports whether dirPattern (a directory-unit
+// pattern like "build/" or "frontend/tests/mocks/") is excluded per the
+// LAST bare directory-unit rule anywhere in the file that names that
+// directory. Only bare directory patterns count, never wildcards, since
+// a wildcard exclude of a directory's children (e.g. "build/*") can
+// never poison the directory itself.
+//
+// Per gitignore's own matching rules, a pattern with no slash (besides a
+// possible trailing one) is UNANCHORED and matches at any depth by its
+// final path segment alone - e.g. "mocks/" matches
+// "frontend/tests/mocks/" the same way it matches a top-level "mocks/".
+// A pattern containing an interior slash is anchored to that exact path.
+// This mirrors real git: verified with git check-ignore that a bare
+// "mocks/" rule poisons a "!frontend/tests/mocks/data/" negation even
+// though the exclude pattern is never anchored to the full ancestor path.
+func dirResolvesExcluded(dirPattern string, lines []string) bool {
+	excluded := false
+	for _, line := range lines {
+		negated := strings.HasPrefix(line, "!")
+		candidate := line
+		if negated {
+			candidate = line[1:]
+		}
+		candidate = unescapeGitignorePattern(candidate)
+		if !dirPatternMatches(candidate, dirPattern) {
+			continue
+		}
+		excluded = !negated
+	}
+	return excluded
+}
+
+// dirPatternMatches reports whether gitignore directory pattern matches
+// ancestor (both normalized as "a/b/" style paths). An exact match always
+// counts. An unanchored pattern (no interior slash) additionally matches
+// by ancestor's final path segment, per gitignore's own rule that such a
+// pattern applies at any depth.
+func dirPatternMatches(pattern, ancestor string) bool {
+	if pattern == ancestor {
+		return true
+	}
+	interior := strings.TrimSuffix(pattern, "/")
+	if strings.Contains(interior, "/") {
+		return false // anchored to a specific path, already checked above
+	}
+	trimmedAncestor := strings.TrimSuffix(ancestor, "/")
+	segments := strings.Split(trimmedAncestor, "/")
+	return segments[len(segments)-1]+"/" == pattern
+}
+
+// ancestorDirs returns rsync directory-match patterns (each ending in "/")
+// for every parent directory of pattern, from shallowest to deepest. E.g.
+// "frontend/tests/mocks/data/" yields ["frontend/", "frontend/tests/",
+// "frontend/tests/mocks/"].
+func ancestorDirs(pattern string) []string {
+	// Anchoring ("/" prefix) doesn't change parent segmentation, only where
+	// rsync starts matching from - strip it for splitting, the "/" prefix
+	// on each emitted parent below re-adds equivalent anchoring behavior
+	// via rsync's leading-slash rule.
+	anchored := strings.HasPrefix(pattern, "/")
+	trimmed := strings.TrimPrefix(pattern, "/")
+	trimmed = strings.TrimSuffix(trimmed, "/")
+
+	segments := strings.Split(trimmed, "/")
+	if len(segments) <= 1 {
+		return nil
+	}
+
+	var parents []string
+	var prefix string
+	for _, seg := range segments[:len(segments)-1] {
+		prefix += seg + "/"
+		if anchored {
+			parents = append(parents, "/"+prefix)
+		} else {
+			parents = append(parents, prefix)
+		}
+	}
+	return parents
 }
 
 // streamOutput reads from r and writes each line to w.

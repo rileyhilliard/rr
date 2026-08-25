@@ -129,11 +129,18 @@ func TestWriteJSONError_NoSuggestion(t *testing.T) {
 	assert.Nil(t, env.Error.Details)
 }
 
+func assertExitOne(t *testing.T, err error) {
+	t.Helper()
+	code, ok := errors.GetExitCode(err)
+	require.True(t, ok, "expected an ExitError, got %v", err)
+	assert.Equal(t, 1, code)
+}
+
 func TestWriteJSONFromError_NilError(t *testing.T) {
 	var buf bytes.Buffer
 
 	err := WriteJSONFromError(&buf, nil)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -148,7 +155,7 @@ func TestWriteJSONFromError_GenericError(t *testing.T) {
 
 	goErr := fmt.Errorf("something went wrong")
 	err := WriteJSONFromError(&buf, goErr)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -165,7 +172,7 @@ func TestWriteJSONFromError_StructuredError(t *testing.T) {
 
 	rrErr := errors.New(errors.ErrConfig, "Config file not found", "Run 'rr init' to create one")
 	err := WriteJSONFromError(&buf, rrErr)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
@@ -184,7 +191,7 @@ func TestWriteJSONFromError_WrappedStructuredError(t *testing.T) {
 	innerErr := errors.New(errors.ErrSSH, "Connection refused", "Check if SSH server is running")
 	wrappedErr := fmt.Errorf("failed to connect: %w", innerErr)
 	err := WriteJSONFromError(&buf, wrappedErr)
-	require.NoError(t, err)
+	assertExitOne(t, err)
 
 	var env JSONEnvelope
 	err = json.Unmarshal(buf.Bytes(), &env)
