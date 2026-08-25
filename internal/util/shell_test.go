@@ -52,3 +52,93 @@ func TestShellQuotePreserveTilde(t *testing.T) {
 		})
 	}
 }
+
+func TestShellQuoteJoin(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		expected string
+	}{
+		{"empty", nil, ""},
+		{"single", []string{"foo"}, "'foo'"},
+		{"multiple", []string{"tests/foo.py", "-k", "a b"}, "'tests/foo.py' '-k' 'a b'"},
+		{"embedded quote", []string{"it's"}, `'it'\''s'`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShellQuoteJoin(tt.args); got != tt.expected {
+				t.Errorf("ShellQuoteJoin(%v) = %q, want %q", tt.args, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsCompoundCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmd      string
+		expected bool
+	}{
+		{"plain command", "pytest tests/", false},
+		{"flags only", "go test -v -run TestFoo ./...", false},
+		{"pipe", "pytest | grep -v PASS", true},
+		{"newline separated", "make build\nmake test", true},
+		{"newline inside single quotes", "echo 'a\nb'", false},
+		{"and chain", "cd app && pytest", true},
+		{"or chain", "pytest || true", true},
+		{"semicolon", "cd app; pytest", true},
+		{"redirect out", "pytest > out.log", true},
+		{"redirect stderr", "pytest --tb=short 2>&1", true},
+		{"redirect in", "wc -l < file", true},
+		{"background", "server &", true},
+		{"command substitution", "echo $(date)", true},
+		{"backticks", "echo `date`", true},
+		{"subst inside double quotes", `go build -ldflags "-X main.sha=$(git rev-parse HEAD)"`, true},
+		{"backtick inside double quotes", "echo \"`date`\"", true},
+		{"pipe inside single quotes", "grep 'a|b' file", false},
+		{"semicolon inside single quotes", "echo 'a;b'", false},
+		{"redirect inside single quotes", "echo '2>&1'", false},
+		{"dollar paren inside single quotes", "echo '$(date)'", false},
+		{"escaped pipe", `echo \| foo`, false},
+		{"plain dollar var", "echo $HOME", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsCompoundCommand(tt.cmd); got != tt.expected {
+				t.Errorf("IsCompoundCommand(%q) = %v, want %v", tt.cmd, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHasPipe(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmd      string
+		expected bool
+	}{
+		{"plain command", "pytest tests/", false},
+		{"simple pipe", "pytest | tail -3", true},
+		{"multiple pipes", "pytest | grep FAIL | wc -l", true},
+		{"logical or is not a pipe", "pytest || echo failed", false},
+		{"logical or then pipe", "pytest || echo failed | tee log", true},
+		{"pipe in single quotes", "grep '|' file.txt", false},
+		{"pipe in double quotes", `awk -F"|" '{print $1}' f`, false},
+		{"escaped pipe", `echo a \| b`, false},
+		{"and-chain without pipe", "cd sub && pytest", false},
+		{"redirect is not a pipe", "pytest > out.txt", false},
+		{"pipe after quoted section", "grep 'a|b' f | wc -l", true},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasPipe(tt.cmd); got != tt.expected {
+				t.Errorf("HasPipe(%q) = %v, want %v", tt.cmd, got, tt.expected)
+			}
+		})
+	}
+}

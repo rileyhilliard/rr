@@ -35,6 +35,100 @@ func ExtractFailures(command string, rawOutput []byte) []output.TestFailure {
 	return nil
 }
 
+// TestSummary holds aggregate test counts extracted from raw output.
+type TestSummary struct {
+	Passed  int `json:"passed"`
+	Failed  int `json:"failed"`
+	Skipped int `json:"skipped"`
+	Errors  int `json:"errors"`
+	// NoTests is set when the runner explicitly reported running no tests.
+	// Distinguishes "ran nothing" from "nothing failed" - without it, a
+	// broken path filter looks identical to a clean suite.
+	NoTests bool `json:"no_tests,omitempty"`
+}
+
+// intentionalZeroFlags are runner flags whose whole purpose is to produce zero
+// executed tests. A run using one of these collected nothing by design, so
+// reporting it as "ran no tests" would be noise.
+var intentionalZeroFlags = []string{
+	"--collect-only",
+	"--co",
+	"--fixtures",
+	"--markers",
+	"--passwithnotests",
+	"--listtests",
+}
+
+// hasIntentionalZeroFlag reports whether the command opted into a zero-test run.
+//
+// Matches whole tokens, not substrings: "--co" is a prefix of "--cov",
+// "--color", "--config", and "--continue-on-collection-errors", so a substring
+// check would silently disable no-tests detection for `pytest --cov=app -k typo`
+// and most other real CI commands. A flag written as "--flag=value" still
+// matches, since only the part before "=" is compared.
+func hasIntentionalZeroFlag(command string) bool {
+	for _, field := range strings.Fields(strings.ToLower(command)) {
+		name, _, _ := strings.Cut(field, "=")
+		for _, flag := range intentionalZeroFlags {
+			if name == flag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// DetectNoTests reports whether the command's output shows the test runner ran
+// no tests at all. False when no framework was recognized, when the command
+// explicitly asked for a zero-test run, or when any results were parsed.
+func DetectNoTests(command string, rawOutput []byte) bool {
+	if hasIntentionalZeroFlag(command) {
+		return false
+	}
+
+	formatter := detectFormatter(command, rawOutput)
+	if formatter == nil {
+		return false
+	}
+	for _, line := range strings.Split(string(rawOutput), "\n") {
+		formatter.ProcessLine(line)
+	}
+
+	reporter, ok := formatter.(output.NoTestsReporter)
+	return ok && reporter.RanNothing()
+}
+
+// ExtractTestSummary detects the test framework from command/output and
+// returns aggregate counts. ok is false when no framework matched or the
+// output contained no recognizable test results.
+func ExtractTestSummary(command string, rawOutput []byte) (TestSummary, bool) {
+	formatter := detectFormatter(command, rawOutput)
+	if formatter == nil {
+		return TestSummary{}, false
+	}
+
+	for _, line := range strings.Split(string(rawOutput), "\n") {
+		formatter.ProcessLine(line)
+	}
+
+	provider, ok := formatter.(output.TestSummaryProvider)
+	if !ok {
+		return TestSummary{}, false
+	}
+	passed, failed, skipped, errs := provider.GetTestCounts()
+	if passed+failed+skipped+errs == 0 {
+		// All-zero counts are only meaningful when the runner explicitly said
+		// it ran nothing. Otherwise this is unparseable output (or a non-test
+		// command that merely mentions a framework), not a zero-test run.
+		reporter, ok := formatter.(output.NoTestsReporter)
+		if ok && reporter.RanNothing() && !hasIntentionalZeroFlag(command) {
+			return TestSummary{NoTests: true}, true
+		}
+		return TestSummary{}, false
+	}
+	return TestSummary{Passed: passed, Failed: failed, Skipped: skipped, Errors: errs}, true
+}
+
 // detectorFormatter is a formatter that also implements detection.
 type detectorFormatter interface {
 	output.Formatter

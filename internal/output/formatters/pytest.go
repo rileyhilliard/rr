@@ -47,6 +47,13 @@ type PytestFormatter struct {
 	inFailures     bool
 	currentFailure *pytestFailureBuilder
 	summaryLine    string
+
+	// noTestsRan is set by pytest's explicit "no tests ran" summary.
+	noTestsRan bool
+	// collected holds the "collected N items" count; sawCollected records
+	// whether such a line appeared at all.
+	collected    int
+	sawCollected bool
 }
 
 // pytestFailureBuilder accumulates failure details across multiple lines.
@@ -108,6 +115,23 @@ var (
 	// Matches summary line: 1 failed, 1 passed, 1 skipped in 0.03s
 	pytestSummaryPattern = regexp.MustCompile(`=+\s*(\d+\s+\w+(?:,\s*\d+\s+\w+)*)\s+in\s+[\d.]+s\s*=+`)
 
+	// Quiet mode (-q/-qq) drops the ==== decoration and prints the bare
+	// summary alone on a line: "5 passed in 4.20s".
+	pytestBareSummaryPattern = regexp.MustCompile(`^\d+\s+\w+(?:,\s*\d+\s+\w+)*\s+in\s+[\d.]+s$`)
+
+	// Extracts "<count> <word>" pairs from a summary line.
+	pytestCountPairPattern = regexp.MustCompile(`(\d+)\s+(\w+)`)
+
+	// Matches pytest's zero-result summary, decorated or bare: pytest prints
+	// "no tests ran in 0.05s" with no leading count, so neither summary
+	// pattern above matches it and the counters silently stay at zero.
+	pytestNoTestsRanPattern = regexp.MustCompile(`(?:^|=\s*)no tests ran in [\d.]+s`)
+
+	// Matches the collection count: "collected 0 items" / "collected 12 items".
+	// A nonzero count means tests were found, which distinguishes an
+	// intentional --collect-only run from one that matched nothing.
+	pytestCollectedPattern = regexp.MustCompile(`collected (\d+) items?`)
+
 	// Matches the failures section header
 	pytestFailuresSectionStart = regexp.MustCompile(`^=+\s*FAILURES\s*=+$`)
 	pytestFailuresSectionEnd   = regexp.MustCompile(`^=+\s*short test summary`)
@@ -166,9 +190,23 @@ func (f *PytestFormatter) ProcessLine(line string) string {
 		}
 	}
 
-	// Check for summary line
-	if pytestSummaryPattern.MatchString(trimmed) {
+	// Check for summary line (decorated, or bare in -q/-qq mode)
+	if pytestSummaryPattern.MatchString(trimmed) || pytestBareSummaryPattern.MatchString(trimmed) {
 		f.summaryLine = trimmed
+	}
+
+	// "no tests ran" is pytest's explicit zero-result signal.
+	if pytestNoTestsRanPattern.MatchString(trimmed) {
+		f.noTestsRan = true
+	}
+
+	// Record the collection count so an intentional collect-only run (which
+	// collects tests but runs none) isn't mistaken for one that matched nothing.
+	if m := pytestCollectedPattern.FindStringSubmatch(trimmed); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			f.collected = n
+			f.sawCollected = true
+		}
 	}
 
 	// Pass through ANSI codes and other lines unchanged
@@ -329,6 +367,27 @@ func (f *PytestFormatter) Reset() {
 	f.inFailures = false
 	f.currentFailure = nil
 	f.summaryLine = ""
+	f.noTestsRan = false
+	f.collected = 0
+	f.sawCollected = false
+}
+
+// RanNothing implements output.NoTestsReporter.
+//
+// True only on positive evidence from the output: pytest said "no tests ran",
+// or it reported collecting zero items. A "collected N>0 items" line means
+// tests were found, so an intentional --collect-only run reports false.
+func (f *PytestFormatter) RanNothing() bool {
+	if len(f.results) > 0 {
+		return false
+	}
+	if passed, failed, skipped, errs := f.GetTestCounts(); passed+failed+skipped+errs > 0 {
+		return false
+	}
+	if f.sawCollected && f.collected > 0 {
+		return false
+	}
+	return f.noTestsRan || (f.sawCollected && f.collected == 0)
 }
 
 // GetTestFailures implements output.TestSummaryProvider.
@@ -349,7 +408,9 @@ func (f *PytestFormatter) GetTestFailures() []output.TestFailure {
 }
 
 // GetTestCounts implements output.TestSummaryProvider.
-// Returns (passed, failed, skipped, errors) counts.
+// Returns (passed, failed, skipped, errors) counts. Quiet runs (-q/-qq)
+// emit no per-test result lines, so when none were seen the counts come
+// from the final summary line instead.
 func (f *PytestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
 	for _, r := range f.results {
 		switch r.Status {
@@ -361,6 +422,32 @@ func (f *PytestFormatter) GetTestCounts() (passed, failed, skipped, errors int) 
 			skipped++
 		case "ERROR":
 			errors++
+		}
+	}
+	if passed == 0 && failed == 0 && skipped == 0 && errors == 0 && f.summaryLine != "" {
+		return parseSummaryCounts(f.summaryLine)
+	}
+	return
+}
+
+// parseSummaryCounts extracts test counts from a pytest summary line like
+// "2 failed, 3 passed, 1 skipped in 1.10s". Unknown categories (xfailed,
+// deselected, warnings, ...) are ignored.
+func parseSummaryCounts(line string) (passed, failed, skipped, errors int) {
+	for _, m := range pytestCountPairPattern.FindAllStringSubmatch(line, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		switch m[2] {
+		case "passed":
+			passed += n
+		case "failed":
+			failed += n
+		case "skipped":
+			skipped += n
+		case "error", "errors":
+			errors += n
 		}
 	}
 	return

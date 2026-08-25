@@ -29,6 +29,8 @@ var (
 	execPullFlags            []string
 	execPullDestFlag         string
 	execCwdFlag              string
+	runTailFlag              int
+	execTailFlag             int
 	syncHostFlag             string
 	syncTagFlag              string
 	syncProbeTimeoutFlag     string
@@ -46,6 +48,8 @@ var (
 	initSkipProbe            bool
 	monitorHostsFlag         string
 	monitorIntervalFlag      string
+	monitorOnceFlag          bool
+	monitorJSONFlag          bool
 	hostAddSkipProbe         bool
 	unlockAllFlag            bool
 	provisionHostFlag        string
@@ -73,7 +77,19 @@ Examples:
 				fmt.Sprintf("--repeat must be >= 0, got %d", runRepeatFlag),
 				"Use --repeat with a positive number like --repeat 5")
 		}
-		return runCommand(args, runHostFlag, runTagFlag, runProbeTimeoutFlag, runLocalFlag, runSkipRequirementsFlag, runRepeatFlag, runPullFlags, runPullDestFlag, runCwdFlag)
+		return runCommand(args, runCmdFlags{
+			Verb:             "run",
+			Host:             runHostFlag,
+			Tag:              runTagFlag,
+			ProbeTimeout:     runProbeTimeoutFlag,
+			Local:            runLocalFlag,
+			SkipRequirements: runSkipRequirementsFlag,
+			Repeat:           runRepeatFlag,
+			Pull:             runPullFlags,
+			PullDest:         runPullDestFlag,
+			RemoteCWD:        runCwdFlag,
+			Tail:             runTailFlag,
+		})
 	},
 }
 
@@ -91,7 +107,19 @@ Examples:
   rr exec "cat /var/log/app.log"`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return execCommand(args, execHostFlag, execTagFlag, execProbeTimeoutFlag, execLocalFlag, execSkipRequirementsFlag, execPullFlags, execPullDestFlag, execCwdFlag)
+		return runCommand(args, runCmdFlags{
+			Verb:             "exec",
+			Host:             execHostFlag,
+			Tag:              execTagFlag,
+			ProbeTimeout:     execProbeTimeoutFlag,
+			Local:            execLocalFlag,
+			SkipRequirements: execSkipRequirementsFlag,
+			SkipSync:         true, // Key difference from run
+			Pull:             execPullFlags,
+			PullDest:         execPullDestFlag,
+			RemoteCWD:        execCwdFlag,
+			Tail:             execTailFlag,
+		})
 	},
 }
 
@@ -217,6 +245,11 @@ for all configured remote hosts.
 Displays CPU, RAM, GPU (if available), and network metrics with
 color-coded status indicators and responsive layout.
 
+With --once, skip the TUI and print a single fleet snapshot instead, then
+exit. This is the mode for scripts and agents: it collects two samples a
+second apart so CPU, disk and network rates are real, not zero. Add --json
+for machine-readable output.
+
 Keyboard shortcuts:
   q / Ctrl+C  Quit
   r           Force refresh
@@ -225,23 +258,37 @@ Keyboard shortcuts:
   down/j      Select next host
   Enter       Expand selected host details
   Esc         Collapse / go back
+  p           Cycle process sort (CPU/MEM, detail view)
   ?           Show help
 
 Examples:
   rr monitor
   rr monitor --hosts mini,workstation
-  rr monitor --interval 5s`,
+  rr monitor --interval 5s
+  rr monitor --once
+  rr monitor --once --json
+  rr monitor --once --json --hosts gpu-box`,
 	PreRun: func(cmd *cobra.Command, args []string) {
-		// Monitor is always an interactive TUI, so force colors on
-		// even though the default output mode is machine-readable.
-		if !noColor {
+		// The TUI always wants colors even though the default output mode is
+		// machine-readable. --json must stay clean, so leave colors off there.
+		if !noColor && !monitorJSONFlag {
 			ui.EnableColors()
 		}
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Parse interval
-		interval := 2 * time.Second
-		if monitorIntervalFlag != "" {
+		if err := validateMonitorFlags(); err != nil {
+			return err
+		}
+
+		if monitorOnceFlag {
+			return monitorOnceCommand(monitorHostsFlag, monitorJSONFlag)
+		}
+
+		// Parse the interval only when the flag was explicitly set; otherwise
+		// monitorCommand resolves it from project config (falling back to 1s).
+		var interval time.Duration
+		intervalSet := cmd.Flags().Changed("interval")
+		if intervalSet {
 			parsed, err := time.ParseDuration(monitorIntervalFlag)
 			if err != nil {
 				return errors.WrapWithCode(err, errors.ErrConfig,
@@ -256,7 +303,7 @@ Examples:
 			interval = parsed
 		}
 
-		return monitorCommand(monitorHostsFlag, interval)
+		return monitorCommand(monitorHostsFlag, interval, intervalSet)
 	},
 }
 
@@ -473,6 +520,7 @@ func init() {
 	runCmd.Flags().StringArrayVar(&runPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
 	runCmd.Flags().StringVar(&runPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 	runCmd.Flags().StringVar(&runCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
+	runCmd.Flags().IntVar(&runTailFlag, "tail", 0, "print the last N lines of the run log after completion")
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
@@ -483,6 +531,7 @@ func init() {
 	execCmd.Flags().StringArrayVar(&execPullFlags, "pull", nil, "pull files from remote after command (can be repeated)")
 	execCmd.Flags().StringVar(&execPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 	execCmd.Flags().StringVar(&execCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
+	execCmd.Flags().IntVar(&execTailFlag, "tail", 0, "print the last N lines of the run log after completion")
 
 	// sync command flags
 	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")
@@ -508,6 +557,8 @@ func init() {
 	// monitor command flags
 	monitorCmd.Flags().StringVar(&monitorHostsFlag, "hosts", "", "filter to specific hosts (comma-separated)")
 	monitorCmd.Flags().StringVar(&monitorIntervalFlag, "interval", "1s", "refresh interval (e.g., 1s, 2s, 5s)")
+	monitorCmd.Flags().BoolVar(&monitorOnceFlag, "once", false, "print a single fleet snapshot and exit (no TUI)")
+	monitorCmd.Flags().BoolVar(&monitorJSONFlag, "json", false, "output the snapshot as JSON (requires --once)")
 
 	// host command flags
 	hostAddCmd.Flags().BoolVar(&hostAddSkipProbe, "skip-probe", false, "skip SSH connection testing")

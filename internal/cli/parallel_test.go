@@ -176,6 +176,7 @@ func TestParallelTask_RejectsArgsViaCobra(t *testing.T) {
 	require.Error(t, execErr)
 	assert.Contains(t, execErr.Error(), "doesn't accept extra arguments")
 	assert.Contains(t, execErr.Error(), "extra-arg")
+	assert.Contains(t, execErr.Error(), "forward_args: true")
 }
 
 // TestBuildSubtaskInfos_ForwardArgsAppended verifies that when forward_args is true
@@ -275,7 +276,7 @@ func TestExtractTaskFailures_PytestFailures(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -306,7 +307,7 @@ func TestExtractTaskFailures_FallbackToOutputTail(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -334,7 +335,7 @@ func TestExtractTaskFailures_EmptyOutput(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -356,7 +357,7 @@ func TestExtractTaskFailures_SkipsPassingTasks(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	assert.Empty(t, failures)
 }
 
@@ -376,7 +377,7 @@ func TestExtractTaskFailures_TruncatesLongMessages(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	tests, ok := failures[0]["tests"].([]map[string]string)
@@ -405,7 +406,7 @@ func TestExtractTaskFailures_OutputTailCapped(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result)
+	failures := extractTaskFailures(result, "")
 	require.Len(t, failures, 1)
 
 	tail, ok := failures[0]["output_tail"].(string)
@@ -487,4 +488,54 @@ func TestRenderParallelResult_MachineMode_SuccessHasNoFailures(t *testing.T) {
 	assert.Equal(t, "success", event.Status)
 	_, hasFailures := event.Details["failures"]
 	assert.False(t, hasFailures, "successful result should not include failures key")
+}
+
+func TestBuildSubtaskInfos_PlaceholderSubstitution(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"test-py": {Run: "pytest {args:-.} -n 4 | grep -v PASS"},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"test-py"},
+		ForwardArgs: true,
+	}
+
+	infos, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, []string{"tests/foo.py"})
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "pytest 'tests/foo.py' -n 4 | grep -v PASS", infos[0].Command)
+}
+
+func TestBuildSubtaskInfos_PlaceholderDefaultWithoutArgs(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"test-py": {Run: "pytest {args:-.} -n 4"},
+		},
+	}
+	// forward_args not even set: defaults still apply
+	parentTask := &config.TaskConfig{
+		Parallel: []string{"test-py"},
+	}
+
+	infos, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, nil)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "pytest . -n 4", infos[0].Command)
+}
+
+func TestBuildSubtaskInfos_CompoundSubtaskWithoutPlaceholderErrors(t *testing.T) {
+	proj := &config.Config{
+		Tasks: map[string]config.TaskConfig{
+			"test-py": {Run: "pytest -n 4 | grep -v PASS"},
+		},
+	}
+	parentTask := &config.TaskConfig{
+		Parallel:    []string{"test-py"},
+		ForwardArgs: true,
+	}
+
+	_, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, []string{"tests/foo.py"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "{args} placeholder")
 }

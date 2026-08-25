@@ -73,7 +73,7 @@ rr fills the gap: **a single binary that handles sync, execution, locking, load 
 -   **Claude Code skill** — Install the `rr` skill and let Claude set up your environment and troubleshoot issues
 -   **Named tasks** — Define `test`, `build`, `deploy` commands in config, run with `rr test`
 -   **Output formatters** — Auto-formats pytest, Jest, Go test, and Cargo output for readable failure summaries
--   **Real-time monitor** — TUI dashboard showing CPU, RAM, GPU across all your hosts
+-   **Real-time monitor** — TUI dashboard showing CPU, RAM, GPU, disk, and network across all your hosts, or `--once --json` for a scriptable snapshot
 -   **Remote environment bootstrap** — Declare required tools with `require:`, rr verifies they exist before running
 -   **Zero dependencies** — Single Go binary, no runtime requirements
 -   **Works anywhere** — macOS, Linux, Windows (WSL)
@@ -269,7 +269,7 @@ hosts: [mini] # Optional: defaults to all hosts
 require: [go, golangci-lint]  # Project-level requirements
 
 sync:
-    exclude: [.git/, node_modules/, .venv/]
+    exclude: [.git, node_modules, .venv] # bare patterns: .git is a file in linked worktrees
 
 tasks:
     build:
@@ -277,7 +277,7 @@ tasks:
         require: [cargo]  # Task-specific requirement
 ```
 
-`${PROJECT}` expands to your local directory name. See [configuration docs](docs/configuration.md) for all options.
+`${PROJECT}` expands to your local directory name. In a linked git worktree it expands to `repo@worktree-name`, so each worktree gets its own remote directory (disable with `sync.worktree_isolation: false`). See [configuration docs](docs/configuration.md) for all options.
 
 ## How It Works
 
@@ -298,7 +298,7 @@ hosts:
 | Coffee shop   | LAN times out → uses Tailscale |
 | gpu-box busy  | Skips to `backup-gpu`          |
 
-**File sync:** Wraps rsync with smart defaults. Excludes build artifacts, preserves remote-only directories (like `.venv` installed on the remote).
+**File sync:** Wraps rsync with smart defaults. Excludes build artifacts, preserves remote-only directories (like `.venv` installed on the remote). Each sync writes a `.rr-source` marker on the remote recording where the tree came from; syncing over a mirror owned by a different source directory or machine warns instead of silently clobbering it.
 
 **Locking:** Creates a lock before running commands. If a host is locked, `rr` tries the next host. If all hosts are locked, it round-robins until one frees up.
 

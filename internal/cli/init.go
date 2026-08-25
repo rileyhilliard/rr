@@ -534,20 +534,31 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	}
 
 	// Local fallback
-	sb.WriteString("# Run locally when all remote hosts fail or are unreachable\n")
-	sb.WriteString("# Set to true to fall back to local execution instead of failing\n")
-	sb.WriteString("# local_fallback: false\n\n")
+	sb.WriteString("# Run locally when remote hosts are unavailable, instead of failing\n")
+	sb.WriteString("#   never          - always require a remote host (default)\n")
+	sb.WriteString("#   on-unreachable - fall back only when no host answers\n")
+	sb.WriteString("#   always         - always run locally\n")
+	sb.WriteString("# Booleans are accepted too: false = never, true = always\n")
+	sb.WriteString("# local_fallback: never\n\n")
+
+	// Path rewriting
+	sb.WriteString("# rr rewrites local absolute paths in commands/args to their remote\n")
+	sb.WriteString("# equivalents before running. Set to false to disable.\n")
+	sb.WriteString("# rewrite_paths: true\n\n")
 
 	// Sync section
 	sb.WriteString("# File sync settings (uses rsync under the hood)\n")
 	sb.WriteString("sync:\n")
 	sb.WriteString("  # Files/directories to exclude from sync (rsync patterns)\n")
+	sb.WriteString("  # Bare patterns (no trailing slash) for .git/.venv/node_modules:\n")
+	sb.WriteString("  # in git worktrees .git is a FILE and node_modules may be a symlink,\n")
+	sb.WriteString("  # and dir-only patterns miss those (rsync exit 23).\n")
 	sb.WriteString("  exclude:\n")
-	sb.WriteString("    - .git/\n")
-	sb.WriteString("    - .venv/\n")
+	sb.WriteString("    - .git\n")
+	sb.WriteString("    - .venv\n")
 	sb.WriteString("    - __pycache__/\n")
 	sb.WriteString("    - \"*.pyc\"\n")
-	sb.WriteString("    - node_modules/\n")
+	sb.WriteString("    - node_modules\n")
 	sb.WriteString("    - .mypy_cache/\n")
 	sb.WriteString("    - .pytest_cache/\n")
 	sb.WriteString("    - .ruff_cache/\n")

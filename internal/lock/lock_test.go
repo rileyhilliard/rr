@@ -1153,3 +1153,74 @@ func TestIsLockStale_FallbackToStarted(t *testing.T) {
 	stale := isLockStale(mock, "/tmp/info.json", 10*time.Minute)
 	assert.True(t, stale)
 }
+
+func TestAcquire_AliveLocalHolderNotStolen(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	mock.GetFS().Mkdir("/tmp/rr.lock")
+	info, err := NewLockInfo("rr test-backend")
+	require.NoError(t, err)
+	info.PID = 1 // pid 1 is always alive
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 100 * time.Millisecond,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	_, err = Acquire(conn, cfg, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Lock timeout")
+}
+
+func TestTryAcquire_AliveLocalHolderReturnsErrLocked(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	mock.GetFS().Mkdir("/tmp/rr.lock")
+	info, err := NewLockInfo("rr test-backend")
+	require.NoError(t, err)
+	info.PID = 1
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 5 * time.Second,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	_, err = TryAcquire(conn, cfg, "")
+	assert.ErrorIs(t, err, ErrLocked)
+}
+
+func TestAcquire_TimeoutErrorMentionsUnlock(t *testing.T) {
+	conn, mock := newMockConnection("testhost")
+
+	mock.GetFS().Mkdir("/tmp/rr.lock")
+	info := &LockInfo{
+		User:     "other",
+		Hostname: "otherhost",
+		Started:  time.Now().Add(-5 * time.Minute),
+		PID:      1,
+		Command:  "rr test-backend",
+	}
+	infoJSON, _ := info.Marshal()
+	mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
+
+	cfg := config.LockConfig{
+		Enabled: true,
+		Timeout: 100 * time.Millisecond,
+		Stale:   10 * time.Minute,
+		Dir:     "/tmp",
+	}
+
+	_, err := Acquire(conn, cfg, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "rr unlock testhost")
+	assert.Contains(t, err.Error(), "'rr test-backend' held by other@otherhost")
+	assert.NotContains(t, err.Error(), "--force-unlock")
+}

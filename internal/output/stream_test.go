@@ -2,8 +2,10 @@ package output
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -250,4 +252,107 @@ func TestStreamHandlerGetFormatterNil(t *testing.T) {
 	// Should not panic when nil
 	f := h.GetFormatter()
 	assert.Nil(t, f)
+}
+
+func TestStreamHandlerSetTee(t *testing.T) {
+	var stdout, stderr, tee bytes.Buffer
+	h := NewStreamHandler(&stdout, &stderr)
+	h.SetTee(&tee)
+
+	require.NoError(t, h.WriteStdout("out line"))
+	require.NoError(t, h.WriteStderr("err line"))
+
+	assert.Equal(t, "out line\nerr line\n", tee.String())
+	assert.Equal(t, "out line\n", stdout.String())
+	assert.Equal(t, "err line\n", stderr.String())
+}
+
+// epipeWriter simulates a consumer that closed its end of the pipe.
+type epipeWriter struct {
+	writes int
+}
+
+func (w *epipeWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return 0, &os.PathError{Op: "write", Path: "|1", Err: syscall.EPIPE}
+}
+
+func TestStreamHandlerBrokenPipe(t *testing.T) {
+	broken := &epipeWriter{}
+	var stderr, tee bytes.Buffer
+	h := NewStreamHandler(broken, &stderr)
+	h.SetTee(&tee)
+
+	assert.False(t, h.BrokenPipe())
+
+	// First write hits EPIPE: swallowed, stream marked broken.
+	require.NoError(t, h.WriteStdout("line 1"))
+	assert.True(t, h.BrokenPipe())
+	assert.Equal(t, 1, broken.writes)
+
+	// Further writes are suppressed entirely, but the tee keeps capturing.
+	require.NoError(t, h.WriteStdout("line 2"))
+	assert.Equal(t, 1, broken.writes, "no writes after the pipe broke")
+	assert.Equal(t, "line 1\nline 2\n", tee.String())
+
+	// Stderr is unaffected.
+	require.NoError(t, h.WriteStderr("err line"))
+	assert.Equal(t, "err line\n", stderr.String())
+}
+
+func TestStreamHandlerNonPipeErrorStillFails(t *testing.T) {
+	h := NewStreamHandler(&failingWriter{}, &bytes.Buffer{})
+	assert.Error(t, h.WriteStdout("line"))
+	assert.False(t, h.BrokenPipe())
+}
+
+// failingWriter returns a generic (non-EPIPE) error.
+type failingWriter struct{}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	return 0, assert.AnError
+}
+
+// safeBuffer is a bytes.Buffer safe for concurrent writes.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Parallel dependency stages share one stream writer across concurrently
+// running tasks; concurrent writes must not corrupt the line buffer.
+func TestStreamWriterConcurrentWrites(t *testing.T) {
+	var out safeBuffer
+	h := NewStreamHandler(&out, &out)
+	w := h.Stdout()
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				// Split lines across writes to exercise buffering.
+				_, err := w.Write([]byte("partial-"))
+				assert.NoError(t, err)
+				_, err = w.Write([]byte("line\n"))
+				assert.NoError(t, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Contains(t, out.String(), "partial-line")
 }

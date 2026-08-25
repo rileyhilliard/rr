@@ -46,7 +46,6 @@ func TestHostStatus_String(t *testing.T) {
 		{StatusConnectingState, "connecting"},
 		{StatusIdleState, "idle"},
 		{StatusRunningState, "running"},
-		{StatusSlowState, "slow"},
 		{StatusUnreachableState, "offline"},
 		{HostStatus(99), "unknown"},
 	}
@@ -79,8 +78,8 @@ func TestModel_OnlineCount(t *testing.T) {
 	m.status["server2"] = StatusIdleState
 	assert.Equal(t, 2, m.OnlineCount())
 
-	// Mark one as slow (not counted as online)
-	m.status["server3"] = StatusSlowState
+	// Mark one as unreachable (not counted as online)
+	m.status["server3"] = StatusUnreachableState
 	assert.Equal(t, 2, m.OnlineCount())
 }
 
@@ -120,39 +119,6 @@ func TestModel_SecondsSinceUpdate(t *testing.T) {
 	// Set last update to 5 seconds ago
 	m.lastUpdate = time.Now().Add(-5 * time.Second)
 	assert.GreaterOrEqual(t, m.SecondsSinceUpdate(), 5)
-}
-
-func TestModel_updateMetrics(t *testing.T) {
-	hosts := map[string]config.Host{
-		"server1": {SSH: []string{"server1"}},
-		"server2": {SSH: []string{"server2"}},
-	}
-	collector := NewCollector(hosts)
-	m := NewModel(collector, time.Second, 0, nil)
-
-	// Create some metrics
-	metrics := map[string]*HostMetrics{
-		"server1": {
-			Timestamp: time.Now(),
-			CPU:       CPUMetrics{Percent: 50.0},
-		},
-		"server2": nil, // Server2 unreachable
-	}
-	errors := map[string]string{
-		"server2": "connection refused",
-	}
-
-	m.updateMetrics(metrics, errors, nil)
-
-	// Server1 should be connected
-	assert.Equal(t, StatusIdleState, m.status["server1"])
-	assert.NotNil(t, m.metrics["server1"])
-	_, hasError := m.errors["server1"]
-	assert.False(t, hasError)
-
-	// Server2 should be unreachable with error
-	assert.Equal(t, StatusUnreachableState, m.status["server2"])
-	assert.Equal(t, "connection refused", m.errors["server2"])
 }
 
 func TestModel_sortHosts_ByName(t *testing.T) {
@@ -314,4 +280,169 @@ func TestModel_Init(t *testing.T) {
 
 	// Should return a batch command
 	require.NotNil(t, cmd)
+}
+
+func TestPollResultsCmd_CancelInvokedOnChannelClose(t *testing.T) {
+	results := make(chan HostResult)
+	canceled := false
+
+	cmd := pollResultsCmd(results, func() { canceled = true })
+	require.NotNil(t, cmd)
+
+	close(results)
+	msg := cmd()
+
+	// Channel close produces the completion sentinel (empty alias)
+	sentinel, ok := msg.(hostResultMsg)
+	require.True(t, ok)
+	assert.Empty(t, sentinel.alias)
+
+	// The round's context cancel must fire when its channel closes
+	assert.True(t, canceled, "cancel should be invoked when the results channel closes")
+}
+
+func TestPollResultsCmd_NilChannel(t *testing.T) {
+	assert.Nil(t, pollResultsCmd(nil, nil))
+}
+
+func TestPollResultsCmd_OverlappingRoundsCancelIndependently(t *testing.T) {
+	// Simulates pressing 'r' mid-collection: two rounds in flight, each with
+	// its own channel and cancel. Each round must clean up only its own context.
+	round1 := make(chan HostResult, 1)
+	round2 := make(chan HostResult, 1)
+	var canceled1, canceled2 bool
+
+	cmd1 := pollResultsCmd(round1, func() { canceled1 = true })
+	cmd2 := pollResultsCmd(round2, func() { canceled2 = true })
+
+	// Round 1 finishes first: only its cancel fires
+	close(round1)
+	msg1 := cmd1().(hostResultMsg)
+	assert.Empty(t, msg1.alias)
+	assert.True(t, canceled1)
+	assert.False(t, canceled2, "round 2's cancel must not fire when round 1 completes")
+
+	// Round 2 still delivers results; its msg carries its own channel + cancel
+	round2 <- HostResult{Alias: "server1", Metrics: &HostMetrics{}}
+	msg2 := cmd2().(hostResultMsg)
+	assert.Equal(t, "server1", msg2.alias)
+	require.NotNil(t, msg2.results)
+	assert.False(t, canceled2)
+
+	// Feeding the result through Update continues polling round 2's channel,
+	// even after round 1's sentinel cleared the collecting state
+	collector := NewCollector(map[string]config.Host{"server1": {SSH: []string{"server1"}}})
+	m := NewModel(collector, time.Second, time.Second, nil)
+	_, _ = m.Update(msg1) // round 1 sentinel
+
+	_, cmd := m.Update(msg2)
+	require.NotNil(t, cmd, "Update should keep polling round 2 after round 1 completed")
+
+	// When round 2's channel closes, its cancel fires
+	close(round2)
+	msg3 := cmd().(hostResultMsg)
+	assert.Empty(t, msg3.alias)
+	assert.True(t, canceled2)
+}
+
+func TestModel_Update_CollectionCompleteSentinel(t *testing.T) {
+	collector := NewCollector(map[string]config.Host{"server1": {SSH: []string{"server1"}}})
+	m := NewModel(collector, time.Second, time.Second, nil)
+	m.collecting = true
+
+	// Empty alias signals the round's channel closed
+	updated, cmd := m.Update(hostResultMsg{time: time.Now()})
+	assert.Nil(t, cmd)
+	assert.False(t, updated.(Model).collecting)
+}
+
+func TestNewModelWithThresholds(t *testing.T) {
+	hosts := map[string]config.Host{
+		"server1": {SSH: []string{"user@server1"}},
+	}
+
+	t.Run("custom thresholds shift class boundaries per metric", func(t *testing.T) {
+		thresholds := config.ThresholdConfig{
+			CPU: config.ThresholdValues{Warning: 50, Critical: 80},
+			RAM: config.ThresholdValues{Warning: 60, Critical: 85},
+			GPU: config.ThresholdValues{Warning: 40, Critical: 75},
+		}
+		m := NewModelWithThresholds(NewCollector(hosts), time.Second, 0, nil, thresholds)
+
+		cpuColor := thresholdColorFunc(m.thresholds.CPU)
+		assert.Equal(t, ColorHealthy, cpuColor(49.9))
+		assert.Equal(t, ColorWarning, cpuColor(50))
+		assert.Equal(t, ColorWarning, cpuColor(79.9))
+		assert.Equal(t, ColorCritical, cpuColor(80))
+
+		ramColor := thresholdColorFunc(m.thresholds.RAM)
+		assert.Equal(t, ColorHealthy, ramColor(59.9))
+		assert.Equal(t, ColorWarning, ramColor(60))
+		assert.Equal(t, ColorCritical, ramColor(85))
+
+		gpuColor := thresholdColorFunc(m.thresholds.GPU)
+		assert.Equal(t, ColorHealthy, gpuColor(39.9))
+		assert.Equal(t, ColorWarning, gpuColor(40))
+		assert.Equal(t, ColorCritical, gpuColor(75))
+
+		// The same value classifies differently across metrics with different thresholds
+		assert.Equal(t, ColorHealthy, cpuColor(45))
+		assert.Equal(t, ColorWarning, gpuColor(45))
+	})
+
+	t.Run("zero thresholds fall back to 70/90 defaults", func(t *testing.T) {
+		m := NewModelWithThresholds(NewCollector(hosts), time.Second, 0, nil, config.ThresholdConfig{})
+
+		for _, values := range []config.ThresholdValues{m.thresholds.CPU, m.thresholds.RAM, m.thresholds.GPU} {
+			color := thresholdColorFunc(values)
+			assert.Equal(t, ColorHealthy, color(69.9))
+			assert.Equal(t, ColorWarning, color(70))
+			assert.Equal(t, ColorWarning, color(89.9))
+			assert.Equal(t, ColorCritical, color(90))
+		}
+	})
+
+	t.Run("NewModel uses default thresholds", func(t *testing.T) {
+		m := NewModel(NewCollector(hosts), time.Second, 0, nil)
+
+		color := thresholdColorFunc(m.thresholds.CPU)
+		assert.Equal(t, ColorHealthy, color(69.9))
+		assert.Equal(t, ColorWarning, color(70))
+		assert.Equal(t, ColorCritical, color(90))
+	})
+}
+
+func TestNormalizeThresholdValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    config.ThresholdValues
+		expected config.ThresholdValues
+	}{
+		{
+			name:     "zero values get defaults",
+			input:    config.ThresholdValues{},
+			expected: config.ThresholdValues{Warning: 70, Critical: 90},
+		},
+		{
+			name:     "partial config keeps set value",
+			input:    config.ThresholdValues{Warning: 55},
+			expected: config.ThresholdValues{Warning: 55, Critical: 90},
+		},
+		{
+			name:     "negative values get defaults",
+			input:    config.ThresholdValues{Warning: -1, Critical: -5},
+			expected: config.ThresholdValues{Warning: 70, Critical: 90},
+		},
+		{
+			name:     "fully set config is unchanged",
+			input:    config.ThresholdValues{Warning: 40, Critical: 60},
+			expected: config.ThresholdValues{Warning: 40, Critical: 60},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, normalizeThresholdValues(tt.input))
+		})
+	}
 }

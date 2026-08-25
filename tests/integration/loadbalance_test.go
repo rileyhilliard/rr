@@ -154,7 +154,7 @@ defaults:
 	assert.Contains(t, globalCfg.Hosts, "cpu-box")
 
 	// Verify local_fallback
-	assert.True(t, globalCfg.Defaults.LocalFallback)
+	assert.True(t, globalCfg.Defaults.LocalFallback.Enabled())
 
 	// Write project config with lock settings
 	projectContent := `

@@ -33,7 +33,7 @@ func TestNewPool(t *testing.T) {
 			assert.NotNil(t, pool)
 			assert.NotNil(t, pool.connections)
 			assert.NotNil(t, pool.hosts)
-			assert.Equal(t, 0, pool.Size())
+			assert.Empty(t, pool.connections)
 
 			if tt.timeout == 0 {
 				assert.Equal(t, 10*time.Second, pool.timeout)
@@ -51,7 +51,7 @@ func TestPoolClose(t *testing.T) {
 
 	// Close empty pool should not panic
 	pool.Close()
-	assert.Equal(t, 0, pool.Size())
+	assert.Empty(t, pool.connections)
 }
 
 func TestPoolCloseOne(t *testing.T) {
@@ -61,23 +61,7 @@ func TestPoolCloseOne(t *testing.T) {
 
 	// CloseOne on non-existent alias should not panic
 	pool.CloseOne("nonexistent")
-	assert.Equal(t, 0, pool.Size())
-}
-
-func TestPoolReturn(t *testing.T) {
-	hosts := map[string]config.Host{}
-	pool := NewPool(hosts, 10*time.Second)
-	assert.NotNil(t, pool)
-
-	// Return on non-existent alias should not panic
-	pool.Return("nonexistent", nil)
-	assert.Equal(t, 0, pool.Size())
-}
-
-func TestPoolSize(t *testing.T) {
-	hosts := map[string]config.Host{}
-	pool := NewPool(hosts, 10*time.Second)
-	assert.Equal(t, 0, pool.Size())
+	assert.Empty(t, pool.connections)
 }
 
 // Note: Tests that require actual SSH connections are integration tests
@@ -92,8 +76,7 @@ func TestPoolConcurrency(t *testing.T) {
 	// Concurrent access should not race
 	for i := 0; i < 10; i++ {
 		go func() {
-			pool.Size()
-			pool.Return("test", nil)
+			pool.GetConnectedVia("test")
 			pool.CloseOne("test")
 			done <- true
 		}()
