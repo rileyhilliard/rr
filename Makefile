@@ -4,6 +4,10 @@
 
 # Read golangci-lint version from file (shared with CI)
 GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.0")
+# Run the pinned binary by path. install-linter puts it in GOPATH/bin, and a
+# different golangci-lint earlier on PATH (a Homebrew one, say) would
+# otherwise shadow it and quietly defeat the pin.
+GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
 
 # =============================================================================
 # Primary targets (use rr for remote execution)
@@ -134,17 +138,17 @@ coverage-ci:
 	rm -f coverage-unit.out coverage-integration.out
 
 lint-local: install-linter
-	golangci-lint run
+	$(GOLANGCI_LINT) run
 
 lint-fix: install-linter
-	golangci-lint run --fix
+	$(GOLANGCI_LINT) run --fix
 
 verify-local: lint-local test-local
 	@echo "All local checks passed"
 
 # Install golangci-lint at the pinned version (from .golangci-version)
 install-linter:
-	@CURRENT=$$(golangci-lint version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+	@CURRENT=$$($(GOLANGCI_LINT) version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
 	if [ "$$CURRENT" != "$(GOLANGCI_LINT_VERSION)" ]; then \
 		echo "Installing golangci-lint v$(GOLANGCI_LINT_VERSION) (current: $${CURRENT:-none})..."; \
 		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION); \

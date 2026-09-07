@@ -127,7 +127,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/go/bin/govulncheck
-          key: govulncheck-${{ runner.os }}-v1.3.0
+          # go.mod in the key: a govulncheck built with an older Go can't
+          # load a module whose go directive is newer.
+          key: govulncheck-${{ runner.os }}-v1.3.0-${{ hashFiles('go.mod') }}
 
       - name: Run govulncheck
         run: |

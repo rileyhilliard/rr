@@ -14,6 +14,10 @@ Worktree remote directories now get cleaned up, and host-restricted subtasks are
 - **`rr prune`** - Removes remote `<repo>@<worktree>` sync directories whose git worktree no longer exists locally. Worktree isolation gives every linked worktree its own remote copy (each with its own `node_modules`/`.venv`), and nothing reclaimed them, so a machine that churns through worktrees filled the remote disk. `--dry-run` lists candidates; `--host` targets one host; without flags it visits every project host.
 - **`sync.prune_worktrees`** (default `true`) - Every sync prunes stale per-worktree directories on the host it just synced to, so the common case needs no command. Set `false` to keep them until `rr prune` is run. Pruning is best-effort: a failure warns and never fails a sync that succeeded.
 
+### Security
+
+- **`golang.org/x/crypto` 0.55.0 -> 0.56.0** - Fixes GO-2026-6354 and GO-2026-6355, two remote DoS advisories in `x/crypto/ssh` that rr reaches through `ssh.NewClientConn`. The fix requires Go 1.26, so the go directive moves to 1.26.8 and golangci-lint to 2.13.2.
+
 ### Changed
 
 - `prune` joins the reserved task names, so a task can no longer shadow the new command.
