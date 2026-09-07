@@ -277,7 +277,7 @@ tasks:
         require: [cargo]  # Task-specific requirement
 ```
 
-`${PROJECT}` expands to your local directory name. In a linked git worktree it expands to `repo@worktree-name`, so each worktree gets its own remote directory (disable with `sync.worktree_isolation: false`). See [configuration docs](docs/configuration.md) for all options.
+`${PROJECT}` expands to your local directory name. In a linked git worktree it expands to `repo@worktree-name`, so each worktree gets its own remote directory (disable with `sync.worktree_isolation: false`). Remote directories for deleted worktrees are pruned on sync, or on demand with `rr prune`. See [configuration docs](docs/configuration.md) for all options.
 
 ## How It Works
 
@@ -328,6 +328,7 @@ rr host remove mini     # Remove a host
 
 # Maintenance
 rr unlock               # Release a stuck lock
+rr prune                # Remove remote dirs for deleted git worktrees
 rr update               # Update to latest version
 rr completion bash      # Shell completions (also: zsh, fish, powershell)
 ```

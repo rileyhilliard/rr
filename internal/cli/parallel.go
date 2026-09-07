@@ -102,6 +102,17 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		}
 	}
 
+	// Every host-restricted subtask needs at least one of its hosts in the
+	// run. Without this check the scheduler would have nowhere to send it and
+	// the run would end with a "no available host" failure after the other
+	// subtasks finished; with --host pointing at a disallowed host the old
+	// scheduler ran it there anyway.
+	if !opts.Local {
+		if err := checkSubtaskHosts(tasks, hostOrder); err != nil {
+			return 1, err
+		}
+	}
+
 	// If dry run, just show the plan
 	if opts.DryRun {
 		renderDryRunPlan(opts.TaskName, task.Parallel, flattenedNames, tasks, hosts, task.Setup, resolved.Project.Tasks)
@@ -334,6 +345,29 @@ func rewriteForwardArgs(resolved *config.ResolvedConfig, task *config.TaskConfig
 	}
 }
 
+// checkSubtaskHosts fails when a restricted subtask has none of its allowed
+// hosts among the hosts selected for this run.
+func checkSubtaskHosts(tasks []parallel.TaskInfo, hostOrder []string) error {
+	for _, t := range tasks {
+		if len(t.AllowedHosts) == 0 {
+			continue
+		}
+		ok := false
+		for _, h := range hostOrder {
+			if t.AllowsHost(h) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return errors.New(errors.ErrConfig,
+				fmt.Sprintf("Subtask '%s' can't run on the selected host(s): %s", t.Name, util.JoinOrNone(hostOrder)),
+				fmt.Sprintf("This subtask is restricted to: %s. Drop --host/--tag or include one of those hosts.", util.JoinOrNone(t.AllowedHosts)))
+		}
+	}
+	return nil
+}
+
 // buildSubtaskInfos constructs the TaskInfo list for each flattened subtask name.
 // When forwardTask.ForwardArgs is true, args are substituted into each
 // subtask's {args} placeholder or appended (shell-quoted) to simple commands.
@@ -372,10 +406,11 @@ func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flat
 		}
 
 		tasks = append(tasks, parallel.TaskInfo{
-			Name:    subtaskName,
-			Index:   i,
-			Command: cmd,
-			Env:     subtask.Env,
+			Name:         subtaskName,
+			Index:        i,
+			Command:      cmd,
+			Env:          subtask.Env,
+			AllowedHosts: subtask.Hosts,
 		})
 	}
 	return tasks, nil

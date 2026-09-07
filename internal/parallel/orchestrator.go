@@ -40,6 +40,11 @@ type Orchestrator struct {
 	unavailableHosts map[string]bool
 	unavailableMu    sync.Mutex
 
+	// workerHosts is the subset of hostList that got a worker goroutine in
+	// this run. Tasks with host restrictions can only be served by a worker
+	// host, so this is what hasAvailableHostFor consults.
+	workerHosts []string
+
 	// Output management
 	outputMgr *OutputManager
 
@@ -133,7 +138,10 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	// (e.g., when the original host is unavailable)
 	requeueChan := make(chan TaskInfo, len(o.tasks))
 
-	// Determine number of workers
+	// Determine number of workers, then pick which hosts get one. A task
+	// pinned to a host (`hosts:` on the subtask) needs a worker on that
+	// host, so the pick can exceed the count when the first N hosts in
+	// priority order would leave a pinned task with nowhere to run.
 	numWorkers := len(o.hostList)
 	if o.config.MaxParallel > 0 && o.config.MaxParallel < numWorkers {
 		numWorkers = o.config.MaxParallel
@@ -141,6 +149,8 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	if numWorkers > len(o.tasks) {
 		numWorkers = len(o.tasks)
 	}
+	o.workerHosts = o.pickWorkerHosts(numWorkers)
+	numWorkers = len(o.workerHosts)
 
 	// Result channel for collecting task results
 	resultChan := make(chan TaskResult, len(o.tasks))
@@ -207,7 +217,12 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 			case <-allDone:
 				return
 			case task := <-requeueChan:
-				// Task was re-queued because its host was unavailable
+				// Task was re-queued: its host went unavailable, or a worker
+				// on a host the task is not allowed on bounced it.
+				if !o.hasAvailableHostFor(task) {
+					resultChan <- noHostResult(task)
+					continue
+				}
 				pending = append(pending, task)
 			case taskQueue <- pending[0]:
 				// Task dispatched to a worker
@@ -230,19 +245,11 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 					return
 				}
 
-				// Check if all hosts are unavailable
-				if o.allHostsUnavailable() {
-					result := TaskResult{
-						TaskName:  task.Name,
-						TaskIndex: task.Index,
-						Command:   task.Command,
-						Host:      "none",
-						ExitCode:  1,
-						Error:     fmt.Errorf("all hosts unavailable"),
-						StartTime: time.Now(),
-						EndTime:   time.Now(),
-					}
-					resultChan <- result
+				// No live host may run this task (every host down, or the
+				// task's allowed hosts are all down): fail it now instead
+				// of bouncing it between workers forever.
+				if !o.hasAvailableHostFor(task) {
+					resultChan <- noHostResult(task)
 					continue
 				}
 
@@ -262,7 +269,7 @@ func (o *Orchestrator) Run(ctx context.Context) (*Result, error) {
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
-		hostName := o.hostList[i%len(o.hostList)]
+		hostName := o.workerHosts[i]
 		wg.Add(1)
 		go func(hostName string) {
 			defer wg.Done()
@@ -347,51 +354,19 @@ func (o *Orchestrator) hostWorkerWithRequeue(
 			}
 		}
 
-		// Try to grab a task from the queue.
-		// For subsequent tasks on slow hosts, we apply a delay to give fast hosts
-		// priority. But first, check if a task is immediately available (non-blocking).
-		// Only apply the delay if the queue isn't empty and we'd be competing.
-		var task TaskInfo
-		var ok bool
+		task, ok := o.nextTask(ctx, hostName, taskQueue, isFirstTask)
+		if !ok {
+			return // Queue closed or run cancelled
+		}
 
-		if !isFirstTask {
-			// Non-blocking check: is a task immediately available?
-			select {
-			case task, ok = <-taskQueue:
-				if !ok {
-					return // Queue closed, no more tasks
-				}
-				// Got a task immediately, skip delay and process it
-			default:
-				// No task immediately available. Apply slow host delay if needed,
-				// then do a blocking read.
-				if delay := o.getSlowHostDelay(hostName); delay > 0 {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(delay):
-					}
-				}
-				// Blocking read after delay
-				select {
-				case task, ok = <-taskQueue:
-					if !ok {
-						return // Queue closed, no more tasks
-					}
-				case <-ctx.Done():
-					return
-				}
-			}
-		} else {
-			// First task: grab immediately without delay
-			select {
-			case task, ok = <-taskQueue:
-				if !ok {
-					return // Queue closed, no more tasks
-				}
-			case <-ctx.Done():
+		// A task pinned to other hosts goes back to the queue for a worker
+		// that may run it. This host stays available; the short pause keeps
+		// this worker from racing the allowed host for the same task.
+		if !task.AllowsHost(hostName) {
+			if !bounceTask(ctx, task, requeueChan) {
 				return
 			}
+			continue
 		}
 
 		// Execute the task
@@ -531,6 +506,129 @@ func (o *Orchestrator) allHostsUnavailable() bool {
 		}
 	}
 	return true
+}
+
+// bounceBackoff is how long a worker waits after handing back a task it is
+// not allowed to run, so the allowed host's worker wins the next read.
+const bounceBackoff = 50 * time.Millisecond
+
+// nextTask pulls the next task for this worker. Subsequent tasks on a slow
+// host wait out getSlowHostDelay first, but only when nothing is already
+// queued, so fast hosts get first claim without idling the slow one. ok is
+// false when the queue closed or the run was cancelled.
+func (o *Orchestrator) nextTask(ctx context.Context, hostName string, taskQueue <-chan TaskInfo, isFirstTask bool) (TaskInfo, bool) {
+	if !isFirstTask {
+		select {
+		case task, ok := <-taskQueue:
+			return task, ok
+		default:
+		}
+		if delay := o.getSlowHostDelay(hostName); delay > 0 {
+			select {
+			case <-ctx.Done():
+				return TaskInfo{}, false
+			case <-time.After(delay):
+			}
+		}
+	}
+	select {
+	case task, ok := <-taskQueue:
+		return task, ok
+	case <-ctx.Done():
+		return TaskInfo{}, false
+	}
+}
+
+// bounceTask returns a task this worker may not run to the dispatcher, then
+// pauses so the allowed host's worker wins the next read. It reports false
+// when the run was cancelled and the worker should exit.
+func bounceTask(ctx context.Context, task TaskInfo, requeueChan chan<- TaskInfo) bool {
+	select {
+	case requeueChan <- task:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case <-time.After(bounceBackoff):
+	case <-ctx.Done():
+		return false
+	}
+	return true
+}
+
+// pickWorkerHosts returns the hosts that get a worker goroutine: the first n
+// in priority order, plus any further host a restricted task needs. Returns
+// hostList order, deduplicated.
+func (o *Orchestrator) pickWorkerHosts(n int) []string {
+	if n > len(o.hostList) {
+		n = len(o.hostList)
+	}
+	picked := make([]string, 0, n)
+	picked = append(picked, o.hostList[:n]...)
+	has := func(name string) bool {
+		for _, p := range picked {
+			if p == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, task := range o.tasks {
+		if len(task.AllowedHosts) == 0 {
+			continue
+		}
+		covered := false
+		for _, p := range picked {
+			if task.AllowsHost(p) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		for _, h := range o.hostList {
+			if task.AllowsHost(h) && !has(h) {
+				picked = append(picked, h)
+				break
+			}
+		}
+	}
+	return picked
+}
+
+// hasAvailableHostFor reports whether some worker host that the task allows
+// is still available.
+func (o *Orchestrator) hasAvailableHostFor(task TaskInfo) bool {
+	hosts := o.workerHosts
+	if len(hosts) == 0 {
+		hosts = o.hostList
+	}
+	for _, h := range hosts {
+		if task.AllowsHost(h) && !o.isHostUnavailable(h) {
+			return true
+		}
+	}
+	return false
+}
+
+// noHostResult is the failure recorded when no live host may run a task.
+func noHostResult(task TaskInfo) TaskResult {
+	err := fmt.Errorf("all hosts unavailable")
+	if len(task.AllowedHosts) > 0 {
+		err = fmt.Errorf("no available host allowed for this task (hosts: %v)", task.AllowedHosts)
+	}
+	now := time.Now()
+	return TaskResult{
+		TaskName:  task.Name,
+		TaskIndex: task.Index,
+		Command:   task.Command,
+		Host:      "none",
+		ExitCode:  1,
+		Error:     err,
+		StartTime: now,
+		EndTime:   now,
+	}
 }
 
 // drainUnconsumedTasks pulls any remaining tasks from taskQueue and sends

@@ -273,6 +273,42 @@ func getProject() string {
 	return facts.baseName
 }
 
+// ProjectName returns the expanded ${PROJECT} value for the current tree
+// ("<repo>" in the main checkout, "<repo>@<worktree>" in a linked worktree
+// when isolation is on).
+func ProjectName() string {
+	return getProject()
+}
+
+// ProjectBaseName returns the repository name without any worktree suffix.
+func ProjectBaseName() string {
+	return loadProjectFacts().baseName
+}
+
+// ListWorktreeNames returns the sanitized basenames of every worktree of the
+// repository containing dir (main checkout included). ok is false when git
+// could not list them, in which case callers must not treat any remote
+// directory as stale.
+func ListWorktreeNames(dir string) (names map[string]bool, ok bool) {
+	cmd := exec.Command("git", "-C", dir, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false
+	}
+	names = make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		if path == "" {
+			continue
+		}
+		names[sanitizeWorktreeName(filepath.Base(path))] = true
+	}
+	return names, true
+}
+
 // getGitRepoName extracts the repository name from git remote origin.
 func getGitRepoName() string {
 	// Try to get remote URL

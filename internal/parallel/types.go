@@ -116,6 +116,23 @@ type TaskInfo struct {
 	Command string            // Command to execute
 	Env     map[string]string // Environment variables
 	WorkDir string            // Working directory on remote
+
+	// AllowedHosts restricts which hosts may run this task (from the
+	// subtask's `hosts:` list). Empty means any host.
+	AllowedHosts []string
+}
+
+// AllowsHost reports whether this task may run on the named host.
+func (t TaskInfo) AllowsHost(hostName string) bool {
+	if len(t.AllowedHosts) == 0 {
+		return true
+	}
+	for _, h := range t.AllowedHosts {
+		if h == hostName {
+			return true
+		}
+	}
+	return false
 }
 
 // ID returns a unique identifier for this task.

@@ -303,3 +303,27 @@ func TestLoad_WorktreeIsolationEscapeHatch(t *testing.T) {
 	// The escape hatch must apply to expansions after project load.
 	assert.Equal(t, "~/rr/myrepo", ExpandRemote("~/rr/${PROJECT}"))
 }
+
+func TestListWorktreeNames(t *testing.T) {
+	mainDir, wtDir := setupWorktreeRepo(t)
+
+	t.Run("lists the main checkout and every linked worktree", func(t *testing.T) {
+		names, ok := ListWorktreeNames(mainDir)
+		require.True(t, ok)
+		assert.True(t, names["myrepo"], "main checkout: %v", names)
+		assert.True(t, names["myrepo-feature.x"], "linked worktree: %v", names)
+	})
+
+	t.Run("same set from inside a linked worktree", func(t *testing.T) {
+		names, ok := ListWorktreeNames(wtDir)
+		require.True(t, ok)
+		assert.True(t, names["myrepo"])
+		assert.True(t, names["myrepo-feature.x"])
+	})
+
+	t.Run("not ok outside a repo, so nothing is judged stale", func(t *testing.T) {
+		names, ok := ListWorktreeNames(t.TempDir())
+		assert.False(t, ok)
+		assert.Nil(t, names)
+	})
+}

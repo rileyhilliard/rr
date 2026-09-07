@@ -139,6 +139,22 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 	// Record where this sync came from (best-effort)
 	writeSourceMarker(conn, localDir)
 
+	// Remove per-worktree remote copies whose worktree is gone (best-effort:
+	// a prune failure never fails the sync that just succeeded).
+	if cfg.PruneWorktreesEnabled() {
+		var pruned func(string)
+		if opts != nil {
+			pruned = opts.Pruned
+		}
+		if _, err := PruneStaleWorktrees(conn, localDir, PruneOptions{Pruned: pruned}); err != nil && opts != nil && opts.Warn != nil {
+			opts.Warn(SyncWarning{
+				Code:    "prune_failed",
+				Message: fmt.Sprintf("couldn't prune stale worktree directories on %s: %v", conn.Name, err),
+				Details: map[string]interface{}{"code": "prune_failed", "error": err.Error()},
+			})
+		}
+	}
+
 	return nil
 }
 

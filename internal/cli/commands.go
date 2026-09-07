@@ -35,6 +35,8 @@ var (
 	syncTagFlag              string
 	syncProbeTimeoutFlag     string
 	syncDryRun               bool
+	pruneHostFlag            string
+	pruneDryRun              bool
 	pullHostFlag             string
 	pullTagFlag              string
 	pullProbeTimeoutFlag     string
@@ -468,6 +470,27 @@ Examples:
 	},
 }
 
+// pruneCmd removes stale per-worktree remote directories
+var pruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Remove remote sync dirs for deleted worktrees",
+	Long: `Remove remote "<repo>@<worktree>" sync directories whose git worktree no
+longer exists locally.
+
+With worktree isolation (the default) every linked worktree syncs to its own
+remote directory, each carrying its own node_modules/.venv. Syncs prune
+these automatically (sync.prune_worktrees); run this to clean hosts that
+have not been synced to since a worktree was removed, or to preview.
+
+Examples:
+  rr prune                 # every project host
+  rr prune --dry-run       # list what would be removed
+  rr prune --host m4-mini  # one host`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return pruneCommand(PruneOptions{Host: pruneHostFlag, DryRun: pruneDryRun})
+	},
+}
+
 // tasksCmd lists available tasks
 var tasksCmd = &cobra.Command{
 	Use:   "tasks",
@@ -577,6 +600,10 @@ func init() {
 	// tasks command flags
 	tasksCmd.Flags().BoolVar(&tasksJSON, "json", false, "output in JSON format")
 
+	// prune command flags
+	pruneCmd.Flags().StringVar(&pruneHostFlag, "host", "", "target a single host (default: all project hosts)")
+	pruneCmd.Flags().BoolVar(&pruneDryRun, "dry-run", false, "list stale directories without removing them")
+
 	// provision command flags
 	provisionCmd.Flags().StringVar(&provisionHostFlag, "host", "", "target specific host (default: all project hosts)")
 	provisionCmd.Flags().BoolVar(&provisionCheckOnly, "check", false, "report status without installing (dry-run)")
@@ -601,5 +628,6 @@ func init() {
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(unlockCmd)
 	rootCmd.AddCommand(tasksCmd)
+	rootCmd.AddCommand(pruneCmd)
 	rootCmd.AddCommand(provisionCmd)
 }

@@ -40,6 +40,9 @@ type SyncWarning struct {
 type SyncOptions struct {
 	// Warn receives non-fatal warnings (nil to ignore).
 	Warn func(SyncWarning)
+	// Pruned receives each stale per-worktree remote directory removed after
+	// a sync (nil to ignore). See PruneStaleWorktrees.
+	Pruned func(remoteDir string)
 }
 
 // markerRemotePath returns the remote path of the provenance marker.

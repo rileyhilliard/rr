@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-09-06
+
+Worktree remote directories now get cleaned up, and host-restricted subtasks are honored inside parallel groups.
+
+### Added
+
+- **`rr prune`** - Removes remote `<repo>@<worktree>` sync directories whose git worktree no longer exists locally. Worktree isolation gives every linked worktree its own remote copy (each with its own `node_modules`/`.venv`), and nothing reclaimed them, so a machine that churns through worktrees filled the remote disk. `--dry-run` lists candidates; `--host` targets one host; without flags it visits every project host.
+- **`sync.prune_worktrees`** (default `true`) - Every sync prunes stale per-worktree directories on the host it just synced to, so the common case needs no command. Set `false` to keep them until `rr prune` is run. Pruning is best-effort: a failure warns and never fails a sync that succeeded.
+
+### Changed
+
+- `prune` joins the reserved task names, so a task can no longer shadow the new command.
+
+### Fixed
+
+- **Host-restricted subtasks are honored in parallel groups** - A subtask with `hosts:` was scheduled on any host in the pool; the restriction was only enforced for single-task runs. The scheduler now gives a worker to every host a restricted subtask needs, bounces a pinned task off workers that may not run it, and fails it with the restriction named when none of its hosts is available. `rr <parallel-task> --host`/`--tag` that excludes every host a subtask allows now fails up front instead of mid-run.
+
 ## [0.25.0] - 2026-07-30
 
 Full product/architecture/performance round on `rr monitor`. Net: three inert config keys made functional, a metrics gap vs comparable tools closed, a scriptable snapshot mode, threshold alerts, large render speedups, and ~2,300 lines of dead code removed.
