@@ -44,6 +44,14 @@ linters:
         - fmt.Fprint
         - (io.Closer).Close
 
+    staticcheck:
+      checks:
+        - all
+        # QF1012 rewrites sb.WriteString(fmt.Sprintf(...)) as fmt.Fprintf(&sb,
+        # ...). Same behavior, and the WriteString form reads better next to
+        # the plain WriteString calls it sits among. Style preference, not a bug.
+        - -QF1012
+
     gocyclo:
       min-complexity: 30  # CLI tools often have complex switch statements
 
@@ -95,6 +103,16 @@ linters:
         - G304  # File path from variable (common in CLI tools)
         - G306  # WriteFile permissions 0644 (standard for config files)
         - G602  # Slice bounds (false positive in controlled code)
+        # Taint-analysis rules added in gosec 2.23 (golangci-lint 2.13). They
+        # are the dataflow-tracking counterparts of G204/G304 above and flag
+        # the same by-design behavior: rr's whole job is to run the command
+        # the user asked for, on the host and with the SSH key their config
+        # names. The inputs are the operator's own config and argv, not
+        # untrusted remote data.
+        - G702  # Command injection (rr executes user-supplied commands)
+        - G703  # Path traversal (SSH key/cert paths come from user config)
+        - G704  # SSRF (SSH/agent endpoints come from user config)
+        - G706  # Log injection (host names from user config reach logs)
 
     nolintlint:
       require-explanation: true

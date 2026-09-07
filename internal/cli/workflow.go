@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
@@ -453,6 +455,14 @@ func structuredSyncOptions() *rrsync.SyncOptions {
 				Details: w.Details,
 			})
 		},
+		Pruned: func(dir string) {
+			WritePhaseEvent(PhaseEvent{
+				Type:    "phase",
+				Phase:   "sync",
+				Status:  "pruned",
+				Details: map[string]interface{}{"dir": dir},
+			})
+		},
 	}
 }
 
@@ -461,6 +471,10 @@ func prettySyncOptions() *rrsync.SyncOptions {
 	return &rrsync.SyncOptions{
 		Warn: func(w rrsync.SyncWarning) {
 			ui.PrintWarning(w.Message)
+		},
+		Pruned: func(dir string) {
+			muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
+			fmt.Println(muted.Render("Pruned stale worktree dir " + dir))
 		},
 	}
 }

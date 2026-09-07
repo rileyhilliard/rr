@@ -300,8 +300,6 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 }
 
 // outputDoctorTextResults outputs just the summary after progressive category rendering.
-//
-//nolint:unparam // error return reserved for future use
 func outputDoctorTextResults(_ []doctor.Check, results []doctor.CheckResult) error {
 	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)

@@ -170,6 +170,17 @@ type SyncConfig struct {
 	// directory (${PROJECT} becomes "<repo>@<worktree>"). Defaults to true;
 	// set false to share the main checkout's remote directory.
 	WorktreeIsolation *bool `yaml:"worktree_isolation,omitempty" mapstructure:"worktree_isolation"`
+
+	// PruneWorktrees removes remote "<repo>@<worktree>" directories after a
+	// sync when the worktree no longer exists locally. Defaults to true; set
+	// false to keep every per-worktree remote copy until `rr prune` is run.
+	PruneWorktrees *bool `yaml:"prune_worktrees,omitempty" mapstructure:"prune_worktrees"`
+}
+
+// PruneWorktreesEnabled reports whether post-sync pruning of stale
+// per-worktree remote directories is on (the default).
+func (c SyncConfig) PruneWorktreesEnabled() bool {
+	return c.PruneWorktrees == nil || *c.PruneWorktrees
 }
 
 // LockConfig controls the distributed lock behavior to prevent concurrent executions.

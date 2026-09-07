@@ -13,6 +13,7 @@ var ReservedTaskNames = map[string]bool{
 	"run":        true,
 	"exec":       true,
 	"sync":       true,
+	"prune":      true,
 	"init":       true,
 	"setup":      true,
 	"status":     true,

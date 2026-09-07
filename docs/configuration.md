@@ -142,6 +142,22 @@ mirror. The main checkout keeps its plain name. Expect a cold first sync per
 worktree, and remember `preserve`d directories (like `.venv`) start empty in
 the new remote dir. Disable per project with `sync.worktree_isolation: false`.
 
+Removing a worktree locally leaves its remote directory behind, so a machine
+that churns through worktrees fills the remote disk. Every sync removes the
+remote directories of worktrees that no longer exist locally (disable with
+`sync.prune_worktrees: false`), and `rr prune` cleans hosts that have not been
+synced to since a worktree was removed:
+
+```bash
+rr prune                 # every project host
+rr prune --dry-run       # list what would be removed
+rr prune --host m4-mini  # one host
+```
+
+Prune only ever removes `<repo>@<worktree>` directories beside the project's
+remote dir, never the main checkout's, and it skips directories whose sync
+marker names a different machine.
+
 ## Project config (.rr.yaml)
 
 The project config lives in your project root and contains settings that can be shared with your team.
@@ -367,6 +383,7 @@ sync:
 | `preserve` | list | see below | Patterns for files not deleted on remote. |
 | `flags` | list | `[]` | Extra flags passed to rsync. |
 | `worktree_isolation` | bool | `true` | Give each linked git worktree its own remote directory (`${PROJECT}` becomes `repo@worktree`). |
+| `prune_worktrees` | bool | `true` | After a sync, remove remote `repo@worktree` directories whose worktree no longer exists locally. |
 
 ### Default excludes
 
@@ -825,11 +842,15 @@ tasks:
 
 This task only runs on the `server` host, regardless of the default.
 
+The restriction holds inside parallel groups too: a restricted subtask is
+scheduled only on a host it allows, and the run fails up front if `--host` or
+`--tag` leaves it with no host to run on.
+
 ### Reserved task names
 
 You cannot name a task after a built-in command. These names are reserved:
 
-- `run`, `exec`, `sync`
+- `run`, `exec`, `sync`, `prune`
 - `init`, `setup`, `status`
 - `monitor`, `doctor`, `completion`
 - `help`, `version`, `update`, `host`

@@ -1922,3 +1922,10 @@ func TestLockWaitTimeout_ViperDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, time.Minute, cfg.Lock.WaitTimeout)
 }
+
+func TestSyncConfig_PruneWorktreesEnabled(t *testing.T) {
+	off, on := false, true
+	assert.True(t, SyncConfig{}.PruneWorktreesEnabled(), "defaults on")
+	assert.False(t, SyncConfig{PruneWorktrees: &off}.PruneWorktreesEnabled())
+	assert.True(t, SyncConfig{PruneWorktrees: &on}.PruneWorktreesEnabled())
+}
