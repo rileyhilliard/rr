@@ -473,6 +473,7 @@ Examples:
 // pruneCmd removes stale per-worktree remote directories
 var pruneCmd = &cobra.Command{
 	Use:   "prune",
+	Args:  cobra.NoArgs,
 	Short: "Remove remote sync dirs for deleted worktrees",
 	Long: `Remove remote "<repo>@<worktree>" sync directories whose git worktree no
 longer exists locally.

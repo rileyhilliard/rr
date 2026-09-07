@@ -90,22 +90,67 @@ func TestStaleWorktreeDirs(t *testing.T) {
 	})
 }
 
-func TestRemoveRemoteDirs(t *testing.T) {
-	t.Run("removes the listed dirs", func(t *testing.T) {
+func TestRemoveRemoteDir(t *testing.T) {
+	t.Run("removes the named dir and nothing else", func(t *testing.T) {
 		conn, mock := pruneTestConn(t, "")
-		require.NoError(t, RemoveRemoteDirs(conn, []string{"/root/rr/myapp@gone"}))
+		require.NoError(t, removeRemoteDir(conn, "/root/rr/myapp@gone"))
 		assert.False(t, mock.GetFS().Exists("/root/rr/myapp@gone"))
 		assert.True(t, mock.GetFS().Exists("/root/rr/myapp@live"))
 	})
 
 	t.Run("refuses paths that are not worktree dirs", func(t *testing.T) {
 		conn, mock := pruneTestConn(t, "")
-		err := RemoveRemoteDirs(conn, []string{"/root/rr/myapp"})
+		err := removeRemoteDir(conn, "/root/rr/myapp")
 		require.Error(t, err)
 		assert.True(t, mock.GetFS().Exists("/root/rr/myapp"))
 
-		err = RemoveRemoteDirs(conn, []string{"/x@y"})
+		err = removeRemoteDir(conn, "/x@y")
 		require.Error(t, err)
+	})
+}
+
+func TestPruneDirs(t *testing.T) {
+	stale := []string{"/root/rr/myapp@gone", "/root/rr/myapp@live"}
+
+	t.Run("removes and reports each dir", func(t *testing.T) {
+		conn, mock := pruneTestConn(t, "")
+		var reported []string
+		done, err := pruneDirs(conn, stale, PruneOptions{
+			Pruned: func(dir string) { reported = append(reported, dir) },
+		})
+		require.NoError(t, err)
+		assert.Equal(t, stale, done)
+		assert.Equal(t, stale, reported)
+		assert.False(t, mock.GetFS().Exists("/root/rr/myapp@gone"))
+	})
+
+	t.Run("a dir that could not be removed is not reported", func(t *testing.T) {
+		conn, mock := pruneTestConn(t, "")
+		mock.SetCommandResponse(`^rm -rf `, sshtesting.CommandResponse{
+			Stderr:   []byte("Permission denied"),
+			ExitCode: 1,
+		})
+		var reported []string
+		done, err := pruneDirs(conn, stale, PruneOptions{
+			Pruned: func(dir string) { reported = append(reported, dir) },
+		})
+		require.Error(t, err)
+		assert.Empty(t, done)
+		assert.Empty(t, reported)
+		assert.True(t, mock.GetFS().Exists("/root/rr/myapp@gone"))
+	})
+
+	t.Run("dry run reports without removing", func(t *testing.T) {
+		conn, mock := pruneTestConn(t, "")
+		var reported []string
+		done, err := pruneDirs(conn, stale, PruneOptions{
+			DryRun: true,
+			Pruned: func(dir string) { reported = append(reported, dir) },
+		})
+		require.NoError(t, err)
+		assert.Equal(t, stale, done)
+		assert.Equal(t, stale, reported)
+		assert.True(t, mock.GetFS().Exists("/root/rr/myapp@gone"))
 	})
 }
 

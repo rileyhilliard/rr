@@ -61,18 +61,27 @@ func PruneStaleWorktrees(conn *host.Connection, localDir string, opts PruneOptio
 		return nil, err
 	}
 
+	return pruneDirs(conn, stale, opts)
+}
+
+// pruneDirs removes the given directories and reports each one, stopping at
+// the first failure. A directory is reported only once it is actually gone,
+// so a failed rm never surfaces as a "pruned" event; in dry-run mode nothing
+// is removed and every candidate is reported.
+func pruneDirs(conn *host.Connection, stale []string, opts PruneOptions) ([]string, error) {
+	var done []string
 	for _, dir := range stale {
+		if !opts.DryRun {
+			if err := removeRemoteDir(conn, dir); err != nil {
+				return done, err
+			}
+		}
+		done = append(done, dir)
 		if opts.Pruned != nil {
 			opts.Pruned(dir)
 		}
 	}
-	if opts.DryRun {
-		return stale, nil
-	}
-	if err := RemoveRemoteDirs(conn, stale); err != nil {
-		return nil, err
-	}
-	return stale, nil
+	return done, nil
 }
 
 // staleWorktreeDirs lists "<parent>/<base>@<wt>" directories beside remoteDir
@@ -132,29 +141,27 @@ func markerHostname(conn *host.Connection, remoteDir string) string {
 	return m.Hostname
 }
 
-// RemoveRemoteDirs deletes the given remote directories. Every path must be
-// a "<repo>@<worktree>" directory (the only thing prune ever produces); the
+// removeRemoteDir deletes one remote directory. The path must be a
+// "<repo>@<worktree>" directory (the only thing prune ever produces); the
 // check is a last guard against a malformed path reaching rm -rf.
-func RemoveRemoteDirs(conn *host.Connection, dirs []string) error {
-	for _, dir := range dirs {
-		base := path.Base(dir)
-		if !strings.Contains(base, "@") || path.Dir(dir) == "/" || path.Dir(dir) == "." {
-			return errors.New(errors.ErrSync,
-				fmt.Sprintf("Refusing to remove %s", dir),
-				"Prune only removes <repo>@<worktree> directories beside the project's remote dir.")
-		}
-		rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(dir))
-		_, stderr, exitCode, err := conn.Client.Exec(rmCmd)
-		if err != nil {
-			return errors.WrapWithCode(err, errors.ErrSync,
-				fmt.Sprintf("Failed to remove stale remote directory %s", dir),
-				"Check SSH connection and remote permissions.")
-		}
-		if exitCode != 0 {
-			return errors.New(errors.ErrSync,
-				fmt.Sprintf("Failed to remove stale remote directory %s", dir),
-				fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(stderr))))
-		}
+func removeRemoteDir(conn *host.Connection, dir string) error {
+	base := path.Base(dir)
+	if !strings.Contains(base, "@") || path.Dir(dir) == "/" || path.Dir(dir) == "." {
+		return errors.New(errors.ErrSync,
+			fmt.Sprintf("Refusing to remove %s", dir),
+			"Prune only removes <repo>@<worktree> directories beside the project's remote dir.")
+	}
+	rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(dir))
+	_, stderr, exitCode, err := conn.Client.Exec(rmCmd)
+	if err != nil {
+		return errors.WrapWithCode(err, errors.ErrSync,
+			fmt.Sprintf("Failed to remove stale remote directory %s", dir),
+			"Check SSH connection and remote permissions.")
+	}
+	if exitCode != 0 {
+		return errors.New(errors.ErrSync,
+			fmt.Sprintf("Failed to remove stale remote directory %s", dir),
+			fmt.Sprintf("Remote error: %s", strings.TrimSpace(string(stderr))))
 	}
 	return nil
 }
