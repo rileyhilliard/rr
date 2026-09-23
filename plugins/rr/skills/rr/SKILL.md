@@ -12,7 +12,7 @@ allowed-tools:
 
 # rr (Road Runner) CLI
 
-rr syncs code to remote machines and runs commands there. Handles host failover, file sync with rsync, distributed locking, and test output formatting.
+rr syncs code to remote machines and runs commands there. Handles host failover, file sync with rsync, distributed locking, and test output parsing.
 
 ## Quick Reference
 
@@ -21,9 +21,11 @@ rr run "make test"     # Sync files + run command
 rr exec "git status"   # Run command without syncing
 rr sync                # Just sync files
 rr <taskname>          # Run named task from config
+rr tasks               # List tasks
 rr provision           # Install missing tools on hosts
 rr doctor              # Diagnose issues
-rr monitor             # TUI dashboard for host metrics
+rr unlock <host>       # Release a stuck lock
+rr monitor --once --json  # One-shot host metrics snapshot
 ```
 
 ## Two-Config System
@@ -53,13 +55,12 @@ hosts:
 version: 1
 hosts: [mini]
 
-sync:
-  exclude: [.git/, node_modules/, .venv/]
-
 tasks:
   test:
     run: pytest -v
 ```
+
+rr ships default sync excludes (`.git`, `.venv`, `node_modules`, caches, agent dirs like `.claude/`) and applies `.gitignore`. A custom `sync.exclude` list **replaces** the defaults, so copy them in if you set one.
 
 ## Commands Overview
 
@@ -68,21 +69,28 @@ tasks:
 | `rr run "cmd"` | Sync files, then run command |
 | `rr exec "cmd"` | Run command without syncing |
 | `rr sync` | Just sync files |
+| `rr pull <pattern>` | Download files from the remote |
 | `rr <taskname>` | Run named task |
 | `rr tasks` | List available tasks |
+| `rr status` | Host connectivity and which remote dir this tree syncs to |
 | `rr provision` | Install missing tools on hosts |
 | `rr doctor` | Diagnose issues |
+| `rr unlock [host]` / `rr unlock --all` | Release stuck locks |
+| `rr prune` | Remove remote dirs left by deleted git worktrees |
 | `rr host list/add/remove` | Manage hosts |
 
 **See [commands.md](reference/commands.md) for full command reference.**
 
 ### Common Flags
 
-- `--pretty` / `-p` - Opt into human-readable output (spinners, colors). Default is structured JSON.
 - `--host <name>` - Target specific host
 - `--tag <tag>` - Select host by tag
 - `--local` - Force local execution
-- `--skip-requirements` - Skip requirement checks
+- `--cwd <dir>` - (`run`/`exec`) Directory to run in, relative to the project root
+- `--tail N` - (`run`/`exec`/single-command tasks) Reprint the last N log lines after the result
+- `--skip-requirements` - (`run`/`exec` only) Skip requirement checks
+- `--no-phases` - Suppress intermediate phase events; the final result event is still emitted
+- `--pretty` / `-p` - Human-readable output (spinners, colors). Default is structured JSON.
 
 Run `rr --help` or `rr <command> --help` for complete flag reference.
 
@@ -106,78 +114,127 @@ tasks:
 
 Run with: `rr test`, `rr deploy`
 
-Extra arguments append to single-command tasks: `rr test -k "test_login"`
+Named tasks always run from the project root, regardless of which subdirectory you invoke them from.
 
-**See [tasks.md](reference/tasks.md) for parallel tasks, multi-step tasks, and advanced configuration.**
+**See [tasks.md](reference/tasks.md) for parallel tasks, multi-step tasks, and dependencies.**
 
-## Task Types and Arguments
+## Passing Arguments to Tasks
 
 Tasks come in three types. The type determines whether extra args work:
 
 | Type | Config field | Accepts args? | Example |
 |------|-------------|---------------|---------|
-| Single-command | `run:` | YES | `rr test -k "test_foo"` |
-| Multi-step | `steps:` | NO (errors) | `rr deploy` |
-| Parallel | `parallel:` | NO unless `forward_args: true` | `rr test-all` |
+| Single-command | `run:` | Yes | `rr test tests/test_api.py` |
+| Multi-step | `steps:` | No (errors) | `rr deploy` |
+| Parallel | `parallel:` | Only with `forward_args: true` | `rr test-all` |
 
-**When you need custom args on a parallel task, bypass it:**
-```bash
-# Preferred: use --cwd for subdirectory execution (path-traversal safe)
-rr run --cwd backend "uv run pytest tests/bond/ -v"
+Rules for single-command tasks:
 
-# Fallback: manual cd pattern (avoid — quoting errors are common)
-rr run "cd backend && uv run pytest tests/bond/ -v"
+- **Flag-like args need `--`.** rr parses flags before the task sees them, so `rr test -k foo` fails with "rr parses flags before the task sees them". Use `rr test -- -k foo`. Positional args (`rr test tests/foo.py`) work without it.
+- **Args are shell-quoted.** `rr test -- -k "foo or bar"` arrives as one argument. Remote globs and `$VARS` in args are not expanded; put those in the task's `run` string.
+- **Args are appended to the end** of the command, unless the command has an `{args}` placeholder. `{args:-default}` supplies a default when no args are given; `{{args}}` is a literal `{args}`.
+- **Compound commands need a placeholder.** If `run` contains pipes, `&&`, `;`, redirections, `$()`, or backticks, passing args without an `{args}` placeholder is an error (otherwise the args would land on the last command in the pipeline).
+
+```yaml
+tasks:
+  test:
+    run: pytest {args:-tests/} -n 4 | tail -20   # rr test -- -k bond  =>  pytest -k bond -n 4 | tail -20
 ```
 
-To check which type a task is: `rr <task> --help`
+Parallel tasks reject args unless `forward_args: true` is set. With it, args are forwarded to every subtask (appended, or substituted into each subtask's `{args}`). Subtasks that are compound commands need an `{args}` placeholder, and multi-step subtasks can't take forwarded args. A forwarded test filter can leave some subtasks with zero matching tests (pytest exits 5).
 
-To forward args to all subtasks in a parallel task, set `forward_args: true` in the task config:
 ```yaml
 tasks:
   test-backend:
     parallel: [test-backend-api, test-backend-services]
-    forward_args: true   # rr test-backend -k bond works
+    forward_args: true   # rr test-backend -- -k bond
 ```
+
+**When a parallel task doesn't forward args, bypass it:**
+```bash
+rr run --cwd backend "uv run pytest tests/bond/ -v"
+```
+
+To check a task's type, subtasks, and flags: `rr <task> --help`. This is faster than reading `.rr.yaml`.
 
 ## Choosing the Right Command
 
 ```
 Need to run something remotely?
 ├── Named task exists? → rr <task>
-│   ├── Single-command task → rr <task> <args>   (args forwarded)
-│   ├── Parallel task (forward_args: true) → rr <task> <args>
-│   └── Parallel task (default) → rr run "cd <dir> && <cmd> <args>"
+│   ├── Single-command task → rr <task> -- <args>
+│   ├── Parallel task (forward_args: true) → rr <task> -- <args>
+│   └── Parallel task (default) → rr run --cwd <dir> "<cmd> <args>"
 ├── No task, files may have changed → rr run "<command>"   (syncs first)
 └── Files already synced → rr exec "<command>"   (faster, skips sync)
 ```
 
-**Never nest rr inside rr exec** — rr may not be installed on the remote:
+Quote the whole command: `rr run "make test"`. rr rejects `rr run <host> make test` and `rr run <task> -k foo` with an error that shows the correct form (`rr run --host <host> "..."` or `rr <task> -- ...`).
+
+**Never nest rr inside rr exec.** rr may not be installed on the remote:
 ```bash
 # Wrong:  rr exec "rr sync && pytest"
 # Right:  rr run "pytest"
 ```
 
+## Where Commands Run
+
+- `rr run`/`rr exec` run in the remote equivalent of your **current subdirectory**. From `backend/`, `rr run "make"` uses `backend/Makefile`. Use `--cwd .` to run at the project root, or `--cwd <dir>` for another subdirectory. `details.remote_cwd` reports the subdirectory used.
+- Absolute local paths under the project are rewritten to the remote project dir (`details.path_rewrites` counts them). Absolute paths outside the project draw a warning. Disable with `rewrite_paths: false`.
+- In a linked git worktree, `${PROJECT}` expands to `<repo>@<worktree>`, so each worktree gets its own remote copy (and its own `node_modules`/`.venv`, which means a cold first sync).
+
 ## Reading rr Output
 
-rr sends phase events (connect, sync, exec) to stderr and command output to stdout.
+Output is structured by default. No flags needed.
 
-```bash
-rr test-opendata 2>/dev/null         # suppress all phase events
-rr test-opendata --no-phases         # suppress intermediate events, keep final result JSON
-rr test-opendata 2>&1                # capture everything (mixes phase JSON into output stream)
+- **stderr**: JSON phase events, one per line (`connect`, `lock`, `sync`, `exec`), then a final `{"type":"result",...}` line.
+- **stdout/stderr**: the command's own output, passed through raw.
+- **Exit code**: the remote command's exit code. If rr itself fails before the command runs (config, SSH, lock, sync, missing tools), it exits 1 and writes a JSON error envelope (`{"success":false,"error":{"code":...,"message":...,"suggestion":...}}`) to stderr instead of a result event.
+
+```json
+{"type":"result","status":"failed","exit_code":1,"host":"mini","duration_s":14.2,"details":{"exec_duration_s":11.8,"log_file":"/home/me/.rr/logs/test-20260101-120000/output.log","summary":{"passed":41,"failed":1,"skipped":0,"errors":0},"failures":[{"name":"test_login","file":"tests/test_auth.py:42","message":"AssertionError: ..."}]}}
 ```
 
-The final result is always a JSON line on stderr with `"type":"result"` containing exit code, host, and duration.
+Useful `details` keys on the result event:
+
+| Key | Meaning |
+|-----|---------|
+| `summary` | Test counts (pytest, jest/vitest, go test only) |
+| `failures` | Failed tests with `name`, `file` (file:line), `message` |
+| `no_tests` | The runner reported collecting zero tests. Exit code may still be 0. |
+| `piped_exit_code` | Zero tests plus a pipe: the exit code is the last pipeline stage's, not the runner's |
+| `log_file` | Full raw output (`~/.rr/logs/...`). Read it instead of rerunning. |
+| `hint` | Explanation of a likely local-vs-remote path mistake |
+| `fallback` | Ran locally because all hosts were locked (reason, wait time, lock holders) |
+| `path_rewrites` | Number of local paths rewritten to remote paths |
+| `remote_cwd` | Subdirectory the command ran in |
+
+Parallel tasks print nothing on stdout by default (only with `--stream` or `--verbose`). The result event has `total`, `passed`, `failed`, `log_dir`, and `failures` (per subtask: `task`, `host`, `exit_code`, `log_file`, parsed test failures or an `output_tail`). Use `--stream` to see live output prefixed with `[host:task]`.
+
+```bash
+rr test 2>/dev/null          # command output only
+rr test --no-phases          # keep only the final result JSON on stderr
+rr test --tail 50            # reprint the last 50 log lines after the result
+```
+
+**See [machine-interface.md](reference/machine-interface.md) for the event schema and error codes.**
+
+## Pitfalls
+
+- **Pipes hide failures.** Without `pipefail`, `pytest | tail` exits with `tail`'s status. Set `shell: "bash -o pipefail -c"` on the host, or check `details.summary`/`failures`.
+- **Zero tests isn't success.** Check `details.no_tests` after narrowing with `-k`, `-run`, or paths.
+- **Locks are per host, shared across projects.** A run from another project on the same host blocks you. With several hosts, rr tries the next free one. If all are locked it waits up to `lock.wait_timeout` (1m) for one to free up, then fails, or runs locally when `local_fallback: always`. With one host it waits up to `lock.timeout` (5m).
+- **`rr unlock` with no host only works when one host is configured.** With several, the host picker only appears in `--pretty` mode; otherwise pass a name (`rr unlock mini`) or `--all`.
+- **Custom `sync.exclude` replaces the defaults.** Include `.git`, `node_modules`, `.venv` yourself.
+- **Relative paths follow your cwd** for `run`/`exec` (see Where Commands Run). If a path fails, read `details.hint`.
 
 ## Remote Environment Bootstrap
 
-Declare required tools with `require:` - rr verifies they exist before running commands:
+Declare required tools with `require:`. rr checks they exist before syncing and fails with "Missing required tools: ..." if not:
 
 ```yaml
 # .rr.yaml
-require:
-  - go
-  - node
+require: [go, node]
 
 tasks:
   build:
@@ -193,177 +250,54 @@ hosts:
     require: [nvidia-smi, python3]  # Host-specific requirements
 ```
 
-Run with: `rr test-all`, `rr quick-check`
+`rr provision` installs missing tools that have built-in installers (40+). `rr run/exec --skip-requirements` skips the check.
 
-#### Setup Phase (Once Per Host)
+**See [requirements.md](reference/requirements.md) for complete requirements reference.**
 
-Avoid redundant setup work (dependency sync, migrations) when multiple subtasks run on the same host:
+## Parallel Tasks and Dependencies
 
 ```yaml
 tasks:
   test-all:
-    setup: pip install -r requirements.txt   # Runs once per host
-    parallel:
-      - test-unit
-      - test-integration
-      - test-e2e
-```
-
-Setup runs exactly once per host before any subtasks execute. If a host runs 3 subtasks, setup runs once (not 3 times).
-
-#### Parallel Task Flags
-
-| Flag | Purpose |
-|------|---------|
-| `--stream` | Show real-time interleaved output with `[host:task]` prefixes |
-| `--verbose` | Show full output per task on completion |
-| `--quiet` | Summary only |
-| `--fail-fast` | Stop on first failure (overrides config) |
-| `--max-parallel N` | Limit concurrent tasks |
-| `--dry-run` | Show plan without executing |
-| `--local` | Force local execution (no remote hosts) |
-
-### Task Dependencies
-
-Define task execution order with `depends`. Tasks run their dependencies first, then execute their own command:
-
-```yaml
-tasks:
-  lint:
-    run: golangci-lint run
-  test:
-    run: go test ./...
-  build:
-    run: go build ./...
-
-  # Linear chain: lint -> test -> build
-  ci:
-    description: Full CI pipeline
-    depends:
-      - lint
-      - test
-      - build
-```
-
-Run with: `rr ci`
-
-#### Parallel Groups in Dependencies
-
-Run multiple dependencies simultaneously:
-
-```yaml
-tasks:
-  lint:
-    run: golangci-lint run
-  typecheck:
-    run: mypy .
-  test:
-    run: pytest
+    setup: pip install -r requirements.txt   # Runs once per host before subtasks
+    parallel: [test-unit, test-integration, test-e2e]
+    fail_fast: false
 
   ci:
     depends:
       - parallel: [lint, typecheck]  # Run simultaneously
-      - test                          # Run after parallel completes
+      - test                         # Then this
 ```
 
-Executes: `[lint, typecheck]` (parallel) -> `test`
+Parallel task flags: `--stream`, `--verbose`, `--quiet`, `--fail-fast`, `--max-parallel N`, `--no-logs`, `--dry-run`, `--local`, `--host`, `--tag`. `--dry-run` shows the flattened subtask list and commands.
 
-#### Orchestrator Tasks
+Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task, `--from <task>` starts partway through the chain.
 
-Tasks with only `depends` orchestrate without running their own command:
+`--repeat N` on `rr run` or a single-command task runs it N times in parallel across hosts for flake detection.
 
-```yaml
-tasks:
-  lint:
-    run: golangci-lint run
-  test:
-    run: go test ./...
-
-  verify:
-    description: Run all checks
-    depends: [lint, test]
-    # No 'run' - just orchestrates
-```
-
-#### Dependency Flags
-
-| Flag | Purpose |
-|------|---------|
-| `--skip-deps` | Skip dependencies, run only the target task |
-| `--from <task>` | Start from a specific task in the chain |
-
-```bash
-rr ci                  # Full dependency chain
-rr ci --skip-deps      # Only run ci task itself
-rr ci --from test      # Start from test, skip lint
-```
-
-#### Dependency Features
-
-- **Deduplication**: Tasks run once even if referenced multiple times (diamond deps)
-- **Validation**: Circular dependencies detected at config load
-- **Fail-fast**: Stops on first failure when `fail_fast: true`
-- **Timeout**: Honor `timeout` field for entire dependency chain
-
-#### Output Modes
-
-- **progress** (default): Live status indicators with spinners
-- **stream**: Real-time output with `[host:task]` prefixes
-- **verbose**: Full output shown when each task completes
-- **quiet**: Summary only at the end
-
-Example:
-```bash
-rr test-all --stream    # See all output in real-time
-rr test-all --dry-run   # Preview what would run
-rr test-all --local     # Run locally without remote hosts
-```
-
-Missing tools trigger actionable error messages. Tools with built-in installers (40+) can be auto-installed.
-
-**See [requirements.md](reference/requirements.md) for complete requirements reference.**
+**See [tasks.md](reference/tasks.md) for details.**
 
 ## How It Works
 
-1. **Host Selection**: Tries SSH aliases in order until one connects
-2. **Requirements**: Verifies required tools exist (if configured)
-3. **File Sync**: Uses rsync with exclude/preserve patterns
-4. **Locking**: Creates lock on remote; if locked, tries next host
-5. **Execution**: Runs command with configured environment
+1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred)
+2. **Locking**: Takes a lock on the host; if it's locked, tries the next host
+3. **Requirements**: Verifies required tools exist (if configured)
+4. **File sync**: rsync with exclude/preserve patterns
+5. **Execution**: Runs the command with configured env and setup commands, then releases the lock
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
 | SSH fails | Check `ssh <alias>` manually, verify `~/.ssh/config` |
-| "handshake failed" but ssh works | Key not in agent: `ssh-add ~/.ssh/id_rsa`, add `AddKeysToAgent yes` to SSH config |
-| "command not found" | Add `setup_commands` or check `require` config |
+| `SSH_AUTH_FAILED` but `ssh` works | Key not in agent: `ssh-add ~/.ssh/id_ed25519`, add `AddKeysToAgent yes` to SSH config |
+| `SSH_HOST_KEY` | Host not in `~/.ssh/known_hosts` yet: `ssh -o StrictHostKeyChecking=accept-new <alias> exit` |
+| "command not found" | Add `setup_commands` or `shell: "zsh -l -c"` to the host; check `require` |
 | Sync slow | Add large dirs to `sync.exclude` |
-| Lock stuck | `rr unlock` |
-| Lock timeout after crash or cancel | `rr unlock --all` — stale locks from sessions that didn't exit cleanly |
-
-## Self-Documentation
-
-When you're unsure about a task's type, subtasks, or flags, run `rr <task> --help` before executing it. The help output shows whether the task is parallel (and lists subtasks), what flags it accepts, and whether it takes extra arguments. This is faster than reading `.rr.yaml` and avoids the silent-arg-drop problem.
+| `LOCK_HELD` / lock timeout | Wait, or `rr unlock <host>` / `rr unlock --all` if the holder is gone |
+| Unknown task flag error | Put task args after `--` |
 
 **See [troubleshooting.md](reference/troubleshooting.md) for detailed diagnostics.**
-
-## Structured Output (Default)
-
-rr defaults to structured output (agent-first). No flags needed. Phase events are emitted as JSON lines to stderr, command stdout/stderr passes through undecorated.
-
-```bash
-# Default behavior - structured JSON events on stderr, raw output on stdout
-rr run "make test"
-rr test
-
-# Opt into human-readable spinners/colors
-rr run --pretty "make test"
-```
-
-The `--machine` / `-m` flag still works but is a no-op (structured is already the default).
-
-**See [machine-interface.md](reference/machine-interface.md) for JSON event format and error codes.**
 
 ## Quick Setup
 
@@ -380,19 +314,6 @@ rr doctor
 # 4. Run
 rr run "make test"
 ```
-
-## When to Use Each Command
-
-| Situation | Command |
-|-----------|---------|
-| Run tests with latest code | `rr run "make test"` |
-| Quick check on remote | `rr exec "git log -1"` |
-| Prep remote before multiple runs | `rr sync` |
-| Install missing tools on hosts | `rr provision` |
-| Debug connection issues | `rr doctor` |
-| Watch resource usage | `rr monitor` |
-| First time setup | `rr init` |
-| Add new machine | `rr host add` |
 
 ## Reference Files
 

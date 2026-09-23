@@ -64,6 +64,10 @@ hosts:
 defaults:
   local_fallback: never
   probe_timeout: 2s
+
+logs:
+  dir: ~/.rr/logs
+  keep_runs: 10
 ```
 
 ### Global config fields
@@ -75,6 +79,12 @@ defaults:
 | `defaults.local_fallback` | string | `never` | When to run locally: `never`, `on-unreachable` (hosts down or unconfigured), or `always` (also when every host is locked). Booleans still work: `true` = `always`, `false` = `never`. |
 | `defaults.probe_timeout` | duration | `2s` | How long to wait when testing SSH connectivity. |
 | `defaults.rewrite_paths` | bool | `true` | Rewrite local absolute paths in commands and task args to their remote equivalents before running. |
+| `logs.dir` | string | `~/.rr/logs` | Where run logs are written (single runs and parallel tasks). |
+| `logs.keep_runs` | int | `10` | Keep this many recent runs per task. `0` disables count-based cleanup. |
+| `logs.keep_days` | int | `0` | Delete logs older than this many days. `0` disables it. |
+| `logs.max_size_mb` | int | `0` | Delete the oldest logs to stay under this total size. `0` disables it. |
+
+Log cleanup runs after each run, in this order: `max_size_mb`, then `keep_days`, then `keep_runs`. `rr logs` lists log directories and `rr logs clean` applies the policy on demand (`--all` deletes everything, `--older 7d` deletes by age).
 
 ### Host fields
 
@@ -125,9 +135,9 @@ The `dir` field supports these variables:
 
 | Variable | Expands to | Example |
 |----------|------------|---------|
-| `${PROJECT}` | Current directory name | `myapp` |
+| `${PROJECT}` | Git repo name (from the `origin` URL, else the repo root's directory name), or the current directory name outside a repo | `myapp` |
 | `${USER}` | Local username | `riley` |
-| `${HOME}` | Remote user's home directory | `/home/riley` |
+| `${HOME}` | Remote user's home directory (sent as `~` for the remote shell to expand) | `/home/riley` |
 
 ```yaml
 # If your local project is /Users/riley/code/myapp
@@ -185,6 +195,7 @@ hosts:
 # host: mini
 
 sync:
+  respect_gitignore: true
   exclude:
     - .git # bare pattern: .git is a file in linked worktrees
     - .venv
@@ -200,12 +211,15 @@ sync:
     - data/
   flags:
     - --compress
+  invalidations:
+    - lockfile: package-lock.json
+      dirs: [node_modules/]
 
 lock:
   enabled: true
   timeout: 5m
   wait_timeout: 1m
-  stale: 10m
+  stale: 90s
   dir: /tmp/rr-locks
 
 tasks:
@@ -223,12 +237,6 @@ tasks:
       - name: Deploy
         run: ./scripts/deploy.sh
         on_fail: stop
-
-output:
-  color: auto
-  format: auto
-  timing: true
-  verbosity: normal
 
 monitor:
   interval: 2s
@@ -259,7 +267,7 @@ monitor:
 | `sync` | object | see below | File synchronization settings. |
 | `lock` | object | see below | Distributed lock settings. |
 | `tasks` | map | `{}` | Named command sequences. |
-| `output` | object | see below | Terminal output formatting. |
+| `output` | object | see below | Accepted and validated, but currently has no effect (see [Output](#output)). |
 | `monitor` | object | see below | Resource monitoring dashboard settings. |
 
 **Note:** Use either `host` (singular) or `hosts` (plural), not both. If neither is specified, all hosts from your global config are available for load balancing.
@@ -289,6 +297,8 @@ When you run a command, `rr` determines which host(s) to use in this order:
 2. `.rr.yaml` `hosts:` field (project's preferred hosts for load balancing)
 3. `.rr.yaml` `host:` field (project's single preferred host)
 4. All hosts from global config, alphabetically (default for load balancing)
+
+Exception: if `.rr.yaml` sets `local_fallback` to `on-unreachable` or `always` and names no `host`/`hosts`, commands run locally without trying any remote host.
 
 **Important:** The order of hosts in your `hosts:` list determines priority. The first host is tried first. If it's busy or unreachable, `rr` moves to the next host in the list. This gives you explicit control over which machines are preferred.
 
@@ -365,8 +375,8 @@ Controls file synchronization behavior using rsync.
 ```yaml
 sync:
   exclude:
-    - .git/
-    - node_modules/
+    - .git
+    - node_modules
     - "*.pyc"
   preserve:
     - node_modules/
@@ -381,7 +391,9 @@ sync:
 |-------|------|---------|-------------|
 | `exclude` | list | see below | Patterns for files not sent to remote. |
 | `preserve` | list | see below | Patterns for files not deleted on remote. |
+| `respect_gitignore` | bool | `true` | Apply your `.gitignore` files as extra exclude rules. Explicit `exclude`/`preserve` patterns take precedence. |
 | `flags` | list | `[]` | Extra flags passed to rsync. |
+| `invalidations` | list | see below | Lockfiles that, when changed, delete remote install directories so they get reinstalled. |
 | `worktree_isolation` | bool | `true` | Give each linked git worktree its own remote directory (`${PROJECT}` becomes `repo@worktree`). |
 | `prune_worktrees` | bool | `true` | After a sync, remove remote `repo@worktree` directories whose worktree no longer exists locally. |
 
@@ -426,6 +438,30 @@ preserve:
 
 **Note:** Preserved files are not deleted on the remote even if they don't exist locally. This is useful for dependencies that should be installed once on the remote.
 
+### Lockfile invalidations
+
+Preserved install directories go stale when a lockfile changes locally: rsync syncs the new lockfile, but the old `node_modules/` stays put and the package manager may not notice. Before each sync, `rr` compares each local lockfile's mtime with the remote directory's mtime and deletes the remote directory when the lockfile is newer (or the directory is missing). Your next install command then starts clean. `rr` only deletes; it doesn't run the install for you, so pair this with a task `setup` or an install task.
+
+If you don't specify `invalidations`, these are used:
+
+```yaml
+invalidations:
+  - lockfile: bun.lock
+    dirs: [node_modules/]
+  - lockfile: package-lock.json
+    dirs: [node_modules/]
+  - lockfile: yarn.lock
+    dirs: [node_modules/]
+  - lockfile: pnpm-lock.yaml
+    dirs: [node_modules/]
+  - lockfile: poetry.lock
+    dirs: [.venv/]
+  - lockfile: Pipfile.lock
+    dirs: [.venv/]
+```
+
+`lockfile` is relative to the project root, and `dirs` are relative to the remote project directory. Like `exclude`, your list replaces the defaults. Set `invalidations: []` to turn the behavior off.
+
 ### Pattern syntax
 
 Patterns use rsync filter syntax:
@@ -443,7 +479,7 @@ Distributed locking prevents multiple `rr` instances from running on the same ho
 lock:
   enabled: true
   timeout: 5m
-  stale: 10m
+  stale: 90s
   dir: /tmp/rr-locks
 ```
 
@@ -454,15 +490,19 @@ lock:
 | `enabled` | bool | `true` | Whether to use distributed locking. |
 | `timeout` | duration | `5m` | How long to wait for a lock on a single host. |
 | `wait_timeout` | duration | `1m` | How long to round-robin when all hosts are locked. |
-| `stale` | duration | `10m` | When to consider a lock abandoned. |
+| `stale` | duration | `90s` | When to consider a lock abandoned. (`3m` when there is no `.rr.yaml`.) |
 | `dir` | string | `/tmp/rr-locks` | Directory for lock files on remote. |
 
 ### How locking works
 
-1. Before running a command, `rr` creates a lock file on the remote
-2. If another instance holds the lock, `rr` waits up to `timeout`
-3. If the lock is older than `stale`, it's considered abandoned and can be taken
-4. The lock is released when the command finishes
+1. Before running a command, `rr` atomically creates a `rr.lock/` directory inside the lock `dir` on the remote, with an `info.json` describing the holder. There is one lock per host, shared by every project that uses it.
+2. While it holds the lock, `rr` touches `info.json` every 30s as a heartbeat
+3. If another instance holds the lock, `rr` waits up to `timeout`
+4. If the holder's heartbeat is older than `stale`, the lock is considered abandoned and taken over with a warning
+5. If the holder is an `rr` process on this machine that is no longer running, the lock is taken immediately without waiting for `stale`
+6. The lock is released when the command finishes
+
+`rr unlock [host]` (or `rr unlock --all`) force-releases a stuck lock.
 
 ### Load balancing with multiple hosts
 
@@ -471,15 +511,16 @@ When multiple hosts are configured, `rr` distributes work automatically:
 1. Tries each host with a non-blocking lock check
 2. If a host is locked, immediately tries the next host
 3. Locks held by dead processes on this machine are reclaimed automatically
-4. If all hosts are locked, `rr` waits up to `wait_timeout` for one to free up
-5. When the wait runs out: `local_fallback: always` runs locally with a loud warning (and `details.fallback` in structured output); other modes fail with the lock holders listed
+4. If all hosts are locked, what happens depends on `local_fallback`:
+   - `always`: runs locally right away with a loud warning (and `details.fallback` in structured output). If any lock holder is on this same machine (likely your own other run), it first waits up to `wait_timeout` for a host to free up.
+   - `never` / `on-unreachable`: waits up to `wait_timeout`, cycling through the hosts, then fails with the lock holders listed
 
 ```yaml
 lock:
   enabled: true
   timeout: 5m        # Per-host lock wait time
   wait_timeout: 2m   # Total time to round-robin when all hosts locked
-  stale: 10m
+  stale: 90s
 ```
 
 Disable locking if you're the only user of a remote host:
@@ -523,6 +564,10 @@ tasks:
   compound commands (pipes, `&&`, redirections, `$()`) reject extra args
   and tell you where to add `{args}`
 - Write `{{args}}` for a literal `{args}` in the command
+- Multi-step (`steps`) tasks don't accept extra args
+- Put flag-style args after `--` (`rr test -- -k bond -x`) so `rr`'s own flag parser doesn't reject them
+
+Parallel tasks reject extra args unless they set `forward_args: true` (see [Forwarding args to subtasks](#forwarding-args-to-subtasks)).
 
 ### Multi-step task
 
@@ -542,7 +587,7 @@ tasks:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `description` | string | no | Shown in `rr --help`. |
+| `description` | string | no | Shown in `rr --help` and `rr tasks`. |
 | `run` | string | if no steps/parallel/depends | Command to execute (simple tasks). |
 | `steps` | list | if no run/parallel | Steps for multi-step tasks. |
 | `parallel` | list | if no run/steps | Subtask names to run concurrently across hosts. |
@@ -551,9 +596,14 @@ tasks:
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. |
 | `require` | list | no | Tools that must exist for this task. |
+| `pull` | list | no | Files to download from the remote after the task runs (see [Pulling files back](#pulling-files-back)). |
 | `fail_fast` | bool | no | Stop all tasks on first failure (parallel/depends tasks). |
 | `max_parallel` | int | no | Limit concurrent tasks (parallel tasks only). |
-| `timeout` | duration | no | Per-subtask timeout (parallel tasks) or total timeout (depends tasks). |
+| `timeout` | duration | no | Per-subtask timeout (parallel tasks) or total timeout (depends tasks). Ignored for plain `run`/`steps` tasks. |
+| `output` | string | no | Default output mode for parallel tasks: `progress` (default), `stream`, `verbose`, or `quiet`. CLI flags override it. |
+| `forward_args` | bool | no | Parallel tasks only: forward extra CLI args to each subtask. |
+
+**CLI flags for non-parallel tasks:** `--host`, `--tag`, `--local`, `--probe-timeout`, `--repeat N` (run the task N times in parallel across hosts, for flake detection), and `--tail N` (print the last N lines of the run log after the result). Tasks with `depends` also get `--skip-deps` and `--from`.
 
 ### Parallel task
 
@@ -582,12 +632,12 @@ Run with: `rr test`
 **How it works (work-stealing queue):**
 
 1. All subtasks are placed in a shared queue
-2. One worker per host pulls tasks from the queue
+2. One worker per host pulls tasks from the queue (a subtask with `hosts:` only goes to a worker for one of its allowed hosts)
 3. Files are synced and locks acquired once per host (not per task)
 4. After first tasks complete, rr tracks host performance
 5. Slow hosts wait before grabbing additional tasks, giving fast hosts priority
 6. Output is captured and shown in a summary when complete
-7. Logs are saved to `~/.rr/logs/<task>-<timestamp>/`
+7. Logs are saved to `<logs.dir>/<task>-<timestamp>/` (default `~/.rr/logs`)
 
 This performance-based work-stealing ensures efficient distribution across heterogeneous hosts. If you have 6 tasks across 3 hosts where one host is slower, the fast hosts grab more tasks (e.g., 3-2-1 distribution) instead of round-robin (2-2-2).
 
@@ -617,6 +667,26 @@ Setup behavior:
 - If a host runs 3 subtasks, setup runs once (not 3 times)
 - Setup failure aborts all subtasks on that host
 - Works with both remote and local execution
+
+#### Forwarding args to subtasks
+
+By default a parallel task rejects extra CLI args. Set `forward_args: true` to pass them to every subtask:
+
+```yaml
+tasks:
+  test-api:
+    run: pytest {args:-tests/api} -q
+  test-models:
+    run: pytest {args:-tests/models} -q
+
+  test-backend:
+    parallel: [test-api, test-models]
+    forward_args: true
+```
+
+`rr test-backend -- -k bond` runs both subtasks with `-k bond`. Each subtask follows the same rules as a single task: args replace its `{args}` placeholder, or are appended (quoted) to a simple command, and a compound command without a placeholder is an error. Subtasks that use `steps` can't receive forwarded args. `{args:-default}` defaults apply even without `forward_args`. Absolute local paths in forwarded args are rewritten to project-relative paths (unless `rewrite_paths` is off).
+
+A forwarded test filter can leave some subtasks with nothing to run, which pytest reports as a failure (exit 5).
 
 #### Nested parallel tasks
 
@@ -686,6 +756,7 @@ Circular references are detected during config validation.
 | `--dry-run` | Show execution plan without running |
 | `--local` | Force local execution (ignore remote hosts) |
 | `--no-logs` | Don't save output to log files |
+| `--host` / `--tag` | Limit the host pool |
 
 ### Step fields
 
@@ -829,6 +900,22 @@ tasks:
     fail_fast: true
 ```
 
+### Pulling files back
+
+`pull` downloads files from the remote after the task finishes, whether it passed or failed (test reports are often most useful on failure):
+
+```yaml
+tasks:
+  coverage:
+    run: pytest --cov --cov-report=xml --cov-report=html
+    pull:
+      - coverage.xml            # to the current directory
+      - src: htmlcov/
+        dest: ./reports/        # to a specific local directory
+```
+
+Sources are paths or globs relative to the host's `dir`. `dest` defaults to the current directory and is created if missing. A failed pull is reported but doesn't change the task's exit code. Pulling is skipped for local runs, and it isn't applied to subtasks of a parallel task. For ad-hoc commands, use `rr run --pull <pattern> [--pull-dest <dir>]`, or `rr pull <pattern>` on its own.
+
 ### Host-restricted tasks
 
 ```yaml
@@ -854,6 +941,7 @@ You cannot name a task after a built-in command. These names are reserved:
 - `init`, `setup`, `status`
 - `monitor`, `doctor`, `completion`
 - `help`, `version`, `update`, `host`
+- `unlock`, `tasks`
 
 ## Requirements
 
@@ -908,9 +996,9 @@ tasks:
 
 ### Built-in installers
 
-rr includes installers for 40+ common tools. When a required tool is missing and has a built-in installer, rr can auto-install it.
+A missing tool fails the run with a list of what's missing. `rr provision` installs missing tools on your hosts, for tools that have a built-in installer (`--check` reports without installing, `--yes` skips prompts, `--host` targets one host).
 
-**Supported tools include:** `go`, `node`, `python3`, `rust`, `uv`, `pip`, `npm`, `bun`, `cargo`, `make`, `cmake`, `golangci-lint`, `eslint`, `ruff`, `jq`, `yq`, `ripgrep`, `fd`, `fzf`, and more.
+**Built-in installers:** `go`, `node`, `npm`, `yarn`, `pnpm`, `bun`, `deno`, `python`/`python3`, `pip`, `uv`/`uvx`, `rust`/`rustc`/`cargo`, `ruby`, `gem`, `java`/`javac`, `make`, `git`, `docker`, `kubectl`, `terraform`, `aws`, `gcloud`, `jq`, `curl`, `wget`, `rsync`, `ripgrep`/`rg`, `fd`, `fzf`, `tree`, `htop`, `tmux`, `vim`, `nvim`/`neovim`, `chromium`. Other tools can still be listed in `require`; `rr` checks for them but can't install them.
 
 ### CLI flags
 
@@ -929,39 +1017,31 @@ rr doctor --requirements
 
 ## Output
 
-Controls terminal output formatting.
+The `output` section is accepted and validated, but nothing in `rr` currently reads it. Setting it has no effect:
 
 ```yaml
 output:
-  color: auto
-  format: auto
+  color: auto       # auto, always, never
+  format: auto      # auto, generic, pytest, jest, go, cargo
   timing: true
-  verbosity: normal
+  verbosity: normal # quiet, normal, verbose
 ```
 
-### Output fields
+Output is controlled by CLI flags instead:
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `color` | string | `auto` | Color mode: `auto`, `always`, or `never`. |
-| `format` | string | `auto` | Output formatter: `auto`, `generic`, `pytest`, `jest`, `go`, `cargo`. |
-| `timing` | bool | `true` | Show timing for each phase. |
-| `verbosity` | string | `normal` | Output level: `quiet`, `normal`, or `verbose`. |
+| Flag | Effect |
+|------|--------|
+| (default) | Structured JSON: phase events on stderr, then a final result event. |
+| `--pretty`, `-p` | Human-readable output with spinners and colors. |
+| `--no-color` | Disable colors in pretty mode. |
+| `--no-phases` | Suppress intermediate phase events (connect, sync, exec). The final result event is still emitted. |
+| `--machine`, `-m` | No-op, kept for compatibility (JSON is already the default). |
 
-### Color modes
+The result event's `details` can include `summary` (test counts), `failures` (name, `file:line`, message), `no_tests`, `piped_exit_code`, `fallback`, `log_file`, `hint`, `remote_cwd`, and `path_rewrites`.
 
-- `auto` - Enable color when output is a terminal, disable when piped
-- `always` - Always use color (even when piped)
-- `never` - Never use color
+### Test output parsing
 
-### Output formatters
-
-- `auto` - Detect test framework from command and apply appropriate formatting
-- `generic` - No special formatting
-- `pytest` - Format pytest output
-- `jest` - Format Jest output
-- `go` - Format `go test` output
-- `cargo` - Format `cargo test` output
+`rr` detects the test framework from the command and its output, and parses pytest, Jest, and `go test` results into `summary` and `failures`. Other runners (including `cargo test`) are passed through without parsing.
 
 ## Monitor
 
@@ -1096,8 +1176,9 @@ These environment variables affect `rr` behavior:
 | `RR_HOST` | SSH host for `rr init` (non-interactive mode). |
 | `RR_HOST_NAME` | Friendly name for the host in `rr init`. |
 | `RR_REMOTE_DIR` | Remote directory path for `rr init`. |
-| `RR_NON_INTERACTIVE` | Set to `true` to skip prompts in `rr init`. |
+| `RR_NON_INTERACTIVE` | Set to `true` to skip prompts in `rr init`. A non-empty `CI` variable does the same. |
 | `RR_NO_UPDATE_CHECK` | Set to `1` to disable automatic update checks. |
+| `RR_DEBUG` | Set to any value to print debug logs (lock acquisition and similar internals). |
 
 **Example: non-interactive setup in CI**
 
@@ -1127,16 +1208,20 @@ Fields that accept durations use Go's duration format:
 
 | Error | Fix |
 |-------|-----|
-| "no hosts configured" | Add at least one host to `~/.rr/config.yaml` or run `rr host add` |
-| "host 'X' not found in global config" | The host referenced in `.rr.yaml` doesn't exist in `~/.rr/config.yaml` |
-| "host 'X' has no SSH aliases" | Add `ssh:` list to the host in global config |
-| "host 'X' has no dir" | Add `dir:` to the host in global config |
-| "reserved task name 'X'" | Rename the task to avoid built-in command names |
-| "task 'X' has both run and steps" | Use either `run` or `steps`, not both |
+| "No hosts configured" | Add at least one host to `~/.rr/config.yaml` or run `rr host add` |
+| "Project references host 'X' which doesn't exist in global config" | The host referenced in `.rr.yaml` doesn't exist in `~/.rr/config.yaml` |
+| "host 'X' needs at least one SSH connection" | Add `ssh:` list to the host in global config |
+| "host 'X' needs a 'dir'" | Add `dir:` to the host in global config |
+| "Can't use 'X' as a task name - that's a built-in command" | Rename the task to avoid built-in command names |
+| "task 'X' has both 'run' and 'steps'" | Use either `run` or `steps`, not both |
 | "task 'X' depends on non-existent task 'Y'" | Add the missing task or fix the dependency reference |
 | "task 'X' can't depend on itself" | Remove self-reference from depends list |
 | "circular dependency detected: A -> B -> A" | Break the cycle by removing one of the dependencies |
-| "task 'X' has both parallel and depends" | Parallel tasks can't have dependencies; use depends inside subtasks instead |
+| "task 'X' has both 'parallel' and 'depends'" | Parallel tasks can't have dependencies; use depends inside subtasks instead |
+| "parallel task 'X' references non-existent task 'Y'" | Add the missing subtask or fix the reference |
+| "Config file has some issues" | A value has the wrong shape, e.g. an unknown `local_fallback` mode. Use `never`, `on-unreachable`, `always`, or a boolean there. |
+
+Unknown keys are ignored rather than rejected, so a misspelled key silently does nothing.
 
 ## Minimal config
 
@@ -1161,8 +1246,8 @@ version: 1
 
 sync:
   exclude:
-    - .git/
-    - node_modules/
+    - .git
+    - node_modules
 ```
 
 Everything else uses sensible defaults.

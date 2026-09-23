@@ -8,22 +8,24 @@ The `--machine` / `-m` flag is kept for backward compatibility but is now a no-o
 
 ## Phase Events (stderr)
 
-During `rr run` or `rr <task>`, phase events are emitted as JSON lines to stderr:
+During `rr run`, `rr exec`, or `rr <task>`, phase events are emitted as JSON lines to stderr. The lock is taken before sync:
 
 ```json
 {"type":"phase","phase":"connect","status":"started","ts":"2026-01-15T10:30:00Z"}
 {"type":"phase","phase":"connect","status":"complete","host":"m4-mini","duration_s":0.5,"ts":"..."}
-{"type":"phase","phase":"sync","status":"started","ts":"..."}
-{"type":"phase","phase":"sync","status":"complete","host":"m4-mini","duration_s":2.1,"ts":"..."}
 {"type":"phase","phase":"lock","status":"started","ts":"..."}
 {"type":"phase","phase":"lock","status":"complete","host":"m4-mini","duration_s":0.1,"ts":"..."}
+{"type":"phase","phase":"sync","status":"started","ts":"..."}
+{"type":"phase","phase":"sync","status":"complete","host":"m4-mini","duration_s":2.1,"ts":"..."}
 {"type":"phase","phase":"exec","status":"started","details":{"command":"make test"},"ts":"..."}
 ```
 
 After the command finishes:
 ```json
-{"type":"result","status":"success","exit_code":0,"host":"m4-mini","duration_s":12.3,"details":{"exec_duration_s":10.1},"ts":"..."}
+{"type":"result","status":"success","exit_code":0,"host":"m4-mini","duration_s":12.3,"details":{"exec_duration_s":10.1,"log_file":"/home/me/.rr/logs/run-20260115-103000/output.log"},"ts":"..."}
 ```
+
+`--no-phases` suppresses the `phase` events; the `result` event is always emitted.
 
 ## Phase Event Schema
 
@@ -31,7 +33,7 @@ After the command finishes:
 |-------|------|-------------|
 | `type` | string | `"phase"` or `"result"` |
 | `phase` | string | `"connect"`, `"sync"`, `"lock"`, `"exec"`, `"pull"` |
-| `status` | string | `"started"`, `"complete"`, `"failed"`, `"skipped"` |
+| `status` | string | Phase: `"started"`, `"complete"`, `"failed"`, `"skipped"`, `"warn"` (plus `"pruned"`/`"invalidated"` for sync). Result: `"success"`, `"failed"` |
 | `host` | string | Host name (on complete/failed) |
 | `duration_s` | float | Duration in seconds (on complete) |
 | `exit_code` | int | Process exit code (on result) |
@@ -39,15 +41,34 @@ After the command finishes:
 | `details` | object | Additional context (varies by phase) |
 | `ts` | string | RFC3339 timestamp |
 
+## Result Details
+
+The `details` object on the result event can include:
+
+| Key | Meaning |
+|-----|---------|
+| `exec_duration_s` | Time spent running the command |
+| `log_file` | Raw output log for this run |
+| `summary` | `{passed, failed, skipped, errors}` from pytest, jest/vitest, or go test output |
+| `failures` | `[{name, file, message}]`, `file` as `path:line` (only on failure) |
+| `no_tests` | `true` when the runner reported collecting zero tests |
+| `piped_exit_code` | `true` when zero tests ran and the command has a pipe, so the exit code may come from a later stage |
+| `hint` | Explanation for a failure that looks like a local-vs-remote path mistake |
+| `fallback` | `{reason, waited_s, holders}` when rr ran locally because all hosts were locked |
+| `path_rewrites` | Count of local absolute paths rewritten to remote paths |
+| `remote_cwd` | Subdirectory (relative to the project root) the command ran in |
+| `broken_pipe` | `true` when the stdout consumer closed early (e.g. `\| head`) |
+
+Parallel tasks emit a single result event with no `host`. Its details hold `total`, `passed`, `failed`, `log_dir`, `failures` (per subtask: `task`, `host`, `exit_code`, `log_file`, and parsed test failures or an `output_tail`), and `no_tests`/`no_tests_tasks` when some subtasks collected nothing.
+
 ## Informational Commands (JSON Envelope)
 
-Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to stdout:
+Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to stdout. When any command fails before (or instead of) running a command, the same envelope with `success: false` goes to stderr and rr exits 1:
 
 ```json
 {
   "success": true,
-  "data": { /* command-specific */ },
-  "error": null
+  "data": { /* command-specific */ }
 }
 ```
 
@@ -55,11 +76,11 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 ```json
 {
   "success": false,
-  "data": null,
   "error": {
     "code": "SSH_AUTH_FAILED",
-    "message": "Authentication failed for host m1-mini",
-    "suggestion": "Run: ssh-copy-id m1-mini"
+    "message": "probe m1-mini failed: authentication failed (ssh: handshake failed: ...)",
+    "suggestion": "Deploy SSH key: ssh-copy-id <hostname>",
+    "details": {"reason": "authentication failed", "alias": "m1-mini"}
   }
 }
 ```
@@ -73,17 +94,19 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 | `HOST_NOT_FOUND` | Unknown host name | Check `rr host list` |
 | `SSH_TIMEOUT` | Connection timed out | Check network/VPN |
 | `SSH_AUTH_FAILED` | Key rejected | Run `rr setup <host>` |
-| `SSH_HOST_KEY` | Host key mismatch | Verify fingerprint |
+| `SSH_HOST_KEY` | Host key unknown or changed | Accept or verify the key with `ssh` |
 | `SSH_CONNECTION_FAILED` | SSH connection error | Check host reachability |
 | `RSYNC_FAILED` | File sync failed | Check disk space/permissions |
 | `LOCK_HELD` | Another process has lock | Run `rr unlock` |
 | `COMMAND_FAILED` | Remote command failed | Check command output |
 | `DEPENDENCY_MISSING` | Required tool not found | Install missing dependency |
-| `REQUIREMENTS_FAILED` | Required tools missing | Install tools or use --skip-requirements |
+| `UNKNOWN` | Unclassified error | Read `message` |
+
+Mapping quirks in the current code: an unknown host name (`Host 'x' not found in global config`) comes back as `CONFIG_NOT_FOUND`, and missing required tools (`Missing required tools: ...`) come back as `COMMAND_FAILED`. `HOST_NOT_FOUND` and `DEPENDENCY_MISSING` are defined but not currently emitted. Always read `message` and `suggestion`.
 
 ## Exit Code Contract
 
-The process exit code always matches the remote command's exit code. JSON events are supplementary metadata on stderr, not the primary signal.
+When the command runs, rr's exit code is the command's exit code (a parallel task exits 1 if any subtask failed). When rr fails before the command runs (config, SSH, lock, sync, requirements), it exits 1 and writes an error envelope to stderr instead of a result event. Check for a `"type":"result"` line to tell the two apart.
 
 ## Non-Interactive Commands
 
@@ -106,9 +129,11 @@ rr init --non-interactive --host dev-box
 
 ```
 1. Run: rr doctor
-2. Parse JSON output: check .success field
-   - true  -> Setup OK
-   - false -> Check .error.code
+2. Parse JSON output:
+   - .success false          -> Check .error.code (doctor couldn't run)
+   - .data.summary.all_clear -> true means setup OK
+   - otherwise read .data.categories[].results[] with status "fail"/"warn"
+     (doctor exits 0 even when checks fail)
 
 3. Based on error.code:
 
@@ -127,12 +152,13 @@ rr init --non-interactive --host dev-box
      -> Run: ssh -o StrictHostKeyChecking=accept-new <hostname> exit
 
    LOCK_HELD:
-     -> Run: rr unlock
+     -> Message names the holder; wait if it's a live run
+     -> Run: rr unlock <host>  (or rr unlock --all)
      -> Retry original command
 
-   REQUIREMENTS_FAILED:
-     -> Check which tools are missing
-     -> Install tools or run with --skip-requirements
+   COMMAND_FAILED with "Missing required tools":
+     -> Run: rr provision --yes
+     -> Or install manually, or run with --skip-requirements
 ```
 
 ## Parsing Phase Events
@@ -141,11 +167,11 @@ rr init --non-interactive --host dev-box
 # Run command and capture phase events from stderr
 rr run "make test" 2>events.jsonl
 
-# Check result
-tail -1 events.jsonl | jq '.exit_code'
+# Check result (stderr also carries the command's own stderr, so filter)
+grep '"type":"result"' events.jsonl | jq '.exit_code'
 
 # Get execution duration
-tail -1 events.jsonl | jq '.details.exec_duration_s'
+grep '"type":"result"' events.jsonl | jq '.details.exec_duration_s'
 ```
 
 ## When to Use rr vs Local Execution
@@ -155,9 +181,10 @@ IF .rr.yaml exists AND rr status shows healthy hosts:
   -> Use rr for tests, builds, remote commands
 
 IF no .rr.yaml OR all hosts unhealthy:
-  -> Check if local_fallback is enabled in config
-  -> If yes: rr will run locally automatically
-  -> If no: run commands locally
+  -> Check local_fallback (never / on-unreachable / always)
+  -> on-unreachable or always: rr runs locally when no host is reachable
+     (always also falls back when every host stays locked past lock.wait_timeout)
+  -> never: run commands locally yourself
 ```
 
 For the most current flag and command details, run `rr --help` or `rr <command> --help`.

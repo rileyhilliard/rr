@@ -14,13 +14,14 @@ host: linux-box
 
 sync:
   exclude:
-    - .git/
+    - .git  # bare pattern: .git is a file in linked worktrees
     - bin/
     - dist/
     - "*.exe"
     - vendor/  # If you vendor deps locally, exclude them
-  preserve:
-    # Go module cache lives elsewhere, nothing to preserve
+  # Go module cache lives elsewhere, nothing to preserve.
+  # (Leaving preserve empty would keep the defaults; [] clears them.)
+  preserve: []
 
 tasks:
   test:
@@ -61,7 +62,3 @@ tasks:
       - test
       - test
     fail_fast: false
-
-output:
-  format: go
-  timing: true

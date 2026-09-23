@@ -1,6 +1,6 @@
 # Remote Environment Bootstrap
 
-The `require` field declares tools that must exist on remote hosts before commands run. rr verifies requirements after SSH connect but before file sync, providing early failure with actionable error messages.
+The `require` field declares tools that must exist on remote hosts before commands run. rr verifies requirements after connecting and taking the lock, before file sync, so a missing tool fails fast. The check is skipped for local execution.
 
 ## Configuration
 
@@ -63,29 +63,34 @@ Requirements from all levels are merged (deduplicated):
 
 ## How It Works
 
-1. **Connect**: SSH connection established
-2. **Check**: Each required tool verified with `command -v <tool>`
-3. **Report**: Missing tools listed with suggestions
-4. **Fail or Install**: If tools are missing, show error or offer installation
+1. **Connect**: SSH connection established and lock acquired
+2. **Check**: Each required tool verified with `command -v <tool>` (results are cached per host)
+3. **Fail**: If any are missing, the command stops with "Missing required tools: ..." and suggests `rr provision`
 
 ## Built-in Installers
 
-rr includes installers for 40+ common tools. When a required tool is missing and has a built-in installer, rr can auto-install it.
+rr includes installers (macOS and Linux) for about 40 common tools. `rr provision` installs missing tools that have one.
 
-**Supported tools include:**
-- Languages: `go`, `node`, `python3`, `rust`, `ruby`
-- Package managers: `uv`, `pip`, `npm`, `bun`, `cargo`
-- Build tools: `make`, `cmake`, `ninja`
-- Linters: `golangci-lint`, `eslint`, `ruff`
-- Version managers: `nvm`, `pyenv`, `rustup`
-- Utilities: `jq`, `yq`, `ripgrep`, `fd`, `fzf`
-- And more...
+**Supported tools:**
+- Languages and runtimes: `go`, `node`, `python`/`python3`, `rust`/`rustc`, `ruby`, `java`/`javac`, `deno`, `bun`
+- Package managers: `npm`, `yarn`, `pnpm`, `pip`, `uv`/`uvx`, `cargo`, `gem`
+- Build and infra: `make`, `git`, `docker`, `kubectl`, `terraform`, `aws`, `gcloud`
+- Utilities: `jq`, `curl`, `wget`, `rsync`, `ripgrep`/`rg`, `fd`, `fzf`, `tree`, `htop`, `tmux`, `vim`, `nvim`/`neovim`, `chromium`
+
+Tools without an installer (e.g. `golangci-lint`, `ruff`, `nvidia-smi`) have to be installed by hand.
+
+```bash
+rr provision              # Check all project hosts and offer to install
+rr provision --check      # Report only
+rr provision --host mini  # One host
+rr provision --yes        # No prompts
+```
 
 ## CLI Flags
 
 ### Skip Requirements
 
-Skip requirement checking:
+Skip requirement checking (only `rr run` and `rr exec` have this flag):
 
 ```bash
 rr run --skip-requirements "make test"
@@ -183,13 +188,11 @@ hosts:
 When requirements are missing, rr shows actionable errors:
 
 ```text
-✗ Requirements check failed on gpu-box:
-  Missing: cargo, rustc
-
-  Suggestion: 2 tools can be auto-installed.
-  Run with missing tools to trigger installation prompts,
-  or install manually and retry.
+Missing required tools: cargo (can install), golangci-lint
+Run 'rr provision' to install missing tools, or use --skip-requirements to bypass.
 ```
+
+In structured output this is an error envelope on stderr with code `COMMAND_FAILED`.
 
 ## Validation
 

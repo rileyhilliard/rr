@@ -25,8 +25,9 @@ hosts:
     dir: /var/projects/${PROJECT}
 
 defaults:
-  local_fallback: false
+  local_fallback: never   # never | on-unreachable | always (true = always, false = never)
   probe_timeout: 2s
+  rewrite_paths: true     # Rewrite local absolute paths in commands to remote paths
 ```
 
 ### Host Options
@@ -37,8 +38,8 @@ defaults:
 | `dir` | Working directory on remote (supports variable expansion) |
 | `tags` | Labels for filtering with `--tag` flag |
 | `env` | Environment variables set for all commands |
-| `shell` | Custom shell (default: `$SHELL` or `/bin/bash`) |
-| `setup_commands` | Commands run before every task |
+| `shell` | Shell invocation the command is appended to (default: `${SHELL:-/bin/bash} -c`, after sourcing `~/.bashrc` and `~/.zshrc` if present). Use `"zsh -l -c"` for a login shell or `"bash -o pipefail -c"` to catch failures inside pipes |
+| `setup_commands` | Commands run before every remote command (`run`, `exec`, tasks) |
 | `require` | Tools that must exist on this host |
 
 ### SSH Entries
@@ -66,7 +67,7 @@ hosts:
       PYTHONDONTWRITEBYTECODE: "1"
 ```
 
-These commands are automatically prepended to every task.
+These commands are prepended (joined with `&&`) to every remote command: `rr run`, `rr exec`, and tasks.
 
 ## Project Config (`.rr.yaml`)
 
@@ -85,19 +86,19 @@ require:
   - go
   - golangci-lint
 
-# Defaults applied to all tasks
+# Defaults applied to all tasks and ad-hoc run/exec commands
 defaults:
   setup:
     - source ~/.local/bin/env
-    - set -o pipefail
   env:
     PYTHONDONTWRITEBYTECODE: "1"
 
 sync:
-  exclude:
-    - .git/
-    - node_modules/
-    - .venv/
+  exclude:            # Replaces the default list, so repeat the defaults you want
+    - .git
+    - node_modules
+    - .venv
+    - build/
   preserve:
     - .venv/
     - node_modules/
@@ -118,8 +119,10 @@ tasks:
 
 | Field | Purpose |
 |-------|---------|
-| `setup` | Commands run before every task |
+| `setup` | Commands run before every task and every remote `rr run`/`rr exec` |
 | `env` | Environment variables applied to all tasks |
+
+Project-level `local_fallback` and `rewrite_paths` override the global `defaults` values.
 
 ### Merge Order (lowest to highest precedence)
 
@@ -137,23 +140,29 @@ tasks:
 
 | Field | Default | Purpose |
 |-------|---------|---------|
-| `exclude` | see below | Patterns to skip during sync (rsync exclude) |
-| `preserve` | `[]` | Patterns to preserve on remote (don't delete) |
+| `exclude` | see below | Patterns to skip during sync (rsync exclude). Setting it replaces the defaults |
+| `preserve` | `.venv/`, `node_modules/`, `data/`, `.cache/` | Patterns kept on the remote even when missing locally |
 | `respect_gitignore` | `true` | Apply `.gitignore` patterns as rsync excludes |
+| `flags` | `[]` | Extra rsync flags (e.g. `--compress`) |
+| `invalidations` | JS and Python lockfiles | Delete a preserved remote dir (e.g. `node_modules/`) when its lockfile changes locally |
+| `worktree_isolation` | `true` | Give each linked git worktree its own remote dir (`<repo>@<worktree>`) |
+| `prune_worktrees` | `true` | After a sync, remove remote dirs for worktrees that no longer exist locally |
 
-Default excludes include `.git/`, `.claude/`, `.cursor/`, `.aider/`, `.copilot/`, `.venv/`, `node_modules/`, `__pycache__/`, and others.
+Default excludes: `.git`, `.venv`, `node_modules` (bare patterns, so they match files and symlinks too), `__pycache__/`, `*.pyc`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `.DS_Store`, `*.log`, `.claude/`, `.cursor/`, `.aider/`, `.copilot/`.
 
-When `respect_gitignore` is true, rsync reads `.gitignore` files in each directory and applies those patterns as excludes. Explicit `.rr.yaml` excludes take precedence (first-match-wins).
+When `respect_gitignore` is true, rr reads the repo-root `.gitignore` (nested `.gitignore` files are not read) and translates it into rsync filter rules, including `!` negations. Explicit `.rr.yaml` excludes take precedence.
 
 ### Lock Configuration
 
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `enabled` | `true` | Enable distributed locking |
-| `timeout` | `5m` | Lock acquisition timeout |
-| `stale` | `3m` | Time without heartbeat before lock is considered dead |
+| `timeout` | `5m` | How long to wait for a lock on a single host |
+| `wait_timeout` | `1m` | With several hosts all locked, how long to keep cycling before failing (or falling back locally with `local_fallback: always`) |
+| `stale` | `90s` | Time without a heartbeat before a lock is considered dead |
+| `dir` | `/tmp/rr-locks` | Remote directory holding the lock (`<dir>/rr.lock/`) |
 
-Locks are refreshed every 30 seconds via heartbeat. A lock without a heartbeat update for the `stale` duration is automatically reclaimed.
+There is one lock per host, shared by every project that uses the same `lock.dir`. The holder refreshes it every 30 seconds. A lock without a heartbeat for the `stale` duration is reclaimed automatically, and a lock held by a dead rr process on your own machine is reclaimed immediately.
 
 ## Variable Expansion
 
@@ -161,6 +170,6 @@ The `dir` field supports:
 
 | Variable | Expands to |
 |----------|------------|
-| `${PROJECT}` | Current directory name |
+| `${PROJECT}` | Git repo name, or the project directory name. In a linked worktree: `<repo>@<worktree>` |
 | `${USER}` | Local username |
-| `${HOME}` | Remote user's home directory |
+| `${HOME}` | Remote user's home directory (passed to the remote as `~`) |
