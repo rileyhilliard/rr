@@ -9,6 +9,8 @@ import (
 )
 
 // ReservedTaskNames are command names that cannot be used as task names.
+// It lives here (not in cli) because config must not import cli; a test in
+// internal/cli walks the command tree to keep this list complete.
 var ReservedTaskNames = map[string]bool{
 	"run":        true,
 	"exec":       true,
@@ -26,13 +28,30 @@ var ReservedTaskNames = map[string]bool{
 	"host":       true,
 	"unlock":     true,
 	"tasks":      true,
+	"pull":       true,
+	"logs":       true,
+	"provision":  true,
 }
 
 // ValidationOption controls validation behavior.
 type ValidationOption func(*validationContext)
 
 type validationContext struct {
-	// No options currently needed for project config validation
+	// allowLocalTarget lets ValidateResolved pass with zero hosts, for runs
+	// whose execution target is local (see AllowLocalTarget).
+	allowLocalTarget bool
+}
+
+// AllowLocalTarget is a ValidateResolved option for runs whose execution
+// target is local: an explicit --local, or project local mode (see
+// ProjectLocalMode). It skips the "at least one host" requirement and the
+// check that project host references exist, since no host is used. Global
+// hosts that are defined are still validated, as is the project config.
+// Validate ignores this option.
+func AllowLocalTarget() ValidationOption {
+	return func(ctx *validationContext) {
+		ctx.allowLocalTarget = true
+	}
 }
 
 // Validate checks the project config for errors and returns structured error messages.
@@ -77,17 +96,12 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		if ReservedTaskNames[name] {
 			return errors.New(errors.ErrConfig,
 				fmt.Sprintf("Can't use '%s' as a task name - that's a built-in command", name),
-				fmt.Sprintf("Pick a different name, like 'my-%s' or 'do-%s'.", name, name))
+				fmt.Sprintf("Rename task '%s' in .rr.yaml, like 'my-%s' or 'do-%s'. Until then, none of the project's tasks can register.", name, name, name))
 		}
 
 		if err := validateTask(name, cfg.Tasks[name]); err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your task config in .rr.yaml.")
 		}
-	}
-
-	// Validate output config
-	if err := validateOutput(cfg.Output); err != nil {
-		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'output' section in your .rr.yaml.")
 	}
 
 	// Validate lock config
@@ -174,7 +188,14 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 }
 
 // ValidateResolved checks the combined global and project configuration.
-func ValidateResolved(r *ResolvedConfig) error {
+// Pass AllowLocalTarget() when the run executes locally so a machine with
+// no hosts configured can still run.
+func ValidateResolved(r *ResolvedConfig, opts ...ValidationOption) error {
+	ctx := &validationContext{}
+	for _, opt := range opts {
+		opt(ctx)
+	}
+
 	if r == nil {
 		return errors.New(errors.ErrConfig,
 			"Resolved config is nil",
@@ -188,7 +209,7 @@ func ValidateResolved(r *ResolvedConfig) error {
 			"This is unexpected - try running the command again.")
 	}
 
-	if len(r.Global.Hosts) == 0 {
+	if len(r.Global.Hosts) == 0 && !ctx.allowLocalTarget {
 		return errors.New(errors.ErrConfig,
 			"No hosts configured",
 			"Add hosts to ~/.rr/config.yaml or run 'rr host add'.")
@@ -202,6 +223,11 @@ func ValidateResolved(r *ResolvedConfig) error {
 	if r.Project != nil {
 		if err := Validate(r.Project); err != nil {
 			return err
+		}
+
+		// A local run never uses the project's host references.
+		if ctx.allowLocalTarget {
+			return nil
 		}
 
 		// Validate project's Host reference exists in global (if set)
@@ -318,6 +344,10 @@ func validateTask(name string, task TaskConfig) error {
 	hasParallel := len(task.Parallel) > 0
 	hasDepends := len(task.Depends) > 0
 
+	if !IsValidTaskOutput(task.Output) {
+		return fmt.Errorf("task '%s' has output '%s' but it needs to be one of: %s", name, task.Output, strings.Join(TaskOutputModes, ", "))
+	}
+
 	// Parallel tasks are mutually exclusive with run and steps
 	if hasParallel {
 		if hasRun {
@@ -360,29 +390,6 @@ func validateTask(name string, task TaskConfig) error {
 	// Validate task-level require list
 	if err := validateRequireList(fmt.Sprintf("task '%s'", name), task.Require); err != nil {
 		return err
-	}
-
-	return nil
-}
-
-// validateOutput checks output configuration.
-func validateOutput(out OutputConfig) error {
-	validColors := map[string]bool{"auto": true, "always": true, "never": true, "": true}
-	if !validColors[out.Color] {
-		return fmt.Errorf("output.color '%s' isn't valid - use 'auto', 'always', or 'never'", out.Color)
-	}
-
-	validFormats := map[string]bool{
-		"auto": true, "generic": true, "pytest": true,
-		"jest": true, "go": true, "cargo": true, "": true,
-	}
-	if !validFormats[out.Format] {
-		return fmt.Errorf("output.format '%s' isn't valid - try: auto, generic, pytest, jest, go, or cargo", out.Format)
-	}
-
-	validVerbosity := map[string]bool{"quiet": true, "normal": true, "verbose": true, "": true}
-	if !validVerbosity[out.Verbosity] {
-		return fmt.Errorf("output.verbosity '%s' isn't valid - use 'quiet', 'normal', or 'verbose'", out.Verbosity)
 	}
 
 	return nil

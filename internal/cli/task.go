@@ -681,6 +681,10 @@ func outputTasksText(cfg *config.Config) error {
 	return nil
 }
 
+// taskCommandAnnotation marks cobra commands generated from .rr.yaml tasks,
+// so built-in commands can be told apart from them.
+const taskCommandAnnotation = "rr.task"
+
 // RegisterTaskCommands dynamically registers task commands from config.
 // This should be called after config is loaded.
 func RegisterTaskCommands(cfg *config.Config) {
@@ -697,6 +701,7 @@ func RegisterTaskCommands(cfg *config.Config) {
 		// Create a command for this task
 		task := cfg.Tasks[name]
 		taskCmd := createTaskCommand(name, task)
+		taskCmd.Annotations = map[string]string{taskCommandAnnotation: name}
 		rootCmd.AddCommand(taskCmd)
 	}
 }

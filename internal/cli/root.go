@@ -34,6 +34,9 @@ type configDiscoveryState struct {
 	LoadErr        error    // Error loading/parsing config (nil if loaded)
 	ValidateErr    error    // Error validating config (nil if valid)
 	TasksAvailable []string // Available task names for suggestions
+	// Warnings from loading the project config, emitted once from
+	// PersistentPreRun (see emitConfigWarnings).
+	Warnings []config.Warning
 }
 
 // discoveryState stores the result of config discovery for error reporting.
@@ -149,6 +152,7 @@ func registerTasksFromConfig(explicit string) {
 		discoveryState.LoadErr = err
 		return
 	}
+	discoveryState.Warnings = cfg.Warnings
 
 	// Validate - don't register tasks from invalid configs
 	if err := config.Validate(cfg); err != nil {
@@ -284,11 +288,83 @@ func init() {
 		if noStrictHostKeyCheck {
 			sshutil.StrictHostKeyChecking = false
 		}
+		// Report config warnings once per invocation, now that --pretty is parsed.
+		if !isCompletionRequest(cmd) {
+			emitConfigWarnings(collectConfigWarnings())
+		}
 		// Call original pre-run if it exists
 		if originalPreRun != nil {
 			originalPreRun(cmd, args)
 		}
 	}
+}
+
+// configWarningsEmitted guards emitConfigWarnings so config warnings are
+// reported at most once per invocation, however many times config loads.
+var configWarningsEmitted bool
+
+// collectConfigWarnings gathers warnings from the project config loaded at
+// startup and from the global config, dropping duplicates.
+func collectConfigWarnings() []config.Warning {
+	var all []config.Warning
+	if discoveryState != nil {
+		all = append(all, discoveryState.Warnings...)
+	}
+	// A global config that fails to load isn't reported here: every command
+	// that needs it loads it again and returns that error itself.
+	if global, err := config.LoadGlobal(); err == nil {
+		all = append(all, global.Warnings...)
+	}
+	return dedupeConfigWarnings(all)
+}
+
+// dedupeConfigWarnings drops repeated warnings, keeping first-seen order.
+func dedupeConfigWarnings(warnings []config.Warning) []config.Warning {
+	seen := make(map[config.Warning]bool, len(warnings))
+	out := make([]config.Warning, 0, len(warnings))
+	for _, w := range warnings {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
+		out = append(out, w)
+	}
+	return out
+}
+
+// emitConfigWarnings reports config warnings in the active output mode: a
+// config warn phase event on stderr in structured mode, a styled warning in
+// pretty mode. Only the first call per invocation emits anything.
+func emitConfigWarnings(warnings []config.Warning) {
+	if configWarningsEmitted {
+		return
+	}
+	configWarningsEmitted = true
+
+	for _, w := range warnings {
+		if PrettyMode() {
+			ui.PrintWarning(fmt.Sprintf("%s (%s). %s", w.Message, w.File, w.Suggestion))
+			continue
+		}
+		WritePhaseEvent(PhaseEvent{
+			Type:   "phase",
+			Phase:  "config",
+			Status: "warn",
+			Details: map[string]interface{}{
+				"file":       w.File,
+				"key":        w.Key,
+				"message":    w.Message,
+				"suggestion": w.Suggestion,
+			},
+		})
+	}
+}
+
+// isCompletionRequest reports whether cmd is cobra's hidden shell-completion
+// command, whose stderr should stay quiet.
+func isCompletionRequest(cmd *cobra.Command) bool {
+	name := cmd.Name()
+	return name == cobra.ShellCompRequestCmd || name == cobra.ShellCompNoDescRequestCmd
 }
 
 // GetRootCmd returns the root command for testing and subcommand registration.

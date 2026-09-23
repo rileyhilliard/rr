@@ -22,6 +22,10 @@ type GlobalConfig struct {
 	Hosts    map[string]Host `yaml:"hosts" mapstructure:"hosts"`
 	Defaults GlobalDefaults  `yaml:"defaults" mapstructure:"defaults"`
 	Logs     LogsConfig      `yaml:"logs" mapstructure:"logs"`
+
+	// Warnings are non-fatal problems found while loading (unknown keys).
+	// Populated by LoadGlobal; never read from or written to YAML.
+	Warnings []Warning `yaml:"-" mapstructure:"-"`
 }
 
 // LocalFallbackMode controls when rr falls back to local execution.
@@ -93,18 +97,37 @@ type Config struct {
 	Sync     SyncConfig            `yaml:"sync" mapstructure:"sync"`
 	Lock     LockConfig            `yaml:"lock" mapstructure:"lock"`
 	Tasks    map[string]TaskConfig `yaml:"tasks" mapstructure:"tasks"`
-	Output   OutputConfig          `yaml:"output" mapstructure:"output"`
 	Monitor  MonitorConfig         `yaml:"monitor" mapstructure:"monitor"`
 
 	// Require lists tools that must be available on remote hosts.
 	// Checked before sync; uses built-in installers when available.
 	Require []string `yaml:"require,omitempty" mapstructure:"require"`
+
+	// Warnings are non-fatal problems found while loading: unknown keys,
+	// the removed output: section, and task settings that have no effect
+	// where they're placed. Populated by Load; never read from or written
+	// to YAML. Load doesn't print them; the CLI emits them once per run.
+	Warnings []Warning `yaml:"-" mapstructure:"-"`
+}
+
+// Warning is a non-fatal config problem recorded during Load or LoadGlobal.
+type Warning struct {
+	// File is the config file the warning came from.
+	File string
+	// Key is the dotted path of the offending key, e.g. "tasks.test.pull".
+	Key string
+	// Message says what's wrong.
+	Message string
+	// Suggestion says how to fix it.
+	Suggestion string
 }
 
 // Host defines a remote machine and its connection settings.
 type Host struct {
-	// SSH connection strings, tried in order until one succeeds.
-	// Can be: hostname, user@hostname, or SSH config alias.
+	// SSH connection strings. All aliases are dialed in parallel and the
+	// earliest-listed alias that connects wins, so list the preferred
+	// route (e.g. LAN) first. Can be: hostname, user@hostname, or SSH
+	// config alias.
 	SSH []string `yaml:"ssh" mapstructure:"ssh"`
 
 	// Dir is the working directory on remote (where files sync to).
@@ -118,8 +141,9 @@ type Host struct {
 	Env map[string]string `yaml:"env" mapstructure:"env"`
 
 	// Shell specifies how to invoke the shell for commands.
-	// Default uses $SHELL -l -c (user's login shell) to ensure PATH is set up.
-	// Use "sh -c" for minimal shell without profile loading.
+	// Default is "${SHELL:-/bin/bash} -c". Commands are always prefixed
+	// with sourcing ~/.bashrc and ~/.zshrc (when present) so PATH setup
+	// from tools like nvm or pyenv is available, whatever shell is used.
 	// Format: "<shell> <flags> <command-flag>" where the command will be appended.
 	Shell string `yaml:"shell,omitempty" mapstructure:"shell"`
 
@@ -191,9 +215,11 @@ type LockConfig struct {
 	// Timeout is how long to wait for a lock before giving up.
 	Timeout time.Duration `yaml:"timeout" mapstructure:"timeout"`
 
-	// WaitTimeout is how long to round-robin through hosts when all are locked.
-	// Only applies when multiple hosts are configured and local_fallback is false.
-	// If local_fallback is true, we immediately fall back to local when all hosts are locked.
+	// WaitTimeout is how long to round-robin through hosts when all are
+	// locked. What happens next depends on the local_fallback mode: with
+	// never or on-unreachable, rr waits this long and then errors. With
+	// always, rr falls back to local right away, unless a lock holder is on
+	// this machine, in which case it waits this long before falling back.
 	WaitTimeout time.Duration `yaml:"wait_timeout" mapstructure:"wait_timeout"`
 
 	// Stale is when to consider a lock stale (holder probably crashed).
@@ -247,8 +273,9 @@ type TaskConfig struct {
 	// Applies to individual tasks and parallel orchestrators.
 	Timeout string `yaml:"timeout" mapstructure:"timeout"`
 
-	// Output controls how task output is displayed: "progress", "stream", "verbose", "quiet".
-	// Overrides the global output settings for this task.
+	// Output controls how a parallel task's subtask output is displayed:
+	// one of the TaskOutput* constants. CLI flags (--stream, --verbose,
+	// --quiet) take precedence. Has no effect on non-parallel tasks.
 	Output string `yaml:"output" mapstructure:"output"`
 
 	// Require lists additional tools needed for this specific task.
@@ -265,6 +292,31 @@ type TaskConfig struct {
 	// Only valid for parallel tasks where all subtasks use a single run command (not steps).
 	// Enables: rr test-backend -k bond  (forwards "-k bond" to each subtask)
 	ForwardArgs bool `yaml:"forward_args" mapstructure:"forward_args"`
+}
+
+// Valid values for TaskConfig.Output (parallel tasks only).
+const (
+	TaskOutputProgress = "progress"
+	TaskOutputStream   = "stream"
+	TaskOutputVerbose  = "verbose"
+	TaskOutputQuiet    = "quiet"
+)
+
+// TaskOutputModes lists the valid TaskConfig.Output values.
+var TaskOutputModes = []string{TaskOutputProgress, TaskOutputStream, TaskOutputVerbose, TaskOutputQuiet}
+
+// IsValidTaskOutput reports whether s is a valid TaskConfig.Output value.
+// The empty string (unset) is valid.
+func IsValidTaskOutput(s string) bool {
+	if s == "" {
+		return true
+	}
+	for _, m := range TaskOutputModes {
+		if s == m {
+			return true
+		}
+	}
+	return false
 }
 
 // DependencyItem represents a single dependency which can be either
@@ -421,22 +473,6 @@ type TaskStep struct {
 	OnFail string `yaml:"on_fail" mapstructure:"on_fail"`
 }
 
-// OutputConfig controls terminal output formatting.
-type OutputConfig struct {
-	// Color mode: "auto", "always", or "never".
-	// "auto" disables color when output is piped.
-	Color string `yaml:"color" mapstructure:"color"`
-
-	// Format for command output: "auto", "generic", "pytest", "jest", "go", "cargo".
-	Format string `yaml:"format" mapstructure:"format"`
-
-	// Timing shows timing for each phase.
-	Timing bool `yaml:"timing" mapstructure:"timing"`
-
-	// Verbosity level: "quiet", "normal", or "verbose".
-	Verbosity string `yaml:"verbosity" mapstructure:"verbosity"`
-}
-
 // MonitorConfig controls the resource monitoring dashboard.
 type MonitorConfig struct {
 	// Interval between metric updates (e.g., "2s", "5s").
@@ -578,16 +614,10 @@ func DefaultConfig() *Config {
 			Enabled:     true,
 			Timeout:     5 * time.Minute,
 			WaitTimeout: 1 * time.Minute,
-			Stale:       3 * time.Minute,
+			Stale:       90 * time.Second,
 			Dir:         "/tmp/rr-locks",
 		},
 		Tasks: make(map[string]TaskConfig),
-		Output: OutputConfig{
-			Color:     "auto",
-			Format:    "auto",
-			Timing:    true,
-			Verbosity: "normal",
-		},
 		Monitor: MonitorConfig{
 			Interval: "1s",
 			Timeout:  "8s",

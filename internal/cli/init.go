@@ -629,14 +629,6 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	sb.WriteString("#       - name: Run build\n")
 	sb.WriteString("#         run: python setup.py build\n\n")
 
-	// Output section (commented out)
-	sb.WriteString("# Output formatting\n")
-	sb.WriteString("# output:\n")
-	sb.WriteString("#   color: auto      # auto, always, or never\n")
-	sb.WriteString("#   format: auto     # auto, generic, pytest, jest, go, cargo\n")
-	sb.WriteString("#   timing: true     # show timing for each phase\n")
-	sb.WriteString("#   verbosity: normal  # quiet, normal, or verbose\n\n")
-
 	// Monitor section (commented out)
 	sb.WriteString("# Resource monitoring dashboard settings (rr monitor)\n")
 	sb.WriteString("# monitor:\n")
