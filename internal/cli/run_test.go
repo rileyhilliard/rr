@@ -919,6 +919,54 @@ func TestAutoCWDSoftCdShellSemantics(t *testing.T) {
 	})
 }
 
+// TestBuildRemoteRunCommand_SemicolonStaysInChain runs the full `rr run`
+// command through bash. A ; in the command used to split it off the chain, so
+// with a missing --cwd the part after the ; ran at the project root and the
+// run reported success.
+func TestBuildRemoteRunCommand_SemicolonStaysInChain(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	t.Setenv("HOME", t.TempDir()) // no rc files to source
+	root := t.TempDir()
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		cwd      string
+		offset   string
+		setup    []string
+		want     string
+		wantFail bool
+	}{
+		{name: "missing --cwd stops the whole command", cwd: "missing", wantFail: true},
+		{name: "failing defaults.setup stops the whole command", setup: []string{"false"}, wantFail: true},
+		{name: "|| in defaults.setup stays inside it", setup: []string{"false", "true || true"}, wantFail: true},
+		{name: "missing implicit offset runs at the root", offset: "missing", want: "A\n" + resolvedRoot},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wf := newTestWorkflowContext("/Users/r/app", tt.offset)
+			wf.Conn.Host = config.Host{Dir: root, Shell: "bash -c"}
+			wf.Resolved.Project.Defaults.Setup = tt.setup
+
+			cmd, err := buildRemoteRunCommand(wf, RunOptions{Command: "echo A; pwd -P", RemoteCWD: tt.cwd}, root)
+			require.NoError(t, err)
+
+			out, runErr := osexec.Command("bash", "-c", cmd).Output()
+			if tt.wantFail {
+				require.Error(t, runErr)
+				assert.Empty(t, string(out), "nothing after the failure should run")
+				return
+			}
+			require.NoError(t, runErr)
+			assert.Equal(t, tt.want, strings.TrimSpace(string(out)))
+		})
+	}
+}
+
 // TestBuildRemoteRunCommand_ExplicitCWDStillHardFails - an explicit --cwd is a
 // direct request, so traversal outside the project root is still an error. This
 // exercises the real guard rather than mirroring its logic.

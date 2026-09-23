@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -484,4 +485,37 @@ func TestSyncOptions_Invalidated(t *testing.T) {
 		assert.Contains(t, stdout, "Invalidating stale node_modules (package-lock.json changed)")
 		assert.Empty(t, stderr)
 	})
+}
+
+// A structured parallel run reports a host it couldn't reach as a connect
+// warn event and leaves stdout to the subtasks' own output.
+func TestRunParallelTask_StructuredRequeueIsAnEvent(t *testing.T) {
+	for _, quiet := range []bool{false, true} {
+		t.Run(fmt.Sprintf("quiet=%v", quiet), func(t *testing.T) {
+			withStructuredOutput(t)
+			writeGlobalConfig(t, `version: 1
+defaults:
+  probe_timeout: 1s
+hosts:
+  a:
+    ssh: [rr-test-unreachable-a.invalid]
+    dir: ~/rr/proj
+`)
+			inProject(t, "version: 1\nhosts: [a]\ntasks:\n  x:\n    run: \"true\"\n  both:\n    parallel: [x]\n")
+
+			stdout, stderr := runCaptured(t, func() {
+				_, _ = RunParallelTask(ParallelTaskOptions{TaskName: "both", NoLogs: true, Quiet: quiet})
+			})
+
+			assert.Empty(t, stdout)
+			warns := eventsWith(parseEvents(t, stderr), "connect", "warn")
+			require.Len(t, warns, 1)
+			assert.Equal(t, "a", warns[0].Host)
+			assert.Equal(t, "connect_failed", warns[0].Details["reason"])
+			assert.Equal(t, "x", warns[0].Details["task"])
+			errDetail, ok := warns[0].Details["error"].(map[string]interface{})
+			require.True(t, ok, "the warn event carries the cause")
+			assert.Equal(t, "SSH_CONNECTION_FAILED", errDetail["code"])
+		})
+	}
 }

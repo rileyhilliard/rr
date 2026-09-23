@@ -390,6 +390,22 @@ func TestOutputManager_TaskRequeued_QuietMode(t *testing.T) {
 	assert.Contains(t, output, "unavailable")
 }
 
+// TestOutputManager_NoneModePrintsNothing - structured mode's stdout carries
+// only the subtasks' output, so even a requeue warning stays off it.
+func TestOutputManager_NoneModePrintsNothing(t *testing.T) {
+	var buf bytes.Buffer
+	mgr := NewOutputManager(OutputNone, true)
+	mgr.SetWriter(&buf)
+
+	mgr.TaskSyncing("test-task", 0, "bad-host")
+	mgr.TaskExecuting("test-task", 0)
+	mgr.TaskOutput("test-task", 0, []byte("line"), false)
+	mgr.TaskRequeued("test-task", 0, "bad-host")
+	mgr.TaskCompleted(TaskResult{TaskName: "test-task", Host: "good-host"})
+
+	assert.Empty(t, buf.String())
+}
+
 func TestOutputManager_TaskRequeued_ResetsState(t *testing.T) {
 	mgr := NewOutputManager(OutputQuiet, true)
 

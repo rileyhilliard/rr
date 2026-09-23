@@ -3,6 +3,7 @@ package sshutil
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"time"
@@ -52,8 +53,10 @@ func (c *Client) ExecStream(cmd string, stdout, stderr io.Writer) (exitCode int,
 
 // ExecStreamContext runs a command with context cancellation support.
 // When the context is cancelled, SIGINT is sent to the remote process.
-// Returns the exit code and any error.
-// Exit code is -1 if the command couldn't be executed at all.
+// Returns the exit code and any error. A command that ran and exited non-zero
+// is not an error. The exit code is -1 with an error if the command couldn't
+// start, the connection dropped before it finished (IsConnectionLost), or its
+// output couldn't be written.
 func (c *Client) ExecStreamContext(ctx context.Context, cmd string, stdout, stderr io.Writer) (exitCode int, err error) {
 	session, err := c.newSSHSession()
 	if err != nil {
@@ -92,8 +95,42 @@ func (c *Client) ExecStreamContext(ctx context.Context, cmd string, stdout, stde
 			return 130, ctx.Err()
 		}
 	case runErr := <-done:
-		return exitCodeFromError(runErr), nil
+		return waitResult(runErr)
 	}
+}
+
+// waitResult turns session.Wait's error into an exit code. A command that
+// exited, even non-zero, is not an error. Anything else is: the session
+// ended without an exit status (the connection dropped), or copying the
+// command's output failed locally.
+func waitResult(runErr error) (int, error) {
+	if runErr == nil {
+		return 0, nil
+	}
+	var exitErr *ssh.ExitError
+	if stderrors.As(runErr, &exitErr) {
+		return exitErr.ExitStatus(), nil
+	}
+	if IsConnectionLost(runErr) {
+		return -1, errors.WrapWithCode(runErr, errors.ErrSSH,
+			"Lost the connection before the command finished",
+			"The network dropped or the machine running rr slept. Run the command again.")
+	}
+	return -1, errors.WrapWithCode(runErr, errors.ErrExec,
+		"Couldn't write the command's output",
+		"Check that wherever the output goes (a file or a pipe) is writable and has space.")
+}
+
+// ErrConnectionLost marks a connection found dead between commands (a failed
+// keepalive), as opposed to one that dropped mid-command.
+var ErrConnectionLost = stderrors.New("connection lost")
+
+// IsConnectionLost reports whether err means the connection dropped: either
+// mid-command (the session ended without an exit status) or between commands
+// (ErrConnectionLost).
+func IsConnectionLost(err error) bool {
+	var missing *ssh.ExitMissingError
+	return stderrors.As(err, &missing) || stderrors.Is(err, ErrConnectionLost)
 }
 
 // exitCodeFromError extracts the exit code from an error.

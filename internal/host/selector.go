@@ -116,6 +116,48 @@ func (c *Connection) Close() error {
 	return nil
 }
 
+// aliveTimeout bounds Alive's keepalive. A healthy connection answers in
+// milliseconds, even over a VPN.
+var aliveTimeout = 5 * time.Second
+
+// Alive reports whether the connection is still usable. A local connection
+// is always alive; a nil one never is.
+//
+// It sends SSH's "keepalive@openssh.com" global request instead of opening a
+// session: NewSession() costs 100-200ms, while the keepalive is one packet
+// exchange on the existing connection, cheap enough to call before every use.
+// Connections die silently (network changes, a laptop going to sleep, remote
+// restarts), and reusing a dead one fails with a confusing error.
+//
+// A peer that goes quiet without closing TCP never answers, and the request
+// would wait until the OS gives up on the connection, which can take minutes.
+// After aliveTimeout the connection counts as dead and is closed, which also
+// releases the blocked request.
+func (c *Connection) Alive() bool {
+	if c == nil {
+		return false
+	}
+	if c.IsLocal {
+		return true
+	}
+	if c.Client == nil {
+		return false
+	}
+	// wantReply=true makes the remote answer, confirming the connection works.
+	reply := make(chan error, 1)
+	go func() {
+		_, _, err := c.Client.SendRequest("keepalive@openssh.com", true, nil)
+		reply <- err
+	}()
+	select {
+	case err := <-reply:
+		return err == nil
+	case <-time.After(aliveTimeout):
+		_ = c.Client.Close()
+		return false
+	}
+}
+
 // Selector manages host selection and connection caching.
 type Selector struct {
 	hosts         map[string]config.Host
@@ -255,37 +297,6 @@ func (s *Selector) trySSHAliases(hostName string, host config.Host) (*Connection
 	}, nil
 }
 
-// isConnectionAlive checks if the cached connection is still usable.
-//
-// We use SSH's "keepalive@openssh.com" request instead of creating a new session
-// because NewSession() adds 100-200ms of overhead per check. The keepalive request
-// is just a single packet exchange on the existing connection, making it fast
-// enough to call on every Select() without noticeable delay.
-//
-// This matters because connections can silently die (network changes, remote
-// restarts) and we don't want stale connections causing confusing errors.
-func (s *Selector) isConnectionAlive(conn *Connection) bool {
-	if conn == nil {
-		return false
-	}
-
-	// Local connections are always "alive"
-	if conn.IsLocal {
-		return true
-	}
-
-	if conn.Client == nil {
-		return false
-	}
-
-	// Use SendRequest with "keepalive@openssh.com" for a lightweight check.
-	// This is much faster than NewSession() because it doesn't create a
-	// new channel - it just sends a global request on the existing connection.
-	// The wantReply=true ensures we get a response confirming the connection works.
-	_, _, err := conn.Client.SendRequest("keepalive@openssh.com", true, nil)
-	return err == nil
-}
-
 // orderedHostNames returns host names in priority order.
 // Uses hostOrder if set, otherwise alphabetical order for determinism.
 // Only includes hosts that exist in the hosts map.
@@ -416,7 +427,7 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 		// Local fallback connections are reused regardless of preferred host
 		if preferred == "" || s.cached.Name == preferred || s.cached.IsLocal {
 			// Verify connection is still alive
-			if s.isConnectionAlive(s.cached) {
+			if s.cached.Alive() {
 				s.emit(ConnectionEvent{
 					Type:    EventCacheHit,
 					Alias:   s.cached.Alias,

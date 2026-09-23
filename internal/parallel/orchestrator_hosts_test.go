@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -102,4 +103,28 @@ func TestOrchestrator_RestrictedTask_NeverRunsOnDisallowedHost(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestOrchestrator_OnRequeueReportsCause - a host that was never reached is
+// re-queued with its connect error, not reported as a lost connection.
+func TestOrchestrator_OnRequeueReportsCause(t *testing.T) {
+	hosts := map[string]config.Host{
+		"host-a": {SSH: []string{"nonexistent-host-a-xxxx"}, Dir: "~"},
+	}
+	var causes []error
+	cfg := Config{OnRequeue: func(taskName, hostName string, cause error) {
+		assert.Equal(t, "t1", taskName)
+		assert.Equal(t, "host-a", hostName)
+		causes = append(causes, cause)
+	}}
+	orch := NewOrchestrator([]TaskInfo{{Name: "t1", Command: "true"}}, hosts, []string{"host-a"}, nil, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := orch.Run(ctx)
+	require.NoError(t, err)
+
+	require.Len(t, causes, 1)
+	require.Error(t, causes[0])
+	assert.False(t, sshutil.IsConnectionLost(causes[0]))
 }

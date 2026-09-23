@@ -49,6 +49,7 @@ type OutputManager struct {
 //   - stream: Real-time interleaved output with [host:task] prefixes
 //   - verbose: Full output per task shown on completion
 //   - quiet: Summary only, no per-task output
+//   - none: Nothing at all (structured mode, which reports through events)
 //
 // TTY detection fallback: If progress mode is requested but stdout isn't a TTY
 // (e.g., piped to a file or CI environment), we fall back to quiet mode since
@@ -142,7 +143,7 @@ func (m *OutputManager) TaskSyncing(taskName string, taskIndex int, host string)
 			m.mutedStyle.Render(ui.SymbolSyncing),
 			taskName,
 			host)
-	case OutputQuiet:
+	case OutputQuiet, OutputNone:
 		// No output for quiet mode
 	}
 }
@@ -170,7 +171,7 @@ func (m *OutputManager) TaskExecuting(taskName string, taskIndex int) {
 			m.mutedStyle.Render(ui.SymbolProgress),
 			taskName,
 			host)
-	case OutputQuiet:
+	case OutputQuiet, OutputNone:
 		// No output for quiet mode
 	}
 }
@@ -205,7 +206,7 @@ func (m *OutputManager) TaskOutput(taskName string, taskIndex int, line []byte, 
 		host := m.taskHosts[tid]
 		prefix := m.formatPrefix(host, taskName)
 		fmt.Fprintf(m.w, "%s %s\n", prefix, string(line))
-	case OutputProgress, OutputVerbose, OutputQuiet:
+	case OutputProgress, OutputVerbose, OutputQuiet, OutputNone:
 		// Buffered, no immediate output
 	}
 }
@@ -241,6 +242,8 @@ func (m *OutputManager) TaskRequeued(taskName string, taskIndex int, unavailable
 		// Still show warnings in quiet mode since this is important info
 		fmt.Fprintf(m.w, "%s %s unavailable, re-queuing %s\n",
 			ui.SymbolWarning, unavailableHost, taskName)
+	case OutputNone:
+		// Structured mode: the caller reports the re-queue as an event.
 	}
 }
 
@@ -273,7 +276,7 @@ func (m *OutputManager) TaskCompleted(result TaskResult) {
 		fmt.Fprintf(m.w, "%s %s %s\n", prefix, style.Render(symbol), formatDuration(result.Duration))
 	case OutputVerbose:
 		m.renderVerboseCompletion(result, status)
-	case OutputQuiet:
+	case OutputQuiet, OutputNone:
 		// No output for quiet mode
 	}
 }

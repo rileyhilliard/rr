@@ -15,8 +15,10 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestMachineMode_DefaultValue(t *testing.T) {
@@ -571,6 +573,49 @@ func captureStderr(t *testing.T, fn func()) string {
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
 	return buf.String()
+}
+
+// TestRequeuedEvent pins the event agents branch on when a parallel subtask
+// moves off a host: a dropped connection and a host never reached get
+// different reasons, and both carry the error.
+func TestRequeuedEvent(t *testing.T) {
+	tests := []struct {
+		name       string
+		cause      error
+		wantReason string
+	}{
+		{
+			name:       "connection died mid-run",
+			cause:      errors.WrapWithCode(sshutil.ErrConnectionLost, errors.ErrSSH, "Lost the connection to 'm1'", "retry"),
+			wantReason: "connection_lost",
+		},
+		{
+			name:       "connection died mid-command",
+			cause:      errors.WrapWithCode(&ssh.ExitMissingError{}, errors.ErrSSH, "Lost the connection before the command finished", "retry"),
+			wantReason: "connection_lost",
+		},
+		{
+			name:       "host never reached",
+			cause:      errors.New(errors.ErrSSH, "Couldn't connect to 'm1'", "retry"),
+			wantReason: "connect_failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStderr(t, func() { requeuedEvent("test-api", "m1", tt.cause) })
+
+			var event map[string]interface{}
+			require.NoError(t, json.Unmarshal([]byte(out), &event))
+			assert.Equal(t, "connect", event["phase"])
+			assert.Equal(t, "warn", event["status"])
+			assert.Equal(t, "m1", event["host"])
+			details := event["details"].(map[string]interface{})
+			assert.Equal(t, tt.wantReason, details["reason"])
+			assert.Equal(t, "test-api", details["task"])
+			assert.Equal(t, "SSH_CONNECTION_FAILED", details["error"].(map[string]interface{})["code"])
+		})
+	}
 }
 
 func TestWritePhaseEvent_SuppressPhasesBehavior(t *testing.T) {

@@ -378,6 +378,9 @@ func (o *Orchestrator) hostWorkerWithRequeue(
 			if o.outputMgr != nil {
 				o.outputMgr.TaskRequeued(task.Name, task.Index, hostName)
 			}
+			if o.config.OnRequeue != nil {
+				o.config.OnRequeue(task.Name, hostName, result.Error)
+			}
 
 			// Send task back to the queue BEFORE marking host unavailable.
 			// This ordering matters: the dispatcher checks allHostsUnavailable()

@@ -8,11 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
+	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 // createLocalConn creates a local connection for testing.
@@ -414,6 +419,52 @@ func TestBuildCommand_ChainStopsOnFailure(t *testing.T) {
 	}
 }
 
+// TestBuildRemoteCommand_ChainStopsOnFailure runs `rr run` commands through
+// real shells: a ; or || in the command or a setup command can't run part of
+// the command after a failed setup or cd.
+func TestBuildRemoteCommand_ChainStopsOnFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no rc files to source
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing")
+
+	tests := []struct {
+		name     string
+		cmd      string
+		dir      string
+		setup    []string
+		want     string
+		wantFail bool
+	}{
+		{name: "missing dir stops a ; command", cmd: "echo A; echo B", dir: missing, wantFail: true},
+		{name: "failing setup stops a ; command", cmd: "echo A; echo B", dir: dir, setup: []string{"false"}, wantFail: true},
+		{name: "|| in a setup command stays inside it", cmd: "echo RAN", dir: dir, setup: []string{"false", "true || true"}, wantFail: true},
+		{name: "; command runs in the dir", cmd: "echo A; pwd -P", dir: dir, want: "A\n" + evalSymlinks(t, dir)},
+	}
+
+	for _, shell := range taskShells(t) {
+		for _, tt := range tests {
+			t.Run(filepath.Base(shell)+"/"+tt.name, func(t *testing.T) {
+				host := &config.Host{Dir: tt.dir, SetupCommands: tt.setup, Shell: shell + " -c"}
+				stdout, stderr, code := runInShell(t, shell, BuildRemoteCommand(tt.cmd, host))
+				if tt.wantFail {
+					assert.NotEqual(t, 0, code)
+					assert.Empty(t, stdout, "nothing after the failure should run")
+					return
+				}
+				require.Equal(t, 0, code, stderr)
+				assert.Equal(t, tt.want, strings.TrimSpace(stdout))
+			})
+		}
+	}
+}
+
+func evalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	return resolved
+}
+
 func TestBuildRemoteCommand_DefaultShell(t *testing.T) {
 	host := &config.Host{
 		Dir: "/home/user/project",
@@ -541,4 +592,45 @@ func TestExecuteTask_CompoundCommandRejectsArgs(t *testing.T) {
 	_, err := ExecuteTask(context.Background(), conn, task, []string{"extra"}, nil, "", &stdout, &stderr, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "compound command")
+}
+
+// A step cut off by a dropped connection still comes back with the result so
+// far, so callers can report which step it was instead of only the error.
+func TestExecuteTask_MultiStepConnectionLost(t *testing.T) {
+	client := sshtesting.NewMockClient("test-host")
+	client.SetCommandResponse("echo two", sshtesting.CommandResponse{
+		Error: rrerrors.WrapWithCode(&ssh.ExitMissingError{}, rrerrors.ErrSSH, "Lost the connection", ""),
+	})
+	conn := &host.Connection{Name: "test-host", Client: client}
+	task := &config.TaskConfig{
+		Steps: []config.TaskStep{
+			{Name: "one", Run: "echo one"},
+			{Name: "two", Run: "echo two"},
+			{Name: "three", Run: "echo three"},
+		},
+	}
+
+	steps := &recordingStepHandler{}
+
+	var stdout, stderr bytes.Buffer
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr,
+		&TaskExecOptions{StepHandler: steps})
+
+	require.Error(t, err)
+	assert.True(t, sshutil.IsConnectionLost(err))
+	assert.Equal(t, []int{0, -1}, steps.completed, "the cut-off step still gets its completion line")
+	require.NotNil(t, result)
+	assert.Equal(t, -1, result.ExitCode)
+	assert.Equal(t, 1, result.FailedStep)
+	require.Len(t, result.StepResults, 2)
+	assert.Equal(t, -1, result.StepResults[1].ExitCode)
+}
+
+// recordingStepHandler records the exit code of each completed step.
+type recordingStepHandler struct{ completed []int }
+
+func (h *recordingStepHandler) OnStepStart(int, int, config.TaskStep) {}
+
+func (h *recordingStepHandler) OnStepComplete(_, _ int, _ config.TaskStep, _ time.Duration, exitCode int) {
+	h.completed = append(h.completed, exitCode)
 }

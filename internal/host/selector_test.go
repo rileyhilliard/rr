@@ -866,9 +866,7 @@ func TestConnection_IsLocal_Field(t *testing.T) {
 	}
 }
 
-func TestSelector_isConnectionAlive_LocalConnection(t *testing.T) {
-	selector := NewSelector(nil)
-
+func TestConnection_Alive_LocalConnection(t *testing.T) {
 	// Local connection should always be considered alive
 	localConn := &Connection{
 		Name:    "local",
@@ -877,7 +875,7 @@ func TestSelector_isConnectionAlive_LocalConnection(t *testing.T) {
 		Client:  nil, // No client for local
 	}
 
-	if !selector.isConnectionAlive(localConn) {
+	if !localConn.Alive() {
 		t.Error("local connection should be considered alive")
 	}
 }
@@ -1149,30 +1147,26 @@ func TestSelector_SelectByTag_LocalFallback(t *testing.T) {
 	}
 }
 
-func TestSelector_isConnectionAlive_NilConnection(t *testing.T) {
-	selector := NewSelector(nil)
-
-	if selector.isConnectionAlive(nil) {
-		t.Error("isConnectionAlive(nil) should return false")
+func TestConnection_Alive_NilConnection(t *testing.T) {
+	var conn *Connection
+	if conn.Alive() {
+		t.Error("Alive() on a nil connection should return false")
 	}
 }
 
-func TestSelector_isConnectionAlive_NilClient(t *testing.T) {
-	selector := NewSelector(nil)
-
+func TestConnection_Alive_NilClient(t *testing.T) {
 	conn := &Connection{
 		Name:    "test",
 		IsLocal: false,
 		Client:  nil,
 	}
 
-	if selector.isConnectionAlive(conn) {
-		t.Error("isConnectionAlive should return false when Client is nil")
+	if conn.Alive() {
+		t.Error("Alive should return false when Client is nil")
 	}
 }
 
-func TestSelector_isConnectionAlive_WithMockClient(t *testing.T) {
-	selector := NewSelector(nil)
+func TestConnection_Alive_WithMockClient(t *testing.T) {
 	mockClient := sshmock.NewMockClient("testhost")
 
 	conn := &Connection{
@@ -1182,16 +1176,59 @@ func TestSelector_isConnectionAlive_WithMockClient(t *testing.T) {
 	}
 
 	// Mock client should return true when connection is open
-	if !selector.isConnectionAlive(conn) {
-		t.Error("isConnectionAlive should return true for open mock connection")
+	if !conn.Alive() {
+		t.Error("Alive should return true for open mock connection")
 	}
 
 	// After closing, should return false
 	mockClient.Close()
 
-	if selector.isConnectionAlive(conn) {
-		t.Error("isConnectionAlive should return false after connection is closed")
+	if conn.Alive() {
+		t.Error("Alive should return false after connection is closed")
 	}
+}
+
+// A peer that stops answering without closing the TCP connection (a sleep or
+// silent network drop) must not hang the check until the OS gives up on TCP.
+func TestConnection_Alive_UnansweredKeepaliveTimesOut(t *testing.T) {
+	prev := aliveTimeout
+	aliveTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { aliveTimeout = prev })
+
+	client := &unansweredClient{MockClient: sshmock.NewMockClient("testhost"), closed: make(chan struct{})}
+	conn := &Connection{Name: "test", Client: client}
+
+	start := time.Now()
+	alive := conn.Alive()
+
+	if alive {
+		t.Error("Alive should return false when the keepalive gets no reply")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Alive took %v, want it bounded by aliveTimeout", elapsed)
+	}
+	select {
+	case <-client.closed:
+	default:
+		t.Error("Alive should close the client so the blocked request is released")
+	}
+}
+
+// unansweredClient's keepalive blocks until the client is closed, like a
+// request to a peer that has silently gone away.
+type unansweredClient struct {
+	*sshmock.MockClient
+	closed chan struct{}
+}
+
+func (c *unansweredClient) SendRequest(string, bool, []byte) (bool, []byte, error) {
+	<-c.closed
+	return false, nil, errors.New(errors.ErrSSH, "connection closed", "")
+}
+
+func (c *unansweredClient) Close() error {
+	close(c.closed)
+	return nil
 }
 
 // ============================================================================

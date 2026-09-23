@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.1] - 2026-09-23
+
+### Fixed
+
+- **`rr run` kept running after a failed `cd` or setup when the command had a `;`** - v0.27.0 grouped task commands so `;`, `||` and `&` stay inside them, but `rr run` builds its command separately and missed that. `rr run --cwd missing 'a; b'` skipped `a`, ran `b` at the project root, and reported success. The command, host `setup_commands`, and `defaults.setup` are now grouped the same way, so a failed `--cwd`, setup, or cd fails the whole run.
+- **A dropped connection failed the parallel subtasks still waiting for that host** - When a host's connection died mid-run (a network drop, or the laptop sleeping), its worker kept the dead connection, and the next subtasks it took failed in microseconds with `Couldn't create an SSH session`. The worker now checks the connection before each subtask, giving up after 5 seconds if the host doesn't answer. If it's dead, the host is dropped for the rest of the run and the subtask moves to another host. If no host is left, the remaining subtasks fail with `all hosts unavailable`.
+- **A command cut off by a dropped connection reported no cause** - It came back as `exit_code: -1` with no error. It now carries `Lost the connection before the command finished`: in `details.error` on the result of a single `rr run` or task (including one with `depends`), with `log_file` still set on runs that write a log, and in the failure entry of a parallel subtask. A command that exits 0 but whose output rr couldn't write locally (a full disk under `rr run ... > file`) used to report the same bare `-1`; it now fails with `COMMAND_FAILED` and says so.
+- **Structured parallel runs printed the re-queue warning to stdout** - `⚠ <host> unavailable, re-queuing <task>` went to stdout as plain text, mixed into the subtasks' output. In the default and `quiet` output modes, structured runs now print nothing to stdout themselves and report the re-queue as a connect `warn` event with `details.task`, `details.error`, and `details.reason`: `connection_lost` or `connect_failed`. `--pretty` still prints the warning.
+
 ## [0.27.0] - 2026-09-23
 
 Fixes for the bugs found while auditing the docs against the code. Several change what scripts and agents see, so read Breaking Changes and [MIGRATION.md](docs/MIGRATION.md) before upgrading.

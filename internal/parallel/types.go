@@ -20,6 +20,9 @@ const (
 	OutputVerbose OutputMode = "verbose"
 	// OutputQuiet shows summary only.
 	OutputQuiet OutputMode = "quiet"
+	// OutputNone prints nothing. Structured mode uses it: stdout carries only
+	// the commands' output, and the caller reports progress as events.
+	OutputNone OutputMode = "none"
 )
 
 // Config holds configuration for parallel execution.
@@ -37,6 +40,12 @@ type Config struct {
 	// parallel syncs get the same notices as single runs without this
 	// package importing cli.
 	SyncOptions func(hostName string) *rrsync.SyncOptions
+
+	// OnRequeue, if set, is called when a task goes back to the queue
+	// because its host became unavailable, with the reason
+	// (sshutil.IsConnectionLost when the host's connection died after the
+	// worker connected), so the CLI can report it as a structured event.
+	OnRequeue func(taskName, hostName string, cause error)
 }
 
 // DefaultConfig returns a Config with sensible defaults.
