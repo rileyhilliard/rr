@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildFullCommand(t *testing.T) {
@@ -26,7 +28,25 @@ func TestBuildFullCommand(t *testing.T) {
 			name:     "command with workdir",
 			cmd:      "make test",
 			workDir:  "/home/user/project",
-			expected: "cd /home/user/project && make test",
+			expected: "cd '/home/user/project' && make test",
+		},
+		{
+			name:     "workdir with spaces is quoted",
+			cmd:      "make test",
+			workDir:  "/home/user/my project",
+			expected: "cd '/home/user/my project' && make test",
+		},
+		{
+			name:     "tilde workdir keeps tilde expandable",
+			cmd:      "make test",
+			workDir:  "~/rr projects/app",
+			expected: "cd ~/'rr projects/app' && make test",
+		},
+		{
+			name:     "workdir with shell metacharacters is inert",
+			cmd:      "make test",
+			workDir:  "/tmp/x; rm -rf ~",
+			expected: "cd '/tmp/x; rm -rf ~' && make test",
 		},
 		{
 			name: "command with env vars",
@@ -54,7 +74,9 @@ func TestBuildFullCommand(t *testing.T) {
 			env:           map[string]string{"CC": "gcc"},
 			workDir:       "/app",
 			setupCommands: []string{"module load gcc"},
-			expected:      "module load gcc && cd /app && export CC='gcc'; make build",
+			// cd runs first so relative setup (source .venv/bin/activate)
+			// resolves in the project dir, matching single tasks.
+			expected: "cd '/app' && module load gcc && export CC='gcc'; make build",
 		},
 		{
 			name:     "empty command",
@@ -462,4 +484,152 @@ func TestHostWorker_ExecuteTaskWithRequeue_ContextTimeout(t *testing.T) {
 	assert.False(t, shouldRequeue, "should not re-queue when context times out")
 	assert.NotNil(t, result.Error, "should have an error")
 	assert.Equal(t, 1, result.ExitCode, "exit code should be 1")
+}
+
+// TestHostWorker_FullCommand_MergesEnvAndSetup checks that parallel subtasks
+// get the same env and setup merge as single tasks: host env < defaults env
+// < task env, and host setup_commands then defaults.setup.
+func TestHostWorker_FullCommand_MergesEnvAndSetup(t *testing.T) {
+	project := &config.Config{Defaults: config.ProjectDefaults{
+		Env:   map[string]string{"FROM_DEFAULTS": "d"},
+		Setup: []string{"source .venv/bin/activate"},
+	}}
+
+	tests := []struct {
+		name     string
+		resolved *config.ResolvedConfig
+		taskEnv  map[string]string
+		want     string
+	}{
+		{
+			name:     "host, defaults and task layers",
+			resolved: &config.ResolvedConfig{Project: project},
+			taskEnv:  map[string]string{"FROM_TASK": "t"},
+			want:     "cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS='d'; export FROM_HOST='h'; export FROM_TASK='t'; make test",
+		},
+		{
+			name:     "setup step with no task env still gets host and defaults",
+			resolved: &config.ResolvedConfig{Project: project},
+			want:     "cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS='d'; export FROM_HOST='h'; make test",
+		},
+		{
+			name: "no project config",
+			want: "cd '/srv/app' && source ~/.profile && export FROM_HOST='h'; make test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &hostWorker{
+				orchestrator: &Orchestrator{resolved: tt.resolved},
+				hostName:     "box",
+				host: config.Host{
+					Env:           map[string]string{"FROM_HOST": "h"},
+					SetupCommands: []string{"source ~/.profile"},
+				},
+			}
+			assert.Equal(t, tt.want, w.fullCommand("make test", tt.taskEnv, "/srv/app"))
+		})
+	}
+}
+
+// TestHostWorker_FullCommand_TaskEnvWins checks precedence when all three
+// layers set the same key.
+func TestHostWorker_FullCommand_TaskEnvWins(t *testing.T) {
+	w := &hostWorker{
+		orchestrator: &Orchestrator{resolved: &config.ResolvedConfig{Project: &config.Config{
+			Defaults: config.ProjectDefaults{Env: map[string]string{"K": "defaults"}},
+		}}},
+		host: config.Host{Env: map[string]string{"K": "host"}},
+	}
+	assert.Equal(t, "export K='task'; run", w.fullCommand("run", map[string]string{"K": "task"}, ""))
+	assert.Equal(t, "export K='defaults'; run", w.fullCommand("run", nil, ""))
+}
+
+// TestLocalWorker_DefaultsEnvAndSetup checks local parallel runs get
+// defaults.env and defaults.setup like local single tasks do.
+func TestLocalWorker_DefaultsEnvAndSetup(t *testing.T) {
+	resolved := &config.ResolvedConfig{
+		Project: &config.Config{Defaults: config.ProjectDefaults{
+			Env:   map[string]string{"RR_DEF": "from-defaults", "RR_OVERRIDE": "defaults"},
+			Setup: []string{"export RR_SETUP=from-setup"},
+		}},
+		Global: &config.GlobalConfig{},
+	}
+	orchestrator := NewOrchestrator(nil, map[string]config.Host{}, nil, resolved, Config{})
+	worker := &localWorker{orchestrator: orchestrator}
+
+	result := worker.executeTask(context.Background(), TaskInfo{
+		Name:    "t",
+		Command: `echo "$RR_DEF $RR_SETUP $RR_OVERRIDE"`,
+		Env:     map[string]string{"RR_OVERRIDE": "task"},
+	})
+
+	require.Equal(t, 0, result.ExitCode, string(result.Output))
+	assert.Contains(t, string(result.Output), "from-defaults from-setup task")
+}
+
+// TestLocalWorker_SetupStepSeesDefaults checks the parallel `setup:` step runs
+// after defaults.setup with defaults.env applied, locally as well as remote.
+func TestLocalWorker_SetupStepSeesDefaults(t *testing.T) {
+	resolved := &config.ResolvedConfig{
+		Project: &config.Config{Defaults: config.ProjectDefaults{
+			Env:   map[string]string{"RR_DEF": "yes"},
+			Setup: []string{"export RR_SETUP=yes"},
+		}},
+		Global: &config.GlobalConfig{},
+	}
+	orchestrator := NewOrchestrator(nil, map[string]config.Host{}, nil, resolved, Config{
+		Setup: `test "$RR_DEF" = yes && test "$RR_SETUP" = yes`,
+	})
+	worker := &localWorker{orchestrator: orchestrator}
+
+	result := worker.executeTask(context.Background(), TaskInfo{Name: "t", Command: "true"})
+
+	assert.Equal(t, 0, result.ExitCode)
+	assert.NoError(t, result.Error)
+}
+
+// TestHostWorker_SyncOptions checks the worker asks the caller for sync
+// options for its own host, so parallel syncs get the same invalidation,
+// provenance and prune callbacks as single runs.
+func TestHostWorker_SyncOptions(t *testing.T) {
+	want := &rrsync.SyncOptions{}
+	var gotHost string
+
+	tests := []struct {
+		name     string
+		cfg      Config
+		wantOpts *rrsync.SyncOptions
+		wantHost string
+	}{
+		{
+			name: "callback set",
+			cfg: Config{SyncOptions: func(hostName string) *rrsync.SyncOptions {
+				gotHost = hostName
+				return want
+			}},
+			wantOpts: want,
+			wantHost: "gpu-box",
+		},
+		{
+			name:     "no callback",
+			cfg:      Config{},
+			wantOpts: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHost = ""
+			w := &hostWorker{orchestrator: &Orchestrator{config: tt.cfg}, hostName: "gpu-box"}
+			got := w.syncOptions()
+			if tt.wantOpts == nil {
+				assert.Nil(t, got)
+			} else {
+				assert.Same(t, tt.wantOpts, got)
+			}
+			assert.Equal(t, tt.wantHost, gotHost)
+		})
+	}
 }

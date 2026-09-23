@@ -861,9 +861,25 @@ func createParallelTaskCommand(name string, task config.TaskConfig) *cobra.Comma
 
 	if task.ForwardArgs {
 		cmd.SetFlagErrorFunc(taskFlagErrorFunc(name))
+	} else {
+		cmd.SetFlagErrorFunc(parallelNoArgsFlagErrorFunc(name))
 	}
 
 	return cmd
+}
+
+// parallelNoArgsFlagErrorFunc is taskFlagErrorFunc for a parallel task
+// without forward_args: the '--' alone wouldn't help, since the task rejects
+// extra args, so the hint says to turn forward_args on first.
+func parallelNoArgsFlagErrorFunc(name string) func(*cobra.Command, error) error {
+	return func(_ *cobra.Command, err error) error {
+		if err == nil || !strings.Contains(err.Error(), "unknown") {
+			return err
+		}
+		return errors.WrapWithCode(err, errors.ErrConfig,
+			fmt.Sprintf("parallel task '%s' doesn't accept extra arguments", name),
+			fmt.Sprintf("Set 'forward_args: true' on the task and add {args} placeholders to subtask commands, then put task flags after '--': rr %s -- <args>", name))
+	}
 }
 
 // runParallelTaskCommand is the implementation for parallel task commands.

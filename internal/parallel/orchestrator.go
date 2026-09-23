@@ -445,6 +445,14 @@ func (o *Orchestrator) buildResult(duration time.Duration, hostsUsed map[string]
 	return result
 }
 
+// project returns the loaded project config, or nil when there is none.
+func (o *Orchestrator) project() *config.Config {
+	if o.resolved == nil {
+		return nil
+	}
+	return o.resolved.Project
+}
+
 // markHostSynced marks a host as synced and returns whether it was already synced.
 func (o *Orchestrator) markHostSynced(hostName string) bool {
 	o.syncMu.Lock()

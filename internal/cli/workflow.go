@@ -435,7 +435,7 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 
 	syncCfg := resolveSyncConfig(ctx)
 
-	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions())
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions(""))
 	if err != nil {
 		reporter.PhaseFailed("sync", err)
 		return err
@@ -450,17 +450,20 @@ func syncOptions() *rrsync.SyncOptions {
 	if PrettyMode() {
 		return prettySyncOptions()
 	}
-	return structuredSyncOptions()
+	return structuredSyncOptions("")
 }
 
 // structuredSyncOptions surfaces sync notices and warnings as phase events.
-func structuredSyncOptions() *rrsync.SyncOptions {
+// hostName goes in the events' host field; parallel runs set it because they
+// sync several hosts, single runs leave it empty.
+func structuredSyncOptions(hostName string) *rrsync.SyncOptions {
 	return &rrsync.SyncOptions{
 		Invalidated: func(dir, lockfile string) {
 			WritePhaseEvent(PhaseEvent{
 				Type:   "phase",
 				Phase:  "sync",
 				Status: "invalidated",
+				Host:   hostName,
 				Details: map[string]interface{}{
 					"dir":      dir,
 					"lockfile": lockfile,
@@ -472,6 +475,7 @@ func structuredSyncOptions() *rrsync.SyncOptions {
 				Type:    "phase",
 				Phase:   "sync",
 				Status:  "warn",
+				Host:    hostName,
 				Details: w.Details,
 			})
 		},
@@ -480,6 +484,7 @@ func structuredSyncOptions() *rrsync.SyncOptions {
 				Type:    "phase",
 				Phase:   "sync",
 				Status:  "pruned",
+				Host:    hostName,
 				Details: map[string]interface{}{"dir": dir},
 			})
 		},

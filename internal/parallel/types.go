@@ -3,6 +3,9 @@ package parallel
 import (
 	"fmt"
 	"time"
+
+	"github.com/rileyhilliard/rr/internal/config"
+	rrsync "github.com/rileyhilliard/rr/internal/sync"
 )
 
 // OutputMode controls how parallel task output is displayed.
@@ -28,6 +31,12 @@ type Config struct {
 	SaveLogs    bool          // Write output to log files
 	LogDir      string        // Directory for log files
 	Setup       string        // Command to run once per host before subtasks
+
+	// SyncOptions returns the sync options for a host's one sync (nil
+	// callback or nil result: sync's defaults). The CLI supplies it so
+	// parallel syncs get the same notices as single runs without this
+	// package importing cli.
+	SyncOptions func(hostName string) *rrsync.SyncOptions
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -62,6 +71,7 @@ type TaskResult struct {
 	TaskIndex int    // Position in task list (for duplicate name handling)
 	Command   string // Original command (for formatter detection)
 	Host      string
+	Alias     string // SSH alias the host was reached through (empty if never connected)
 	ExitCode  int
 	Duration  time.Duration
 	Error     error
@@ -120,6 +130,10 @@ type TaskInfo struct {
 	// AllowedHosts restricts which hosts may run this task (from the
 	// subtask's `hosts:` list). Empty means any host.
 	AllowedHosts []string
+
+	// Pull is the subtask's `pull:` config. The orchestrator doesn't act on
+	// it; the caller pulls after the run finishes.
+	Pull []config.PullItem
 }
 
 // AllowsHost reports whether this task may run on the named host.

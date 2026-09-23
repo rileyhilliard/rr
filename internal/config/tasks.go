@@ -51,32 +51,35 @@ func GetTaskWithMergedEnv(cfg *Config, taskName string, host *Host) (*TaskConfig
 		return nil, nil, err
 	}
 
-	// Start with empty env
-	mergedEnv := make(map[string]string)
+	return task, MergedTaskEnv(cfg, host, task.Env), nil
+}
 
-	// Add host env first (lowest precedence)
+// MergedTaskEnv returns the environment a task runs with on host. Single
+// tasks and parallel subtasks both use it. Merge order (lowest to highest
+// precedence): host env, project defaults env, task env. host and cfg may be
+// nil (local runs, tests).
+func MergedTaskEnv(cfg *Config, host *Host, taskEnv map[string]string) map[string]string {
+	merged := make(map[string]string)
 	if host != nil {
 		for k, v := range host.Env {
-			mergedEnv[k] = v
+			merged[k] = v
 		}
 	}
-
-	// Add project defaults env (middle precedence)
-	for k, v := range cfg.Defaults.Env {
-		mergedEnv[k] = v
+	if cfg != nil {
+		for k, v := range cfg.Defaults.Env {
+			merged[k] = v
+		}
 	}
-
-	// Add task env (highest precedence)
-	for k, v := range task.Env {
-		mergedEnv[k] = v
+	for k, v := range taskEnv {
+		merged[k] = v
 	}
-
-	return task, mergedEnv, nil
+	return merged
 }
 
 // GetMergedSetupCommands returns setup commands merged from host and project defaults.
 // Order: host setup_commands first, then project defaults setup.
-// Both run before the task command.
+// Both run before the task command. Single tasks and parallel subtasks both
+// use it. host and cfg may be nil.
 func GetMergedSetupCommands(cfg *Config, host *Host) []string {
 	var setup []string
 
@@ -86,7 +89,9 @@ func GetMergedSetupCommands(cfg *Config, host *Host) []string {
 	}
 
 	// Add project defaults setup
-	setup = append(setup, cfg.Defaults.Setup...)
+	if cfg != nil {
+		setup = append(setup, cfg.Defaults.Setup...)
+	}
 
 	return setup
 }

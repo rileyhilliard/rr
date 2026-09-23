@@ -543,3 +543,54 @@ func TestBuildTaskLongDescription_ArgsExampleUsesSeparator(t *testing.T) {
 	desc := buildTaskLongDescription("test", config.TaskConfig{Run: "go test ./..."})
 	assert.Contains(t, desc, "rr test -- -v  =>  go test ./... -v")
 }
+
+// TestParallelTaskCommand_UnknownFlagHint is C5: a flag-looking arg on a
+// parallel task gets a hint instead of a bare cobra parse error. With
+// forward_args it's the '--' hint single tasks give; without it, the hint
+// says to turn forward_args on first.
+func TestParallelTaskCommand_UnknownFlagHint(t *testing.T) {
+	tests := []struct {
+		name        string
+		forwardArgs bool
+		args        []string
+		wantHint    []string
+	}{
+		{
+			name:        "forward_args: -- hint",
+			forwardArgs: true,
+			args:        []string{"-k", "foo"},
+			wantHint:    []string{"rr all -- <args>"},
+		},
+		{
+			name:     "no forward_args: says to enable it",
+			args:     []string{"-x"},
+			wantHint: []string{"forward_args: true", "rr all -- <args>"},
+		},
+		{
+			name:     "no forward_args, long flag",
+			args:     []string{"--lf"},
+			wantHint: []string{"forward_args: true"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := createParallelTaskCommand("all", config.TaskConfig{Parallel: []string{"a"}, ForwardArgs: tt.forwardArgs})
+			parseErr := cmd.ParseFlags(tt.args)
+			require.Error(t, parseErr)
+			hinted := cmd.FlagErrorFunc()(cmd, parseErr)
+			require.Error(t, hinted)
+			assert.Contains(t, hinted.Error(), "unknown")
+			for _, h := range tt.wantHint {
+				assert.Contains(t, hinted.Error(), h)
+			}
+		})
+	}
+}
+
+// TestParallelTaskCommand_KnownFlagsStillParse checks the hint doesn't get
+// in the way of the parallel task's own flags.
+func TestParallelTaskCommand_KnownFlagsStillParse(t *testing.T) {
+	cmd := createParallelTaskCommand("all", config.TaskConfig{Parallel: []string{"a"}})
+	require.NoError(t, cmd.Flags().Parse([]string{"--local", "--fail-fast", "--max-parallel", "2"}))
+}
