@@ -498,6 +498,9 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 		if !remote {
 			continue // "local" or "none": nothing on a remote to pull
 		}
+		if tr.Alias == "" {
+			continue // never connected (e.g. cancelled by fail-fast): nothing ran there
+		}
 		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
 		pullAndReport(conn, rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}, pull, t.Name)
 	}

@@ -79,7 +79,7 @@ func runLogsList(cmd *cobra.Command, args []string) error {
 		fmt.Println("No log directories found.")
 		fmt.Println()
 		fmt.Printf("Logs are stored in: %s\n", ExpandLogsDir(baseDir))
-		fmt.Println("Run a parallel task to generate logs.")
+		fmt.Println("Run a command or task to generate logs.")
 		return nil
 	}
 
@@ -87,7 +87,7 @@ func runLogsList(cmd *cobra.Command, args []string) error {
 	boldStyle := lipgloss.NewStyle().Bold(true)
 	headerStyle := lipgloss.NewStyle().Foreground(ui.ColorSecondary).Bold(true)
 
-	fmt.Println(headerStyle.Render("Recent Parallel Task Logs"))
+	fmt.Println(headerStyle.Render("Recent Run Logs"))
 	fmt.Println()
 
 	for _, d := range dirs {

@@ -161,7 +161,7 @@ rr init --non-interactive --host dev-box
 2. Parse JSON output:
    - .success false          -> Check .error.code (doctor couldn't run)
    - .data.summary.all_clear -> true means setup OK
-   - otherwise read .data.categories[].results[] with status "fail"/"warn"
+   - otherwise read .data.categories[].results[] with status 2 (fail) or 1 (warn); 0 is pass
      (exit 1 means at least one check failed; warnings alone exit 0)
 
 3. Based on error.code:

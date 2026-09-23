@@ -164,10 +164,16 @@ git push origin $NEW_TAG
 
 Don't run `gh release create`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, and GoReleaser creates the GitHub release, uploads the binaries, and publishes the Homebrew cask. A manual `gh release create` for the same tag collides with it.
 
-Watch the workflow and get the release URL once it finishes:
+Watch the workflow and get the release URL once it finishes. GitHub can take a few seconds to register the run, and until then the newest run is the previous release, so wait for the run whose `headBranch` is the new tag:
 ```bash
-gh run list --workflow=release.yml --limit 1
-gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')
+RUN_ID=""
+for _ in $(seq 1 30); do
+  RUN_ID=$(gh run list --workflow=release.yml --limit 10 --json databaseId,headBranch \
+    -q ".[] | select(.headBranch == \"$NEW_TAG\") | .databaseId" | head -1)
+  [ -n "$RUN_ID" ] && break
+  sleep 5
+done
+gh run watch "$RUN_ID" --exit-status
 gh release view $NEW_TAG --json url -q .url
 ```
 

@@ -306,11 +306,12 @@ Env values are double-quoted, so the shell expands some things and leaves the re
 | `$VAR`, `${VAR}`, `${VAR:-default}`, `$(cmd)`, `$((1+1))` | Expanded by the shell that runs the task |
 | `\$` | A literal `$`: `pa\$\$word` becomes `pa$$word` |
 | `~` | Literal. Use `$HOME` instead: `PATH: "$HOME/.local/bin:$PATH"` |
-| Double quotes, backticks, single quotes, spaces, `;`, `\|`, `&`, globs, newlines, other backslashes | Literal |
+| Double quotes, backticks, single quotes, spaces, `;`, `\|`, `&`, globs, newlines, other backslashes (outside `$(...)`) | Literal |
+| Anything inside `$(...)` | Runs exactly as written, as its own command: quotes are real quotes and backslashes pass through, so `$(echo "$PATH" \| tr ':' '\n')` behaves as typed |
 
-Two edge cases follow from the quoting. A literal backslash can't sit directly before an expanded variable, because `\$` always means a literal `$`. A `"` inside `$(...)` is a literal character, so quote with `'...'` inside a substitution.
+One edge case follows from the quoting: a literal backslash can't sit directly before an expanded variable, because `\$` always means a literal `$`.
 
-Names must be valid shell variable names: letters, digits, and underscores, not starting with a digit. A value with an unclosed `${` or `$(` is rejected when the config loads, with an error naming the key. Commands run in the remote user's login shell (or `$SHELL` locally), which must be POSIX-compatible; fish is not supported.
+Names must be valid shell variable names: letters, digits, and underscores, not starting with a digit. A value with an unclosed `${` or `$(`, or an unclosed quote inside `$(...)`, is rejected when the config loads, with an error naming the key. Commands run in the remote user's login shell (or `$SHELL` locally), which must be POSIX-compatible; fish is not supported.
 
 ## Host resolution order
 
@@ -483,7 +484,7 @@ invalidations:
     dirs: [.venv/]
 ```
 
-`lockfile` is relative to the project root, and `dirs` are relative to the remote project directory. Like `exclude`, your list replaces the defaults. Set `invalidations: []` to turn the behavior off.
+`lockfile` is relative to the project root, and `dirs` are relative to the remote project directory. A dir that doesn't exist on the remote is skipped. If it exists but rr can't read its age (both GNU and BSD `stat` fail, or the command can't run), the sync fails and nothing is deleted. Like `exclude`, your list replaces the defaults. Set `invalidations: []` to turn the behavior off.
 
 ### Pattern syntax
 

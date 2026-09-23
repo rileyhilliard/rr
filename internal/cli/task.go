@@ -1090,10 +1090,13 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 		}
 	}
 
-	// Build parallel config
+	// Build parallel config. Workers sync through the same callbacks as a
+	// single run, so invalidation, provenance and prune notices show up.
+	syncNotices := &parallelSyncNotices{}
 	parallelCfg := parallel.Config{
-		OutputMode: parallel.OutputProgress,
-		SaveLogs:   true,
+		OutputMode:  parallel.OutputProgress,
+		SaveLogs:    true,
+		SyncOptions: syncNotices.optionsFor,
 	}
 
 	// Set up log writer
@@ -1132,6 +1135,7 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 
 	// Execute
 	result, err := orchestrator.Run(ctx)
+	syncNotices.flush()
 	if err != nil {
 		return 1, err
 	}

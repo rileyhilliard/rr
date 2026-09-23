@@ -159,7 +159,7 @@ FAILED tests/test_example.py::test_fail - AssertionError: assert 1 == 2
 
 	failures := ParseRunOutcome(command, output).Failures
 
-	assert.Len(t, failures, 1)
+	require.Len(t, failures, 1)
 	assert.Equal(t, "test_fail", failures[0].TestName)
 	assert.Equal(t, "tests/test_example.py", failures[0].File)
 	assert.Equal(t, 5, failures[0].Line)
@@ -181,7 +181,7 @@ FAIL	example	0.005s
 
 	failures := ParseRunOutcome(command, output).Failures
 
-	assert.Len(t, failures, 1)
+	require.Len(t, failures, 1)
 	assert.Equal(t, "TestFail", failures[0].TestName)
 	assert.Contains(t, failures[0].Message, "Expected 1, got 2")
 }

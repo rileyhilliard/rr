@@ -102,7 +102,7 @@ func TestPullSubtaskFiles_Dirs(t *testing.T) {
 	result := &parallel.Result{}
 	for _, task := range tasks {
 		result.TaskResults = append(result.TaskResults,
-			parallel.TaskResult{TaskName: task.Name, TaskIndex: task.Index, Host: "box-a"})
+			parallel.TaskResult{TaskName: task.Name, TaskIndex: task.Index, Host: "box-a", Alias: "a-lan"})
 	}
 
 	var dests []string
@@ -230,6 +230,22 @@ func TestPullSubtaskFiles_LocalRunSkips(t *testing.T) {
 	result := &parallel.Result{TaskResults: []parallel.TaskResult{{TaskName: "a", Host: "local"}}}
 	called := false
 	pullSubtaskFiles(tasks, result, nil, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
+		called = true
+		return nil
+	})
+	assert.False(t, called)
+}
+
+// TestPullSubtaskFiles_NeverConnectedSkips checks a subtask assigned to a
+// host whose worker never connected (fail-fast cancelled it during connect)
+// isn't pulled: the result names the host but has no alias, and nothing ran
+// there.
+func TestPullSubtaskFiles_NeverConnectedSkips(t *testing.T) {
+	hosts := map[string]config.Host{"box-a": {Dir: "~/rr/proj"}}
+	tasks := []parallel.TaskInfo{{Name: "a", Pull: []config.PullItem{{Src: "x"}}}}
+	result := &parallel.Result{TaskResults: []parallel.TaskResult{{TaskName: "a", Host: "box-a", ExitCode: 1}}}
+	called := false
+	pullSubtaskFiles(tasks, result, hosts, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
 		called = true
 		return nil
 	})
