@@ -126,12 +126,13 @@ func Sync(opts SyncOptions) error {
 	if resolved.Project != nil {
 		syncCfg = resolved.Project.Sync
 	}
-	// Add dry-run flag if requested (copy first to avoid mutating shared config slice)
+	// List transferred files on a dry run (copy first to avoid mutating the
+	// shared config slice). SyncWithOptions adds --dry-run itself.
 	if opts.DryRun {
-		syncCfg.Flags = append(slices.Clone(syncCfg.Flags), "--dry-run", "-v")
+		syncCfg.Flags = append(slices.Clone(syncCfg.Flags), "-v")
 	}
 
-	err = sync.SyncWithOptions(conn, workDir, syncCfg, nil, syncOptions())
+	err = sync.SyncWithOptions(conn, workDir, syncCfg, nil, syncCommandOptions(opts.DryRun))
 	if err != nil {
 		spinner.Fail()
 		return err
@@ -153,6 +154,18 @@ func Sync(opts SyncOptions) error {
 	}
 
 	return nil
+}
+
+// syncCommandOptions returns the sync options for rr sync. A dry run deletes
+// nothing, so it drops the "Invalidating stale ..." callback and lets the sync
+// package report what it would invalidate instead.
+func syncCommandOptions(dryRun bool) *sync.SyncOptions {
+	opts := syncOptions()
+	if dryRun {
+		opts.DryRun = true
+		opts.Invalidated = nil
+	}
+	return opts
 }
 
 // syncCommand is the implementation called by the cobra command.

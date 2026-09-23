@@ -609,3 +609,17 @@ func TestSync_AcquiresLockBeforeSync(t *testing.T) {
 	assert.Contains(t, content, "lck.Release()",
 		"Sync must release the lock after syncing (see issue #181)")
 }
+
+func TestSyncCommandOptions(t *testing.T) {
+	t.Run("dry run deletes nothing and reports what it would invalidate", func(t *testing.T) {
+		opts := syncCommandOptions(true)
+		assert.True(t, opts.DryRun)
+		assert.Nil(t, opts.Invalidated, "the sync package prints 'Would invalidate' when no callback is set")
+	})
+
+	t.Run("real sync keeps the invalidation notice", func(t *testing.T) {
+		opts := syncCommandOptions(false)
+		assert.False(t, opts.DryRun)
+		assert.NotNil(t, opts.Invalidated)
+	})
+}

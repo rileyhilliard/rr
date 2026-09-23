@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -67,11 +68,15 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 //
 // Steps, in order: lockfile invalidation (cfg.Invalidations), rsync, the
 // provenance marker, then worktree pruning. Notices from each step go through
-// the callbacks on opts; see SyncOptions for the nil defaults.
+// the callbacks on opts; see SyncOptions for the nil defaults and for what
+// DryRun skips.
 func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer, opts *SyncOptions) error {
 	// Skip sync for local connections - we're already working with local files
 	if conn != nil && conn.IsLocal {
 		return nil
+	}
+	if opts == nil {
+		opts = &SyncOptions{}
 	}
 
 	rsyncPath, err := FindRsync()
@@ -81,12 +86,13 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 
 	// Delete remote install dirs made stale by a changed lockfile, so rsync's
 	// preserve rules don't keep them around.
-	var invalidated InvalidationNotifyFunc
-	if opts != nil {
-		invalidated = opts.Invalidated
-	}
-	if err := InvalidateStaleDirectories(conn, localDir, cfg.Invalidations, invalidated); err != nil {
+	if err := invalidateStaleDirectories(conn, localDir, cfg.Invalidations, opts.Invalidated, opts.DryRun); err != nil {
 		return err
+	}
+
+	if opts.DryRun {
+		// Clone so the append never writes into the caller's backing array.
+		cfg.Flags = append(slices.Clone(cfg.Flags), "--dry-run")
 	}
 
 	// Ensure the SSH control socket directory exists for ControlMaster
@@ -150,17 +156,17 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 		}
 	}
 
+	if opts.DryRun {
+		return nil
+	}
+
 	// Record where this sync came from (best-effort)
 	writeSourceMarker(conn, localDir)
 
 	// Remove per-worktree remote copies whose worktree is gone (best-effort:
 	// a prune failure never fails the sync that just succeeded).
 	if cfg.PruneWorktreesEnabled() {
-		var pruned func(string)
-		if opts != nil {
-			pruned = opts.Pruned
-		}
-		if _, err := PruneStaleWorktrees(conn, localDir, PruneOptions{Pruned: pruned}); err != nil && opts != nil && opts.Warn != nil {
+		if _, err := PruneStaleWorktrees(conn, localDir, PruneOptions{Pruned: opts.Pruned}); err != nil && opts.Warn != nil {
 			opts.Warn(SyncWarning{
 				Code:    "prune_failed",
 				Message: fmt.Sprintf("couldn't prune stale worktree directories on %s: %v", conn.Name, err),
@@ -591,9 +597,10 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 	return errors.WrapWithCode(err, errors.ErrSync, msg, suggestion)
 }
 
-// InvalidationNotifyFunc is called when a stale directory is about to be removed.
-// dir is the relative path (e.g. "node_modules/"), lockfile is the triggering lockfile.
-// When nil, a plain fmt.Printf line is written to stdout.
+// InvalidationNotifyFunc is called when a stale directory is about to be
+// removed (or, in a dry run, would be). dir is the relative path (e.g.
+// "node_modules/"), lockfile is the triggering lockfile. When nil, a plain
+// fmt.Printf line is written to stdout.
 type InvalidationNotifyFunc func(dir, lockfile string)
 
 // InvalidateStaleDirectories checks each lockfile invalidation entry and deletes
@@ -609,6 +616,12 @@ type InvalidationNotifyFunc func(dir, lockfile string)
 //
 // SyncWithOptions calls this before rsync; callers don't need to.
 func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc) error {
+	return invalidateStaleDirectories(conn, localDir, invalidations, notify, false)
+}
+
+// invalidateStaleDirectories is InvalidateStaleDirectories with a dry-run
+// mode that reports each stale directory but deletes nothing.
+func invalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc, dryRun bool) error {
 	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
 		return nil
 	}
@@ -662,10 +675,16 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 			// If local lockfile is newer than remote dir (or its mtime couldn't
 			// be read), delete the remote directory so the package manager reinstalls
 			if localMtime > remoteMtime {
-				if notify != nil {
+				switch {
+				case notify != nil:
 					notify(dir, inv.Lockfile)
-				} else {
+				case dryRun:
+					fmt.Printf("Would invalidate stale %s (%s changed)\n", dir, inv.Lockfile)
+				default:
 					fmt.Printf("Invalidating stale %s (%s changed)\n", dir, inv.Lockfile)
+				}
+				if dryRun {
+					continue
 				}
 
 				rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(remotePath))

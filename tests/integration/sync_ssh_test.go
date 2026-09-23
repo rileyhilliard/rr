@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -282,4 +283,46 @@ func TestSyncMultipleTimes(t *testing.T) {
 	// Verify new file
 	content = ReadRemoteFile(t, conn, conn.Host.Dir+"/file2.txt")
 	assert.Equal(t, "new file", content)
+}
+
+// TestSyncDryRunChangesNothing checks that a dry-run sync reports the stale
+// directory lockfile invalidation would remove, but leaves the remote as it
+// was: no invalidation, no transfer, no --delete, no provenance marker.
+func TestSyncDryRunChangesNothing(t *testing.T) {
+	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
+	remoteDir := conn.Host.Dir
+	t.Cleanup(func() { CleanupRemoteDir(t, conn, remoteDir) })
+
+	// A remote node_modules older than the local lockfile is stale.
+	EnsureRemoteDir(t, conn, remoteDir+"/node_modules")
+	CreateRemoteFile(t, conn, remoteDir+"/node_modules/installed.txt", "old install")
+	_, _, code, err := conn.Client.Exec(fmt.Sprintf("touch -d '2000-01-01' %q", remoteDir+"/node_modules"))
+	require.NoError(t, err)
+	require.Equal(t, 0, code)
+	CreateRemoteFile(t, conn, remoteDir+"/remote-only.txt", "a real sync would delete this")
+
+	localDir := TempSyncDirWithFiles(t, map[string]string{
+		"package-lock.json": `{"lockfileVersion": 3}`,
+		"app.txt":           "not transferred in a dry run",
+	})
+	cfg := config.SyncConfig{
+		Preserve:      []string{"node_modules/"},
+		Invalidations: []config.LockfileInvalidation{{Lockfile: "package-lock.json", Dirs: []string{"node_modules"}}},
+	}
+
+	var invalidated []string
+	err = sync.SyncWithOptions(conn, localDir, cfg, nil, &sync.SyncOptions{
+		DryRun: true,
+		Invalidated: func(dir, lockfile string) {
+			invalidated = append(invalidated, dir+":"+lockfile)
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"node_modules:package-lock.json"}, invalidated, "dry run should report the stale dir")
+	assert.True(t, RemoteFileExists(t, conn, remoteDir+"/node_modules/installed.txt"), "stale node_modules must survive a dry run")
+	assert.True(t, RemoteFileExists(t, conn, remoteDir+"/remote-only.txt"), "dry run must not delete remote files")
+	assert.False(t, RemoteFileExists(t, conn, remoteDir+"/app.txt"), "dry run must not transfer files")
+	assert.False(t, RemoteFileExists(t, conn, remoteDir+"/.rr-source"), "dry run must not write the provenance marker")
 }

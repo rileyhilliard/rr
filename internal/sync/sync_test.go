@@ -1430,6 +1430,36 @@ func TestSyncWithOptions_InvalidationErrorStopsSync(t *testing.T) {
 	assert.Contains(t, err.Error(), "stale remote directory node_modules/")
 }
 
+func TestSyncWithOptions_DryRunReportsButKeepsStaleDirs(t *testing.T) {
+	requireRsync(t)
+	localDir, conn, client := invalidationFixture(t)
+
+	var notified []string
+	err := SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{
+		DryRun: true,
+		Invalidated: func(dir, lockfile string) {
+			notified = append(notified, dir+"|"+lockfile)
+		},
+	})
+	require.Error(t, err, "rsync should fail on the bogus flag")
+
+	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified, "dry run still reports what it would invalidate")
+	assert.Zero(t, client.rmCount("node_modules"), "dry run must not delete anything")
+	assert.True(t, client.GetFS().Exists("/root/rr/myapp/node_modules"))
+}
+
+func TestSyncWithOptions_DryRunDefaultNotice(t *testing.T) {
+	requireRsync(t)
+	localDir, conn, client := invalidationFixture(t)
+
+	out := captureStdout(t, func() {
+		_ = SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{DryRun: true})
+	})
+
+	assert.Zero(t, client.rmCount("node_modules"))
+	assert.Contains(t, out, "Would invalidate stale node_modules/ (bun.lock changed)")
+}
+
 func TestSync_InvalidatesWithDefaultNotice(t *testing.T) {
 	requireRsync(t)
 	localDir, conn, client := invalidationFixture(t)
