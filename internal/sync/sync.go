@@ -611,8 +611,9 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 
 // InvalidationNotifyFunc is called when a stale directory is about to be
 // removed (or, in a dry run, would be). dir is the relative path (e.g.
-// "node_modules/"), lockfile is the triggering lockfile. When nil, a plain
-// fmt.Printf line is written to stdout.
+// "node_modules/"), lockfile is the triggering lockfile. When nil, nothing is
+// reported: this package never prints, so callers that want the notice pass
+// a callback.
 type InvalidationNotifyFunc func(dir, lockfile string)
 
 // invalidateStaleDirectories checks each lockfile invalidation entry and
@@ -624,7 +625,9 @@ type InvalidationNotifyFunc func(dir, lockfile string)
 //
 // Skip silently if conn is nil, local, or invalidations is empty. A remote
 // directory that doesn't exist is skipped too: there's nothing to delete, and
-// it makes a repeat call right after a successful one a silent no-op. With
+// it makes a repeat call right after a successful one a silent no-op. A
+// remote directory whose age can't be read is an error: deleting it could
+// throw away a fresh install, and skipping it could leave a stale one. With
 // dryRun, each stale directory is reported but nothing is deleted.
 //
 // SyncWithOptions calls this before rsync.
@@ -653,42 +656,19 @@ func invalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 		for _, dir := range inv.Dirs {
 			remotePath := remoteDir + "/" + strings.TrimSuffix(dir, "/")
 
-			// Get remote directory mtime. We try Linux stat first, then fall back
-			// to macOS stat. If the directory doesn't exist, echo "absent".
-			statCmd := fmt.Sprintf(
-				`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d" 2>/dev/null || echo 0; else echo %s; fi`,
-				util.ShellQuotePreserveTilde(remotePath), remoteDirAbsent,
-			)
-
-			stdout, _, _, execErr := conn.Client.Exec(statCmd)
-			remoteMtimeStr := strings.TrimSpace(string(stdout))
-			if execErr == nil && remoteMtimeStr == remoteDirAbsent {
+			remoteMtime, exists, err := remoteDirMtime(conn, remotePath, dir, inv.Lockfile)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				continue // nothing on the remote to invalidate
 			}
 
-			var remoteMtime int64
-			if execErr != nil || remoteMtimeStr == "" {
-				// On any error, assume stale - safer to delete than to leave stale
-				remoteMtime = 0
-			} else {
-				parsed, parseErr := strconv.ParseInt(remoteMtimeStr, 10, 64)
-				if parseErr != nil {
-					remoteMtime = 0
-				} else {
-					remoteMtime = parsed
-				}
-			}
-
-			// If local lockfile is newer than remote dir (or its mtime couldn't
-			// be read), delete the remote directory so the package manager reinstalls
+			// If local lockfile is newer than remote dir, delete the remote
+			// directory so the package manager reinstalls
 			if localMtime > remoteMtime {
-				switch {
-				case notify != nil:
+				if notify != nil {
 					notify(dir, inv.Lockfile)
-				case dryRun:
-					fmt.Printf("Would invalidate stale %s (%s changed)\n", dir, inv.Lockfile)
-				default:
-					fmt.Printf("Invalidating stale %s (%s changed)\n", dir, inv.Lockfile)
 				}
 				if dryRun {
 					continue
@@ -716,6 +696,47 @@ func invalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 // remoteDirAbsent is what the invalidation stat command prints when the
 // remote directory doesn't exist.
 const remoteDirAbsent = "absent"
+
+// remoteDirMtime returns the modification time (Unix seconds) of the remote
+// directory at remotePath, or exists=false when it isn't there. dir and
+// lockfile only name the invalidation entry in errors. Any failure to read
+// the age (the command failing to run, both stat variants failing, or
+// output that isn't a number) is an error, never a guess.
+func remoteDirMtime(conn *host.Connection, remotePath, dir, lockfile string) (mtime int64, exists bool, err error) {
+	// GNU stat first, then BSD/macOS stat. If both fail, the second one's
+	// error and exit status come back.
+	statCmd := fmt.Sprintf(
+		`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d"; else echo %s; fi`,
+		util.ShellQuotePreserveTilde(remotePath), remoteDirAbsent,
+	)
+	msg := fmt.Sprintf("Couldn't read the age of remote %s to check it against %s", dir, lockfile)
+	suggestion := fmt.Sprintf("Check that %s on the remote is readable, or delete it there so the next install starts fresh.", remotePath)
+
+	stdout, stderr, exitCode, execErr := conn.Client.Exec(statCmd)
+	if execErr != nil {
+		return 0, false, errors.WrapWithCode(execErr, errors.ErrSync, msg,
+			"Check the SSH connection to the host and try again.")
+	}
+	if exitCode != 0 {
+		detail := strings.TrimSpace(string(stderr))
+		if detail == "" {
+			detail = fmt.Sprintf("stat exited with code %d", exitCode)
+		}
+		return 0, false, errors.New(errors.ErrSync, msg,
+			fmt.Sprintf("Remote error: %s. %s", detail, suggestion))
+	}
+
+	out := strings.TrimSpace(string(stdout))
+	if out == remoteDirAbsent {
+		return 0, false, nil
+	}
+	mtime, parseErr := strconv.ParseInt(out, 10, 64)
+	if parseErr != nil {
+		return 0, false, errors.New(errors.ErrSync, msg,
+			fmt.Sprintf("stat printed %q instead of a timestamp. %s", out, suggestion))
+	}
+	return mtime, true, nil
+}
 
 // ensureRemoteDir creates the remote sync directory if it doesn't exist.
 // rsync requires the target directory (or at least its parent) to exist.
