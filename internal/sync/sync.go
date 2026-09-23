@@ -64,6 +64,10 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 
 // SyncWithOptions is Sync with optional behavior (e.g. a warning callback
 // for provenance mismatches).
+//
+// Steps, in order: lockfile invalidation (cfg.Invalidations), rsync, the
+// provenance marker, then worktree pruning. Notices from each step go through
+// the callbacks on opts; see SyncOptions for the nil defaults.
 func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer, opts *SyncOptions) error {
 	// Skip sync for local connections - we're already working with local files
 	if conn != nil && conn.IsLocal {
@@ -72,6 +76,16 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 
 	rsyncPath, err := FindRsync()
 	if err != nil {
+		return err
+	}
+
+	// Delete remote install dirs made stale by a changed lockfile, so rsync's
+	// preserve rules don't keep them around.
+	var invalidated InvalidationNotifyFunc
+	if opts != nil {
+		invalidated = opts.Invalidated
+	}
+	if err := InvalidateStaleDirectories(conn, localDir, cfg.Invalidations, invalidated); err != nil {
 		return err
 	}
 
@@ -577,6 +591,11 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 	return errors.WrapWithCode(err, errors.ErrSync, msg, suggestion)
 }
 
+// InvalidationNotifyFunc is called when a stale directory is about to be removed.
+// dir is the relative path (e.g. "node_modules/"), lockfile is the triggering lockfile.
+// When nil, a plain fmt.Printf line is written to stdout.
+type InvalidationNotifyFunc func(dir, lockfile string)
+
 // InvalidateStaleDirectories checks each lockfile invalidation entry and deletes
 // the corresponding remote directories when the local lockfile is newer than the
 // remote directory. This handles the common case where a lockfile (bun.lock,
@@ -584,12 +603,11 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 // (node_modules/, .venv/, etc.) is stale and won't be re-installed because rsync
 // preserves it.
 //
-// Skip silently if conn is nil, local, or invalidations is empty.
-// InvalidationNotifyFunc is called when a stale directory is about to be removed.
-// dir is the relative path (e.g. "node_modules/"), lockfile is the triggering lockfile.
-// When nil, a plain fmt.Printf line is written to stdout.
-type InvalidationNotifyFunc func(dir, lockfile string)
-
+// Skip silently if conn is nil, local, or invalidations is empty. A remote
+// directory that doesn't exist is skipped too: there's nothing to delete, and
+// it makes a repeat call right after a successful one a silent no-op.
+//
+// SyncWithOptions calls this before rsync; callers don't need to.
 func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc) error {
 	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
 		return nil
@@ -616,14 +634,17 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 			remotePath := remoteDir + "/" + strings.TrimSuffix(dir, "/")
 
 			// Get remote directory mtime. We try Linux stat first, then fall back
-			// to macOS stat. If the directory doesn't exist, echo 0.
+			// to macOS stat. If the directory doesn't exist, echo "absent".
 			statCmd := fmt.Sprintf(
-				`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d" 2>/dev/null || echo 0; else echo 0; fi`,
-				util.ShellQuotePreserveTilde(remotePath),
+				`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d" 2>/dev/null || echo 0; else echo %s; fi`,
+				util.ShellQuotePreserveTilde(remotePath), remoteDirAbsent,
 			)
 
 			stdout, _, _, execErr := conn.Client.Exec(statCmd)
 			remoteMtimeStr := strings.TrimSpace(string(stdout))
+			if execErr == nil && remoteMtimeStr == remoteDirAbsent {
+				continue // nothing on the remote to invalidate
+			}
 
 			var remoteMtime int64
 			if execErr != nil || remoteMtimeStr == "" {
@@ -638,8 +659,8 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 				}
 			}
 
-			// If local lockfile is newer than remote dir (or remote dir is missing),
-			// delete the remote directory so the package manager reinstalls
+			// If local lockfile is newer than remote dir (or its mtime couldn't
+			// be read), delete the remote directory so the package manager reinstalls
 			if localMtime > remoteMtime {
 				if notify != nil {
 					notify(dir, inv.Lockfile)
@@ -665,6 +686,10 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 
 	return nil
 }
+
+// remoteDirAbsent is what the invalidation stat command prints when the
+// remote directory doesn't exist.
+const remoteDirAbsent = "absent"
 
 // ensureRemoteDir creates the remote sync directory if it doesn't exist.
 // rsync requires the target directory (or at least its parent) to exist.

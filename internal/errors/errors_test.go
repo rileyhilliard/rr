@@ -17,6 +17,9 @@ func TestErrorCodes(t *testing.T) {
 		ErrSync,
 		ErrLock,
 		ErrExec,
+		ErrConfigNotFound,
+		ErrHostNotFound,
+		ErrDependency,
 	}
 
 	for _, code := range codes {
