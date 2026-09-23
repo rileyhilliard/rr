@@ -60,15 +60,17 @@ rr test -v         # CONFIG_INVALID, with a hint to use --
 
 **Remove the `output:` section from `.rr.yaml`.** It was validated but never read. rr now warns about it (a `config` warn event, or a styled warning with `--pretty`) and ignores it. Unknown keys and the old `defaults.host` get the same kind of warning, so a typo no longer silently does nothing. Configs that loaded before still load.
 
+**Host, task, and env names are case-sensitive.** rr used to lowercase every key in its config files, so host `MyBox` was stored as `mybox`, task `Build` ran as `rr build`, and `env: {FOO: bar}` exported `foo=bar`. Keys are now kept exactly as written. If you worked around the old behavior, match the case used in the config: `hosts: [MyBox]` and `--host MyBox`, `rr Build`, and `$FOO` in commands that read the variable. Task and host names containing a dot now load as written instead of being split apart. Env var names must be valid shell names (letters, digits, underscores, not starting with a digit); anything else fails validation with an error naming the key.
+
 **`pull`, `logs`, and `provision` are reserved task names.** Tasks with those names already collided with the built-in commands. Rename them.
 
-**Local runs report a different connect event.** `--local` and local mode (project `local_fallback` with no `hosts:` listed) emit a connect `complete` event with `host: "local"` and `details.reason` of `local_flag` or `local_mode`. They used to emit a connect `warn` event with `reason: hosts_unreachable`. Consumers that matched `hosts_unreachable` to detect local runs should match the new reasons. Real fallbacks still warn with `hosts_unreachable` or `all_hosts_locked`. `--local` also works with no hosts configured now.
+**Local runs report a different connect event.** `--local` and local mode (project `local_fallback` with no `hosts:` listed) emit a connect `complete` event with `host: "local"` and `details.reason` of `local_flag` or `local_mode`, and the result carries `details.local_reason` with the same value. They used to emit a connect `warn` event with `reason: hosts_unreachable`. Consumers that matched `hosts_unreachable` to detect local runs should match the new reasons. Real fallbacks still warn with `hosts_unreachable` or `all_hosts_locked`. `--local` also works with no hosts configured now.
 
 **`rr tasks` fails on an invalid config.** It exits non-zero with an error envelope on stderr, the same error `rr <task>` gives. It used to write error envelopes to stdout. A project with no hosts configured still lists its tasks.
 
 **Parallel subtasks get the full env and setup.** Subtasks now merge host `env`, then `defaults.env`, then the task's `env`, and run host `setup_commands` plus `defaults.setup` after the `cd` into the project directory, the same as single tasks. If a subtask depended on not seeing `defaults.env`, or on setup running before the `cd`, adjust it.
 
-**Parallel subtask `pull:` now runs.** Each subtask's files land in `<dest>/<subtask>/`. Subtasks that run on the same host share one remote directory, so give each one its own output path (a different junit file per subtask, say) or they overwrite each other on the remote. `pull:` set on the parallel task itself does nothing and warns; move it to the subtasks.
+**Parallel subtask `pull:` now runs.** Each subtask's files land in `<dest>/<subtask>/`, or `<dest>/<subtask>_<index>/` for a subtask listed more than once. Subtasks that run on the same host share one remote directory, so give each one its own output path (a different junit file per subtask, say) or they overwrite each other on the remote. `pull:` set on the parallel task itself does nothing and warns; move it to the subtasks.
 
 ## Upgrading to v0.26.0 (worktree pruning)
 

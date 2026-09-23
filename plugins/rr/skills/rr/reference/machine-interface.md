@@ -40,7 +40,7 @@ The connect event says where the command runs and why:
 | No host reachable, `local_fallback` on | `status: warn`, `host: local`, `details.local_fallback: true` | `hosts_unreachable` | `{reason}` |
 | Every host locked, `local_fallback` on | `status: warn`, `host: local`, `details.local_fallback: true` | `all_hosts_locked` | `{reason, waited_s, holders}` |
 
-`--local` and local mode need no configured hosts. Transition note: rr binaries older than this release report a `--local` run as a connect `warn` event with `reason: hosts_unreachable`. Treat that as `local_flag` when you passed `--local`.
+The result of a `--local` or local-mode run carries the same value in `details.local_reason`; `details.fallback` appears only for runtime fallbacks, never alongside it. `--local` and local mode need no configured hosts. Transition note: rr binaries older than this release report a `--local` run as a connect `warn` event with `reason: hosts_unreachable`. Treat that as `local_flag` when you passed `--local`.
 
 ### Config warnings
 

@@ -297,7 +297,7 @@ When you run a command, `rr` determines which host(s) to use in this order:
 3. `.rr.yaml` `host:` field (project's single preferred host)
 4. All hosts from global config, alphabetically (default for load balancing)
 
-Exception (local mode): if `.rr.yaml` sets `local_fallback` to `on-unreachable` or `always` and names no `host`/`hosts`, or `local_fallback` is on and no hosts are configured at all, commands run locally without trying any remote host. `--host` or `--tag` overrides local mode. Local-mode runs report `details.reason: "local_mode"` on their connect event, and `--local` runs report `local_flag`; neither needs any hosts configured.
+Exception (local mode): if `.rr.yaml` sets `local_fallback` to `on-unreachable` or `always` and names no `host`/`hosts`, or `local_fallback` is on and no hosts are configured at all, commands run locally without trying any remote host. `--host` or `--tag` overrides local mode. Local-mode runs report `details.reason: "local_mode"` on their connect event (and `details.local_reason` on the result), and `--local` runs report `local_flag`; neither needs any hosts configured.
 
 **Important:** The order of hosts in your `hosts:` list determines priority. The first host is tried first. If it's busy or unreachable, `rr` moves to the next host in the list. This gives you explicit control over which machines are preferred.
 
@@ -924,7 +924,7 @@ Sources are paths or globs relative to the host's `dir`. `dest` defaults to the 
 **Subtasks of a parallel task** pull too, with three differences:
 
 - Pulls run after every subtask has finished, pass or fail, one at a time, each from the host its subtask ran on.
-- Each subtask's files land in `<dest>/<subtask>/` (`./<subtask>/` when `dest` is unset), so shards with the same output paths don't overwrite each other locally.
+- Each subtask's files land in `<dest>/<subtask>/` (`./<subtask>/` when `dest` is unset), so shards with the same output paths don't overwrite each other locally. A subtask listed more than once in `parallel:` lands in `<dest>/<subtask>_<index>/`, the same name its log file uses.
 - Nothing is pulled after Ctrl+C.
 
 Subtasks that run on the same host share one remote directory, so they overwrite each other there unless each writes to its own path, such as a junit file named after the subtask. `pull:` on the parallel task itself does nothing and produces a config warning.
