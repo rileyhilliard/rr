@@ -116,7 +116,7 @@ func getHostsToProvision(resolved *config.ResolvedConfig, preferred string) ([]s
 			for name := range resolved.Global.Hosts {
 				available = append(available, name)
 			}
-			return nil, nil, errors.New(errors.ErrConfig,
+			return nil, nil, errors.New(errors.ErrHostNotFound,
 				"Host '"+preferred+"' not found",
 				"Available hosts: "+strings.Join(available, ", "))
 		}

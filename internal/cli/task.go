@@ -535,32 +535,24 @@ func ListTasks() error {
 	// explicit path must error rather than silently falling back to a
 	// discovered .rr.yaml.
 	cfgPath, err := config.Find(Config())
-	if err == nil && cfgPath == "" {
-		notFound := errors.New(errors.ErrConfig,
-			"No .rr.yaml found in this directory or parent directories",
-			"Run 'rr init' to create one, or check you're in the right directory.")
-		if tasksJSON || MachineMode() {
-			return WriteJSONFromError(os.Stdout, notFound)
-		}
-		return notFound
-	}
 	if err != nil {
-		if tasksJSON || MachineMode() {
-			return WriteJSONFromError(os.Stdout, errors.WrapWithCode(err, errors.ErrConfig,
-				"Couldn't find a config file",
-				"Run 'rr init' to create one."))
-		}
-		return errors.WrapWithCode(err, errors.ErrConfig,
-			"Couldn't find a config file",
-			"Run 'rr init' to create one.")
+		return tasksError(err)
+	}
+	if cfgPath == "" {
+		return tasksError(errors.New(errors.ErrConfigNotFound,
+			"No .rr.yaml found in this directory or parent directories",
+			"Run 'rr init' to create one, or check you're in the right directory."))
 	}
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		if tasksJSON || MachineMode() {
-			return WriteJSONFromError(os.Stdout, err)
-		}
-		return err
+		return tasksError(err)
+	}
+
+	// Validate the project config only (not hosts), so a fresh clone with no
+	// hosts configured can still list its tasks.
+	if err := config.Validate(cfg); err != nil {
+		return tasksError(err)
 	}
 
 	// JSON/machine mode output
@@ -570,6 +562,16 @@ func ListTasks() error {
 
 	// Human-readable output
 	return outputTasksText(cfg)
+}
+
+// tasksError reports an `rr tasks` failure. In JSON or structured mode the
+// error envelope goes to stderr (stdout carries only the task list); in
+// pretty mode the error is returned for the normal error printer.
+func tasksError(err error) error {
+	if tasksJSON || MachineMode() {
+		return WriteJSONFromError(os.Stderr, err)
+	}
+	return err
 }
 
 // outputTasksJSON outputs tasks in JSON format with envelope.
@@ -882,7 +884,7 @@ func buildTaskLongDescription(name string, task config.TaskConfig) string {
 	if task.Run != "" {
 		desc += fmt.Sprintf("Command: %s\n", task.Run)
 		desc += "\nExtra arguments are appended to the command.\n"
-		desc += fmt.Sprintf("Example: rr %s -v  =>  %s -v\n", name, task.Run)
+		desc += fmt.Sprintf("Example: rr %s -- -v  =>  %s -v\n", name, task.Run)
 	} else if len(task.Steps) > 0 {
 		desc += "Steps:\n"
 		for i, step := range task.Steps {

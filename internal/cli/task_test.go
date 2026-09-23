@@ -480,3 +480,54 @@ func TestTaskCommand_KnownFlagsStillParse(t *testing.T) {
 	cmd := createTaskCommand("my-task", task)
 	require.NoError(t, cmd.Flags().Parse([]string{"--local", "--tail", "5"}))
 }
+
+// TestTaskCommand_RootShortFlagsDontEatTaskArgs is the B5 contract: on a
+// single task registered under rootCmd, a flag-looking arg either reaches
+// the task (after '--') or fails with the '--' hint. It must never be
+// silently consumed by a root flag.
+func TestTaskCommand_RootShortFlagsDontEatTaskArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantHint bool     // parse fails with the '--' hint
+		wantArgs []string // otherwise, the args the task receives
+	}{
+		{name: "-v", args: []string{"--local", "-v"}, wantHint: true},
+		{name: "-x", args: []string{"-x"}, wantHint: true},
+		{name: "-k foo", args: []string{"-k", "foo"}, wantHint: true},
+		{name: "-v after --", args: []string{"--local", "--", "-v"}, wantArgs: []string{"-v"}},
+		{name: "-k foo after --", args: []string{"--", "-k", "foo"}, wantArgs: []string{"-k", "foo"}},
+		{name: "--verbose still parses as rr flag", args: []string{"--verbose"}, wantArgs: []string{}},
+		{name: "-q stays an rr flag", args: []string{"-q"}, wantArgs: []string{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := createTaskCommand("hi", config.TaskConfig{Run: "echo hi"})
+			rootCmd.AddCommand(cmd)
+			prevVerbose, prevQuiet := verbose, quiet
+			t.Cleanup(func() {
+				rootCmd.RemoveCommand(cmd)
+				verbose, quiet = prevVerbose, prevQuiet
+			})
+
+			parseErr := cmd.ParseFlags(tt.args)
+			if tt.wantHint {
+				require.Error(t, parseErr, "flag-looking arg was silently consumed")
+				hinted := cmd.FlagErrorFunc()(cmd, parseErr)
+				require.Error(t, hinted)
+				assert.Contains(t, hinted.Error(), "rr hi -- <args>")
+				return
+			}
+			require.NoError(t, parseErr)
+			assert.Equal(t, tt.wantArgs, cmd.Flags().Args())
+		})
+	}
+}
+
+// TestBuildTaskLongDescription_ArgsExampleUsesSeparator checks the help
+// example shows flag-looking args passed after '--'.
+func TestBuildTaskLongDescription_ArgsExampleUsesSeparator(t *testing.T) {
+	desc := buildTaskLongDescription("test", config.TaskConfig{Run: "go test ./..."})
+	assert.Contains(t, desc, "rr test -- -v  =>  go test ./... -v")
+}

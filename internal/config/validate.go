@@ -234,7 +234,7 @@ func ValidateResolved(r *ResolvedConfig, opts ...ValidationOption) error {
 		if r.Project.Host != "" {
 			if _, ok := r.Global.Hosts[r.Project.Host]; !ok {
 				hostNames := getHostNames(r.Global.Hosts)
-				return errors.New(errors.ErrConfig,
+				return errors.New(errors.ErrHostNotFound,
 					fmt.Sprintf("Project references host '%s' which doesn't exist in global config", r.Project.Host),
 					fmt.Sprintf("Available hosts: %s. Add it to ~/.rr/config.yaml or change the host in .rr.yaml.", strings.Join(hostNames, ", ")))
 			}
@@ -244,7 +244,7 @@ func ValidateResolved(r *ResolvedConfig, opts ...ValidationOption) error {
 		for _, h := range r.Project.Hosts {
 			if _, ok := r.Global.Hosts[h]; !ok {
 				hostNames := getHostNames(r.Global.Hosts)
-				return errors.New(errors.ErrConfig,
+				return errors.New(errors.ErrHostNotFound,
 					fmt.Sprintf("Project references host '%s' which doesn't exist in global config", h),
 					fmt.Sprintf("Available hosts: %s. Add it to ~/.rr/config.yaml or remove it from .rr.yaml.", strings.Join(hostNames, ", ")))
 			}

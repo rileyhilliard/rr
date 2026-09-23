@@ -750,9 +750,16 @@ func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return nil
 	}
 
-	// Report missing requirements with actionable suggestion
-	missingStr := require.FormatMissing(missing)
-	return errors.New(errors.ErrExec,
-		"Missing required tools: "+missingStr,
-		"Run 'rr provision' to install missing tools, or use --skip-requirements to bypass.")
+	return missingRequirementsError(require.FormatMissing(missing), opts.TaskName)
+}
+
+// missingRequirementsError reports required tools missing on the remote.
+// Only rr run and rr exec have --skip-requirements, so the suggestion
+// mentions it only when no task is running (taskName is empty).
+func missingRequirementsError(missing, taskName string) error {
+	suggestion := "Run 'rr provision' to install missing tools, or use --skip-requirements to bypass."
+	if taskName != "" {
+		suggestion = "Run 'rr provision' to install missing tools, or remove them from 'require:' in your config."
+	}
+	return errors.New(errors.ErrDependency, "Missing required tools: "+missing, suggestion)
 }

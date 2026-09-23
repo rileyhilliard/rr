@@ -184,7 +184,7 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 	if preferred != "" {
 		host, ok := s.hosts[preferred]
 		if !ok {
-			return "", config.Host{}, errors.New(errors.ErrConfig,
+			return "", config.Host{}, errors.New(errors.ErrHostNotFound,
 				fmt.Sprintf("Host '%s' doesn't exist", preferred),
 				fmt.Sprintf("Did you mean one of these? %s", s.hostNames()))
 		}
@@ -533,7 +533,7 @@ func (s *Selector) SelectHost(hostName string) (*Connection, error) {
 
 	host, ok := s.hosts[hostName]
 	if !ok {
-		return nil, errors.New(errors.ErrConfig,
+		return nil, errors.New(errors.ErrHostNotFound,
 			fmt.Sprintf("Host '%s' doesn't exist", hostName),
 			fmt.Sprintf("Available hosts: %s", s.hostNames()))
 	}

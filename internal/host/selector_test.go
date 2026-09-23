@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	sshmock "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 )
 
@@ -274,6 +275,9 @@ func TestSelector_Select_HostNotFound(t *testing.T) {
 	_, err := selector.Select("nonexistent")
 	if err == nil {
 		t.Fatal("Select should fail when host not found")
+	}
+	if !errors.IsCode(err, errors.ErrHostNotFound) {
+		t.Errorf("want ErrHostNotFound, got: %v", err)
 	}
 }
 
@@ -1247,6 +1251,9 @@ func TestSelector_SelectHost_NotFound(t *testing.T) {
 
 	if !containsString(err.Error(), "nonexistent") {
 		t.Errorf("error should mention the missing host: %v", err)
+	}
+	if !errors.IsCode(err, errors.ErrHostNotFound) {
+		t.Errorf("want ErrHostNotFound, got: %v", err)
 	}
 }
 

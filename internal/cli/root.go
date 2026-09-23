@@ -138,7 +138,7 @@ func registerTasksFromConfig(explicit string) {
 		return
 	}
 	if cfgPath == "" {
-		discoveryState.ProjectErr = errors.New(errors.ErrConfig,
+		discoveryState.ProjectErr = errors.New(errors.ErrConfigNotFound,
 			"No .rr.yaml found in this directory or parent directories",
 			"Run 'rr init' to create one, or check you're in the right directory.")
 		return
@@ -262,7 +262,11 @@ func handleUnknownCommand(err error) int {
 func init() {
 	// Global flags available to all commands
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is .rr.yaml)")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	// --verbose has no effect and its old -v shorthand swallowed task args
+	// (rr test -v). It still parses so existing scripts don't break.
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "no effect (deprecated)")
+	_ = rootCmd.PersistentFlags().MarkHidden("verbose")
+	_ = rootCmd.PersistentFlags().MarkDeprecated("verbose", "it has no effect; use RR_DEBUG=1 for debug logging")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-essential output")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
 	rootCmd.PersistentFlags().BoolVar(&noStrictHostKeyCheck, "no-strict-host-key-checking", false,

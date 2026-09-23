@@ -30,7 +30,7 @@ func Load(path string) (*Config, error) {
 
 	if err := v.ReadInConfig(); err != nil {
 		if os.IsNotExist(err) {
-			return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			return nil, errors.WrapWithCode(err, errors.ErrConfigNotFound,
 				"Can't find the config file",
 				"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 		}
@@ -177,7 +177,7 @@ func Find(explicit string) (string, error) {
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err != nil {
 			if os.IsNotExist(err) {
-				return "", errors.WrapWithCode(err, errors.ErrConfig,
+				return "", errors.WrapWithCode(err, errors.ErrConfigNotFound,
 					"Can't find config file at "+explicit,
 					"Double-check that path - it doesn't seem to exist.")
 			}
@@ -386,7 +386,7 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	for _, name := range hostNames {
 		host, ok := resolved.Global.Hosts[name]
 		if !ok {
-			return nil, nil, errors.New(errors.ErrConfig,
+			return nil, nil, errors.New(errors.ErrHostNotFound,
 				"Host '"+name+"' not found in global config",
 				"Available hosts: "+util.JoinOrNone(available)+". Check ~/.rr/config.yaml.")
 		}

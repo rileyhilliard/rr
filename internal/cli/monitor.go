@@ -88,7 +88,7 @@ func resolveMonitorScope(hostsFilter string) (*monitorScope, error) {
 	if hostsFilter != "" {
 		hosts = filterHosts(hosts, hostsFilter)
 		if len(hosts) == 0 {
-			return nil, errors.New(errors.ErrConfig,
+			return nil, errors.New(errors.ErrHostNotFound,
 				fmt.Sprintf("No hosts match '%s'", hostsFilter),
 				"Double-check your host names or try without the --hosts filter.")
 		}

@@ -609,7 +609,7 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	sb.WriteString("  wait_timeout: 1m\n")
 	sb.WriteString("\n")
 	sb.WriteString("  # When to consider a lock stale (holder probably crashed)\n")
-	sb.WriteString("  stale: 3m\n")
+	sb.WriteString("  stale: 90s\n")
 	sb.WriteString("\n")
 	sb.WriteString("  # Where lock files are stored on remote\n")
 	sb.WriteString("  # dir: /tmp/rr-locks\n\n")
