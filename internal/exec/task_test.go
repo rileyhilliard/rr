@@ -345,6 +345,11 @@ func TestBuildCommand_ShellEvaluation(t *testing.T) {
 		{"backtick", "`echo pwned`", "`echo pwned`"},
 		{"backslash", `a\b\`, `a\b\`},
 		{"single quote", "it's", "it's"},
+		{"substitution runs as written", `$(echo "a:b" | tr ':' '\n')`, "a\nb"},
+		{"quotes inside a substitution are real", `$(echo "a  b")`, "a  b"},
+		{"nested substitution", "$(echo $(echo x))", "x"},
+		{"backtick inside a substitution", "$(echo `echo hi`)", "hi"},
+		{"escaping resumes after a substitution", `$(echo x) "y"`, `x "y"`},
 	}
 
 	for _, shell := range taskShells(t) {

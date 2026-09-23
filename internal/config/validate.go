@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // ReservedTaskNames are command names that cannot be used as task names.
@@ -431,44 +432,27 @@ func validateEnv(context string, env map[string]string) error {
 }
 
 // unclosedExpansion returns the innermost ${ or $( in an env value that is
-// never closed ("${" or "$("), or "" when every one is. \$ is a literal dollar and
-// opens nothing. Inside $( ), parentheses nest and single-quoted text is
-// skipped, so $(echo ')') counts as closed. Double quotes are no help there:
-// ShellDoubleQuote escapes them, so they reach the shell as literal
-// characters and a paren between them still counts.
+// never closed ("${" or "$("), or "" when every one is. \$ is a literal
+// dollar and opens nothing. Each expansion is matched by util.MatchExpansion,
+// which reads it the way the shell reads the value ShellDoubleQuote builds:
+// inside $( ), parentheses nest and quoted text is skipped, so $(echo ')')
+// and $(echo "(") both count as closed.
 func unclosedExpansion(v string) string {
-	var closers []byte
 	for i := 0; i < len(v); i++ {
-		c := v[i]
-		inSubst := len(closers) > 0 && closers[len(closers)-1] == ')'
 		switch {
-		case c == '\\' && i+1 < len(v) && v[i+1] == '$':
+		case v[i] == '\\' && i+1 < len(v) && v[i+1] == '$':
 			i++
-		case c == '$' && i+1 < len(v) && v[i+1] == '{':
-			closers = append(closers, '}')
-			i++
-		case c == '$' && i+1 < len(v) && v[i+1] == '(':
-			closers = append(closers, ')')
-			i++
-		case inSubst && c == '(':
-			closers = append(closers, ')')
-		case inSubst && c == '\'':
-			end := strings.IndexByte(v[i+1:], '\'')
-			if end < 0 {
-				end = len(v) // an unclosed quote swallows everything after it
+		case v[i] == '$':
+			end, unclosed := util.MatchExpansion(v, i)
+			if unclosed != "" {
+				return unclosed
 			}
-			i += end + 1
-		case len(closers) > 0 && c == closers[len(closers)-1]:
-			closers = closers[:len(closers)-1]
+			if end > 0 {
+				i = end - 1
+			}
 		}
 	}
-	if len(closers) == 0 {
-		return ""
-	}
-	if closers[len(closers)-1] == '}' {
-		return "${"
-	}
-	return "$("
+	return ""
 }
 
 // validateLock checks lock configuration.

@@ -206,7 +206,7 @@ func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env 
 // reference setup's variables or an earlier key. Values are double-quoted
 // with util.ShellDoubleQuote, so the shell expands $VAR references in them
 // (e.g. PATH: "$HOME/.local/bin:$PATH") while quotes and backticks stay
-// literal.
+// literal, except inside a $(...), which runs as written.
 func BuildCommand(cmd string, env map[string]string, workDir string, setupCommands []string) string {
 	var parts []string
 	if workDir != "" {

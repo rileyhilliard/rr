@@ -93,6 +93,10 @@ func TestShellDoubleQuote(t *testing.T) {
 		{"trailing backslash", `a\`, `"a\\"`},
 		{"single quote needs no escape", "it's", `"it's"`},
 		{"spaces and semicolon stay inert", "a b; rm -rf ~", `"a b; rm -rf ~"`},
+		{"command substitution copied as written", `$(echo "a\b" | tr ':' '\n')`, `"$(echo "a\b" | tr ':' '\n')"`},
+		{"escaping resumes after a substitution", `$(pwd) "x"`, `"$(pwd) \"x\""`},
+		{"escaped dollar opens no substitution", `\$(echo "x")`, `"\$(echo \"x\")"`},
+		{"unclosed substitution is escaped", `$(echo "x"`, `"$(echo \"x\""`},
 	}
 
 	for _, tt := range tests {
@@ -122,6 +126,12 @@ func TestShellDoubleQuote_ShellEvaluation(t *testing.T) {
 		{"newline", "line1\nline2", "line1\nline2"},
 		{"double quote and backtick", "say \"hi\" `whoami`", "say \"hi\" `whoami`"},
 		{"empty", "", ""},
+		{"substitution runs as written", `$(echo "a:b" | tr ':' '\n')`, "a\nb"},
+		{"quotes inside a substitution are real", `$(echo "a  b")`, "a  b"},
+		{"nested substitution", "$(echo $(echo x))", "x"},
+		{"backtick inside a substitution", "$(echo `echo hi`)", "hi"},
+		{"paren inside quotes in a substitution", `$(echo "(" ')')-"q"`, `( )-"q"`},
+		{"escaped dollar before a paren", `\$(echo x)`, "$(echo x)"},
 	}
 
 	for _, tt := range tests {

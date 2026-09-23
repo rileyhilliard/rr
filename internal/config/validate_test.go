@@ -860,7 +860,10 @@ func TestValidate_Env(t *testing.T) {
 		{name: "value with unclosed $(", env: map[string]string{"UNCLOSED": "$(go env GOPATH/bin"}, wantErr: "UNCLOSED"},
 		{name: "value with unclosed nested expansion", env: map[string]string{"UNCLOSED": "${A:-$(pwd}"}, wantErr: "UNCLOSED' has a $( that"},
 		{name: "value with unclosed arithmetic", env: map[string]string{"UNCLOSED": "$((1 + 2)"}, wantErr: "UNCLOSED"},
-		{name: "value with a double-quoted paren", env: map[string]string{"UNCLOSED": `$(echo "(")`}, wantErr: "UNCLOSED"},
+		{name: "value with a double-quoted paren", env: map[string]string{"V": `$(echo "(" ")")`}},
+		{name: "value with a substitution in a double-quoted string", env: map[string]string{"V": `$(echo "$(pwd)")`}},
+		{name: "value with an unclosed double quote", env: map[string]string{"UNCLOSED": `$(echo ")`}, wantErr: "UNCLOSED' has a $( that"},
+		{name: "value with an unclosed substitution in a double-quoted string", env: map[string]string{"UNCLOSED": `$(echo "$(pwd")`}, wantErr: "UNCLOSED' has a $( that"},
 		{name: "value with an unclosed single quote", env: map[string]string{"UNCLOSED": `$(echo ')`}, wantErr: "UNCLOSED"},
 	}
 
