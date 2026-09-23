@@ -141,7 +141,7 @@ Help:
 These names cannot be used as task names (`ReservedTaskNames` in `internal/config/validate.go`):
 
 ```
-run, exec, sync, prune, init, setup, status, monitor, doctor, help, version, completion, update, host, unlock, tasks
+run, exec, sync, prune, init, setup, status, monitor, doctor, help, version, completion, update, host, unlock, tasks, pull, logs, provision
 ```
 
 If a user has a task named `run`, config validation fails:
@@ -169,7 +169,7 @@ The split lives in `internal/cli/phase_reporter.go`: `NewPhaseReporter` returns 
 {"type":"result","status":"failed","exit_code":1,"host":"mini","duration_s":4.8,"details":{"exec_duration_s":3.3,"log_file":"~/.rr/logs/run-20260101-120000/output.log","summary":{"passed":45,"failed":2,"skipped":0,"errors":0},"failures":[...]},"ts":"..."}
 ```
 
-Keys that can appear in the result `details` include `log_file`, `summary`, `failures`, `no_tests`, `piped_exit_code`, `hint`, `path_rewrites`, `remote_cwd`, `fallback`, and `broken_pipe`. Sync can also emit `warn` (provenance mismatch), `invalidated` (lockfile-triggered directory removal) and `pruned` (stale worktree dir) events, and lock can emit `warn` when it steals a stale or dead-holder lock.
+Keys that can appear in the result `details` include `log_file`, `summary`, `failures`, `no_tests`, `piped_exit_code`, `hint`, `path_rewrites`, `remote_cwd`, `fallback`, and `broken_pipe`. Sync can also emit `warn` (provenance mismatch), `invalidated` (lockfile-triggered directory removal) and `pruned` (stale worktree dir) events; parallel runs emit the same events with a top-level `host`, since they sync several hosts. Lock can emit `warn` when it steals a stale or dead-holder lock. A local run's connect event carries `details.reason`: `local_flag` or `local_mode` on a `complete` event, or `hosts_unreachable` or `all_hosts_locked` on a `warn` event when rr fell back. Config problems (unknown keys, the removed `output:` section, the deprecated `--verbose`) are `config` phase events with `status: "warn"`, emitted once before anything else.
 
 ### State Indicators
 
@@ -264,7 +264,7 @@ FAILED tests/test_users.py::test_duplicate - IntegrityError
 
 ```
 
-This per-failure block is what parallel task groups print through `parallel.RenderSummary`. For a single command or task, the same parsed data goes into `details.summary` and `details.failures` in the structured result; the pretty-mode renderer for single runs (`explainRunFailure` in `internal/cli/run.go`) only fires when the stream formatter provides test results, and single runs currently install `GenericFormatter`, which doesn't.
+Parallel task groups print this block through `parallel.RenderSummary`. Single commands and tasks print it through `renderOutcomeFailures` (`internal/cli/runlog.go`), from the same `formatters.Outcome` that fills `details.summary` and `details.failures` in the structured result, so the two can't disagree.
 
 ### Example: Lock Contention
 
@@ -338,12 +338,6 @@ HOSTS
 
 DEPENDENCIES
   ● rsync 3.2.7 (local)
-  ● rsync 3.2.3 (mini)
-
-REMOTE
-  ● Working directory exists: ~/projects/myapp
-  ● Write permission: OK
-  ● No stale locks found
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -366,16 +360,13 @@ CONFIG
 
 SSH
   ● SSH key found: ~/.ssh/id_ed25519.pub
-  ✗ SSH agent not running
-
-    Fix: eval $(ssh-agent) && ssh-add
+  ● SSH agent not running                      (warning)
+    Ignore this if your keys load from files. To use an agent: eval $(ssh-agent) && ssh-add
 
 HOSTS
-  ✗ mini
+  ● mini                                       (warning)
     ✗ mini-local: Connection refused
     ● mini: Connected (52ms)
-
-    mini-local may be offline or firewalled
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -383,6 +374,8 @@ HOSTS
 
   Run with --fix to attempt automatic fixes where possible.
 ```
+
+Warnings render in the warning color; they're marked `(warning)` here. Doctor grades each check by whether a run would fail: a missing SSH agent or a host with one dead alias is a warning, the schema error is a failure, so this run exits 1. With only warnings it exits 0. Host checks cover the project's hosts (every global host outside a project), and remote checks (`--requirements`, `--path`) connect by racing aliases the way `rr run` does.
 
 ---
 
@@ -437,7 +430,7 @@ There is no flag to force or extend a single run's lock wait. Stuck locks are re
   Check your task config in .rr.yaml.
 ```
 
-Validation (`internal/config/validate.go`) checks values after parsing. Unknown keys are ignored by the Viper/mapstructure decode rather than reported with line numbers.
+Validation (`internal/config/validate.go`) checks values after parsing. Unknown keys don't fail validation: the decoder records them (mapstructure's `Unused` metadata), and `Load` turns them into `config.Warning` values on the loaded config, along with removed keys and settings placed where they have no effect (`internal/config/warnings.go`). `Load` never prints. The CLI dedupes the warnings and emits them once from `PersistentPreRun`, after `--pretty` has been parsed.
 
 **rsync not found:**
 
@@ -741,32 +734,11 @@ tasks:
 
   test-unit:
     run: pytest tests/unit {args}   # {args} / {args:-default} placeholders
-    pull: [coverage.xml]            # fetched after the command, pass or fail
+    pull: [coverage.xml]            # fetched pass or fail; via test-all it lands in ./test-unit/
 
   test-integration:
     hosts: [gpu-box]                # pins this subtask, honored in parallel runs too
     run: pytest tests/integration
-
-# ─────────────────────────────────────────────────────────────────────────────
-# OUTPUT
-# Configure terminal output formatting
-# ─────────────────────────────────────────────────────────────────────────────
-
-output:
-  # Every key in this section is validated at load time but not read
-  # anywhere else yet. Color is on only with --pretty and off with --no-color; test
-  # output is always auto-detected (pytest, jest/vitest, go test).
-
-  # Color mode: auto, always, never
-  color: auto
-
-  # Accepted: auto, generic, pytest, jest, go, cargo (there is no cargo formatter)
-  format: auto
-
-  timing: true
-
-  # Verbosity: quiet, normal, verbose
-  verbosity: normal
 ```
 
 ### Schema Design Decisions
@@ -922,7 +894,7 @@ flowchart TB
 **Setup & Diagnostics**
 
 - **SSH Key Manager**: Check for keys, generate if needed, run ssh-copy-id
-- **Doctor Checks**: Validate config, test connectivity, check dependencies, check remote dirs and stale locks, check `require:` tools, flag worktrees that share a remote dir
+- **Doctor Checks**: Validate config, test connectivity to the project's hosts, check local rsync, check `require:` tools and remote rsync (`--requirements`), compare shell PATHs (`--path`), flag worktrees that share a remote dir. Checks are graded by whether a run would fail, and doctor exits 1 only on a failure
 - **Requirements and provisioning**: `internal/require` checks `require:` tools on the remote (cached per host) before sync; `rr provision` installs missing ones with the installers in `internal/exec/provision.go`
 
 ### Package Dependencies
@@ -996,7 +968,7 @@ flowchart TB
     monitor --> host
     monitor --> lock
     doctor --> host
-    doctor --> lock
+    doctor --> require
     output --> ui
 
     style entry fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
@@ -1062,9 +1034,8 @@ sequenceDiagram
 
     rect rgb(120, 53, 15)
         Note over CLI,Sync: Phase 5: Sync Files
-        CLI->>Sync: InvalidateStaleDirectories()
-        CLI->>Sync: SyncWithOptions(conn, projectRoot, syncCfg)
-        Sync-->>CLI: synced (+ .rr-source marker, worktree prune)
+        CLI->>Sync: SyncWithOptions(conn, projectRoot, syncCfg, opts)
+        Sync-->>CLI: invalidated / warn / pruned callbacks, then synced
     end
 
     rect rgb(131, 24, 67)
@@ -1082,15 +1053,15 @@ sequenceDiagram
 ```
 
 **Phase summary:**
-1. **Load Config** - Find and parse `.rr.yaml` (walking up from the cwd) and `~/.rr/config.yaml`
+1. **Load Config** - Find and parse `.rr.yaml` (walking up from the cwd) and `~/.rr/config.yaml`, then decide the execution target once (`resolveExecTarget` in `internal/cli/target.go`). `--local` and local mode skip host selection, locking and sync, and report a connect `complete` event with `details.reason` `local_flag` or `local_mode`; they need no hosts configured
 2. **Select Host** - Dial the host's SSH aliases in parallel, keep the preferred winner
 3. **Acquire Lock** - Take the per-host lock and start the 30s heartbeat
-4. **Check Requirements** - Verify `require:` tools exist on the remote; fail with a pointer to `rr provision`
-5. **Sync Files** - Delete invalidated install dirs, rsync the project root, write `.rr-source`, prune stale worktree dirs
+4. **Check Requirements** - Verify `require:` tools exist on the remote; fail with `DEPENDENCY_MISSING` and a pointer to `rr provision`
+5. **Sync Files** - `SyncWithOptions` deletes invalidated install dirs, rsyncs the project root, writes `.rr-source`, and prunes stale worktree dirs, reporting each through `SyncOptions` callbacks. Every caller (`rr run`, `rr sync`, parallel workers) gets all of these steps
 6. **Execute** - Rewrite local paths, `cd` into the matching subdirectory, run the command, stream output, capture exit code
 7. **Cleanup** - Release lock, pull files if requested, extract test results from the run log, emit the result
 
-Locking happens before sync so a run never rewrites files under another run's command. With more than one host and no `--host`/`--tag`, phases 2 and 3 are merged into `setupWorkflowLoadBalanced` (`internal/cli/loadbalance.go`): each host is connected and `lock.TryAcquire`d in priority order, the first free one wins, and only that host is synced. When every host is locked, the `local_fallback` mode decides: `always` runs locally (after waiting `lock.wait_timeout` if a holder is on this machine), otherwise rr cycles through the locked hosts until `lock.wait_timeout` and then errors. A local fallback is reported loudly (`details.fallback` in the result, repeated warning in pretty mode).
+Locking happens before sync so a run never rewrites files under another run's command. With more than one host and no `--host`/`--tag`, phases 2 and 3 are merged into `setupWorkflowLoadBalanced` (`internal/cli/loadbalance.go`): each host is connected and `lock.TryAcquire`d in priority order, the first free one wins, and only that host is synced. When every host is locked, the `local_fallback` mode decides: `always` runs locally (after waiting `lock.wait_timeout` if a holder is on this machine), otherwise rr cycles through the locked hosts until `lock.wait_timeout` and then errors. When no host can be reached at all, a `local_fallback` other than `never` runs locally with reason `hosts_unreachable`. A local fallback is reported loudly (a connect `warn` event, `details.fallback` in the result, repeated warning in pretty mode).
 
 **Path rewriting** (`internal/cli/pathrewrite.go`): unless `rewrite_paths: false`, absolute paths under the local project root in an ad-hoc command are replaced with the remote project dir (`RewriteLocalPaths`, boundary-aware, symlink-aware, tilde dirs become `$HOME` form). Task args are rewritten to `./`-relative form instead (`RewriteArgsToRelative`) because each host may use a different remote dir. Rewrites are reported in `details.path_rewrites`. `checkForeignPaths` warns about remaining `/Users/` or `/home/` paths outside the project, and rejects a command whose leading `cd` targets one of them that exists locally.
 
@@ -1188,13 +1159,13 @@ stateDiagram-v2
 - **Dead-holder reclaim**: when `info.json` shows the lock came from this machine (matched by a per-machine token, not hostname alone) and its PID is no longer running, the lock is removed immediately instead of waiting for the stale threshold. The info file is re-read just before removal to avoid deleting a lock that changed hands.
 - **Non-blocking variant**: `lock.TryAcquire` returns `lock.ErrLocked` at once. The load-balanced workflow uses it to move to the next host.
 - **Parallel runs**: each host worker takes the lock with the blocking `Acquire` before its first sync, holds it for the whole run, and calls `UpdateCommand` as each subtask starts, so `rr monitor` and lock errors show the current subtask.
-- **Manual release**: `rr unlock [host]` (or `--all`) calls `lock.ForceRelease`. `rr doctor` reports stale locks.
+- **Manual release**: `rr unlock [host]` (or `--all`) calls `lock.ForceRelease`.
 
 ### Sync Details
 
 `sync.SyncWithOptions` (`internal/sync/sync.go`) wraps the rsync call with a few steps that keep the remote mirror honest:
 
-1. **Lockfile invalidation** (`InvalidateStaleDirectories`, run just before sync): for each `sync.invalidations` entry whose lockfile changed since the last sync, the listed remote dirs (usually preserved `node_modules/` or `.venv/`) are deleted so the next install starts clean.
+1. **Lockfile invalidation** (`InvalidateStaleDirectories`, called by `SyncWithOptions` before rsync, so callers never run it themselves): for each `sync.invalidations` entry whose lockfile is newer than the remote dir, the listed remote dirs (usually preserved `node_modules/` or `.venv/`) are deleted so the next install starts clean. A remote dir that doesn't exist is skipped, which makes a repeat call a silent no-op.
 2. **Provenance check**: the remote root holds a `.rr-source` marker (`internal/sync/marker.go`) with the source path, hostname, branch, HEAD and worktree of the last sync. If it names a different tree or machine, sync emits a `source_mismatch` warning before overwriting. rsync is told to protect the marker so `--delete` never removes it.
 3. **rsync**: `BuildArgs` combines excludes, preserves (protected from `--delete`), extra `flags`, and, with `respect_gitignore`, explicit `+`/`-` filter rules translated from `.gitignore` so negations behave like git's.
 4. **Marker write**: `.rr-source` is rewritten after a successful sync.
@@ -1202,7 +1173,7 @@ stateDiagram-v2
 
 **Worktree isolation** (`internal/config/expand.go`): in a linked git worktree, `${PROJECT}` expands to `<repo>@<worktree>` so each worktree syncs to its own remote dir instead of clobbering the main checkout. `sync.worktree_isolation: false` turns this off. `rr status` shows the remote dir per host, `rr doctor` warns when a worktree shares the main checkout's dir, and `rr prune [--dry-run] [--host]` cleans hosts that haven't been synced to since a worktree was removed.
 
-**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run.
+**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run. In a parallel run, `pullSubtaskFiles` (`internal/cli/parallel.go`) pulls each subtask's files after the whole run finishes, one subtask at a time, from the host and alias the subtask used, into `<dest>/<subtask>/`. It emits `pull` phase events with `details.task`, and skips local subtasks and Ctrl+C.
 
 ### Tasks and Dependencies
 
@@ -1217,11 +1188,12 @@ Tasks from `.rr.yaml` are registered as Cobra commands at startup (`registerTask
 `parallel.Orchestrator` (`internal/parallel/orchestrator.go`) runs a parallel group's subtasks across hosts:
 
 - **Work-stealing queue**: subtasks go into a shared channel and one worker per host pulls from it, so fast hosts take more work. Workers are capped by `max_parallel` and the number of subtasks. After each host's first task, slower hosts wait briefly before taking another so faster hosts get first pick.
-- **Per-host setup**: on its first task a worker connects, takes that host's lock (held until the run ends), syncs once, and runs the group's `setup:` command once. A setup failure fails that host's subtasks.
+- **Per-host setup**: on its first task a worker connects, takes that host's lock (held until the run ends), syncs once through `SyncWithOptions` (so invalidation, provenance and prune notices match a single run, tagged with the host), and runs the group's `setup:` command once. A setup failure fails that host's subtasks.
+- **Subtask commands**: each subtask gets the single-task env and setup merge (`config.MergedTaskEnv`, `config.GetMergedSetupCommands`): host `env` < `defaults.env` < task `env`, with host `setup_commands` and `defaults.setup` run after the quoted `cd` into the project dir. Subtasks on the same host share that dir.
 - **Host pins**: a subtask with `hosts:` only runs on those hosts. `pickWorkerHosts` adds a worker for a pinned host even when it falls outside the first `max_parallel` hosts; workers that can't run a pinned subtask put it back on the queue; if none of its hosts is available it fails with the restriction named. `--host`/`--tag` that excludes every allowed host fails before the run starts.
 - **Failover**: a host whose connection fails is marked unavailable and its task is requeued for another host. The run fails only when no host can take the remaining work. `fail_fast` cancels the rest on the first failure.
-- **No hosts**: with no remote hosts (local mode) subtasks run locally, one after another.
-- **Output and logs**: `OutputManager` renders progress, stream, verbose or quiet modes. Each subtask's output is saved to `~/.rr/logs/<task>-<timestamp>/<subtask>_<index>.log` with a `summary.json`, and the structured result carries per-subtask failures and a `no_tests` list.
+- **No hosts**: with a local target (`--local` or local mode) subtasks run locally, one after another.
+- **Output and logs**: `OutputManager` renders progress, stream, verbose or quiet modes. Each subtask's output is saved to `~/.rr/logs/<task>-<timestamp>/<subtask>_<index>.log` with a `summary.json`, and the structured result carries per-subtask failures, plus `no_tests: true` and a `no_tests_tasks` list when subtasks collected nothing.
 
 `rr run --repeat N` and `rr <task> --repeat N` use the same orchestrator to run one command N times across hosts for flake hunting.
 
@@ -1364,7 +1336,7 @@ rr/
 │   ├── setup/                   # SSH key setup
 │   │   ├── keys.go
 │   │   └── copy.go
-│   ├── doctor/                  # Diagnostics (config, ssh, hosts, deps, remote, path, requirements, worktree)
+│   ├── doctor/                  # Diagnostics (config, ssh, hosts, deps, path, requirements, worktree)
 │   ├── monitor/                 # Host monitoring dashboard
 │   │   ├── model.go             # Bubble Tea model and state
 │   │   ├── view.go              # List view, header, help overlay
@@ -1434,6 +1406,7 @@ flowchart LR
 
     subgraph result["Result"]
         details[details.summary<br/>details.failures<br/>details.no_tests]
+        block[--pretty failure block]
     end
 
     stdout --> stream
@@ -1444,6 +1417,7 @@ flowchart LR
     detect --> parse
     parse --> extract
     extract --> details
+    extract --> block
 
     style input fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
     style live fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
@@ -1451,7 +1425,7 @@ flowchart LR
     style result fill:#dcfce7,stroke:#10b981,stroke-width:2px
 ```
 
-For single commands and tasks, `attachRunOutcome` (`internal/cli/runlog.go`) reads the tail of the run log. For parallel groups, each subtask's captured output goes through `formatters.ExtractFailures` and `formatters.DetectNoTests` in `internal/cli/parallel.go`, and pretty mode renders failures with `parallel.RenderSummary`.
+For single commands and tasks, `attachRunOutcome` (`internal/cli/runlog.go`) reads the tail of the run log and calls `formatters.ParseRunOutcome` once. The returned `Outcome` (summary, failures with file, line and full message, no-tests evidence, piped exit code) feeds both the JSON `details`, where failure messages are truncated, and the `--pretty` failure block (`renderOutcomeFailures`). For parallel groups, each subtask's captured output goes through `formatters.ExtractFailures` and `formatters.DetectNoTests` in `internal/cli/parallel.go`, and pretty mode renders failures with `parallel.RenderSummary`.
 
 ### Formatter Interface
 
@@ -1519,7 +1493,7 @@ func detectFormatter(command string, rawOutput []byte) output.Formatter {
 }
 ```
 
-Each `Detect` scores both the command string and the output. The exported helpers built on it are `ExtractTestSummary`, `ExtractFailures`, `DetectNoTests` and `FormatFailureSummary`. `no_tests` needs positive evidence in the output (for example pytest's `no tests ran`), and commands using flags meant to run nothing (`--collect-only`, `--passWithNoTests`, `--listTests`, ...) are exempt.
+Each `Detect` scores both the command string and the output. The exported helpers built on it are `ParseRunOutcome` (`outcome.go`), `ExtractTestSummary`, `ExtractFailures` and `DetectNoTests`. `no_tests` needs positive evidence in the output (for example pytest's `no tests ran`), and commands using flags meant to run nothing (`--collect-only`, `--passWithNoTests`, `--listTests`, ...) are exempt.
 
 ---
 
@@ -2037,11 +2011,11 @@ Anything else falls back to the Linux command path, which degrades to whatever s
 
 | Risk                             | Likelihood | Impact | Mitigation                                                |
 | -------------------------------- | ---------- | ------ | --------------------------------------------------------- |
-| rsync not available on target    | Low        | High   | Check in `rr doctor`, clear install instructions          |
+| rsync not available on target    | Low        | High   | `rr doctor --requirements`, `DEPENDENCY_MISSING` with install instructions |
 | SSH config parsing edge cases    | Medium     | Medium | Fall back gracefully, allow explicit user@host            |
 | Windows SSH support              | Medium     | Low    | Windows is lower priority; document WSL as alternative    |
 | Output formatter false positives | Medium     | Low    | Auto-detect needs a score of 50+; parsing only feeds `details`, never rewrites live output |
-| Lock file permission issues      | Low        | High   | Document in troubleshooting, `rr doctor` checks           |
+| Lock file permission issues      | Low        | High   | Document in troubleshooting                               |
 | Name collision (`rr`)            | Low        | Medium | Check for conflicts at install, document alternatives     |
 
 ---
@@ -2110,7 +2084,6 @@ GLOBAL FLAGS
       --no-color                      Disable colored output
       --no-strict-host-key-checking   Disable SSH host key verification (insecure, for CI/automation only)
   -q, --quiet                         Suppress non-essential output
-  -v, --verbose                       Verbose output
   -h, --help                          Show help
 
 RUN/EXEC FLAGS

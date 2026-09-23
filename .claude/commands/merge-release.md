@@ -1,6 +1,6 @@
 # Merge and Release
 
-Automates the full release workflow: PR creation, merge, tagging, changelog update, and GitHub release.
+Automates the full release workflow: PR creation, merge, changelog update, and tagging. GoReleaser creates the GitHub release from the tag.
 
 ## Arguments
 - `$ARGUMENTS`: Optional version bump type (patch|minor|major). Defaults to "patch".
@@ -93,21 +93,15 @@ LATEST_TAG=$(git tag --sort=-v:refname | head -1)
 # Parse and increment based on $ARGUMENTS or default to patch
 ```
 
-### Step 5: Create and Push Tag
+### Step 5: Update CHANGELOG.md
 
-```bash
-COMMIT_MSG=$(git log -1 --format=%s)
-git tag -a $NEW_TAG -m "$COMMIT_MSG"
-git push origin $NEW_TAG
-```
+Write the changelog before tagging, so the tagged commit includes its own entry.
 
-### Step 6: Update CHANGELOG.md
-
-Read existing changelog and insert new version entry at the top (after header).
+Read existing changelog and insert new version entry at the top (after header). If an `## [Unreleased]` section exists, rename it to the new version instead of writing the entry from scratch.
 
 Get changes for this version:
 ```bash
-git log $PREVIOUS_TAG..$NEW_TAG --format="%s" --reverse
+git log $PREVIOUS_TAG..HEAD --format="%s" --reverse
 ```
 
 Categorize commits by conventional commit type:
@@ -132,7 +126,9 @@ Insert new section following Keep a Changelog format:
 - Other changes...
 ```
 
-### Step 7: Commit and Push Changelog
+Breaking changes also need an entry in `docs/MIGRATION.md`.
+
+### Step 6: Commit and Merge Changelog
 
 **Important**: Most repos have branch protection rules. Always create a PR for the changelog instead of pushing directly to main.
 
@@ -154,25 +150,33 @@ git fetch origin
 git reset --hard origin/main
 ```
 
-### Step 8: Create GitHub Release
+### Step 7: Create and Push Tag
+
+Tag main after the changelog PR has merged:
 
 ```bash
-gh release create $NEW_TAG --title "$NEW_TAG" --notes "$(cat <<'EOF'
-## What's New
+COMMIT_MSG=$(git log -1 --format=%s)
+git tag -a $NEW_TAG -m "$COMMIT_MSG"
+git push origin $NEW_TAG
+```
 
-[Generated from changelog entries]
+### Step 8: Confirm the GitHub Release
 
-## Full Changelog
-https://github.com/OWNER/REPO/compare/$PREVIOUS_TAG...$NEW_TAG
-EOF
-)"
+Don't run `gh release create`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, and GoReleaser creates the GitHub release, uploads the binaries, and publishes the Homebrew cask. A manual `gh release create` for the same tag collides with it.
+
+Watch the workflow and get the release URL once it finishes:
+```bash
+gh run list --workflow=release.yml --limit 1
+gh run watch $(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')
+gh release view $NEW_TAG --json url -q .url
 ```
 
 ## Error Handling
 
 - **PR merge fails**: Report error, don't proceed with tagging
 - **Tag push fails**: Report error, suggest manual intervention
-- **Changelog update fails**: Tag is already pushed, warn user to update changelog manually
+- **Changelog update fails**: Nothing is tagged yet; report the error and don't tag
+- **Release workflow fails**: The tag is pushed; report the failed run and suggest re-running it with `gh run rerun`
 - **Any step fails**: Report which step failed and current state
 
 ## Output

@@ -126,6 +126,8 @@ Project-level `local_fallback` and `rewrite_paths` override the global `defaults
 
 ### Merge Order (lowest to highest precedence)
 
+Single tasks and parallel subtasks use the same merge.
+
 **Environment variables:**
 1. Host `env` (from global config)
 2. Project `defaults.env`
@@ -135,6 +137,8 @@ Project-level `local_fallback` and `rewrite_paths` override the global `defaults
 1. Host `setup_commands` (from global config)
 2. Project `defaults.setup`
 3. Then the task command runs
+
+Setup commands run after the `cd` into the remote project dir, so relative paths in them resolve there.
 
 ### Sync Configuration
 
@@ -163,6 +167,12 @@ When `respect_gitignore` is true, rr reads the repo-root `.gitignore` (nested `.
 | `dir` | `/tmp/rr-locks` | Remote directory holding the lock (`<dir>/rr.lock/`) |
 
 There is one lock per host, shared by every project that uses the same `lock.dir`. The holder refreshes it every 30 seconds. A lock without a heartbeat for the `stale` duration is reclaimed automatically, and a lock held by a dead rr process on your own machine is reclaimed immediately.
+
+## Config Warnings and Reserved Names
+
+rr reports config it accepts but ignores, once per invocation, as a `config` phase event with `status: warn` (a styled warning with `--pretty`). That covers unknown keys (usually typos), the removed `output:` section, the removed `defaults.host` global key, `pull:` on a parallel task, and `output:` on a non-parallel task. The config still loads; remove what the warning names.
+
+Task names can't shadow built-in commands. `run`, `exec`, `sync`, `pull`, `logs`, `provision`, `prune`, `doctor`, and the rest are reserved; a task with a reserved name fails validation with `CONFIG_INVALID` and a suggestion to rename it.
 
 ## Variable Expansion
 

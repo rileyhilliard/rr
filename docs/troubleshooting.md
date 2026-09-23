@@ -25,7 +25,15 @@ rr doctor --requirements  # Also check required tools on each host
 rr doctor --path          # Compare login vs interactive shell PATH on each host
 ```
 
-Like every rr command, doctor prints structured JSON by default. It exits 0 even when checks fail, so scripts should read `data.summary.all_clear` (and `data.summary.fail`/`warn`) instead of the exit code.
+Like every rr command, doctor prints structured JSON by default. It exits 1 when any check fails and 0 when there are only warnings. The envelope's `success` is `true` whenever doctor ran; `data.summary.all_clear` is `false` if there's any failure or warning, and `data.summary.fail`/`warn` have the counts.
+
+Checks are graded by whether a run would fail:
+
+- Inside a project, host checks cover only the project's hosts. Outside one, they cover every global host.
+- An unreachable host is a warning while another host in scope is reachable, or when `local_fallback` would run the command locally. It's a failure only when nothing can take the run.
+- A missing SSH agent, a missing default key file, or no `.rr.yaml` is a warning, since agentless setups, custom keys, and global-only use all work.
+- With `--requirements`, a missing required tool or a missing remote rsync is a failure, because `rr run` fails on it too. The suggestion points to `rr provision`.
+- `--path` and `--requirements` connect the way `rr run` does, racing every SSH alias. A host that can't be reached is reported once, on its host check, and its remote checks are skipped.
 
 Example `--pretty` output:
 
@@ -46,9 +54,11 @@ SSH
 HOSTS
   ● mini
     ● mini-lan: Connected (12ms)
-  ✕ server
+  ● server
     ✕ server.example.com: Connection refused
       ...
+
+    Other hosts are reachable, so runs use the other reachable hosts.
 
 DEPENDENCIES
   ● rsync 3.2.7 (local)
@@ -266,6 +276,8 @@ Host myserver
 
 ### "rsync not found locally"
 
+The error code is `DEPENDENCY_MISSING`.
+
 **Fix (macOS):**
 ```bash
 brew install rsync
@@ -283,11 +295,7 @@ sudo dnf install rsync
 
 ### rsync missing on the remote
 
-`rr doctor` only checks for rsync locally. Check the remote yourself and install it with the same commands above:
-
-```bash
-rr exec "rsync --version"
-```
+Sync fails with `DEPENDENCY_MISSING` ("rsync isn't installed on <host>"). `rr doctor --requirements` checks each host for rsync; install it with the same commands above, or add `rsync` to `require:` and run `rr provision`, which has a built-in installer for it.
 
 ### "rsync version too old"
 
@@ -387,7 +395,7 @@ lock:
 
 ## Config validation errors
 
-### "No config file found" / "Can't find the config file"
+### "No .rr.yaml found" / "Can't find the config file"
 
 **Fix:**
 
@@ -395,7 +403,7 @@ lock:
 rr init
 ```
 
-`rr doctor` reports "No config file found" when there's no `.rr.yaml` in the current directory or any parent. If you passed `--config`, check that path.
+The error code is `CONFIG_NOT_FOUND`. `rr doctor` reports a `config_file` warning, "No project config (.rr.yaml) found; using global hosts only", when there's no `.rr.yaml` in the current directory or any parent. If you passed `--config`, check that path.
 
 ### "No hosts configured"
 
@@ -418,7 +426,7 @@ rr host add
 
 ### "Host 'X' not found in global config"
 
-The host referenced in your project's `.rr.yaml` doesn't exist in `~/.rr/config.yaml`. Either:
+The full message is "Project references host 'X' which doesn't exist in global config" (or "Host 'X' not found" for `--host`, `rr unlock`, and similar), with the code `HOST_NOT_FOUND`. The host doesn't exist in `~/.rr/config.yaml`. Either:
 
 1. Add the host to your global config with `rr host add`
 2. Remove the reference from `.rr.yaml`
@@ -452,7 +460,7 @@ hosts:
 
 ### "Can't use 'X' as a task name - that's a built-in command"
 
-You can't name a task after a built-in command (`run`, `exec`, `sync`, `prune`, and so on). Rename your task:
+You can't name a task after a built-in command (`run`, `exec`, `sync`, `prune`, `pull`, `logs`, `provision`, and so on; see [Reserved task names](configuration.md#reserved-task-names)). One reserved name stops every task in the project from registering, so rename it:
 
 ```yaml
 tasks:
@@ -465,11 +473,20 @@ tasks:
     run: make run
 ```
 
+### Config warning: "Unknown config key 'X' is ignored"
+
+rr doesn't reject keys it doesn't recognize, but it warns about each one once per command: a `{"type":"phase","phase":"config","status":"warn",...}` event on stderr, with `details.file`, `key`, `message`, and `suggestion`, or a styled warning with `--pretty`. Usually it's a typo; fix or remove the key. The same kind of warning covers:
+
+- The removed `output:` section ("The 'output' section has no effect and is no longer supported"). Delete the block.
+- `defaults.host` in `~/.rr/config.yaml`. List your preferred host first under `hosts:` in `.rr.yaml` instead.
+- `pull:` on a parallel task. Move it to the subtasks.
+- `output:` on a task that isn't parallel. It only sets the display mode for parallel tasks.
+
 ## Task and output surprises
 
 ### "rr parses flags before the task sees them"
 
-`rr test -k foo` fails because rr tries to parse `-k` as its own flag. Put task arguments after `--`:
+`rr test -k foo` fails with `CONFIG_INVALID` because rr tries to parse `-k` as its own flag. The same goes for `-v`, which is no longer an rr flag. Put task arguments after `--`:
 
 ```bash
 rr test -- -k foo
@@ -477,7 +494,7 @@ rr test -- -k foo
 
 ### "parallel task 'X' doesn't accept extra arguments"
 
-Parallel tasks drop args unless the task sets `forward_args: true`. Subtasks that are compound commands also need an `{args}` placeholder. For a one-off, run the command directly: `rr run "pytest tests/api -k foo"`.
+Parallel tasks reject extra args, including flags, with `CONFIG_INVALID` unless the task sets `forward_args: true`. With it, put flags after `--` (`rr test-backend -- -k foo`). Subtasks that are compound commands also need an `{args}` placeholder. For a one-off, run the command directly: `rr run "pytest tests/api -k foo"`.
 
 ### "This task is a compound command ..."
 
@@ -590,7 +607,7 @@ grep '"type":"result"' events.jsonl
 RR_DEBUG=1 rr run "make test"
 ```
 
-The global `-v`/`--verbose` flag is accepted but doesn't add output today. Every run's raw output is saved to `~/.rr/logs/`; the result event's `details.log_file` has the exact path.
+There's no verbose flag: `-v` was removed, and `--verbose` only prints a deprecation warning. Every run's raw output is saved to `~/.rr/logs/`; the result event's `details.log_file` has the exact path, and `rr logs` lists recent runs.
 
 ### Test SSH directly
 

@@ -77,13 +77,13 @@ pkg/sshutil/         # Reusable SSH client utilities
 
 ### Key Flows
 
-1. **Host Selection** (`internal/host/selector.go`): Tries SSH aliases in order until one connects. Caches results within session.
+1. **Host Selection** (`internal/host/selector.go`, `dial.go`): Dials a host's SSH aliases in parallel. Earlier aliases are preferred: if a later one connects first, it waits a short grace window for an earlier one. Caches connections within a session. With several hosts, `internal/cli/loadbalance.go` walks them in project `hosts:` order (alphabetical global order otherwise) and takes the first unlocked one.
 
-2. **Run Command** (`internal/cli/run.go`): Sync files -> Acquire lock -> Execute command -> Release lock. Each phase has spinner/progress UI.
+2. **Run Command** (`internal/cli/workflow.go`, `run.go`): Decide the execution target (`internal/cli/target.go`: `--local`, local mode, or remote) -> Connect -> Acquire lock -> Check requirements -> Sync files -> Execute command -> Release lock. Locking before sync avoids syncing to a host that's busy. Each phase has spinner/progress UI in `--pretty` and emits phase events in structured mode.
 
-3. **Lock System** (`internal/lock/`): Creates `/tmp/rr-<hash>.lock/` directory on remote with holder info JSON. Detects stale locks by timestamp.
+3. **Lock System** (`internal/lock/`): Creates a `<lock.dir>/rr.lock/` directory on the remote (default `/tmp/rr-locks/rr.lock/`) with holder info in `info.json`. The lock is per host, not per project. A heartbeat touches `info.json` every 30s, and a lock is stale when that file's mtime is older than `lock.stale`.
 
-4. **Output Formatters** (`internal/output/formatters/`): Auto-detect test framework from command, parse output to extract failures for summary display.
+4. **Output Formatters** (`internal/output/formatters/`): `ParseRunOutcome` detects the test framework from the command and run log, and extracts counts, failures, and the no-tests signal once. The JSON result details and the `--pretty` failure block both render from that outcome.
 
 ## Error Handling Pattern
 
@@ -91,11 +91,13 @@ Always use structured errors from `internal/errors`:
 
 ```go
 // Good: includes code, message, and actionable suggestion
-return errors.New(errors.ErrConfig, "config file not found", "Run 'rr init' to create one")
+return errors.New(errors.ErrConfigNotFound, "config file not found", "Run 'rr init' to create one")
 
 // Good: wrap with context
 return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if host is reachable")
 ```
+
+The code is the contract: `mapErrorCode` (`internal/cli/json.go`) turns it into the public code agents branch on (`ErrConfigNotFound` -> `CONFIG_NOT_FOUND`, `ErrHostNotFound` -> `HOST_NOT_FOUND`, `ErrDependency` -> `DEPENDENCY_MISSING`, and so on) by table lookup, never by reading the message. Pick the code that says what failed where the error is created.
 
 ## Testing Conventions
 

@@ -190,9 +190,9 @@ rr doctor
 ```
 
 **Parse response:**
-- `data.summary.all_clear == true` -> Setup OK (doctor exits 0 even when checks fail, so don't rely on the exit code)
-- Otherwise look at `data.categories[].results[]` entries with `status` `"fail"` or `"warn"`
-- A `CONFIG` result "No config file found" -> Run `rr init --non-interactive --host <host>`
+- `data.summary.all_clear == true` -> Setup OK
+- Otherwise look at `data.categories[].results[]` entries with `status` `"fail"` or `"warn"`. Doctor exits 1 when any check fails and 0 on warnings only; a warning (no SSH agent, an unreachable host while another is reachable) doesn't block runs
+- A `config_file` warning "No project config (.rr.yaml) found" -> Run `rr init --non-interactive --host <host>`
 
 ### Step 3: Verify Connectivity
 

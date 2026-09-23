@@ -161,14 +161,17 @@ func emitFallbackWarning(fb fallbackDetail) {
 }
 
 // findAvailableHost tries to find a host that is both connectable and not locked.
-// It iterates through hosts in alphabetical order, trying to connect and acquire
-// a non-blocking lock on each.
+// It iterates through hosts in the project's hosts: order when that list is
+// set, and in alphabetical order of the global hosts otherwise, trying to
+// connect and acquire a non-blocking lock on each.
 //
 // The function implements load balancing by:
-// 1. Trying each host sequentially with non-blocking lock acquisition
-// 2. If a host is locked, immediately trying the next host
-// 3. If all hosts are locked and local_fallback is true, returning local
-// 4. If all hosts are locked and local_fallback is false, round-robin waiting
+//  1. Trying each host sequentially with non-blocking lock acquisition
+//  2. If a host is locked, immediately trying the next host
+//  3. If all hosts are locked, following local_fallback: run locally right
+//     away, wait (lock.wait_timeout) and then run locally, or round-robin
+//     wait and error when fallback is off
+//  4. If no host is reachable and local_fallback is on, running locally
 //
 // Returns:
 //   - result with conn, lock, and state information on success

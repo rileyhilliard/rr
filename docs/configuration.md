@@ -23,7 +23,7 @@
 | Config | Location | Purpose | Share with team? |
 |--------|----------|---------|------------------|
 | Global | `~/.rr/config.yaml` | Host definitions and personal defaults | No |
-| Project | `.rr.yaml` in project root | Sync rules, tasks, output settings | Yes |
+| Project | `.rr.yaml` in project root | Sync rules, tasks, lock settings | Yes |
 
 **Why the split?** Host configurations include personal SSH settings, directory paths, and machine-specific details that differ between team members. Keeping them in a global config means your `.rr.yaml` can be committed to version control without conflicts.
 
@@ -267,7 +267,6 @@ monitor:
 | `sync` | object | see below | File synchronization settings. |
 | `lock` | object | see below | Distributed lock settings. |
 | `tasks` | map | `{}` | Named command sequences. |
-| `output` | object | see below | Accepted and validated, but currently has no effect (see [Output](#output)). |
 | `monitor` | object | see below | Resource monitoring dashboard settings. |
 
 **Note:** Use either `host` (singular) or `hosts` (plural), not both. If neither is specified, all hosts from your global config are available for load balancing.
@@ -286,8 +285,8 @@ defaults:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `defaults.setup` | list | `[]` | Commands prepended (with `&&`) before every remote command. Applies to tasks **and** ad-hoc `rr run` / `rr exec` on remote hosts. Not applied to local runs. |
-| `defaults.env` | map | `{}` | Environment variables for all tasks. Overrides host env; overridden by task env. |
+| `defaults.setup` | list | `[]` | Commands prepended (with `&&`) before every command, after host `setup_commands`. Applies to tasks and parallel subtasks, locally and on remote hosts, and to ad-hoc `rr run` / `rr exec` on remote hosts only. |
+| `defaults.env` | map | `{}` | Environment variables for all tasks, including parallel subtasks. Overrides host env; overridden by task env. |
 
 ## Host resolution order
 
@@ -298,7 +297,7 @@ When you run a command, `rr` determines which host(s) to use in this order:
 3. `.rr.yaml` `host:` field (project's single preferred host)
 4. All hosts from global config, alphabetically (default for load balancing)
 
-Exception: if `.rr.yaml` sets `local_fallback` to `on-unreachable` or `always` and names no `host`/`hosts`, commands run locally without trying any remote host.
+Exception (local mode): if `.rr.yaml` sets `local_fallback` to `on-unreachable` or `always` and names no `host`/`hosts`, or `local_fallback` is on and no hosts are configured at all, commands run locally without trying any remote host. `--host` or `--tag` overrides local mode. Local-mode runs report `details.reason: "local_mode"` on their connect event, and `--local` runs report `local_flag`; neither needs any hosts configured.
 
 **Important:** The order of hosts in your `hosts:` list determines priority. The first host is tried first. If it's busy or unreachable, `rr` moves to the next host in the list. This gives you explicit control over which machines are preferred.
 
@@ -440,7 +439,7 @@ preserve:
 
 ### Lockfile invalidations
 
-Preserved install directories go stale when a lockfile changes locally: rsync syncs the new lockfile, but the old `node_modules/` stays put and the package manager may not notice. Before each sync, `rr` compares each local lockfile's mtime with the remote directory's mtime and deletes the remote directory when the lockfile is newer (or the directory is missing). Your next install command then starts clean. `rr` only deletes; it doesn't run the install for you, so pair this with a task `setup` or an install task.
+Preserved install directories go stale when a lockfile changes locally: rsync syncs the new lockfile, but the old `node_modules/` stays put and the package manager may not notice. Before each sync, `rr` compares each local lockfile's mtime with the remote directory's mtime and deletes the remote directory when the lockfile is newer. A remote directory that doesn't exist is left alone, since there's nothing to invalidate. This runs inside every sync, including `rr sync` and parallel runs. Your next install command then starts clean. `rr` only deletes; it doesn't run the install for you, so pair this with a task `setup` or an install task.
 
 If you don't specify `invalidations`, these are used:
 
@@ -490,7 +489,7 @@ lock:
 | `enabled` | bool | `true` | Whether to use distributed locking. |
 | `timeout` | duration | `5m` | How long to wait for a lock on a single host. |
 | `wait_timeout` | duration | `1m` | How long to round-robin when all hosts are locked. |
-| `stale` | duration | `90s` | When to consider a lock abandoned. (`3m` when there is no `.rr.yaml`.) |
+| `stale` | duration | `90s` | When to consider a lock abandoned, measured from the holder's last heartbeat. |
 | `dir` | string | `/tmp/rr-locks` | Directory for lock files on remote. |
 
 ### How locking works
@@ -557,7 +556,7 @@ tasks:
     run: pytest {args:-tests/} -n 4 | tail -20
 ```
 
-- `rr test tests/foo.py -k bond` runs `pytest 'tests/foo.py' '-k' 'bond' -n 4 | tail -20`
+- `rr test -- tests/foo.py -k bond` runs `pytest 'tests/foo.py' '-k' 'bond' -n 4 | tail -20`
 - `rr test` with no args uses the `{args:-default}` default: `pytest tests/ -n 4 | tail -20`
 - Args are shell-quoted before substitution
 - Without a placeholder, args are appended (quoted) to simple commands;
@@ -565,7 +564,7 @@ tasks:
   and tell you where to add `{args}`
 - Write `{{args}}` for a literal `{args}` in the command
 - Multi-step (`steps`) tasks don't accept extra args
-- Put flag-style args after `--` (`rr test -- -k bond -x`) so `rr`'s own flag parser doesn't reject them
+- Put flag-style args after `--` (`rr test -- -k bond -x`). Without it, `rr` parses them as its own flags and fails with `CONFIG_INVALID` and a hint to use `--`. That includes `-v`, which is no longer an `rr` flag. `-q`, `-p`, and `-m` are still `rr` flags, so they need `--` too.
 
 Parallel tasks reject extra args unless they set `forward_args: true` (see [Forwarding args to subtasks](#forwarding-args-to-subtasks)).
 
@@ -596,11 +595,11 @@ tasks:
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. |
 | `require` | list | no | Tools that must exist for this task. |
-| `pull` | list | no | Files to download from the remote after the task runs (see [Pulling files back](#pulling-files-back)). |
+| `pull` | list | no | Files to download from the remote after the task runs (see [Pulling files back](#pulling-files-back)). On a parallel task itself it has no effect and warns; set it on the subtasks. |
 | `fail_fast` | bool | no | Stop all tasks on first failure (parallel/depends tasks). |
 | `max_parallel` | int | no | Limit concurrent tasks (parallel tasks only). |
 | `timeout` | duration | no | Per-subtask timeout (parallel tasks) or total timeout (depends tasks). Ignored for plain `run`/`steps` tasks. |
-| `output` | string | no | Default output mode for parallel tasks: `progress` (default), `stream`, `verbose`, or `quiet`. CLI flags override it. |
+| `output` | string | no | Default output mode for parallel tasks: `progress` (default), `stream`, `verbose`, or `quiet`. CLI flags override it. Validated on every task; on a non-parallel task it has no effect and warns. |
 | `forward_args` | bool | no | Parallel tasks only: forward extra CLI args to each subtask. |
 
 **CLI flags for non-parallel tasks:** `--host`, `--tag`, `--local`, `--probe-timeout`, `--repeat N` (run the task N times in parallel across hosts, for flake detection), and `--tail N` (print the last N lines of the run log after the result). Tasks with `depends` also get `--skip-deps` and `--from`.
@@ -668,9 +667,15 @@ Setup behavior:
 - Setup failure aborts all subtasks on that host
 - Works with both remote and local execution
 
+#### Subtask environment and working directory
+
+Each subtask runs with the same environment a single task gets: host `env`, then `defaults.env`, then the subtask's own `env`, with later entries winning. Host `setup_commands` and `defaults.setup` run before the subtask's command, after the `cd` into the project directory.
+
+Subtasks that land on the same host run in the same remote directory. If two of them write the same file (a junit report, a coverage file), the later one overwrites the earlier one, so give each subtask its own output path.
+
 #### Forwarding args to subtasks
 
-By default a parallel task rejects extra CLI args. Set `forward_args: true` to pass them to every subtask:
+By default a parallel task rejects extra CLI args: `rr test-backend -k bond` fails with `CONFIG_INVALID` and a hint to set `forward_args: true` and put task flags after `--`. Set `forward_args: true` to pass them to every subtask:
 
 ```yaml
 tasks:
@@ -914,7 +919,15 @@ tasks:
         dest: ./reports/        # to a specific local directory
 ```
 
-Sources are paths or globs relative to the host's `dir`. `dest` defaults to the current directory and is created if missing. A failed pull is reported but doesn't change the task's exit code. Pulling is skipped for local runs, and it isn't applied to subtasks of a parallel task. For ad-hoc commands, use `rr run --pull <pattern> [--pull-dest <dir>]`, or `rr pull <pattern>` on its own.
+Sources are paths or globs relative to the host's `dir`. `dest` defaults to the current directory and is created if missing. A failed pull is reported but doesn't change the task's exit code. Pulling is skipped for local runs. For ad-hoc commands, use `rr run --pull <pattern> [--pull-dest <dir>]`, or `rr pull <pattern>` on its own.
+
+**Subtasks of a parallel task** pull too, with three differences:
+
+- Pulls run after every subtask has finished, pass or fail, one at a time, each from the host its subtask ran on.
+- Each subtask's files land in `<dest>/<subtask>/` (`./<subtask>/` when `dest` is unset), so shards with the same output paths don't overwrite each other locally.
+- Nothing is pulled after Ctrl+C.
+
+Subtasks that run on the same host share one remote directory, so they overwrite each other there unless each writes to its own path, such as a junit file named after the subtask. `pull:` on the parallel task itself does nothing and produces a config warning.
 
 ### Host-restricted tasks
 
@@ -937,9 +950,9 @@ scheduled only on a host it allows, and the run fails up front if `--host` or
 
 You cannot name a task after a built-in command. These names are reserved:
 
-- `run`, `exec`, `sync`, `prune`
-- `init`, `setup`, `status`
-- `monitor`, `doctor`, `completion`
+- `run`, `exec`, `sync`, `prune`, `pull`
+- `init`, `setup`, `status`, `provision`
+- `monitor`, `doctor`, `completion`, `logs`
 - `help`, `version`, `update`, `host`
 - `unlock`, `tasks`
 
@@ -996,7 +1009,7 @@ tasks:
 
 ### Built-in installers
 
-A missing tool fails the run with a list of what's missing. `rr provision` installs missing tools on your hosts, for tools that have a built-in installer (`--check` reports without installing, `--yes` skips prompts, `--host` targets one host).
+A missing tool fails the run with a `DEPENDENCY_MISSING` error listing what's missing. `rr provision` installs missing tools on your hosts, for tools that have a built-in installer (`--check` reports without installing, `--yes` skips prompts, `--host` targets one host).
 
 **Built-in installers:** `go`, `node`, `npm`, `yarn`, `pnpm`, `bun`, `deno`, `python`/`python3`, `pip`, `uv`/`uvx`, `rust`/`rustc`/`cargo`, `ruby`, `gem`, `java`/`javac`, `make`, `git`, `docker`, `kubectl`, `terraform`, `aws`, `gcloud`, `jq`, `curl`, `wget`, `rsync`, `ripgrep`/`rg`, `fd`, `fzf`, `tree`, `htop`, `tmux`, `vim`, `nvim`/`neovim`, `chromium`. Other tools can still be listed in `require`; `rr` checks for them but can't install them.
 
@@ -1015,19 +1028,11 @@ Check requirement status with doctor:
 rr doctor --requirements
 ```
 
+`rr doctor --requirements` also checks that rsync is installed on each host. A missing requirement is a doctor failure (exit 1), since `rr run` fails on it too.
+
 ## Output
 
-The `output` section is accepted and validated, but nothing in `rr` currently reads it. Setting it has no effect:
-
-```yaml
-output:
-  color: auto       # auto, always, never
-  format: auto      # auto, generic, pytest, jest, go, cargo
-  timing: true
-  verbosity: normal # quiet, normal, verbose
-```
-
-Output is controlled by CLI flags instead:
+Output is controlled by CLI flags. The old `output:` config section was never read and has been removed; if your `.rr.yaml` still has one, rr prints a config warning and ignores it. Delete the block.
 
 | Flag | Effect |
 |------|--------|
@@ -1219,9 +1224,10 @@ Fields that accept durations use Go's duration format:
 | "circular dependency detected: A -> B -> A" | Break the cycle by removing one of the dependencies |
 | "task 'X' has both 'parallel' and 'depends'" | Parallel tasks can't have dependencies; use depends inside subtasks instead |
 | "parallel task 'X' references non-existent task 'Y'" | Add the missing subtask or fix the reference |
+| "task 'X' has output 'Y' but it needs to be one of: ..." | Use `progress`, `stream`, `verbose`, or `quiet` |
 | "Config file has some issues" | A value has the wrong shape, e.g. an unknown `local_fallback` mode. Use `never`, `on-unreachable`, `always`, or a boolean there. |
 
-Unknown keys are ignored rather than rejected, so a misspelled key silently does nothing.
+Unknown keys don't fail validation, but each one produces a config warning naming the key and the file, so a misspelled key doesn't silently do nothing. Removed keys (`output:`, the global `defaults.host`) and settings that have no effect where they're placed (`pull:` on a parallel task, `output:` on a non-parallel task) warn the same way. Warnings are emitted once per command: a `config` phase event with `status: "warn"` in structured mode, or a styled warning with `--pretty`. The config still loads.
 
 ## Minimal config
 

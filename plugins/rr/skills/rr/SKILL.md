@@ -141,7 +141,7 @@ tasks:
     run: pytest {args:-tests/} -n 4 | tail -20   # rr test -- -k bond  =>  pytest -k bond -n 4 | tail -20
 ```
 
-Parallel tasks reject args unless `forward_args: true` is set. With it, args are forwarded to every subtask (appended, or substituted into each subtask's `{args}`). Subtasks that are compound commands need an `{args}` placeholder, and multi-step subtasks can't take forwarded args. A forwarded test filter can leave some subtasks with zero matching tests (pytest exits 5).
+Parallel tasks reject args, flags included, unless `forward_args: true` is set (`CONFIG_INVALID`, with a hint to set it and use `--`). With it, args are forwarded to every subtask (appended, or substituted into each subtask's `{args}`). Subtasks that are compound commands need an `{args}` placeholder, and multi-step subtasks can't take forwarded args. A forwarded test filter can leave some subtasks with zero matching tests (pytest exits 5).
 
 ```yaml
 tasks:
@@ -187,9 +187,11 @@ Quote the whole command: `rr run "make test"`. rr rejects `rr run <host> make te
 
 Output is structured by default. No flags needed.
 
-- **stderr**: JSON phase events, one per line (`connect`, `lock`, `sync`, `exec`), then a final `{"type":"result",...}` line.
+- **stderr**: JSON phase events, one per line (`connect`, `lock`, `sync`, `exec`), then a final `{"type":"result",...}` line. Config warnings (unknown keys, removed settings) come first as `config` events with `status: warn`; fix what they name.
 - **stdout/stderr**: the command's own output, passed through raw.
-- **Exit code**: the remote command's exit code. If rr itself fails before the command runs (config, SSH, lock, sync, missing tools), it exits 1 and writes a JSON error envelope (`{"success":false,"error":{"code":...,"message":...,"suggestion":...}}`) to stderr instead of a result event.
+- **Exit code**: the remote command's exit code. If rr itself fails before the command runs (config, SSH, lock, sync, missing tools), it exits 1 and writes a JSON error envelope (`{"success":false,"error":{"code":...,"message":...,"suggestion":...}}`) to stderr instead of a result event. `rr doctor` exits 1 when a check fails.
+- **Where it ran**: the `connect` event's `host` and `details.reason`. `local_flag` (`--local`) and `local_mode` are deliberate local runs; a `warn` with `hosts_unreachable` or `all_hosts_locked` is a fallback. Older rr binaries report `--local` as `hosts_unreachable`; treat that as `local_flag`.
+- **Error codes**: branch on `error.code`. Missing required tools is `DEPENDENCY_MISSING` (older rr: `COMMAND_FAILED` with a message starting `Missing required tools`, so accept both); a mistyped host is `HOST_NOT_FOUND`; no `.rr.yaml` is `CONFIG_NOT_FOUND`.
 
 ```json
 {"type":"result","status":"failed","exit_code":1,"host":"mini","duration_s":14.2,"details":{"exec_duration_s":11.8,"log_file":"/home/me/.rr/logs/test-20260101-120000/output.log","summary":{"passed":41,"failed":1,"skipped":0,"errors":0},"failures":[{"name":"test_login","file":"tests/test_auth.py:42","message":"AssertionError: ..."}]}}
@@ -205,7 +207,7 @@ Useful `details` keys on the result event:
 | `piped_exit_code` | Zero tests plus a pipe: the exit code is the last pipeline stage's, not the runner's |
 | `log_file` | Full raw output (`~/.rr/logs/...`). Read it instead of rerunning. |
 | `hint` | Explanation of a likely local-vs-remote path mistake |
-| `fallback` | Ran locally because all hosts were locked (reason, wait time, lock holders) |
+| `fallback` | Ran locally because no host was reachable or all were locked (`reason`; plus wait time and lock holders when locked) |
 | `path_rewrites` | Number of local paths rewritten to remote paths |
 | `remote_cwd` | Subdirectory the command ran in |
 
@@ -225,12 +227,13 @@ rr test --tail 50            # reprint the last 50 log lines after the result
 - **Zero tests isn't success.** Check `details.no_tests` after narrowing with `-k`, `-run`, or paths.
 - **Locks are per host, shared across projects.** A run from another project on the same host blocks you. With several hosts, rr tries the next free one. If all are locked it waits up to `lock.wait_timeout` (1m) for one to free up, then fails, or runs locally when `local_fallback: always`. With one host it waits up to `lock.timeout` (5m).
 - **`rr unlock` with no host only works when one host is configured.** With several, the host picker only appears in `--pretty` mode; otherwise pass a name (`rr unlock mini`) or `--all`.
+- **Parallel subtasks on the same host share one remote directory.** Have each write reports to its own path (`reports/unit.xml`, not `reports/junit.xml` for all). Pulled files land locally in `<dest>/<subtask>/`.
 - **Custom `sync.exclude` replaces the defaults.** Include `.git`, `node_modules`, `.venv` yourself.
 - **Relative paths follow your cwd** for `run`/`exec` (see Where Commands Run). If a path fails, read `details.hint`.
 
 ## Remote Environment Bootstrap
 
-Declare required tools with `require:`. rr checks they exist before syncing and fails with "Missing required tools: ..." if not:
+Declare required tools with `require:`. rr checks they exist before syncing and fails with "Missing required tools: ..." (`DEPENDENCY_MISSING`) if not:
 
 ```yaml
 # .rr.yaml
@@ -269,6 +272,8 @@ tasks:
       - test                         # Then this
 ```
 
+Subtask `pull:` runs after all subtasks finish, pass or fail, into `<dest>/<subtask>/`. A failed pull doesn't change the exit code. Subtasks get the same env and setup as single tasks: host `env`, then `defaults.env`, then task `env`; host `setup_commands` and `defaults.setup` run after `cd` into the project dir.
+
 Parallel task flags: `--stream`, `--verbose`, `--quiet`, `--fail-fast`, `--max-parallel N`, `--no-logs`, `--dry-run`, `--local`, `--host`, `--tag`. `--dry-run` shows the flattened subtask list and commands.
 
 Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task, `--from <task>` starts partway through the chain.
@@ -279,7 +284,7 @@ Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task
 
 ## How It Works
 
-1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred)
+1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred). `--local` skips this and needs no hosts configured
 2. **Locking**: Takes a lock on the host; if it's locked, tries the next host
 3. **Requirements**: Verifies required tools exist (if configured)
 4. **File sync**: rsync with exclude/preserve patterns

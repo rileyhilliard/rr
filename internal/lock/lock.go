@@ -64,7 +64,10 @@ type Lock struct {
 // Acquire attempts to acquire a distributed lock on the remote host.
 // It uses mkdir as an atomic primitive (mkdir fails if the directory exists).
 // If the lock is held, it will wait and retry until timeout.
-// Stale locks (older than config.Stale) are automatically removed.
+// A lock is stale when its info.json hasn't been touched for longer than
+// config.Stale. The holder's heartbeat touches that file every 30s, so
+// staleness is measured from the last heartbeat, not from when the lock was
+// taken. Stale locks are removed automatically.
 //
 // The lock is per-host, not per-project. Only one rr task can run on a host
 // at a time, regardless of which project initiated it. This prevents resource
@@ -88,7 +91,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		return nil, err
 	}
 
-	// Build lock directory path: /tmp/rr.lock/
+	// Build lock directory path: <lock.dir>/rr.lock/ (default /tmp/rr-locks/rr.lock/)
 	// Single lock per host - only one rr task can run at a time
 	baseDir := cfg.Dir
 	if baseDir == "" {
@@ -254,7 +257,7 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 		return nil, err
 	}
 
-	// Build lock directory path: /tmp/rr.lock/
+	// Build lock directory path: <lock.dir>/rr.lock/ (default /tmp/rr-locks/rr.lock/)
 	// Single lock per host - only one rr task can run at a time
 	baseDir := cfg.Dir
 	if baseDir == "" {

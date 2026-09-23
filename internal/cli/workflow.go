@@ -613,12 +613,15 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 // SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
 // Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
 //
-// When multiple hosts are configured, this function implements load balancing:
-// 1. Try each host with non-blocking lock acquisition
-// 2. If a host is locked, immediately try the next host
-// 3. If all hosts are locked and local_fallback is true, run locally
-// 4. If all hosts are locked and local_fallback is false, round-robin wait
-// 5. Once a lock is acquired, sync files to that host
+// A local target (--local or local mode) dials nothing, takes no lock, and
+// skips sync.
+// When multiple hosts are configured, this function implements load balancing
+// (see findAvailableHost):
+//  1. Try each host with non-blocking lock acquisition
+//  2. If a host is locked, immediately try the next host
+//  3. If all hosts are locked or unreachable, local_fallback decides whether
+//     to run locally, wait, or fail
+//  4. Once a lock is acquired, sync files to that host
 //
 // The lock-before-sync order ensures we don't waste time syncing to a host we can't use.
 func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {

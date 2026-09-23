@@ -3,7 +3,7 @@
 .PHONY: test-local lint-local verify-local test-all verify-all
 
 # Read golangci-lint version from file (shared with CI)
-GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.0")
+GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.13.2")
 # Run the pinned binary by path: a different golangci-lint earlier on PATH (a
 # Homebrew one, say) would otherwise shadow it and quietly defeat the pin.
 # `go install` writes to GOBIN when it is set, else to the bin directory of
