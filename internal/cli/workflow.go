@@ -453,16 +453,7 @@ func syncOptions() *rrsync.SyncOptions {
 func structuredSyncOptions(hostName string) *rrsync.SyncOptions {
 	return &rrsync.SyncOptions{
 		Invalidated: func(dir, lockfile string) {
-			WritePhaseEvent(PhaseEvent{
-				Type:   "phase",
-				Phase:  "sync",
-				Status: "invalidated",
-				Host:   hostName,
-				Details: map[string]interface{}{
-					"dir":      dir,
-					"lockfile": lockfile,
-				},
-			})
+			WritePhaseEvent(invalidatedEvent(hostName, dir, lockfile))
 		},
 		Warn: func(w rrsync.SyncWarning) {
 			WritePhaseEvent(PhaseEvent{
@@ -485,14 +476,26 @@ func structuredSyncOptions(hostName string) *rrsync.SyncOptions {
 	}
 }
 
+// invalidatedEvent is the sync phase event for a remote directory removed
+// by lockfile invalidation.
+func invalidatedEvent(hostName, dir, lockfile string) PhaseEvent {
+	return PhaseEvent{
+		Type:   "phase",
+		Phase:  "sync",
+		Status: "invalidated",
+		Host:   hostName,
+		Details: map[string]interface{}{
+			"dir":      dir,
+			"lockfile": lockfile,
+		},
+	}
+}
+
 // prettySyncOptions surfaces sync notices and warnings as printed lines.
 func prettySyncOptions() *rrsync.SyncOptions {
-	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	return &rrsync.SyncOptions{
 		Invalidated: func(dir, lockfile string) {
-			// Runs while the sync spinner is drawing: clear its line first.
-			fmt.Print("\r\033[K")
-			fmt.Println(muted.Render(fmt.Sprintf("Invalidating stale %s (%s changed)", dir, lockfile)))
+			printSpinnerNotice(fmt.Sprintf("Invalidating stale %s (%s changed)", dir, lockfile))
 		},
 		Warn: func(w rrsync.SyncWarning) {
 			ui.PrintWarning(w.Message)
@@ -502,6 +505,13 @@ func prettySyncOptions() *rrsync.SyncOptions {
 			fmt.Println(muted.Render("Pruned stale worktree dir " + dir))
 		},
 	}
+}
+
+// printSpinnerNotice prints a muted notice that arrives while the sync
+// spinner is drawing, clearing the spinner's line first.
+func printSpinnerNotice(msg string) {
+	fmt.Print("\r\033[K")
+	fmt.Println(lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(msg))
 }
 
 // resolveSyncConfig returns the sync config to use, falling back to defaults.

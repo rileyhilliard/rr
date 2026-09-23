@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/output"
+	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ func TestDefaultSummaryConfig(t *testing.T) {
 
 func TestRenderSummaryTo_NilResult(t *testing.T) {
 	var buf bytes.Buffer
-	RenderSummaryTo(&buf, nil, DefaultSummaryConfig())
+	RenderSummaryTo(&buf, nil, nil, DefaultSummaryConfig())
 	assert.Empty(t, buf.String())
 }
 
@@ -39,7 +40,7 @@ func TestRenderSummaryTo_AllPassed(t *testing.T) {
 		},
 	}
 
-	RenderSummaryTo(&buf, result, DefaultSummaryConfig())
+	RenderSummaryTo(&buf, result, nil, DefaultSummaryConfig())
 	output := buf.String()
 
 	assert.Contains(t, output, "Parallel Execution Summary")
@@ -69,7 +70,7 @@ func TestRenderSummaryTo_WithFailures(t *testing.T) {
 		},
 	}
 
-	RenderSummaryTo(&buf, result, DefaultSummaryConfig())
+	RenderSummaryTo(&buf, result, nil, DefaultSummaryConfig())
 	output := buf.String()
 
 	assert.Contains(t, output, "1 passed")
@@ -96,7 +97,7 @@ func TestRenderSummaryTo_WithLogDir(t *testing.T) {
 		ShowLogs: true,
 		LogDir:   "/tmp/logs",
 	}
-	RenderSummaryTo(&buf, result, cfg)
+	RenderSummaryTo(&buf, result, nil, cfg)
 	output := buf.String()
 
 	assert.Contains(t, output, "Logs:")
@@ -110,7 +111,7 @@ func TestRenderSummaryTo_SingleFailureLogPath(t *testing.T) {
 		Failed:   1,
 		Duration: time.Second,
 		TaskResults: []TaskResult{
-			{TaskName: "my-task", Host: "host1", ExitCode: 1, Duration: time.Second},
+			{TaskName: "task:unit", TaskIndex: 3, Host: "host1", ExitCode: 1, Duration: time.Second},
 		},
 	}
 
@@ -118,11 +119,39 @@ func TestRenderSummaryTo_SingleFailureLogPath(t *testing.T) {
 		ShowLogs: true,
 		LogDir:   "/tmp/logs",
 	}
-	RenderSummaryTo(&buf, result, cfg)
+	RenderSummaryTo(&buf, result, nil, cfg)
 	output := buf.String()
 
-	// Should point to specific log file for single failure
-	assert.Contains(t, output, "/tmp/logs/my-task.log")
+	// Points at the failed task's log file, named like logs.TaskLogPath does
+	assert.Contains(t, output, "/tmp/logs/task-unit_3.log")
+}
+
+// TestRenderSummaryTo_ParsedFailures checks failed tasks show the failures
+// the caller already parsed (index-aligned with TaskResults, whatever order
+// the summary sorts them in), and fall back to the output tail when there
+// are none.
+func TestRenderSummaryTo_ParsedFailures(t *testing.T) {
+	result := &Result{
+		Failed: 2,
+		TaskResults: []TaskResult{
+			{TaskName: "b-parsed", ExitCode: 1, Output: []byte("raw output of b")},
+			{TaskName: "a-unparsed", ExitCode: 1, Output: []byte("raw output of a")},
+		},
+	}
+	outcomes := []formatters.Outcome{
+		{Failures: []output.TestFailure{{TestName: "TestDivide", File: "math_test.go", Line: 12}}},
+		{},
+	}
+
+	var buf bytes.Buffer
+	RenderSummaryTo(&buf, result, outcomes, DefaultSummaryConfig())
+	out := buf.String()
+
+	assert.Contains(t, out, "TestDivide")
+	assert.Contains(t, out, "math_test.go:12")
+	assert.NotContains(t, out, "raw output of b", "parsed failures replace the output tail")
+	assert.Contains(t, out, "raw output of a")
+	assert.Less(t, strings.Index(out, "a-unparsed"), strings.Index(out, "b-parsed"), "tasks are sorted by name")
 }
 
 func TestRenderSummaryTo_SortsResults(t *testing.T) {
@@ -137,7 +166,7 @@ func TestRenderSummaryTo_SortsResults(t *testing.T) {
 		},
 	}
 
-	RenderSummaryTo(&buf, result, DefaultSummaryConfig())
+	RenderSummaryTo(&buf, result, nil, DefaultSummaryConfig())
 	output := buf.String()
 
 	// Tasks should appear in alphabetical order
@@ -439,7 +468,7 @@ func TestRenderTaskFailures_NoOutput(t *testing.T) {
 	errorStyle := lipgloss.NewStyle()
 	mutedStyle := lipgloss.NewStyle()
 
-	renderTaskFailures(&buf, tr, 10, errorStyle, mutedStyle)
+	renderTaskFailures(&buf, tr, nil, 10, errorStyle, mutedStyle)
 	assert.Empty(t, buf.String())
 }
 
@@ -454,7 +483,7 @@ func TestRenderTaskFailures_FallbackToRawOutput(t *testing.T) {
 	errorStyle := lipgloss.NewStyle()
 	mutedStyle := lipgloss.NewStyle()
 
-	renderTaskFailures(&buf, tr, 10, errorStyle, mutedStyle)
+	renderTaskFailures(&buf, tr, nil, 10, errorStyle, mutedStyle)
 	out := buf.String()
 
 	// Should fall back to showing raw output since no structured failures found

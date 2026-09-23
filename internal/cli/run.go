@@ -668,21 +668,5 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 		return 1, err
 	}
 
-	// Write task outputs to logs
-	if logWriter != nil {
-		writeTaskLogs(logWriter, result, "repeat")
-	}
-
-	// Render summary
-	logDirPath := ""
-	if logWriter != nil {
-		logDirPath = logWriter.Dir()
-	}
-	parallel.RenderSummary(result, logDirPath)
-
-	// Return aggregate exit code
-	if result.Failed > 0 {
-		return 1, nil
-	}
-	return 0, nil
+	return renderParallelResult(result, logWriter, "repeat", target.reason), nil
 }

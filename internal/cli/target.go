@@ -87,7 +87,7 @@ func resolveTargetHosts(resolved *config.ResolvedConfig, target execTarget, host
 // dialed and nothing went wrong, so it's a normal completion, not a fallback
 // warning.
 func emitLocalConnect(reason string) {
-	(&StructuredReporter{}).PhaseStart("connect")
+	WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "connect", Status: "started"})
 	WritePhaseEvent(PhaseEvent{
 		Type:    "phase",
 		Phase:   "connect",

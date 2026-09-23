@@ -156,21 +156,25 @@ func TestHandleUnknownCommand_Envelope(t *testing.T) {
 	}
 }
 
-// TestUnknownCommandError_SuggestsBuiltinOutsideProject checks a mistyped
-// built-in outside a project suggests the command instead of reporting the
-// missing .rr.yaml, which only explains an unknown task.
-func TestUnknownCommandError_SuggestsBuiltinOutsideProject(t *testing.T) {
+// TestUnknownCommandError_OutsideProject checks an unknown command outside a
+// project reports the missing .rr.yaml, since the name is most likely a task
+// that config would define. A near miss of a built-in adds a "Did you mean"
+// hint to the suggestion without replacing the config error: real task names
+// like test and lint are within typo distance of built-ins (host, init).
+func TestUnknownCommandError_OutsideProject(t *testing.T) {
 	noConfig := &configDiscoveryState{ProjectErr: rrerrors.New(rrerrors.ErrConfigNotFound,
 		"No .rr.yaml found in this directory or parent directories", "Run 'rr init' to create one.")}
 
 	tests := []struct {
-		name     string
-		cmd      string
-		wantCode string
-		wantText string
+		name       string
+		cmd        string
+		wantHint   string
+		wantNoHint bool
 	}{
-		{name: "typo of a built-in", cmd: "stauts", wantCode: rrerrors.ErrExec, wantText: "Did you mean: status?"},
-		{name: "no near match", cmd: "sometask", wantCode: rrerrors.ErrConfigNotFound, wantText: "rr init"},
+		{name: "typo of a built-in", cmd: "stauts", wantHint: "Did you mean: status?"},
+		{name: "task name near a built-in", cmd: "test"},
+		{name: "another task name near a built-in", cmd: "lint"},
+		{name: "no near match", cmd: "sometask", wantNoHint: true},
 	}
 
 	for _, tt := range tests {
@@ -180,10 +184,20 @@ func TestUnknownCommandError_SuggestsBuiltinOutsideProject(t *testing.T) {
 
 			var rrErr *rrerrors.Error
 			require.True(t, errors.As(err, &rrErr), "got %T: %v", err, err)
-			assert.Equal(t, tt.wantCode, rrErr.Code)
-			assert.Contains(t, rrErr.Suggestion, tt.wantText)
+			assert.Equal(t, rrerrors.ErrConfigNotFound, rrErr.Code)
+			assert.Equal(t, "No .rr.yaml found in this directory or parent directories", rrErr.Message)
+			assert.Contains(t, rrErr.Suggestion, "rr init")
+			if tt.wantHint != "" {
+				assert.Contains(t, rrErr.Suggestion, tt.wantHint)
+			}
+			if tt.wantNoHint {
+				assert.NotContains(t, rrErr.Suggestion, "Did you mean")
+			}
 		})
 	}
+
+	assert.Equal(t, "Run 'rr init' to create one.", noConfig.ProjectErr.(*rrerrors.Error).Suggestion,
+		"the hint must not leak into the shared discovery state")
 }
 
 // TestVerboseFlag_WarnsWithoutBreakingJSON checks the deprecated --verbose

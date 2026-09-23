@@ -33,8 +33,9 @@ func DefaultSummaryConfig() SummaryConfig {
 }
 
 // RenderSummary prints a formatted summary of parallel execution results.
-func RenderSummary(result *Result, logDir string) {
-	RenderSummaryTo(os.Stdout, result, SummaryConfig{
+// See RenderSummaryTo for outcomes.
+func RenderSummary(result *Result, outcomes []formatters.Outcome, logDir string) {
+	RenderSummaryTo(os.Stdout, result, outcomes, SummaryConfig{
 		ShowLogs:       logDir != "",
 		LogDir:         logDir,
 		MaxOutputLines: 10,
@@ -42,7 +43,10 @@ func RenderSummary(result *Result, logDir string) {
 }
 
 // RenderSummaryTo prints a formatted summary to the specified writer.
-func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
+// outcomes holds each task's parsed output (formatters.ParseRunOutcome),
+// index-aligned with result.TaskResults; a failed task with no parsed
+// failures shows the tail of its output instead. nil means nothing parsed.
+func RenderSummaryTo(w io.Writer, result *Result, outcomes []formatters.Outcome, cfg SummaryConfig) {
 	if result == nil {
 		return
 	}
@@ -64,16 +68,19 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 	fmt.Fprintln(w, headerStyle.Render("Parallel Execution Summary"))
 	fmt.Fprintln(w)
 
-	// Sort results by task name for consistent output
-	sortedResults := make([]TaskResult, len(result.TaskResults))
-	copy(sortedResults, result.TaskResults)
-	sort.Slice(sortedResults, func(i, j int) bool {
-		return sortedResults[i].TaskName < sortedResults[j].TaskName
+	// Sort by task name for consistent output. Sorting indices rather than
+	// a copy keeps each result paired with its outcome.
+	order := make([]int, len(result.TaskResults))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return result.TaskResults[order[a]].TaskName < result.TaskResults[order[b]].TaskName
 	})
 
 	// Per-task results
-	for i := range sortedResults {
-		tr := &sortedResults[i]
+	for _, i := range order {
+		tr := &result.TaskResults[i]
 		symbol := ui.SymbolSuccess
 		style := successStyle
 		statusText := "passed"
@@ -98,7 +105,11 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 		// Show error details for failed tasks
 		if !tr.Success() {
 			fmt.Fprintf(w, "    %s\n", mutedStyle.Render(statusText))
-			renderTaskFailures(w, tr, cfg.MaxOutputLines, errorStyle, mutedStyle)
+			var failures []output.TestFailure
+			if i < len(outcomes) {
+				failures = outcomes[i].Failures
+			}
+			renderTaskFailures(w, tr, failures, cfg.MaxOutputLines, errorStyle, mutedStyle)
 		}
 	}
 
@@ -139,11 +150,11 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 
 		// If there's exactly one failed task, point directly to its log file
 		if result.Failed == 1 {
-			for i := range sortedResults {
-				if !sortedResults[i].Success() {
-					// Sanitize the task name the same way logs/writer.go does
-					taskLogName := sanitizeTaskName(sortedResults[i].TaskName) + ".log"
-					logPath = cfg.LogDir + "/" + taskLogName
+			for i := range result.TaskResults {
+				if tr := &result.TaskResults[i]; !tr.Success() {
+					// Named the way logs.TaskLogPath names it (logs imports
+					// this package, so it can't be called from here)
+					logPath = fmt.Sprintf("%s/%s_%d.log", cfg.LogDir, sanitizeTaskName(tr.TaskName), tr.TaskIndex)
 					break
 				}
 			}
@@ -162,11 +173,11 @@ func RenderSummaryTo(w io.Writer, result *Result, cfg SummaryConfig) {
 		fmt.Fprintln(w, headerStyle.Render("Retry Failed Tasks:"))
 		fmt.Fprintln(w)
 
-		for i := range sortedResults {
-			if !sortedResults[i].Success() {
+		for _, i := range order {
+			if !result.TaskResults[i].Success() {
 				fmt.Fprintf(w, "  %s rr %s\n",
 					mutedStyle.Render("$"),
-					sortedResults[i].TaskName,
+					result.TaskResults[i].TaskName,
 				)
 			}
 		}
@@ -207,13 +218,13 @@ func sanitizeTaskName(name string) string {
 	return string(result)
 }
 
-// renderTaskFailures displays failure details for a failed task.
-func renderTaskFailures(w io.Writer, tr *TaskResult, maxLines int, errorStyle, mutedStyle lipgloss.Style) {
+// renderTaskFailures displays failure details for a failed task: its parsed
+// test failures, or the tail of its output when there are none.
+func renderTaskFailures(w io.Writer, tr *TaskResult, failures []output.TestFailure, maxLines int, errorStyle, mutedStyle lipgloss.Style) {
 	if len(tr.Output) == 0 {
 		return
 	}
 
-	failures := formatters.ExtractFailures(tr.Command, tr.Output)
 	if len(failures) > 0 {
 		renderStructuredFailures(w, failures, maxLines, errorStyle, mutedStyle)
 		return

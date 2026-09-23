@@ -12,6 +12,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/parallel"
+	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,23 +84,26 @@ func TestSubtaskPullItems(t *testing.T) {
 	}
 }
 
-// TestPullSubtaskFiles_DuplicateNames checks a subtask listed twice pulls
-// into <name>_<index>/, the stem of its log file, so the second run's files
-// don't overwrite the first's. Unique names keep <name>/.
-func TestPullSubtaskFiles_DuplicateNames(t *testing.T) {
+// TestPullSubtaskFiles_Dirs checks each subtask pulls into the stem of its
+// log file (<name>_<index>, sanitized like the log name). The index keeps a
+// subtask listed twice, or a task named like another's stem (shard_2), from
+// sharing a dir, and the sanitizing keeps a name with a slash one level deep.
+func TestPullSubtaskFiles_Dirs(t *testing.T) {
 	withStructuredOutput(t)
 	hosts := map[string]config.Host{"box-a": {}, "box-b": {}}
 	pullCfg := []config.PullItem{{Src: "junit.xml"}}
 	tasks := []parallel.TaskInfo{
 		{Name: "shard", Index: 0, Pull: pullCfg},
-		{Name: "lint", Index: 1, Pull: pullCfg},
+		{Name: "shard_2", Index: 1, Pull: pullCfg},
 		{Name: "shard", Index: 2, Pull: pullCfg},
+		{Name: "lint/go", Index: 3, Pull: pullCfg},
+		{Name: "test:unit", Index: 4, Pull: pullCfg},
 	}
-	result := &parallel.Result{TaskResults: []parallel.TaskResult{
-		{TaskName: "shard", TaskIndex: 0, Host: "box-a"},
-		{TaskName: "lint", TaskIndex: 1, Host: "box-a"},
-		{TaskName: "shard", TaskIndex: 2, Host: "box-b"},
-	}}
+	result := &parallel.Result{}
+	for _, task := range tasks {
+		result.TaskResults = append(result.TaskResults,
+			parallel.TaskResult{TaskName: task.Name, TaskIndex: task.Index, Host: "box-a"})
+	}
 
 	var dests []string
 	captureStderr(t, func() {
@@ -111,7 +115,11 @@ func TestPullSubtaskFiles_DuplicateNames(t *testing.T) {
 		})
 	})
 
-	assert.Equal(t, []string{"shard_0", "lint", "shard_2"}, dests)
+	assert.Equal(t, []string{"shard_0", "shard_2_1", "shard_2", "lint-go_3", "test-unit_4"}, dests)
+	for i, task := range tasks {
+		logStem := strings.TrimSuffix(filepath.Base(logs.TaskLogPath("run", task.Name, task.Index)), ".log")
+		assert.Equal(t, logStem, dests[i], "pull dir matches the log file for %s", task.Name)
+	}
 }
 
 // pullCall records one call to the injected pull function.
@@ -122,7 +130,7 @@ type pullCall struct {
 
 // TestPullSubtaskFiles covers the C2 contract: every subtask that ran on a
 // remote host and has pull config gets pulled, pass or fail, one after
-// another in subtask order, into <dest>/<subtask>/.
+// another in subtask order, into <dest>/<subtask>_<index>/.
 func TestPullSubtaskFiles(t *testing.T) {
 	oldPretty := prettyMode
 	defer func() { prettyMode = oldPretty }()
@@ -161,9 +169,9 @@ func TestPullSubtaskFiles(t *testing.T) {
 
 	require.Len(t, calls, 2, "only remote subtasks with pull config are pulled")
 	assert.Equal(t, pullCall{name: "box-a", alias: "a-lan", dir: "~/rr/proj",
-		patterns: []config.PullItem{{Src: "junit.xml", Dest: "shard-1"}}}, calls[0])
+		patterns: []config.PullItem{{Src: "junit.xml", Dest: "shard-1_0"}}}, calls[0])
 	assert.Equal(t, pullCall{name: "box-b", alias: "b-vpn", dir: "/srv/proj",
-		patterns: []config.PullItem{{Src: "junit.xml", Dest: filepath.Join("reports", "shard-2")}}}, calls[1],
+		patterns: []config.PullItem{{Src: "junit.xml", Dest: filepath.Join("reports", "shard-2_1")}}}, calls[1],
 		"a failed subtask is still pulled")
 
 	events := parsePhaseEvents(t, stderr)

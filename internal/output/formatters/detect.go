@@ -11,29 +11,6 @@ type Detector interface {
 	Detect(command string, output []byte) int
 }
 
-// ExtractFailures detects the test framework from command/output and extracts
-// structured failure information. Returns nil if no failures found or format unknown.
-func ExtractFailures(command string, rawOutput []byte) []output.TestFailure {
-	formatter := detectFormatter(command, rawOutput)
-	if formatter == nil {
-		return nil
-	}
-
-	// Process all output through the formatter
-	outputStr := string(rawOutput)
-	lines := strings.Split(outputStr, "\n")
-	for _, line := range lines {
-		formatter.ProcessLine(line)
-	}
-
-	// Extract failures if formatter supports it
-	if provider, ok := formatter.(output.TestSummaryProvider); ok {
-		return provider.GetTestFailures()
-	}
-
-	return nil
-}
-
 // TestSummary holds aggregate test counts extracted from raw output.
 type TestSummary struct {
 	Passed  int `json:"passed"`

@@ -223,7 +223,7 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 	noTests := tasksWithoutTests(result, outcomes)
 
 	if PrettyMode() {
-		parallel.RenderSummary(result, logDir)
+		parallel.RenderSummary(result, outcomes, logDir)
 		if len(noTests) > 0 {
 			warnNoTests(map[string]interface{}{
 				"no_tests":       true,
@@ -477,20 +477,16 @@ func (n *parallelSyncNotices) flush() {
 // pullSubtaskFiles runs each subtask's `pull:` after the whole parallel run
 // has finished, whatever the subtask's exit code. Pulls run one at a time in
 // subtask order, from the host the subtask ran on, through the alias that
-// reached it. Each subtask's files land in <dest>/<subtask>/ so shards with
-// the same output paths don't overwrite each other locally; a subtask listed
-// more than once uses <subtask>_<index>/, the stem of its log file (see
-// logs.TaskLogPath). Subtasks that never reached a remote host (local runs,
-// no host available) are skipped. A failed pull is reported but doesn't
-// change the run's exit code, same as single tasks.
+// reached it. Each subtask's files land in <dest>/<stem>/, where <stem> is
+// its log file's name without .log (see subtaskPullDir), so shards with the
+// same output paths don't overwrite each other locally. Subtasks that never
+// reached a remote host (local runs, no host available) are skipped. A
+// failed pull is reported but doesn't change the run's exit code, same as
+// single tasks.
 func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, pull pullFunc) {
 	ranOn := make(map[int]*parallel.TaskResult, len(result.TaskResults))
 	for i := range result.TaskResults {
 		ranOn[result.TaskResults[i].TaskIndex] = &result.TaskResults[i]
-	}
-	nameCount := make(map[string]int, len(tasks))
-	for _, t := range tasks {
-		nameCount[t.Name]++
 	}
 
 	for _, t := range tasks {
@@ -502,13 +498,19 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 		if !remote {
 			continue // "local" or "none": nothing on a remote to pull
 		}
-		dir := t.Name
-		if nameCount[t.Name] > 1 {
-			dir = fmt.Sprintf("%s_%d", t.Name, t.Index)
-		}
 		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
-		pullAndReport(conn, rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, dir)}, pull, t.Name)
+		pullAndReport(conn, rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}, pull, t.Name)
 	}
+}
+
+// subtaskPullDir names the directory a subtask's pulled files land in: the
+// stem of its log file, <name>_<index> with the characters logs replaces in
+// file names (/ \ : * ? " < > |) turned into '-'. The index is unique within
+// the run and the stem ends in it, so no two subtasks share a directory, even
+// a task listed twice or one named like another's stem, and a name with a
+// slash stays one level deep.
+func subtaskPullDir(t parallel.TaskInfo) string {
+	return strings.TrimSuffix(filepath.Base(logs.TaskLogPath("", t.Name, t.Index)), ".log")
 }
 
 // subtaskPullItems rewrites a subtask's pull items so each lands in

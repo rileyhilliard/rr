@@ -14,6 +14,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,7 +104,7 @@ func TestParallelSyncUsesSyncOptions(t *testing.T) {
 	// preserve, so only lockfile invalidation (not rsync --delete) removes it.
 	EnsureRemoteDir(t, conn, remoteDir+"/node_modules")
 	CreateRemoteFile(t, conn, remoteDir+"/node_modules/stale.txt", "old install")
-	_, _, code, err := conn.Client.Exec(fmt.Sprintf("touch -d '2000-01-01' %q", remoteDir+"/node_modules"))
+	_, _, code, err := conn.Client.Exec("touch -d '2000-01-01' " + util.ShellQuote(remoteDir+"/node_modules"))
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
 
@@ -280,17 +281,18 @@ tasks:
 	require.NoError(t, err)
 	assert.NotEqual(t, 0, exitCode, "a failed subtask should fail the run")
 
+	// Each subtask pulls into its log file stem: <name>_<index>.
 	tests := []struct {
-		subtask string
-		want    string
+		dir  string
+		want string
 	}{
-		{subtask: "shard-pass", want: "from-pass"},
-		{subtask: "shard-fail", want: "from-fail"},
+		{dir: "shard-pass_0", want: "from-pass"},
+		{dir: "shard-fail_1", want: "from-fail"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.subtask, func(t *testing.T) {
-			got, err := os.ReadFile(filepath.Join(pullDest, tt.subtask, "report.txt"))
-			require.NoError(t, err, "expected %s's report pulled into %s/%s/", tt.subtask, pullDest, tt.subtask)
+		t.Run(tt.dir, func(t *testing.T) {
+			got, err := os.ReadFile(filepath.Join(pullDest, tt.dir, "report.txt"))
+			require.NoError(t, err, "expected the report pulled into %s/%s/", pullDest, tt.dir)
 			assert.Equal(t, tt.want+"\n", string(got))
 		})
 	}

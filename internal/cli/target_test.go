@@ -348,12 +348,51 @@ func TestRunRepeatedAndParallel_LocalWithoutHosts(t *testing.T) {
 
 		var exitCode int
 		var runErr error
-		_, stderr := runCaptured(t, func() {
+		stdout, stderr := runCaptured(t, func() {
 			exitCode, runErr = runRepeated("true", 2, "", "", true)
 		})
 		require.NoError(t, runErr)
 		assert.Equal(t, 0, exitCode)
-		assertLocalConnectEvents(t, parseEvents(t, stderr), host.LocalReasonFlag)
+		assert.Empty(t, stdout, "structured mode prints no summary")
+		events := parseEvents(t, stderr)
+		assertLocalTargetConnect(t, events, host.LocalReasonFlag)
+		result := resultEvent(t, events)
+		assert.Equal(t, "success", result.Status)
+		assert.EqualValues(t, 2, result.Details["passed"])
+	})
+
+	t.Run("rr <task> --repeat --local", func(t *testing.T) {
+		withStructuredOutput(t)
+		withGlobalHosts(t)
+		inProject(t, "version: 1\ntasks:\n  t:\n    run: \"false\"\n")
+
+		var exitCode int
+		var runErr error
+		stdout, stderr := runCaptured(t, func() {
+			exitCode, runErr = runTaskRepeated("t", 2, "", "", true)
+		})
+		require.NoError(t, runErr)
+		assert.Equal(t, 1, exitCode)
+		assert.Empty(t, stdout, "structured mode prints no summary")
+		events := parseEvents(t, stderr)
+		assertLocalTargetConnect(t, events, host.LocalReasonFlag)
+		result := resultEvent(t, events)
+		assert.Equal(t, "failed", result.Status)
+		assert.EqualValues(t, 2, result.Details["failed"])
+	})
+
+	t.Run("rr run --repeat --pretty prints the summary", func(t *testing.T) {
+		withPrettyOutput(t)
+		withGlobalHosts(t)
+		inProject(t, "version: 1\n")
+
+		var runErr error
+		stdout, _ := runCaptured(t, func() {
+			_, runErr = runRepeated("true", 2, "", "", true)
+		})
+		require.NoError(t, runErr)
+		assert.Contains(t, stdout, "Parallel Execution Summary")
+		assert.Contains(t, stdout, "2 passed")
 	})
 
 	t.Run("parallel task --local", func(t *testing.T) {

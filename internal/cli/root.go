@@ -1,6 +1,7 @@
 package cli
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 	"strings"
@@ -254,24 +255,42 @@ func unknownCommandError(err error, pretty bool) error {
 				"Fix the validation error above, then try again.")
 		}
 
-		// Case 3: No project config found - preserve the original error
-		// details. A near miss of a built-in (rr stauts) is a typo, not a
-		// task missing its config, so the suggestion wins when there is one.
-		if discoveryState.ProjectErr != nil && len(suggestions) == 0 {
-			return discoveryState.ProjectErr
+		// Case 3: No project config found. The name is most likely a task
+		// the missing .rr.yaml would define, so the config error stands. Real
+		// task names are often near built-ins too (test/host, lint/init), so
+		// a near miss adds a hint instead of replacing the error.
+		if discoveryState.ProjectErr != nil {
+			return withTypoHint(discoveryState.ProjectErr, suggestions)
 		}
 	}
 
-	var suggestion string
+	suggestion := "Run 'rr --help' for available commands."
 	if len(suggestions) > 0 {
-		suggestion = fmt.Sprintf("Did you mean: %s?", strings.Join(suggestions, ", "))
-	} else {
-		suggestion = "Run 'rr --help' for available commands."
+		suggestion = didYouMean(suggestions)
 	}
 
 	return errors.New(errors.ErrExec,
 		fmt.Sprintf("Unknown command '%s'", unknownCmd),
 		suggestion)
+}
+
+// didYouMean formats cobra's command suggestions as a hint.
+func didYouMean(suggestions []string) string {
+	return fmt.Sprintf("Did you mean: %s?", strings.Join(suggestions, ", "))
+}
+
+// withTypoHint returns err with a "Did you mean" hint appended to its
+// suggestion, keeping its code and message. err itself is left unchanged
+// (it's shared discovery state), and returned as is when there are no
+// suggestions or it isn't a structured error.
+func withTypoHint(err error, suggestions []string) error {
+	var rrErr *errors.Error
+	if len(suggestions) == 0 || !stderrors.As(err, &rrErr) {
+		return err
+	}
+	hinted := *rrErr
+	hinted.Suggestion = strings.TrimSpace(rrErr.Suggestion + " " + didYouMean(suggestions))
+	return &hinted
 }
 
 // reportError writes err to stderr: the JSON error envelope in structured

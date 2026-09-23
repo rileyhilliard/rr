@@ -134,12 +134,65 @@ func TestParseRunOutcome_FailureDetail(t *testing.T) {
 	assert.Contains(t, f.Message, long)
 }
 
-// TestParseRunOutcome_MatchesExtractFailures pins that the single-pass
-// parser finds the same failures as ExtractFailures, which the parallel
-// summary still uses.
-func TestParseRunOutcome_MatchesExtractFailures(t *testing.T) {
-	o := ParseRunOutcome("pytest tests/", []byte(pytestFailureLog))
-	assert.Equal(t, ExtractFailures("pytest tests/", []byte(pytestFailureLog)), o.Failures)
+func TestParseRunOutcome_PytestFailure(t *testing.T) {
+	command := "pytest tests/"
+	output := []byte(`
+============================= test session starts ==============================
+collected 3 items
+
+tests/test_example.py::test_pass PASSED [33%]
+tests/test_example.py::test_fail FAILED [66%]
+tests/test_example.py::test_skip SKIPPED [100%]
+
+=================================== FAILURES ===================================
+_________________________________ test_fail ________________________________
+
+    def test_fail():
+>       assert 1 == 2
+E       AssertionError: assert 1 == 2
+
+tests/test_example.py:5: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_example.py::test_fail - AssertionError: assert 1 == 2
+========================= 1 failed, 1 passed, 1 skipped in 0.03s ==========================
+`)
+
+	failures := ParseRunOutcome(command, output).Failures
+
+	assert.Len(t, failures, 1)
+	assert.Equal(t, "test_fail", failures[0].TestName)
+	assert.Equal(t, "tests/test_example.py", failures[0].File)
+	assert.Equal(t, 5, failures[0].Line)
+	assert.Contains(t, failures[0].Message, "AssertionError")
+}
+
+func TestParseRunOutcome_GoTestFailure(t *testing.T) {
+	command := "go test ./..."
+	output := []byte(`
+=== RUN   TestExample
+--- PASS: TestExample (0.00s)
+=== RUN   TestFail
+    example_test.go:15: Expected 1, got 2
+--- FAIL: TestFail (0.00s)
+FAIL
+exit status 1
+FAIL	example	0.005s
+`)
+
+	failures := ParseRunOutcome(command, output).Failures
+
+	assert.Len(t, failures, 1)
+	assert.Equal(t, "TestFail", failures[0].TestName)
+	assert.Contains(t, failures[0].Message, "Expected 1, got 2")
+}
+
+func TestParseRunOutcome_UnknownFormat(t *testing.T) {
+	command := "some-random-command"
+	output := []byte("Some random output that doesn't match any known test format")
+
+	failures := ParseRunOutcome(command, output).Failures
+
+	assert.Nil(t, failures)
 }
 
 // TestParseRunOutcome_NoTests is the regression suite for false-green test

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -610,16 +611,181 @@ func TestSync_AcquiresLockBeforeSync(t *testing.T) {
 		"Sync must release the lock after syncing (see issue #181)")
 }
 
-func TestSyncCommandOptions(t *testing.T) {
-	t.Run("dry run deletes nothing and reports what it would invalidate", func(t *testing.T) {
+// TestSyncCommandOptions_DryRunInvalidation checks a dry run reports the
+// directories it would invalidate through the active output mode: the usual
+// sync invalidated event marked dry_run, or a "Would invalidate" line. It
+// must never fall through to the sync package's plain-text fallback.
+func TestSyncCommandOptions_DryRunInvalidation(t *testing.T) {
+	t.Run("structured", func(t *testing.T) {
+		withStructuredOutput(t)
 		opts := syncCommandOptions(true)
 		assert.True(t, opts.DryRun)
-		assert.Nil(t, opts.Invalidated, "the sync package prints 'Would invalidate' when no callback is set")
+		require.NotNil(t, opts.Invalidated, "nil falls back to a plain Printf on stdout")
+
+		stdout, stderr := runCaptured(t, func() { opts.Invalidated("node_modules", "package-lock.json") })
+		assert.Empty(t, stdout)
+		events := parseEvents(t, stderr)
+		require.Len(t, events, 1)
+		assert.Equal(t, "sync", events[0].Phase)
+		assert.Equal(t, "invalidated", events[0].Status)
+		assert.Equal(t, map[string]interface{}{
+			"dir": "node_modules", "lockfile": "package-lock.json", "dry_run": true,
+		}, events[0].Details)
 	})
 
-	t.Run("real sync keeps the invalidation notice", func(t *testing.T) {
-		opts := syncCommandOptions(false)
-		assert.False(t, opts.DryRun)
-		assert.NotNil(t, opts.Invalidated)
+	t.Run("pretty", func(t *testing.T) {
+		withPrettyOutput(t)
+		opts := syncCommandOptions(true)
+		require.NotNil(t, opts.Invalidated)
+
+		stdout, stderr := runCaptured(t, func() { opts.Invalidated("node_modules", "package-lock.json") })
+		assert.True(t, strings.HasPrefix(stdout, "\r\033[K"), "clears the spinner line first")
+		assert.Contains(t, stdout, "Would invalidate stale node_modules (package-lock.json changed)")
+		assert.NotContains(t, stdout, "Invalidating")
+		assert.Empty(t, stderr)
 	})
+
+	t.Run("a real sync is not a dry run", func(t *testing.T) {
+		assert.False(t, syncCommandOptions(false).DryRun)
+	})
+}
+
+func TestParseItemizedChanges(t *testing.T) {
+	tests := []struct {
+		name         string
+		out          string
+		wantTransfer []string
+		wantDelete   []string
+	}{
+		{
+			name: "rsync 3.x",
+			out: "*deleting   stale.txt\n" +
+				">f.st....... a.txt\n" +
+				"cd++++++++++ sub/\n" +
+				">f++++++++++ sub/b.txt\n" +
+				"cL++++++++++ link -> a.txt\n" +
+				".d..t....... ./\n" +
+				"              4 100%    3.91kB/s    0:00:00 (xfr#2, to-chk=0/4)\n",
+			wantTransfer: []string{"a.txt", "sub/", "sub/b.txt", "link -> a.txt"},
+			wantDelete:   []string{"stale.txt"},
+		},
+		{
+			name:         "openrsync",
+			out:          "*deleting stale.txt\n>f.st.... a.txt\ncd+++++++ sub/\n",
+			wantTransfer: []string{"a.txt", "sub/"},
+			wantDelete:   []string{"stale.txt"},
+		},
+		{
+			name: "rsync messages are not paths",
+			out: "sending incremental file list\n" +
+				"cannot delete non-empty directory: keep\n" +
+				"sent 142 bytes  received 39 bytes  362.00 bytes/sec\n" +
+				"total size is 4  speedup is 0.02 (DRY RUN)\n",
+			wantTransfer: []string{},
+			wantDelete:   []string{},
+		},
+		{
+			name:         "path with spaces",
+			out:          ">f+++++++++ my file.txt\n",
+			wantTransfer: []string{"my file.txt"},
+			wantDelete:   []string{},
+		},
+		{
+			name:         "nothing to do",
+			out:          "",
+			wantTransfer: []string{},
+			wantDelete:   []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseItemizedChanges(tt.out)
+			assert.Equal(t, tt.wantTransfer, got.Transfer)
+			assert.Equal(t, tt.wantDelete, got.Delete)
+		})
+	}
+}
+
+// TestReportSyncDone checks how a finished rr sync reports: a result event
+// in structured mode, with the dry-run preview in its details, or summary
+// lines and the preview with --pretty.
+func TestReportSyncDone(t *testing.T) {
+	conn := &host.Connection{Name: "box-a", Alias: "box-a-lan"}
+	preview := &syncPreview{Transfer: []string{"a.txt", "sub/b.txt"}, Delete: []string{"stale.txt"}}
+
+	t.Run("structured dry run", func(t *testing.T) {
+		withStructuredOutput(t)
+		stdout, stderr := runCaptured(t, func() { reportSyncDone(conn, preview, time.Second, time.Second) })
+
+		assert.Empty(t, stdout)
+		result := resultEvent(t, parseEvents(t, stderr))
+		assert.Equal(t, "success", result.Status)
+		assert.Equal(t, "box-a", result.Host)
+		assert.Nil(t, result.ExitCode)
+		assert.Equal(t, map[string]interface{}{
+			"dry_run":  true,
+			"transfer": []interface{}{"a.txt", "sub/b.txt"},
+			"delete":   []interface{}{"stale.txt"},
+		}, result.Details)
+	})
+
+	t.Run("structured sync", func(t *testing.T) {
+		withStructuredOutput(t)
+		_, stderr := runCaptured(t, func() { reportSyncDone(conn, nil, time.Second, time.Second) })
+
+		result := resultEvent(t, parseEvents(t, stderr))
+		assert.Equal(t, map[string]interface{}{"dry_run": false}, result.Details)
+	})
+
+	t.Run("pretty dry run", func(t *testing.T) {
+		withPrettyOutput(t)
+		stdout, _ := runCaptured(t, func() { reportSyncDone(conn, preview, time.Second, time.Second) })
+
+		assert.Contains(t, stdout, "Would transfer:\n  a.txt\n  sub/b.txt\n")
+		assert.Contains(t, stdout, "Would delete:\n  stale.txt\n")
+		assert.Contains(t, stdout, "Dry run completed")
+	})
+
+	t.Run("pretty sync", func(t *testing.T) {
+		withPrettyOutput(t)
+		stdout, _ := runCaptured(t, func() { reportSyncDone(conn, nil, time.Second, time.Second) })
+
+		assert.Contains(t, stdout, "Files synced to box-a-lan")
+		assert.NotContains(t, stdout, "Would")
+	})
+
+	t.Run("pretty dry run with nothing to do", func(t *testing.T) {
+		withPrettyOutput(t)
+		stdout, _ := runCaptured(t, func() {
+			reportSyncDone(conn, &syncPreview{Transfer: []string{}, Delete: []string{}}, time.Second, time.Second)
+		})
+
+		assert.Contains(t, stdout, "up to date")
+		assert.NotContains(t, stdout, "Would transfer")
+	})
+}
+
+// TestSync_StructuredOutput checks structured rr sync keeps stdout clean and
+// reports its phases as JSON events on stderr, including a failed connect.
+func TestSync_StructuredOutput(t *testing.T) {
+	withStructuredOutput(t)
+	writeGlobalConfig(t, `version: 1
+hosts:
+  box-a:
+    ssh: [rr-test-unreachable.invalid]
+    dir: ~/rr/proj
+`)
+	inProject(t, "version: 1\nhosts: [box-a]\n")
+
+	var err error
+	stdout, stderr := runCaptured(t, func() {
+		err = Sync(SyncOptions{DryRun: true, ProbeTimeout: time.Second})
+	})
+
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	events := parseEvents(t, stderr)
+	assert.Len(t, eventsWith(events, "connect", "started"), 1)
+	assert.Len(t, eventsWith(events, "connect", "failed"), 1)
 }
