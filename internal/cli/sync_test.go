@@ -601,9 +601,9 @@ func TestSync_AcquiresLockBeforeSync(t *testing.T) {
 		"Sync must call lock.Acquire (see issue #181)")
 
 	// Verify lock acquisition happens before sync
-	syncIdx := strings.Index(content, "sync.Sync(")
+	syncIdx := strings.Index(content, "sync.SyncWithOptions(")
 	assert.Greater(t, syncIdx, lockIdx,
-		"lock.Acquire must appear before sync.Sync (see issue #181)")
+		"lock.Acquire must appear before sync.SyncWithOptions (see issue #181)")
 
 	// Verify lock is released
 	assert.Contains(t, content, "lck.Release()",

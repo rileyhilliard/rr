@@ -213,32 +213,44 @@ func extractUnknownCommand(err error) string {
 // handleUnknownCommand provides contextual error messages for unknown commands.
 // It uses discoveryState to provide helpful suggestions based on config status.
 func handleUnknownCommand(err error) int {
+	pretty := prettyRequested(os.Args[1:])
+	reportError(unknownCommandError(err, pretty), pretty)
+	return 1
+}
+
+// unknownCommandError builds the error for an unknown command, explaining
+// a config problem when that's why a task isn't registered. The error
+// envelope has no room for a cause, so in structured mode a config problem
+// is reported as the config error itself.
+func unknownCommandError(err error, pretty bool) error {
 	unknownCmd := extractUnknownCommand(err)
 
 	// Check discoveryState for config-related issues
 	if discoveryState != nil {
+		if !pretty && discoveryState.LoadErr != nil {
+			return discoveryState.LoadErr
+		}
+		if !pretty && discoveryState.ValidateErr != nil {
+			return discoveryState.ValidateErr
+		}
+
 		// Case 1: Config has load error (e.g., invalid YAML) - show the actual error
 		if discoveryState.LoadErr != nil {
-			rrErr := errors.WrapWithCode(discoveryState.LoadErr, errors.ErrConfig,
+			return errors.WrapWithCode(discoveryState.LoadErr, errors.ErrConfig,
 				fmt.Sprintf("Unknown command '%s' (config failed to load)", unknownCmd),
 				"Fix the config error above, then try again.")
-			fmt.Fprintln(os.Stderr, rrErr.Error())
-			return 1
 		}
 
 		// Case 2: Config has validation error - show the actual error
 		if discoveryState.ValidateErr != nil {
-			rrErr := errors.WrapWithCode(discoveryState.ValidateErr, errors.ErrConfig,
+			return errors.WrapWithCode(discoveryState.ValidateErr, errors.ErrConfig,
 				fmt.Sprintf("Unknown command '%s' (config is invalid)", unknownCmd),
 				"Fix the validation error above, then try again.")
-			fmt.Fprintln(os.Stderr, rrErr.Error())
-			return 1
 		}
 
 		// Case 3: No project config found - preserve the original error details
 		if discoveryState.ProjectErr != nil {
-			fmt.Fprintln(os.Stderr, discoveryState.ProjectErr.Error())
-			return 1
+			return discoveryState.ProjectErr
 		}
 	}
 
@@ -252,11 +264,34 @@ func handleUnknownCommand(err error) int {
 		suggestion = "Run 'rr --help' for available commands."
 	}
 
-	rrErr := errors.New(errors.ErrExec,
+	return errors.New(errors.ErrExec,
 		fmt.Sprintf("Unknown command '%s'", unknownCmd),
 		suggestion)
-	fmt.Fprintln(os.Stderr, rrErr.Error())
-	return 1
+}
+
+// reportError writes err to stderr: the JSON error envelope in structured
+// mode, the human-readable form in pretty mode.
+func reportError(err error, pretty bool) {
+	if pretty {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return
+	}
+	_ = WriteJSONFromError(os.Stderr, err)
+}
+
+// prettyRequested reports whether args ask for --pretty. Used where cobra
+// hasn't parsed flags yet (an unknown command fails before flag parsing),
+// so PrettyMode() can't be trusted.
+func prettyRequested(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "--":
+			return false
+		case "--pretty", "--pretty=true", "-p":
+			return true
+		}
+	}
+	return false
 }
 
 func init() {
@@ -265,8 +300,10 @@ func init() {
 	// --verbose has no effect and its old -v shorthand swallowed task args
 	// (rr test -v). It still parses so existing scripts don't break.
 	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "no effect (deprecated)")
+	// Hidden, not MarkDeprecated: cobra prints its deprecation notice as a
+	// plain-text line on stderr, which breaks structured output. The warning
+	// goes through emitWarning instead (see PersistentPreRun).
 	_ = rootCmd.PersistentFlags().MarkHidden("verbose")
-	_ = rootCmd.PersistentFlags().MarkDeprecated("verbose", "it has no effect; use RR_DEBUG=1 for debug logging")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-essential output")
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
 	rootCmd.PersistentFlags().BoolVar(&noStrictHostKeyCheck, "no-strict-host-key-checking", false,
@@ -295,6 +332,9 @@ func init() {
 		// Report config warnings once per invocation, now that --pretty is parsed.
 		if !isCompletionRequest(cmd) {
 			emitConfigWarnings(collectConfigWarnings())
+			if cmd.Flags().Changed("verbose") {
+				emitWarning(verboseDeprecationWarning())
+			}
 		}
 		// Call original pre-run if it exists
 		if originalPreRun != nil {
@@ -346,11 +386,7 @@ func emitConfigWarnings(warnings []config.Warning) {
 	configWarningsEmitted = true
 
 	for _, w := range warnings {
-		if PrettyMode() {
-			ui.PrintWarning(fmt.Sprintf("%s (%s). %s", w.Message, w.File, w.Suggestion))
-			continue
-		}
-		WritePhaseEvent(PhaseEvent{
+		emitWarning(PhaseEvent{
 			Type:   "phase",
 			Phase:  "config",
 			Status: "warn",
@@ -360,8 +396,34 @@ func emitConfigWarnings(warnings []config.Warning) {
 				"message":    w.Message,
 				"suggestion": w.Suggestion,
 			},
-		})
+		}, fmt.Sprintf("%s (%s). %s", w.Message, w.File, w.Suggestion))
 	}
+}
+
+// verboseDeprecationWarning is the warning for the deprecated --verbose flag.
+func verboseDeprecationWarning() (PhaseEvent, string) {
+	const msg = "--verbose is deprecated and has no effect"
+	const suggestion = "Remove it. Set RR_DEBUG=1 for debug logging."
+	return PhaseEvent{
+		Type:   "phase",
+		Phase:  "config",
+		Status: "warn",
+		Details: map[string]interface{}{
+			"flag":       "--verbose",
+			"message":    msg,
+			"suggestion": suggestion,
+		},
+	}, msg + ". " + suggestion
+}
+
+// emitWarning reports a startup warning in the active output mode: event
+// on stderr in structured mode, the styled pretty text otherwise.
+func emitWarning(event PhaseEvent, pretty string) {
+	if PrettyMode() {
+		ui.PrintWarning(pretty)
+		return
+	}
+	WritePhaseEvent(event)
 }
 
 // isCompletionRequest reports whether cmd is cobra's hidden shell-completion

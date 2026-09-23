@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 // MissingToolError represents a command-not-found error with context for fixing it.
@@ -182,19 +180,4 @@ Fixes:
 	}
 
 	return result
-}
-
-// HandleExecError wraps execution errors with helpful suggestions.
-// It detects command-not-found errors and provides actionable fixes.
-// If client and hostName are provided, it probes the remote for better suggestions.
-// This is the legacy function that returns a displayable error.
-func HandleExecError(cmd string, stderr string, exitCode int, client SSHExecer, hostName string) error {
-	missingTool := DetectMissingTool(cmd, stderr, exitCode, client, hostName)
-	if missingTool == nil {
-		return nil
-	}
-
-	return errors.New(errors.ErrExec,
-		fmt.Sprintf("'%s' not found in PATH on remote", missingTool.ToolName),
-		missingTool.Suggestion)
 }

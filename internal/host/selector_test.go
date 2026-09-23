@@ -671,9 +671,11 @@ func TestSelector_LocalFallback_Enabled(t *testing.T) {
 
 	// Track events
 	var sawLocalFallback bool
+	var fallbackReason string
 	selector.SetEventHandler(func(event ConnectionEvent) {
 		if event.Type == EventLocalFallback {
 			sawLocalFallback = true
+			fallbackReason = event.Reason
 		}
 	})
 
@@ -703,6 +705,47 @@ func TestSelector_LocalFallback_Enabled(t *testing.T) {
 
 	if !sawLocalFallback {
 		t.Error("expected EventLocalFallback event")
+	}
+	if fallbackReason != LocalReasonHostsUnreachable {
+		t.Errorf("fallback reason = %q, want %q", fallbackReason, LocalReasonHostsUnreachable)
+	}
+}
+
+func TestSelector_LocalFallback_NoHostsReason(t *testing.T) {
+	selector := NewSelector(map[string]config.Host{})
+	selector.SetLocalFallback(true)
+	defer selector.Close()
+
+	var reason string
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		if event.Type == EventLocalFallback {
+			reason = event.Reason
+		}
+	})
+
+	conn, err := selector.Select("")
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if !conn.IsLocal {
+		t.Error("expected a local connection")
+	}
+	if reason != LocalReasonMode {
+		t.Errorf("fallback reason = %q, want %q", reason, LocalReasonMode)
+	}
+}
+
+func TestDescribeLocalReason(t *testing.T) {
+	tests := map[string]string{
+		LocalReasonFlag:             "--local",
+		LocalReasonMode:             "local mode, no remote hosts configured",
+		LocalReasonHostsUnreachable: "all remote hosts unreachable",
+		LocalReasonAllHostsLocked:   "all remote hosts locked",
+	}
+	for reason, want := range tests {
+		if got := DescribeLocalReason(reason); got != want {
+			t.Errorf("DescribeLocalReason(%q) = %q, want %q", reason, got, want)
+		}
 	}
 }
 

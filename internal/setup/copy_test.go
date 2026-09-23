@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -432,4 +433,14 @@ func TestCopyKey_PublicKeyPathConstruction(t *testing.T) {
 			assert.Equal(t, tt.want, pubKeyPath)
 		})
 	}
+}
+
+// TestCopyKey_MissingSSHCopyIDIsDependency checks a missing ssh-copy-id is a
+// dependency error (DEPENDENCY_MISSING), not an SSH failure.
+func TestCopyKey_MissingSSHCopyIDIsDependency(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	err := CopyKey("remote-host", filepath.Join(t.TempDir(), "id_test.pub"))
+	require.Error(t, err)
+	assert.True(t, errors.IsCode(err, errors.ErrDependency), "got %v", err)
 }

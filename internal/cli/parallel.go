@@ -38,13 +38,9 @@ type ParallelTaskOptions struct {
 // RunParallelTask executes a parallel task group.
 // Returns the aggregate exit code and any error.
 func RunParallelTask(opts ParallelTaskOptions) (int, error) {
-	// Load and validate config
-	resolved, err := config.LoadResolved(Config())
+	// Load and validate config, and decide local vs remote
+	resolved, target, err := loadRunConfig(opts.Local, opts.Host, opts.Tag)
 	if err != nil {
-		return 1, err
-	}
-
-	if err := config.ValidateResolved(resolved); err != nil {
 		return 1, err
 	}
 
@@ -76,20 +72,11 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 1, err
 	}
 
-	// Resolve hosts - hostOrder preserves priority from config
-	hostOrder, hosts, err := config.ResolveHosts(resolved, opts.Host)
+	// Resolve hosts - hostOrder preserves priority from config (none for a
+	// local target)
+	hostOrder, hosts, err := resolveTargetHosts(resolved, target, opts.Host)
 	if err != nil {
 		return 1, err
-	}
-
-	// Handle --local flag
-	if opts.Local {
-		// --local and --tag are mutually exclusive
-		if err := ValidateLocalAndTag(opts.Local, opts.Tag); err != nil {
-			return 1, err
-		}
-		hosts = make(map[string]config.Host)
-		hostOrder = nil
 	}
 
 	// Filter by tag if specified
@@ -107,7 +94,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// the run would end with a "no available host" failure after the other
 	// subtasks finished; with --host pointing at a disallowed host the old
 	// scheduler ran it there anyway.
-	if !opts.Local {
+	if !target.local {
 		if err := checkSubtaskHosts(tasks, hostOrder); err != nil {
 			return 1, err
 		}

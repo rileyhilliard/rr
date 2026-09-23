@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
 
@@ -114,7 +115,7 @@ func repeatFallbackWarning(details map[string]interface{}) {
 	if !ok {
 		return
 	}
-	msg := "Ran LOCALLY - all remote hosts were locked"
+	msg := "Ran LOCALLY - " + host.DescribeLocalReason(fb.Reason)
 	if len(fb.Holders) > 0 {
 		msg += " (" + describeHolders(fb.Holders) + ")"
 	}

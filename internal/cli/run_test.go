@@ -613,17 +613,19 @@ func TestRun_LocalFlag(t *testing.T) {
 	err := os.Chdir(tmpDir)
 	require.NoError(t, err)
 
-	// Local flag alone should be accepted (will fail on no config, not on flag)
-	exitCode, err := Run(RunOptions{
-		Command: "echo test",
-		Local:   true,
+	// --local needs no hosts: the target is local, so nothing is validated
+	// or dialed for remote hosts.
+	var exitCode int
+	captureStdout(t, func() {
+		captureStderr(t, func() {
+			exitCode, err = Run(RunOptions{
+				Command: "echo test",
+				Local:   true,
+			})
+		})
 	})
-	assert.Equal(t, 1, exitCode)
-	require.Error(t, err)
-	// Should fail on config/hosts, not on --local flag
-	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
-		strings.Contains(err.Error(), "No hosts"),
-		"Expected error about missing config or hosts, got: %s", err.Error())
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
 }
 
 func TestPullCommand_NoArgs(t *testing.T) {

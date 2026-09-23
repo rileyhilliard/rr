@@ -114,28 +114,6 @@ func RunTask(opts TaskOptions) (int, error) {
 		return runTaskWithDeps(wf, task, opts)
 	}
 
-	// Phase 4: Execute task
-	wf.Reporter.Divider()
-
-	if PrettyMode() {
-		renderTaskHeader(wf.PhaseDisplay, opts.TaskName, task)
-		fmt.Println()
-	} else {
-		wf.Reporter.CommandPrompt(task.Run)
-	}
-
-	// Set up output streaming - in structured mode, pass raw output
-	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
-	if PrettyMode() {
-		streamHandler.SetFormatter(output.NewGenericFormatter())
-	}
-
-	// Tee raw output into a per-run log file (best-effort).
-	logPath, closeLog := setupRunLog(wf, opts.TaskName, streamHandler)
-	defer closeLog()
-
-	execStart := time.Now()
-
 	// Get remote directory for task execution
 	remoteDir := ""
 	if !wf.Conn.IsLocal {
@@ -156,6 +134,36 @@ func RunTask(opts TaskOptions) (int, error) {
 			return 1, err
 		}
 	}
+
+	// The command that actually runs, args applied. The exec event, the
+	// outcome parser, and the failure hint all describe this, not the
+	// template in the config. Empty for multi-step tasks.
+	command, err := effectiveTaskCommand(task, taskArgs)
+	if err != nil {
+		return 1, err
+	}
+
+	// Phase 4: Execute task
+	wf.Reporter.Divider()
+
+	if PrettyMode() {
+		renderTaskHeader(wf.PhaseDisplay, opts.TaskName, task, command)
+		fmt.Println()
+	} else {
+		wf.Reporter.CommandPrompt(command)
+	}
+
+	// Set up output streaming - in structured mode, pass raw output
+	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
+	if PrettyMode() {
+		streamHandler.SetFormatter(output.NewGenericFormatter())
+	}
+
+	// Tee raw output into a per-run log file (best-effort).
+	logPath, closeLog := setupRunLog(wf, opts.TaskName, streamHandler)
+	defer closeLog()
+
+	execStart := time.Now()
 
 	// Get merged setup commands (host + project defaults)
 	setupCommands := config.GetMergedSetupCommands(wf.Resolved.Project, hostCfg)
@@ -199,19 +207,20 @@ func RunTask(opts TaskOptions) (int, error) {
 	// exist here, git commands against the synced snapshot).
 	failureHint := ""
 	if result.ExitCode != 0 && !wf.Conn.IsLocal {
-		failureHint = buildFailureHint(task.Run, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
+		failureHint = buildFailureHint(command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
 		}
 	}
 
 	// Record test summary/failures from the run log and note broken pipes.
-	attachRunOutcome(wf, task.Run, logPath, result.ExitCode)
+	outcome := attachRunOutcome(wf, command, logPath, result.ExitCode)
 	if streamHandler.BrokenPipe() {
 		wf.AddResultDetail("broken_pipe", true)
 	}
 
 	if PrettyMode() {
+		renderOutcomeFailures(outcome, result.ExitCode)
 		wf.PhaseDisplay.ThinDivider()
 		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
 		repeatFallbackWarning(wf.ResultDetails)
@@ -226,6 +235,16 @@ func RunTask(opts TaskOptions) (int, error) {
 	printLogTail(logPath, opts.Tail)
 
 	return result.ExitCode, nil
+}
+
+// effectiveTaskCommand returns a single-command task's run command with
+// args applied, exactly as exec.ExecuteTask will run it. Returns "" for
+// multi-step tasks.
+func effectiveTaskCommand(task *config.TaskConfig, args []string) (string, error) {
+	if task.Run == "" {
+		return "", nil
+	}
+	return exec.ApplyTaskArgs(task.Run, args)
 }
 
 // runTaskWithDeps executes a task and its dependencies using the dependency executor.
@@ -469,8 +488,9 @@ func (h *depStageHandler) OnTaskComplete(taskName string, exitCode int, duration
 	// Output handled by OnStageComplete
 }
 
-// renderTaskHeader displays the task being executed.
-func renderTaskHeader(pd *ui.PhaseDisplay, taskName string, task *config.TaskConfig) {
+// renderTaskHeader displays the task being executed. command is the task's
+// run command with args applied (see effectiveTaskCommand).
+func renderTaskHeader(pd *ui.PhaseDisplay, taskName string, task *config.TaskConfig, command string) {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	boldStyle := lipgloss.NewStyle().Bold(true)
 
@@ -481,7 +501,7 @@ func renderTaskHeader(pd *ui.PhaseDisplay, taskName string, task *config.TaskCon
 
 	if task.Run != "" {
 		fmt.Printf("Task: %s\n", taskInfo)
-		pd.CommandPrompt(task.Run)
+		pd.CommandPrompt(command)
 	} else if len(task.Steps) > 0 {
 		fmt.Printf("Task: %s %s\n", taskInfo, mutedStyle.Render(fmt.Sprintf("(%d steps)", len(task.Steps))))
 	}
@@ -996,13 +1016,9 @@ func runTaskCommand(taskName string, args []string, hostFlag, tagFlag, probeTime
 // runTaskRepeated runs a task N times in parallel across available hosts.
 // Used for flake detection - run the same task multiple times to surface intermittent failures.
 func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string, localFlag bool) (int, error) {
-	// Load and validate config
-	resolved, err := config.LoadResolved(Config())
+	// Load and validate config, and decide local vs remote
+	resolved, target, err := loadRunConfig(localFlag, hostFlag, tagFlag)
 	if err != nil {
-		return 1, err
-	}
-
-	if err := config.ValidateResolved(resolved); err != nil {
 		return 1, err
 	}
 
@@ -1042,16 +1058,10 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 		}
 	}
 
-	// Resolve hosts
-	hostOrder, hosts, err := config.ResolveHosts(resolved, hostFlag)
+	// Resolve hosts (none for a local target)
+	hostOrder, hosts, err := resolveTargetHosts(resolved, target, hostFlag)
 	if err != nil {
 		return 1, err
-	}
-
-	// Handle --local flag
-	if localFlag {
-		hosts = make(map[string]config.Host)
-		hostOrder = nil
 	}
 
 	// Filter by tag if specified

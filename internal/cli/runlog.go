@@ -9,6 +9,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
+	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/internal/util"
 )
 
@@ -44,59 +45,100 @@ func setupRunLog(wf *WorkflowContext, name string, sh *output.StreamHandler) (st
 	return path, func() { _ = f.Close() }
 }
 
-// attachRunOutcome reads the run log back and records test summary and
-// failure details in the result envelope. Best-effort.
-func attachRunOutcome(wf *WorkflowContext, command, logPath string, exitCode int) {
+// attachRunOutcome parses the run log (see formatters.ParseRunOutcome),
+// records the test summary and failure details in the result envelope, and
+// returns the outcome for the pretty renderer. Best-effort: a missing or
+// empty log yields a zero Outcome.
+func attachRunOutcome(wf *WorkflowContext, command, logPath string, exitCode int) formatters.Outcome {
 	if logPath == "" {
-		return
+		return formatters.Outcome{}
 	}
 	data := readFileTail(logPath, maxLogReadBytes)
 	if len(data) == 0 {
-		return
+		return formatters.Outcome{}
 	}
 
-	if summary, ok := formatters.ExtractTestSummary(command, data); ok {
-		wf.AddResultDetail("summary", summary)
-		if summary.NoTests {
-			// A run that collected nothing looks identical to a clean suite if
-			// we only report counts, so call it out explicitly. Reported, not
-			// fatal: the exit code stays whatever the runner returned.
-			wf.AddResultDetail("no_tests", true)
-			// Note when a pipe is why exitCode can't be trusted: the shell
-			// reports the last stage's status, so a runner that failed upstream
-			// still exits 0. rr won't rewrite the command's semantics (a
-			// deliberate `cmd | grep -q` tolerates upstream failure), but the
-			// caveat belongs in the report.
-			if util.HasPipe(command) {
-				wf.AddResultDetail("piped_exit_code", true)
+	outcome := formatters.ParseRunOutcome(command, data)
+	for k, v := range outcomeDetails(outcome, exitCode) {
+		wf.AddResultDetail(k, v)
+	}
+	return outcome
+}
+
+// outcomeDetails renders an Outcome as result-envelope details. A run that
+// collected nothing looks identical to a clean suite if only counts are
+// reported, so no_tests calls it out explicitly (reported, not fatal: the
+// exit code stays whatever the runner returned). piped_exit_code notes when
+// a pipe is why the exit code can't be trusted - rr won't rewrite the
+// command's semantics (a deliberate `cmd | grep -q` tolerates upstream
+// failure), but the caveat belongs in the report. Failures are listed only
+// for failed runs, with messages truncated to maxFailureMessageLen.
+func outcomeDetails(o formatters.Outcome, exitCode int) map[string]interface{} {
+	details := map[string]interface{}{}
+	if o.Summary != nil {
+		details["summary"] = *o.Summary
+	}
+	if o.NoTests {
+		details["no_tests"] = true
+	}
+	if o.PipedExitCode {
+		details["piped_exit_code"] = true
+	}
+
+	if exitCode != 0 && len(o.Failures) > 0 {
+		entries := make([]map[string]string, 0, len(o.Failures))
+		for _, f := range o.Failures {
+			entry := map[string]string{"name": f.TestName}
+			if f.File != "" {
+				loc := f.File
+				if f.Line > 0 {
+					loc += ":" + util.Itoa(f.Line)
+				}
+				entry["file"] = loc
 			}
+			if f.Message != "" {
+				msg := f.Message
+				if len(msg) > maxFailureMessageLen {
+					msg = msg[:maxFailureMessageLen] + "..."
+				}
+				entry["message"] = msg
+			}
+			entries = append(entries, entry)
+		}
+		details["failures"] = entries
+	}
+	return details
+}
+
+// renderOutcomeFailures prints the pretty-mode failure block (counts plus
+// each failed test with its location and message) for a failed run.
+// Returns whether anything was printed.
+func renderOutcomeFailures(o formatters.Outcome, exitCode int) bool {
+	if exitCode == 0 || len(o.Failures) == 0 {
+		return false
+	}
+
+	summary := &ui.TestSummary{Failures: make([]ui.TestFailure, len(o.Failures))}
+	if o.Summary != nil {
+		summary.Passed = o.Summary.Passed
+		summary.Failed = o.Summary.Failed
+		summary.Skipped = o.Summary.Skipped
+		summary.Errors = o.Summary.Errors
+	}
+	for i, f := range o.Failures {
+		summary.Failures[i] = ui.TestFailure{
+			TestName: f.TestName,
+			File:     f.File,
+			Line:     f.Line,
+			Message:  f.Message,
 		}
 	}
 
-	if exitCode != 0 {
-		if failures := formatters.ExtractFailures(command, data); len(failures) > 0 {
-			entries := make([]map[string]string, 0, len(failures))
-			for _, f := range failures {
-				entry := map[string]string{"name": f.TestName}
-				if f.File != "" {
-					loc := f.File
-					if f.Line > 0 {
-						loc += ":" + util.Itoa(f.Line)
-					}
-					entry["file"] = loc
-				}
-				if f.Message != "" {
-					msg := f.Message
-					if len(msg) > maxFailureMessageLen {
-						msg = msg[:maxFailureMessageLen] + "..."
-					}
-					entry["message"] = msg
-				}
-				entries = append(entries, entry)
-			}
-			wf.AddResultDetail("failures", entries)
-		}
-	}
+	fmt.Println()
+	fmt.Print(ui.FormatDivider(ui.DividerWidth))
+	fmt.Println()
+	fmt.Print(ui.RenderSummary(summary, exitCode))
+	return true
 }
 
 // printLogTail prints the last n lines of the run log to stdout. Used by

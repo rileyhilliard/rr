@@ -348,21 +348,22 @@ func (pt *PhaseTracker) CompleteConnection(hostName, alias string) {
 	}
 }
 
-// CompleteConnectionLocal marks the connection phase as using local fallback.
-func (pt *PhaseTracker) CompleteConnectionLocal() {
+// CompleteConnectionLocal marks the connection phase as using local
+// fallback. detail says why (see ui.ConnectionDisplay.SuccessLocal).
+func (pt *PhaseTracker) CompleteConnectionLocal(detail string) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 
 	pt.connectedHost = "local"
 	pt.connectedAlias = "local"
-	pt.connDisplay.SuccessLocal()
+	pt.connDisplay.SuccessLocal(detail)
 
 	// Update the connection phase event
 	if len(pt.events) > 0 {
 		idx := len(pt.events) - 1
 		pt.events[idx].EndTime = time.Now()
 		pt.events[idx].Success = true
-		pt.events[idx].Message = "Running locally (all remote hosts unreachable)"
+		pt.events[idx].Message = "Running locally (" + detail + ")"
 
 		if pt.onPhase != nil {
 			pt.onPhase(pt.events[idx])

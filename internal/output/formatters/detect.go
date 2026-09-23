@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/rileyhilliard/rr/internal/output"
-	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // Detector interface for formatters that can detect their format.
@@ -110,7 +109,12 @@ func ExtractTestSummary(command string, rawOutput []byte) (TestSummary, bool) {
 	for _, line := range strings.Split(string(rawOutput), "\n") {
 		formatter.ProcessLine(line)
 	}
+	return summarize(formatter, command)
+}
 
+// summarize reads aggregate counts from a formatter that has already
+// processed the output. See ExtractTestSummary.
+func summarize(formatter output.Formatter, command string) (TestSummary, bool) {
 	provider, ok := formatter.(output.TestSummaryProvider)
 	if !ok {
 		return TestSummary{}, false
@@ -163,55 +167,4 @@ func detectFormatter(command string, rawOutput []byte) output.Formatter {
 	}
 
 	return nil
-}
-
-// FormatFailureSummary returns a formatted string summarizing failures.
-// This provides a more readable output than raw log lines.
-func FormatFailureSummary(command string, rawOutput []byte, maxFailures int) string {
-	failures := ExtractFailures(command, rawOutput)
-	if len(failures) == 0 {
-		return ""
-	}
-
-	var sb strings.Builder
-
-	// Limit number of failures shown
-	showCount := len(failures)
-	if maxFailures > 0 && showCount > maxFailures {
-		showCount = maxFailures
-	}
-
-	for i := 0; i < showCount; i++ {
-		f := failures[i]
-		// Format: TestName (file:line)
-		//           message
-		sb.WriteString("  ")
-		sb.WriteString(f.TestName)
-		if f.File != "" {
-			sb.WriteString(" (")
-			sb.WriteString(f.File)
-			if f.Line > 0 {
-				sb.WriteString(":")
-				sb.WriteString(util.Itoa(f.Line))
-			}
-			sb.WriteString(")")
-		}
-		sb.WriteString("\n")
-		if f.Message != "" {
-			// Indent the message
-			for _, line := range strings.Split(f.Message, "\n") {
-				sb.WriteString("    ")
-				sb.WriteString(line)
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	if len(failures) > showCount {
-		sb.WriteString("  ... and ")
-		sb.WriteString(util.Itoa(len(failures) - showCount))
-		sb.WriteString(" more failures\n")
-	}
-
-	return sb.String()
 }

@@ -196,8 +196,16 @@ func TestRenderTaskHeader(t *testing.T) {
 		name        string
 		taskName    string
 		task        *config.TaskConfig
+		command     string // defaults to task.Run
 		wantStrings []string
 	}{
+		{
+			name:        "shows the command with args applied",
+			taskName:    "hi",
+			task:        &config.TaskConfig{Run: "echo hi {args}"},
+			command:     "echo hi 'there'",
+			wantStrings: []string{"Task:", "hi", "$", "echo hi 'there'"},
+		},
 		{
 			name:     "simple run command with description",
 			taskName: "test",
@@ -246,8 +254,12 @@ func TestRenderTaskHeader(t *testing.T) {
 			var buf bytes.Buffer
 			pd := ui.NewPhaseDisplay(&buf)
 
+			command := tt.command
+			if command == "" {
+				command = tt.task.Run
+			}
 			output := captureStdout(t, func() {
-				renderTaskHeader(pd, tt.taskName, tt.task)
+				renderTaskHeader(pd, tt.taskName, tt.task, command)
 			})
 
 			// Combine both outputs (stdout and buffer from PhaseDisplay)
@@ -268,7 +280,7 @@ func TestRenderTaskHeader_EmptyTask(t *testing.T) {
 	task := &config.TaskConfig{}
 
 	output := captureStdout(t, func() {
-		renderTaskHeader(pd, "empty", task)
+		renderTaskHeader(pd, "empty", task, "")
 	})
 
 	combined := output + buf.String()

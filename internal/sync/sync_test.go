@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
@@ -1475,4 +1476,14 @@ func captureStdout(t *testing.T, fn func()) string {
 	fn()
 	require.NoError(t, w.Close())
 	return <-done
+}
+
+// TestFindRsync_MissingIsDependency checks a missing local rsync is a
+// dependency error (DEPENDENCY_MISSING), not a sync failure.
+func TestFindRsync_MissingIsDependency(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := FindRsync()
+	require.Error(t, err)
+	assert.True(t, errors.IsCode(err, errors.ErrDependency), "got %v", err)
 }

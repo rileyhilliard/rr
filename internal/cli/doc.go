@@ -36,9 +36,12 @@
 //
 // # Flag Handling
 //
-// Global flags (--config, --verbose, --quiet, --no-color) are defined on
+// Global flags (--config, --quiet, --pretty, --no-color) are defined on
 // the root command and available to all subcommands. Command-specific flags
-// like --host and --tag are defined on individual commands.
+// like --host and --tag are defined on individual commands. The old
+// --verbose flag is hidden and has no effect: it still parses so existing
+// scripts don't break, and using it emits a warning (RR_DEBUG=1 is the
+// debug switch).
 //
 // The CommonFlags type and AddCommonFlags function provide a standard way
 // to add host selection flags (--host, --tag, --probe-timeout) to commands.
