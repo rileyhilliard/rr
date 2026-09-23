@@ -16,6 +16,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
 // hostWorker executes tasks on a specific host.
@@ -64,7 +65,9 @@ func (w *hostWorker) executeTaskWithRequeue(ctx context.Context, task TaskInfo) 
 			w.notifyComplete(result)
 			return result, false
 		}
-		// Connection failed due to host unavailability - re-queue the task
+		// The host is unavailable: re-queue the task. result.Error carries
+		// the cause for the re-queue notice.
+		result.Error = err
 		return result, true
 	}
 
@@ -160,13 +163,22 @@ func (w *hostWorker) executeTaskInternal(ctx context.Context, task TaskInfo, res
 	return result
 }
 
-// ensureConnection establishes an SSH connection to the host if needed.
+// ensureConnection establishes an SSH connection to the host if needed, and
+// fails when the connection it already has has died. It doesn't reconnect:
+// the heartbeat couldn't touch the lock while the connection was down, so
+// another rr may have taken it as stale; the caller re-queues the task
+// instead of running it here unlocked.
 func (w *hostWorker) ensureConnection(_ context.Context) error {
 	w.connMu.Lock()
 	defer w.connMu.Unlock()
 
 	if w.conn != nil {
-		return nil
+		if w.conn.Alive() {
+			return nil
+		}
+		return errors.WrapWithCode(sshutil.ErrConnectionLost, errors.ErrSSH,
+			fmt.Sprintf("Lost the connection to '%s'", w.hostName),
+			"The network dropped or the machine running rr slept. Run 'rr doctor' to check the host.")
 	}
 
 	// Create a selector for this specific host

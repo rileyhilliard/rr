@@ -53,6 +53,9 @@ type StepHandler interface {
 
 // ExecuteTask runs a task on the given connection.
 // Handles both single-command tasks (Run field) and multi-step tasks (Steps field).
+// When a command runs but can't finish normally, the error comes back with
+// the result so far and whatever exit code the command reported (-1 when the
+// connection dropped).
 // Extra args replace {args} placeholders in single-command tasks, or are
 // appended (shell-quoted) when the command is simple. Compound commands
 // (pipes, &&, redirections) without a placeholder reject extra args, since a
@@ -76,13 +79,10 @@ func ExecuteTask(ctx context.Context, conn *host.Connection, task *config.TaskCo
 			return nil, err
 		}
 		exitCode, err := executeCommand(ctx, conn, cmd, env, workDir, opts.SetupCommands, stdout, stderr)
-		if err != nil {
-			return nil, err
-		}
 		return &TaskResult{
 			ExitCode:   exitCode,
 			FailedStep: -1,
-		}, nil
+		}, err
 	}
 
 	// Multi-step task
@@ -152,7 +152,11 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 		stepDuration := time.Since(stepStart)
 
 		if err != nil {
-			return nil, err
+			stepResult.ExitCode = exitCode
+			result.StepResults = append(result.StepResults, stepResult)
+			result.FailedStep = i
+			result.ExitCode = exitCode
+			return result, err
 		}
 
 		stepResult.ExitCode = exitCode
@@ -213,21 +217,21 @@ func BuildCommand(cmd string, env map[string]string, workDir string, setupComman
 		parts = append(parts, "cd "+util.ShellQuotePreserveTilde(workDir))
 	}
 	for _, setup := range setupCommands {
-		parts = append(parts, shellGroup(setup))
+		parts = append(parts, ShellGroup(setup))
 	}
 	for _, k := range slices.Sorted(maps.Keys(env)) {
 		parts = append(parts, fmt.Sprintf("export %s=%s", k, util.ShellDoubleQuote(env[k])))
 	}
-	parts = append(parts, shellGroup(cmd))
+	parts = append(parts, ShellGroup(cmd))
 
 	return strings.Join(parts, " && ")
 }
 
-// shellGroup wraps user shell text in a brace group so it acts as a single
+// ShellGroup wraps user shell text in a brace group so it acts as a single
 // command in an && chain. The } goes on its own line because a closing
 // brace after a comment, a trailing &, or text without a final ; would not
 // be read as the end of the group.
-func shellGroup(s string) string {
+func ShellGroup(s string) string {
 	return "{ " + s + "\n}"
 }
 
@@ -261,14 +265,17 @@ const DefaultShell = "${SHELL:-/bin/bash}"
 // The trailing semicolon ensures this is always a successful command that can be followed by &&.
 const rcSourceCommand = `[ -f ~/.bashrc ] && . ~/.bashrc || true; [ -f ~/.zshrc ] && . ~/.zshrc || true;`
 
-// BuildRemoteCommand constructs a remote command with shell config, setup commands, and working directory.
-// This is the recommended way to build commands for remote execution with full configuration support.
+// BuildRemoteCommand builds the command `rr run` sends to a host: rc files
+// sourced, then the host's setup commands, a cd into the host dir, and cmd,
+// chained with && and wrapped in the host's shell. Setup commands and cmd are
+// user shell text, so each sits in its own brace group, as in BuildCommand:
+// a ; or || inside one can't run the rest of the command after a failed
+// setup or cd.
 func BuildRemoteCommand(cmd string, host *config.Host) string {
 	var parts []string
 
-	// Add setup commands if configured
-	if len(host.SetupCommands) > 0 {
-		parts = append(parts, host.SetupCommands...)
+	for _, setup := range host.SetupCommands {
+		parts = append(parts, ShellGroup(setup))
 	}
 
 	// Add cd to working directory
@@ -277,8 +284,7 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 		parts = append(parts, fmt.Sprintf("cd %s", util.ShellQuotePreserveTilde(dir)))
 	}
 
-	// Add the actual command
-	parts = append(parts, cmd)
+	parts = append(parts, ShellGroup(cmd))
 
 	// Join all parts with &&
 	cmdChain := strings.Join(parts, " && ")

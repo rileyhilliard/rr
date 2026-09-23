@@ -23,7 +23,9 @@ type SSHClient interface {
 
 	// ExecStreamContext runs a command with context cancellation support.
 	// When the context is cancelled, SIGINT is sent to the remote process.
-	// Returns the exit code and any error.
+	// Returns the exit code and any error. A non-zero exit is not an error;
+	// -1 with an error means the command couldn't start, the connection
+	// dropped before it finished, or its output couldn't be written.
 	ExecStreamContext(ctx context.Context, cmd string, stdout, stderr io.Writer) (exitCode int, err error)
 
 	// Close closes the SSH connection.

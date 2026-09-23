@@ -20,6 +20,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/util"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
 // ParallelTaskOptions configures parallel task execution.
@@ -110,10 +111,12 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 0, nil
 	}
 
-	// Determine output mode - force progress (non-TUI) in structured mode
+	// Structured mode prints no human progress: stdout carries only the
+	// subtasks' output, and progress goes out as events on stderr. An explicit
+	// stream or verbose mode still prints task output.
 	outputMode := determineOutputMode(opts, task)
-	if !PrettyMode() && outputMode == parallel.OutputProgress {
-		outputMode = parallel.OutputQuiet
+	if !PrettyMode() && (outputMode == parallel.OutputProgress || outputMode == parallel.OutputQuiet) {
+		outputMode = parallel.OutputNone
 	}
 
 	// Build parallel config. Workers sync through the same callbacks as a
@@ -126,6 +129,9 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		SaveLogs:    !opts.NoLogs,
 		Setup:       task.Setup,
 		SyncOptions: syncNotices.optionsFor,
+	}
+	if !PrettyMode() {
+		parallelCfg.OnRequeue = requeuedEvent
 	}
 
 	// Apply CLI overrides
@@ -420,6 +426,31 @@ func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flat
 		})
 	}
 	return tasks, nil
+}
+
+// requeuedEvent reports a subtask moved off a host that became unavailable;
+// the host is dropped for the rest of the run. The reason is connection_lost
+// when the host's connection died mid-run, connect_failed when the host was
+// never reached.
+func requeuedEvent(taskName, hostName string, cause error) {
+	reason := "connect_failed"
+	if sshutil.IsConnectionLost(cause) {
+		reason = "connection_lost"
+	}
+	details := map[string]interface{}{
+		"reason": reason,
+		"task":   taskName,
+	}
+	if cause != nil {
+		details["error"] = ErrorToJSON(cause)
+	}
+	WritePhaseEvent(PhaseEvent{
+		Type:    "phase",
+		Phase:   "connect",
+		Status:  "warn",
+		Host:    hostName,
+		Details: details,
+	})
 }
 
 // parallelSyncNotices hands parallel workers the same sync callbacks a single

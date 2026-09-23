@@ -192,7 +192,9 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	if err != nil {
-		return 1, err
+		if err := wf.lostConnectionAsResult(err); err != nil {
+			return 1, err
+		}
 	}
 
 	// Release lock early if task completed (wf.Close() will also release, but early release is cleaner)
@@ -325,7 +327,9 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 	streamHandler.Flush()
 
 	if err != nil {
-		return 1, err
+		if err := wf.lostConnectionAsResult(err); err != nil {
+			return 1, err
+		}
 	}
 
 	// Release lock early

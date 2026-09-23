@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/host"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
+	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -340,6 +343,29 @@ func TestHostWorker_ExecuteTaskWithRequeue_ContextTimeout(t *testing.T) {
 	assert.False(t, shouldRequeue, "should not re-queue when context times out")
 	assert.NotNil(t, result.Error, "should have an error")
 	assert.Equal(t, 1, result.ExitCode, "exit code should be 1")
+}
+
+// TestHostWorker_DeadConnectionRequeues pins the fix for a laptop going to
+// sleep mid-run: the worker kept its dead connection, and every task still
+// queued for that host failed in microseconds instead of moving to another
+// host.
+func TestHostWorker_DeadConnectionRequeues(t *testing.T) {
+	client := sshtesting.NewMockClient("test-host")
+	worker := &hostWorker{
+		orchestrator: &Orchestrator{
+			syncedHosts:      make(map[string]bool),
+			unavailableHosts: make(map[string]bool),
+		},
+		hostName: "test-host",
+		conn:     &host.Connection{Name: "test-host", Client: client},
+	}
+
+	require.NoError(t, worker.ensureConnection(context.Background()), "a live connection is reused")
+
+	require.NoError(t, client.Close())
+	result, requeue := worker.executeTaskWithRequeue(context.Background(), TaskInfo{Name: "test-task", Command: "echo hello"})
+	assert.True(t, requeue, "a task for a dead connection goes back to the queue")
+	assert.True(t, sshutil.IsConnectionLost(result.Error), "the re-queue notice gets the cause")
 }
 
 // TestHostWorker_FullCommand_MergesEnvAndSetup checks that parallel subtasks

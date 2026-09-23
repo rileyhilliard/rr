@@ -153,11 +153,13 @@ func (e *Executor) Execute(ctx context.Context, plan *ExecutionPlan) (*Execution
 			e.opts.StageHandler.OnStageComplete(i+1, len(plan.Stages), stage, stageResult, stageResult.Duration)
 		}
 
+		result.StageResults = append(result.StageResults, stageResult)
 		if err != nil {
+			if !stageResult.Success() && result.FailedStage == -1 {
+				result.FailedStage = i
+			}
 			return result, err
 		}
-
-		result.StageResults = append(result.StageResults, stageResult)
 
 		if !stageResult.Success() {
 			if result.FailedStage == -1 {
@@ -314,10 +316,17 @@ func (e *Executor) executeTask(ctx context.Context, taskName string) *TaskExecut
 	taskResult, err := exec.ExecuteTask(ctx, e.conn, &task, nil, mergedEnv, e.opts.WorkDir, e.opts.Stdout, e.opts.Stderr, execOpts)
 	result.Duration = time.Since(start)
 
-	if err != nil {
+	switch {
+	case err != nil && taskResult != nil && taskResult.ExitCode != 0:
+		// exec reported an exit code along with the error (-1 for a dropped
+		// connection or a command that couldn't run, 130 on cancel): keep it
+		// instead of a generic 1.
+		result.Error = err
+		result.ExitCode = taskResult.ExitCode
+	case err != nil:
 		result.Error = err
 		result.ExitCode = 1
-	} else {
+	default:
 		result.ExitCode = taskResult.ExitCode
 	}
 

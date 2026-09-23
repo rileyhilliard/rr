@@ -297,7 +297,7 @@ Every task command, single or parallel, local or remote, runs as one shell comma
 3. One `export KEY="value"` per env key, in sorted key order. Host `env`, then `defaults.env`, then the task's `env`; a later layer replaces an earlier key.
 4. The task command.
 
-If any step fails, nothing after it runs and the task exits non-zero. `||`, `;`, and `&` inside a setup command or the task command only affect that command. Env is exported after setup, so setup commands can't read env values, but a value can use variables that setup exported and keys that sort before it.
+If any step fails, nothing after it runs and the task exits non-zero. `||`, `;`, and `&` inside a setup command or the task command only affect that command. `rr run` groups its command and setup commands the same way, so a failed `--cwd`, setup command, or cd stops the whole command. Env is exported after setup, so setup commands can't read env values, but a value can use variables that setup exported and keys that sort before it.
 
 Env values are double-quoted, so the shell expands some things and leaves the rest alone:
 

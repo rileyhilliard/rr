@@ -42,6 +42,8 @@ The connect event says where the command runs and why:
 
 The result of a `--local` or local-mode run carries the same value in `details.local_reason`; `details.fallback` appears only for runtime fallbacks, never alongside it. `--local` and local mode need no configured hosts. Transition note: rr binaries older than v0.27.0 report a `--local` run as a connect `warn` event with `reason: hosts_unreachable`. Treat that as `local_flag` when you passed `--local`.
 
+In a parallel run, a host that becomes unavailable is dropped for the rest of the run, and the subtask its worker had picked up moves to another host. That emits one connect `warn` event with the `host`, `details.task`, `details.error` (`{code, message, suggestion}`), and `details.reason`: `connection_lost` when the connection died mid-run, `connect_failed` when the host was never reached. A subtask that was running when its connection dropped isn't moved, since it may have partly run. It fails with `Lost the connection before the command finished`. For a single `rr run` or task, that same error shows up as `details.error` on a failed result with `exit_code: -1`, and `log_file` still points at the partial output (tasks with `depends` don't write a run log, so they have no `log_file`).
+
 ### Config warnings
 
 Config problems that don't stop a run are reported once per invocation as a `config` phase event, before any other event:
@@ -133,7 +135,7 @@ Codes are set where the error is created, never guessed from the message. Transi
 
 ## Exit Code Contract
 
-When the command runs, rr's exit code is the command's exit code (a parallel task exits 1 if any subtask failed). When rr fails before the command runs (config, SSH, lock, sync, requirements), it exits 1 and writes an error envelope to stderr instead of a result event. Check for a `"type":"result"` line to tell the two apart.
+When the command runs, rr's exit code is the command's exit code (a parallel task exits 1 if any subtask failed). A command cut off by a dropped connection has `exit_code: -1` and `details.error`, and rr exits 255. When rr fails before the command runs (config, SSH, lock, sync, requirements), it exits 1 and writes an error envelope to stderr instead of a result event. Check for a `"type":"result"` line to tell the two apart.
 
 `rr doctor` is the exception: it exits 1 when any check fails and 0 when there are only warnings, but its envelope still says `success: true`, because doctor itself ran. `data.summary.fail` counts failures; `data.summary.all_clear` is true only when nothing failed or warned.
 

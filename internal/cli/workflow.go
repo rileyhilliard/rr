@@ -21,6 +21,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/require"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/rileyhilliard/rr/internal/ui"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"golang.org/x/term"
 )
 
@@ -76,6 +77,22 @@ func (w *WorkflowContext) AddResultDetail(key string, value interface{}) {
 		w.ResultDetails = make(map[string]interface{})
 	}
 	w.ResultDetails[key] = value
+}
+
+// lostConnectionAsResult decides whether an exec error still ends in a result.
+// A dropped connection cut off a command that ran, so the run reports a
+// failed result with the error under details.error, keeping log_file and the
+// partial output; it returns nil for that case. Any other error is returned
+// as is, for the caller to fail with.
+func (w *WorkflowContext) lostConnectionAsResult(err error) error {
+	if !sshutil.IsConnectionLost(err) {
+		return err
+	}
+	w.AddResultDetail("error", ErrorToJSON(err))
+	if PrettyMode() {
+		fmt.Fprintf(os.Stderr, "\n%s\n", err.Error())
+	}
+	return nil
 }
 
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.

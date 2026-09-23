@@ -12,6 +12,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/lock"
 	rsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -349,6 +350,23 @@ func TestExecuteTaskFailure(t *testing.T) {
 	require.NoError(t, err, "ExecuteTask should not return error for command failure")
 	assert.NotNil(t, result)
 	assert.Equal(t, 1, result.ExitCode)
+}
+
+// TestExecuteTaskConnectionLost drops the connection mid-command: the command
+// kills the sshd process serving its session. That used to come back as exit
+// -1 with no error, so nothing said what happened.
+func TestExecuteTaskConnectionLost(t *testing.T) {
+	conn := GetSSHConnection(t)
+
+	task := &config.TaskConfig{Run: "kill -9 $PPID; sleep 5"}
+
+	var stdout, stderr bytes.Buffer
+	result, err := exec.ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
+
+	require.Error(t, err)
+	assert.True(t, sshutil.IsConnectionLost(err), "got: %v", err)
+	require.NotNil(t, result, "the result so far comes back with the error")
+	assert.Equal(t, -1, result.ExitCode)
 }
 
 // TestExecuteTaskWithSetupCommands tests task execution with setup commands.

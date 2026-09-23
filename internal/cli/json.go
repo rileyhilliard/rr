@@ -45,6 +45,7 @@ type PhaseEvent struct {
 }
 
 // WritePhaseEvent writes a structured phase event to stderr as a JSON line.
+// It's safe to call from concurrent goroutines.
 // Intermediate phase events (type "phase") are suppressed when --no-phases is set.
 // Result events (type "result") are always emitted.
 func WritePhaseEvent(event PhaseEvent) {
@@ -56,8 +57,9 @@ func WritePhaseEvent(event PhaseEvent) {
 	if err != nil {
 		return
 	}
-	os.Stderr.Write(data)
-	os.Stderr.WriteString("\n")
+	// One write per event, so events from concurrent parallel workers
+	// can't interleave within a line.
+	os.Stderr.Write(append(data, '\n'))
 }
 
 // JSONEnvelope wraps command output in a consistent structure for machine parsing.

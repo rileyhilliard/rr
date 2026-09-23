@@ -127,7 +127,9 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	if err != nil {
-		return 1, err
+		if err := wf.lostConnectionAsResult(err); err != nil {
+			return 1, err
+		}
 	}
 
 	// Release lock early
@@ -255,8 +257,16 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 		}
 	}
 
+	// Group the command before anything is prefixed to it, so a ; or ||
+	// inside it can't run part of it after a failed setup or cd.
+	cmd = exec.ShellGroup(cmd)
+
 	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
-		cmd = strings.Join(wf.Resolved.Project.Defaults.Setup, " && ") + " && " + cmd
+		setup := make([]string, 0, len(wf.Resolved.Project.Defaults.Setup))
+		for _, s := range wf.Resolved.Project.Defaults.Setup {
+			setup = append(setup, exec.ShellGroup(s))
+		}
+		cmd = strings.Join(setup, " && ") + " && " + cmd
 	}
 
 	// --cwd prepends a cd into a subdirectory of the remote project root.
@@ -286,14 +296,8 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 		subdir := util.ShellQuotePreserveTilde(resolved)
 		// Soft cd: the offset may not exist remotely (excluded from sync), and
 		// this is implicit, so it must never turn a working command into a
-		// failure. An explicit --cwd above still hard-fails.
-		//
-		// The braces and the trailing && both matter. BuildRemoteCommand joins
-		// setup commands and the mandatory `cd <project dir>` with &&, and `||`
-		// binds looser than `&&`, so a bare `cd X || true` would swallow the
-		// failure of everything to its left - running the command in $HOME with
-		// a half-built environment and calling it success. Grouping confines
-		// `|| true` to this cd, and joining with && keeps the earlier chain fatal.
+		// failure. An explicit --cwd above still hard-fails. Braces keep
+		// `|| true` confined to this cd.
 		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", subdir, cmd)
 		reportAutoCWD(wf, offset)
 	}

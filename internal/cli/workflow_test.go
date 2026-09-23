@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestWorkflowOptions_Defaults(t *testing.T) {
@@ -1879,4 +1881,28 @@ func TestSetupWorkDir_ExplicitWorkingDirSkipsOffset(t *testing.T) {
 
 	assert.Equal(t, "/explicit/path", ctx.WorkDir)
 	assert.Empty(t, ctx.SubdirOffset)
+}
+
+// TestLostConnectionAsResult - a command cut off by a dropped connection still
+// ran, so it ends in a failed result carrying the error (and its log file)
+// rather than an error envelope. Any other exec error still fails the run.
+func TestLostConnectionAsResult(t *testing.T) {
+	t.Run("dropped connection becomes a result detail", func(t *testing.T) {
+		wf := &WorkflowContext{}
+		lost := errors.WrapWithCode(&ssh.ExitMissingError{}, errors.ErrSSH, "Lost the connection before the command finished", "retry")
+
+		require.NoError(t, wf.lostConnectionAsResult(lost))
+		detail, ok := wf.ResultDetails["error"].(*JSONError)
+		require.True(t, ok, "details.error is set")
+		assert.Equal(t, ErrCodeSSHConnectionFail, detail.Code)
+		assert.Equal(t, "Lost the connection before the command finished", detail.Message)
+	})
+
+	t.Run("other errors still fail the run", func(t *testing.T) {
+		wf := &WorkflowContext{}
+		other := errors.New(errors.ErrExec, "Couldn't write the command's output", "check the disk")
+
+		assert.Equal(t, other, wf.lostConnectionAsResult(other))
+		assert.Empty(t, wf.ResultDetails)
+	})
 }
