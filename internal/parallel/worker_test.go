@@ -10,150 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildFullCommand(t *testing.T) {
-	tests := []struct {
-		name          string
-		cmd           string
-		env           map[string]string
-		workDir       string
-		setupCommands []string
-		expected      string
-	}{
-		{
-			name:     "simple command no extras",
-			cmd:      "echo hello",
-			expected: "echo hello",
-		},
-		{
-			name:     "command with workdir",
-			cmd:      "make test",
-			workDir:  "/home/user/project",
-			expected: "cd '/home/user/project' && make test",
-		},
-		{
-			name:     "workdir with spaces is quoted",
-			cmd:      "make test",
-			workDir:  "/home/user/my project",
-			expected: "cd '/home/user/my project' && make test",
-		},
-		{
-			name:     "tilde workdir keeps tilde expandable",
-			cmd:      "make test",
-			workDir:  "~/rr projects/app",
-			expected: "cd ~/'rr projects/app' && make test",
-		},
-		{
-			name:     "workdir with shell metacharacters is inert",
-			cmd:      "make test",
-			workDir:  "/tmp/x; rm -rf ~",
-			expected: "cd '/tmp/x; rm -rf ~' && make test",
-		},
-		{
-			name: "command with env vars",
-			cmd:  "go test",
-			env: map[string]string{
-				"GOOS": "linux",
-			},
-			expected: "export GOOS='linux'; go test",
-		},
-		{
-			name:          "command with setup",
-			cmd:           "pytest",
-			setupCommands: []string{"source venv/bin/activate"},
-			expected:      "source venv/bin/activate && pytest",
-		},
-		{
-			name:          "command with multiple setup commands",
-			cmd:           "npm test",
-			setupCommands: []string{"nvm use 18", "npm ci"},
-			expected:      "nvm use 18 && npm ci && npm test",
-		},
-		{
-			name:          "command with all options",
-			cmd:           "make build",
-			env:           map[string]string{"CC": "gcc"},
-			workDir:       "/app",
-			setupCommands: []string{"module load gcc"},
-			// cd runs first so relative setup (source .venv/bin/activate)
-			// resolves in the project dir, matching single tasks.
-			expected: "cd '/app' && module load gcc && export CC='gcc'; make build",
-		},
-		{
-			name:     "empty command",
-			cmd:      "",
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildFullCommand(tt.cmd, tt.env, tt.workDir, tt.setupCommands)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestShellQuote(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "simple string",
-			input:    "hello",
-			expected: "'hello'",
-		},
-		{
-			name:     "string with spaces",
-			input:    "hello world",
-			expected: "'hello world'",
-		},
-		{
-			name:     "string with single quote",
-			input:    "it's working",
-			expected: "'it'\"'\"'s working'",
-		},
-		{
-			name:     "string with multiple single quotes",
-			input:    "can't won't don't",
-			expected: "'can'\"'\"'t won'\"'\"'t don'\"'\"'t'",
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			expected: "''",
-		},
-		{
-			name:     "string with special chars",
-			input:    "$HOME; rm -rf /",
-			expected: "'$HOME; rm -rf /'",
-		},
-		{
-			name:     "string with double quotes",
-			input:    `say "hello"`,
-			expected: `'say "hello"'`,
-		},
-		{
-			name:     "string with backticks",
-			input:    "`whoami`",
-			expected: "'`whoami`'",
-		},
-		{
-			name:     "string with newlines",
-			input:    "line1\nline2",
-			expected: "'line1\nline2'",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := shellQuote(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestLocalWorker_ExecuteTask_Success(t *testing.T) {
 	tasks := []TaskInfo{{Name: "test", Command: "echo hello"}}
 	hosts := map[string]config.Host{}
@@ -505,16 +361,16 @@ func TestHostWorker_FullCommand_MergesEnvAndSetup(t *testing.T) {
 			name:     "host, defaults and task layers",
 			resolved: &config.ResolvedConfig{Project: project},
 			taskEnv:  map[string]string{"FROM_TASK": "t"},
-			want:     "cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS='d'; export FROM_HOST='h'; export FROM_TASK='t'; make test",
+			want:     `cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS="d"; export FROM_HOST="h"; export FROM_TASK="t"; make test`,
 		},
 		{
 			name:     "setup step with no task env still gets host and defaults",
 			resolved: &config.ResolvedConfig{Project: project},
-			want:     "cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS='d'; export FROM_HOST='h'; make test",
+			want:     `cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS="d"; export FROM_HOST="h"; make test`,
 		},
 		{
 			name: "no project config",
-			want: "cd '/srv/app' && source ~/.profile && export FROM_HOST='h'; make test",
+			want: `cd '/srv/app' && source ~/.profile && export FROM_HOST="h"; make test`,
 		},
 	}
 
@@ -542,8 +398,8 @@ func TestHostWorker_FullCommand_TaskEnvWins(t *testing.T) {
 		}}},
 		host: config.Host{Env: map[string]string{"K": "host"}},
 	}
-	assert.Equal(t, "export K='task'; run", w.fullCommand("run", map[string]string{"K": "task"}, ""))
-	assert.Equal(t, "export K='defaults'; run", w.fullCommand("run", nil, ""))
+	assert.Equal(t, `export K="task"; run`, w.fullCommand("run", map[string]string{"K": "task"}, ""))
+	assert.Equal(t, `export K="defaults"; run`, w.fullCommand("run", nil, ""))
 }
 
 // TestLocalWorker_DefaultsEnvAndSetup checks local parallel runs get
@@ -567,6 +423,30 @@ func TestLocalWorker_DefaultsEnvAndSetup(t *testing.T) {
 
 	require.Equal(t, 0, result.ExitCode, string(result.Output))
 	assert.Contains(t, string(result.Output), "from-defaults from-setup task")
+}
+
+// TestLocalWorker_EnvExpandsLikeSingleTasks checks a local parallel subtask
+// gets env through the same shell exports as a single task, so a value like
+// "$HOME/bin:$PATH" expands instead of arriving literally.
+func TestLocalWorker_EnvExpandsLikeSingleTasks(t *testing.T) {
+	t.Setenv("HOME", "/home/rr-test")
+	resolved := &config.ResolvedConfig{
+		Project: &config.Config{Defaults: config.ProjectDefaults{
+			Env: map[string]string{"RR_PATH": "$HOME/bin"},
+		}},
+		Global: &config.GlobalConfig{},
+	}
+	orchestrator := NewOrchestrator(nil, map[string]config.Host{}, nil, resolved, Config{})
+	worker := &localWorker{orchestrator: orchestrator}
+
+	result := worker.executeTask(context.Background(), TaskInfo{
+		Name:    "t",
+		Command: `echo "$RR_PATH|$RR_MSG"`,
+		Env:     map[string]string{"RR_MSG": "say \"hi\" `nope`"},
+	})
+
+	require.Equal(t, 0, result.ExitCode, string(result.Output))
+	assert.Equal(t, "/home/rr-test/bin|say \"hi\" `nope`\n", string(result.Output))
 }
 
 // TestLocalWorker_SetupStepSeesDefaults checks the parallel `setup:` step runs

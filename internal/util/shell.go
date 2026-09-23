@@ -11,6 +11,16 @@ func ShellQuote(s string) string {
 	return "'" + escaped + "'"
 }
 
+// ShellDoubleQuote wraps s in double quotes for a POSIX shell, escaping the
+// characters that stay special inside them (\ " `) but leaving $ alone, so
+// the shell still expands $VAR, ${VAR}, and $(...) in s. Use it for values
+// the user expects expanded, like PATH=$HOME/.local/bin:$PATH; use ShellQuote
+// for anything that must stay literal.
+func ShellDoubleQuote(s string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`").Replace(s)
+	return `"` + escaped + `"`
+}
+
 // ShellQuoteJoin quotes each argument and joins them with single spaces.
 func ShellQuoteJoin(args []string) string {
 	quoted := make([]string, len(args))

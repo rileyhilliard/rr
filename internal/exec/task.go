@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -179,53 +181,39 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 	return result, nil
 }
 
-// executeCommand runs a single command on the connection.
+// executeCommand runs a single command on the connection. Remote commands cd
+// into workDir first; local ones run in the current directory.
 func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
-	// Build the full command with environment variables, working directory, and setup commands
-	fullCmd := buildCommand(cmd, env, workDir, setupCommands, conn.IsLocal)
-
 	if conn.IsLocal {
-		return ExecuteLocal(fullCmd, "", stdout, stderr)
+		return ExecuteLocal(BuildCommand(cmd, env, "", setupCommands), "", stdout, stderr)
 	}
 
-	// Remote execution
+	fullCmd := BuildCommand(cmd, env, config.ExpandRemote(workDir), setupCommands)
 	return conn.Client.ExecStreamContext(ctx, fullCmd, stdout, stderr)
 }
 
-// buildCommand constructs the full command string with setup commands, env vars, and cd.
-func buildCommand(cmd string, env map[string]string, workDir string, setupCommands []string, isLocal bool) string {
+// BuildCommand builds the shell command a task runs, local or remote, single
+// or parallel: cd into workDir (skipped when empty), each setup command, then
+// env exported ahead of cmd, the parts joined with && so a failure stops the
+// chain.
+//
+// Env keys are exported in sorted order. Values are double-quoted with
+// util.ShellDoubleQuote, so the shell expands $VAR references in them (e.g.
+// PATH: "$HOME/.local/bin:$PATH") while quotes and backticks stay literal.
+func BuildCommand(cmd string, env map[string]string, workDir string, setupCommands []string) string {
 	var parts []string
-
-	// For local execution, we handle workDir via the exec.Command.Dir field
-	// But for remote, we need to cd to the directory
-	if !isLocal && workDir != "" {
-		workDir = config.ExpandRemote(workDir)
-		parts = append(parts, fmt.Sprintf("cd %s", util.ShellQuotePreserveTilde(workDir)))
+	if workDir != "" {
+		parts = append(parts, "cd "+util.ShellQuotePreserveTilde(workDir))
 	}
-
-	// Add setup commands (these run shell commands like "source ~/.local/bin/env")
 	parts = append(parts, setupCommands...)
 
-	// Add env prefix and actual command
-	cmdWithEnv := buildEnvPrefix(env) + cmd
-	parts = append(parts, cmdWithEnv)
+	var exports strings.Builder
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		fmt.Fprintf(&exports, "export %s=%s; ", k, util.ShellDoubleQuote(env[k]))
+	}
+	parts = append(parts, exports.String()+cmd)
 
-	// Join with && so each part must succeed
 	return strings.Join(parts, " && ")
-}
-
-// buildEnvPrefix creates the environment variable prefix for a command.
-func buildEnvPrefix(env map[string]string) string {
-	if len(env) == 0 {
-		return ""
-	}
-
-	prefix := ""
-	for k, v := range env {
-		// Use shell-safe quoting
-		prefix += fmt.Sprintf("export %s=%q; ", k, v)
-	}
-	return prefix
 }
 
 // ExecuteLocalTask is a convenience function for local task execution.

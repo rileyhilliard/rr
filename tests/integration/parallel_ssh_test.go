@@ -191,6 +191,38 @@ func TestParallelRunRemoteDirWithShellMetacharacters(t *testing.T) {
 	assert.Contains(t, outputs["cat"], "metachar dir ok", "synced file should be readable from the remote dir")
 }
 
+// TestParallelEnvExpandsLikeSingleTasks checks defaults.env values reach a
+// remote parallel subtask the way they reach a single task: $HOME expands on
+// the remote, while quotes and backticks arrive literally.
+func TestParallelEnvExpandsLikeSingleTasks(t *testing.T) {
+	conn := GetSSHConnection(t)
+	RequireRemoteRsync(t, conn)
+	setupParallelSSHHome(t)
+
+	remoteDir := conn.Host.Dir
+	t.Cleanup(func() { CleanupRemoteDir(t, conn, remoteDir) })
+
+	remoteHome, _, code, err := conn.Client.Exec("printf %s \"$HOME\"")
+	require.NoError(t, err)
+	require.Equal(t, 0, code)
+
+	proj := projectConfig(config.DefaultConfig().Sync)
+	proj.Defaults.Env = map[string]string{
+		"RR_BIN": "$HOME/bin",
+		"RR_MSG": "say \"hi\" `nope`",
+	}
+	resolved := &config.ResolvedConfig{Project: proj, ProjectRoot: TempSyncDirWithFiles(t, map[string]string{"a.txt": "a"})}
+
+	tasks := []parallel.TaskInfo{{Name: "env", Index: 0, Command: `printf '%s|%s' "$RR_BIN" "$RR_MSG"`}}
+	h := config.Host{SSH: []string{parallelTestAlias}, Dir: remoteDir}
+	result := runOrchestrator(t, tasks, h, resolved, parallel.Config{OutputMode: parallel.OutputQuiet})
+
+	require.Len(t, result.TaskResults, 1)
+	tr := result.TaskResults[0]
+	require.Equal(t, 0, tr.ExitCode, string(tr.Output))
+	assert.Equal(t, string(remoteHome)+"/bin|say \"hi\" `nope`", strings.TrimSpace(string(tr.Output)))
+}
+
 // TestParallelSubtaskPull runs a parallel task through the CLI entry point
 // and checks each subtask's `pull:` lands in <dest>/<subtask>/ after the run,
 // including for the subtask that failed. Both subtasks write the same

@@ -74,6 +74,31 @@ func TestShellQuoteJoin(t *testing.T) {
 	}
 }
 
+func TestShellDoubleQuote(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple", "bar", `"bar"`},
+		{"empty", "", `""`},
+		{"variable left to expand", "$HOME/.local/bin:$PATH", `"$HOME/.local/bin:$PATH"`},
+		{"double quote", `say "hi"`, `"say \"hi\""`},
+		{"backtick", "`whoami`", "\"\\`whoami\\`\""},
+		{"backslash", `C:\dir\`, `"C:\\dir\\"`},
+		{"single quote needs no escape", "it's", `"it's"`},
+		{"spaces and semicolon stay inert", "a b; rm -rf ~", `"a b; rm -rf ~"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShellDoubleQuote(tt.input); got != tt.expected {
+				t.Errorf("ShellDoubleQuote(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestIsCompoundCommand(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -7,17 +7,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	rrexec "github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
-	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // hostWorker executes tasks on a specific host.
@@ -319,55 +317,7 @@ func (w *hostWorker) fullCommand(cmd string, taskEnv map[string]string, workDir 
 	project := w.orchestrator.project()
 	env := config.MergedTaskEnv(project, &w.host, taskEnv)
 	setup := config.GetMergedSetupCommands(project, &w.host)
-	return buildFullCommand(cmd, env, workDir, setup)
-}
-
-// buildFullCommand constructs the command with workdir, setup commands, and
-// env. The cd comes first so relative setup commands resolve in the project
-// dir, matching single tasks.
-func buildFullCommand(cmd string, env map[string]string, workDir string, setupCommands []string) string {
-	var parts []string
-
-	// Add cd to work directory
-	if workDir != "" {
-		parts = append(parts, "cd "+util.ShellQuotePreserveTilde(workDir))
-	}
-
-	// Add setup commands
-	parts = append(parts, setupCommands...)
-
-	// Build env prefix (sorted, so the command is deterministic)
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	envPrefix := ""
-	for _, k := range keys {
-		envPrefix += "export " + k + "=" + shellQuote(env[k]) + "; "
-	}
-
-	// Add command with env
-	parts = append(parts, envPrefix+cmd)
-
-	// Join with &&
-	result := ""
-	for i, part := range parts {
-		if i > 0 {
-			result += " && "
-		}
-		result += part
-	}
-
-	return result
-}
-
-// shellQuote quotes a string for safe shell use.
-// Uses single quotes with proper escaping to prevent command injection.
-func shellQuote(s string) string {
-	// Use single quotes and escape any embedded single quotes
-	// This is safe for POSIX shells: 'foo'\''bar' -> foo'bar
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+	return rrexec.BuildCommand(cmd, env, workDir, setup)
 }
 
 // notifyComplete notifies the output manager that a task completed.
@@ -519,17 +469,13 @@ func (w *localWorker) ensureSetup(ctx context.Context) error {
 }
 
 // command builds a local shell command with project defaults setup chained
-// in front and taskEnv merged over defaults env, the same merge a local
-// single task gets (there is no host layer locally).
+// in front and taskEnv merged over defaults env, built the same way as a
+// local single task (there is no host layer locally).
 func (w *localWorker) command(ctx context.Context, script string, taskEnv map[string]string) *exec.Cmd {
 	project := w.orchestrator.project()
-	parts := append(config.GetMergedSetupCommands(project, nil), script)
-	cmd := exec.CommandContext(ctx, "sh", "-c", strings.Join(parts, " && "))
-	cmd.Env = os.Environ()
-	for k, v := range config.MergedTaskEnv(project, nil, taskEnv) {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	return cmd
+	env := config.MergedTaskEnv(project, nil, taskEnv)
+	setup := config.GetMergedSetupCommands(project, nil)
+	return exec.CommandContext(ctx, "sh", "-c", rrexec.BuildCommand(script, env, "", setup))
 }
 
 // resolveWorkDir returns the project root from the resolved config if available,

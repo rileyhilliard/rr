@@ -3,6 +3,9 @@ package exec
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -260,98 +263,113 @@ func TestExecuteTask_EmptyTask(t *testing.T) {
 	assert.Contains(t, err.Error(), "doesn't have anything to run")
 }
 
-func TestBuildEnvPrefix(t *testing.T) {
+func TestBuildCommand(t *testing.T) {
 	tests := []struct {
-		name     string
-		env      map[string]string
-		expected string
+		name          string
+		cmd           string
+		env           map[string]string
+		workDir       string
+		setupCommands []string
+		expected      string
 	}{
 		{
-			name:     "empty env",
-			env:      nil,
-			expected: "",
-		},
-		{
-			name:     "empty map",
-			env:      map[string]string{},
-			expected: "",
-		},
-		{
-			name:     "single var",
-			env:      map[string]string{"FOO": "bar"},
-			expected: `export FOO="bar"; `,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildEnvPrefix(tt.env)
-			if len(tt.env) > 0 {
-				// For non-empty, just verify structure since map order is undefined
-				assert.Contains(t, result, "export")
-				for k, v := range tt.env {
-					assert.Contains(t, result, k)
-					assert.Contains(t, result, v)
-				}
-			} else {
-				assert.Equal(t, tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestBuildCommand_Local(t *testing.T) {
-	tests := []struct {
-		name     string
-		cmd      string
-		env      map[string]string
-		workDir  string
-		expected string
-	}{
-		{
-			name:     "simple command",
+			name:     "bare command",
 			cmd:      "echo hello",
-			env:      nil,
-			workDir:  "",
 			expected: "echo hello",
 		},
 		{
-			name:    "command with env",
-			cmd:     "echo $FOO",
-			env:     map[string]string{"FOO": "bar"},
-			workDir: "",
+			name:     "workdir is single-quoted",
+			cmd:      "make test",
+			workDir:  "/home/user/project",
+			expected: "cd '/home/user/project' && make test",
+		},
+		{
+			name:     "workdir with spaces and a quote",
+			cmd:      "make test",
+			workDir:  "/srv/it's my dir",
+			expected: `cd '/srv/it'\''s my dir' && make test`,
+		},
+		{
+			name:     "tilde workdir keeps tilde expandable",
+			cmd:      "make test",
+			workDir:  "~/rr projects/app",
+			expected: "cd ~/'rr projects/app' && make test",
+		},
+		{
+			name:     "env keys are sorted",
+			cmd:      "go test",
+			env:      map[string]string{"GOOS": "linux", "CGO_ENABLED": "0"},
+			expected: `export CGO_ENABLED="0"; export GOOS="linux"; go test`,
+		},
+		{
+			name:     "env value leaves $ for the shell to expand",
+			cmd:      "go test",
+			env:      map[string]string{"PATH": "$HOME/.local/bin:$PATH"},
+			expected: `export PATH="$HOME/.local/bin:$PATH"; go test`,
+		},
+		{
+			name:     "env value with a double quote",
+			cmd:      "run",
+			env:      map[string]string{"MSG": `say "hi"`},
+			expected: `export MSG="say \"hi\""; run`,
+		},
+		{
+			name:     "env value with a backtick stays literal",
+			cmd:      "run",
+			env:      map[string]string{"MSG": "`whoami`"},
+			expected: "export MSG=\"\\`whoami\\`\"; run",
+		},
+		{
+			name:          "setup commands run after cd and before env",
+			cmd:           "make build",
+			env:           map[string]string{"CC": "gcc"},
+			workDir:       "/app",
+			setupCommands: []string{"source .venv/bin/activate", "export PATH=/opt/bin:$PATH"},
+			expected:      `cd '/app' && source .venv/bin/activate && export PATH=/opt/bin:$PATH && export CC="gcc"; make build`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildCommand(tt.cmd, tt.env, tt.workDir, nil, true)
-			if len(tt.env) == 0 {
-				assert.Equal(t, tt.expected, result)
-			} else {
-				// Verify env prefix is present
-				assert.Contains(t, result, "export")
-				assert.Contains(t, result, tt.cmd)
-			}
+			assert.Equal(t, tt.expected, BuildCommand(tt.cmd, tt.env, tt.workDir, tt.setupCommands))
 		})
 	}
 }
 
-func TestBuildCommand_Remote(t *testing.T) {
-	result := buildCommand("make test", nil, "/home/user/project", nil, false)
-	assert.Contains(t, result, "cd")
-	assert.Contains(t, result, "/home/user/project")
-	assert.Contains(t, result, "make test")
-}
+// TestBuildCommand_ShellEvaluation runs built commands through a real shell:
+// $ expands, while quotes, backticks, and backslashes arrive intact.
+func TestBuildCommand_ShellEvaluation(t *testing.T) {
+	t.Setenv("HOME", "/home/rr-test")
+	dir := filepath.Join(t.TempDir(), `it's a "dir"`)
+	require.NoError(t, os.Mkdir(dir, 0o755))
 
-func TestBuildCommand_WithSetupCommands(t *testing.T) {
-	setup := []string{"source ~/.env", "export PATH=/opt/bin:$PATH"}
-	result := buildCommand("make test", nil, "", setup, true)
-	assert.Contains(t, result, "source ~/.env")
-	assert.Contains(t, result, "export PATH=/opt/bin:$PATH")
-	assert.Contains(t, result, "make test")
-	// Should be joined with &&
-	assert.Contains(t, result, " && ")
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"expands $HOME", "$HOME/.local/bin", "/home/rr-test/.local/bin"},
+		{"double quote", `say "hi"`, `say "hi"`},
+		{"backtick", "`echo pwned`", "`echo pwned`"},
+		{"backslash", `a\b\`, `a\b\`},
+		{"single quote", "it's", "it's"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := BuildCommand(`printf '%s|' "$RR_VAL"; pwd -P`, map[string]string{"RR_VAL": tt.value}, dir, nil)
+			var stdout, stderr bytes.Buffer
+			code, err := ExecuteLocal(cmd, "", &stdout, &stderr)
+			require.NoError(t, err)
+			require.Equal(t, 0, code, stderr.String())
+
+			got, pwd, _ := strings.Cut(strings.TrimSpace(stdout.String()), "|")
+			assert.Equal(t, tt.want, got)
+			resolved, err := filepath.EvalSymlinks(dir)
+			require.NoError(t, err)
+			assert.Equal(t, resolved, pwd)
+		})
+	}
 }
 
 func TestBuildRemoteCommand_DefaultShell(t *testing.T) {
