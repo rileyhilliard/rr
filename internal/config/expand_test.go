@@ -182,6 +182,21 @@ func TestSanitizeWorktreeName(t *testing.T) {
 	}
 }
 
+// clearGitEnv unsets GIT_* variables for the rest of the test. Git hooks
+// (e.g. lefthook's pre-push running these tests) export GIT_DIR and friends;
+// inherited, they point both the fixture's `git init` and the code under
+// test at the developer's real repository, which then gets re-initialized
+// as bare.
+func clearGitEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "GIT_") {
+			t.Setenv(k, "") // registers restore of the original value
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+}
+
 // setupWorktreeRepo builds a real git repo with one linked worktree and
 // returns (mainDir, worktreeDir). The origin remote pins the repo name to
 // "myrepo" so ${PROJECT} assertions are deterministic.
@@ -190,6 +205,7 @@ func setupWorktreeRepo(t *testing.T) (string, string) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	clearGitEnv(t)
 
 	base := t.TempDir()
 	mainDir := filepath.Join(base, "myrepo")
