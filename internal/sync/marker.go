@@ -38,9 +38,14 @@ type SyncWarning struct {
 
 // SyncOptions carries optional sync behavior.
 type SyncOptions struct {
+	// DryRun previews the sync without changing the remote tree: rsync runs
+	// with --dry-run, stale directories are reported through Invalidated but
+	// not deleted, and the provenance marker and worktree pruning are
+	// skipped. The remote sync dir is still created if missing, since rsync
+	// needs it to exist.
+	DryRun bool
 	// Invalidated is called for each stale remote directory removed by
-	// lockfile invalidation before rsync runs. Nil prints a plain line to
-	// stdout (see InvalidateStaleDirectories).
+	// lockfile invalidation before rsync runs (nil to ignore).
 	Invalidated InvalidationNotifyFunc
 	// Warn receives non-fatal warnings (nil to ignore).
 	Warn func(SyncWarning)

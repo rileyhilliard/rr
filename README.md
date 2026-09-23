@@ -113,10 +113,10 @@ The other defaults each solve a problem that came up with real agents:
 
 | Behavior                  | Why it matters for an agent                                                                                                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Error codes               | Failures carry a code (`LOCK_HELD`, `SSH_TIMEOUT`, `RSYNC_FAILED`, `COMMAND_FAILED`, `CONFIG_NOT_FOUND`, ...) and a suggested fix, so the agent can branch on the code without parsing prose. |
+| Error codes               | Failures carry a code (`LOCK_HELD`, `SSH_TIMEOUT`, `DEPENDENCY_MISSING`, `HOST_NOT_FOUND`, `CONFIG_NOT_FOUND`, ...) and a suggested fix, so the agent can branch on the code without parsing prose. Codes are set where the error happens, not guessed from the message. |
 | Parsed test results       | For pytest, Jest, and Go test, the result carries pass/fail counts (`details.summary`) and each failing test with its `file:line` and message (`details.failures`), so the agent doesn't scroll back through the output. |
 | Zero-test detection       | A run that collected no tests keeps its exit code but sets `details.no_tests`, so a bad path filter doesn't look like a passing suite.                                                  |
-| Loud local fallback       | If `local_fallback` is on and rr ends up running locally, it emits a warning event. When the cause was locked hosts, the result lists who holds each lock (`details.fallback`). Set `local_fallback: false` if a local run should never count. |
+| Loud local fallback       | If `local_fallback` is on and rr ends up running locally because hosts were unreachable or all locked, it emits a warning event and sets `details.fallback`; for locked hosts it lists who holds each lock. A deliberate local run (`--local`, or local mode) isn't a fallback, and its connect event says so in `details.reason`. Set `local_fallback: false` if a local run should never count. |
 | Path rewriting and hints  | Absolute local paths in a command (`/Users/you/project/tests/...`) are rewritten to the remote copy. A failure that looks like a local-path mistake gets a hint explaining the mapping.   |
 | Scoped runs               | Extra arguments forward into the task (`rr test-api -- tests/auth -x`), or into an `{args}` placeholder, so an agent can run one file without a new task definition.                           |
 | Worktree isolation        | Each git worktree syncs to its own remote directory, so parallel agents on separate branches never overwrite each other's tree. `rr prune` removes directories for deleted worktrees.      |
@@ -268,7 +268,7 @@ tasks:
 
 `rr test-pipeline` runs only the pipeline shards, and `rr test` runs everything. A shard you add to `test-pipeline` is picked up by `test` automatically. To keep a subtask on specific machines (a GPU box, say, or away from a production host), give it a `hosts:` list, and the parallel scheduler honors it.
 
-Each parallel run writes per-task logs and a `summary.json` to `~/.rr/logs/<task>-<timestamp>/`. `rr logs` lists recent runs.
+Each parallel run writes per-task logs and a `summary.json` to `~/.rr/logs/<task>-<timestamp>/`. `rr logs` lists recent runs. A subtask's `pull:` runs after the whole group finishes, pass or fail, and lands in `<dest>/<subtask>_<index>/`, named like the subtask's log file, so shards don't overwrite each other's reports. Subtasks that share a host also share its remote directory, so give each one its own output path.
 
 Output modes:
 
@@ -388,7 +388,7 @@ Flags that come up often: `--pretty` for human output, `--host <name>` to pin a 
 
 ## Troubleshooting
 
-Start with `rr doctor`. It checks your config, SSH setup, and dependencies on each host:
+Start with `rr doctor`. It checks your config, SSH setup, and dependencies on the project's hosts, and exits 1 only when something would actually block a run (warnings exit 0):
 
 ```bash
 rr doctor

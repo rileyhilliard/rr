@@ -1877,3 +1877,76 @@ func TestSyncConfig_PruneWorktreesEnabled(t *testing.T) {
 	assert.False(t, SyncConfig{PruneWorktrees: &off}.PruneWorktreesEnabled())
 	assert.True(t, SyncConfig{PruneWorktrees: &on}.PruneWorktreesEnabled())
 }
+
+// Env var names, task names, and host names are case-sensitive and may
+// contain dots. Loading must keep them exactly as written.
+func TestLoad_PreservesMapKeys(t *testing.T) {
+	cfg, err := Load(writeProjectConfig(t, `version: 1
+hosts: [MyBox]
+defaults:
+  env:
+    FOO: bar
+    MixedCase: "1"
+tasks:
+  Build:
+    run: make
+    env:
+      BAZ: qux
+  test.unit:
+    run: go test
+    env:
+      GOFLAGS: -count=1
+  CI:
+    parallel: [Build, test.unit]
+`))
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Warnings)
+	assert.Equal(t, []string{"MyBox"}, cfg.Hosts)
+	assert.Equal(t, map[string]string{"FOO": "bar", "MixedCase": "1"}, cfg.Defaults.Env)
+	require.Contains(t, cfg.Tasks, "Build")
+	require.Contains(t, cfg.Tasks, "test.unit")
+	require.Contains(t, cfg.Tasks, "CI")
+	assert.Equal(t, map[string]string{"BAZ": "qux"}, cfg.Tasks["Build"].Env)
+	assert.Equal(t, map[string]string{"GOFLAGS": "-count=1"}, cfg.Tasks["test.unit"].Env)
+	assert.Equal(t, []string{"Build", "test.unit"}, cfg.Tasks["CI"].Parallel)
+	assert.NoError(t, Validate(cfg))
+}
+
+func TestLoadGlobal_PreservesMapKeys(t *testing.T) {
+	writeGlobalConfig(t, `version: 1
+hosts:
+  MyBox:
+    ssh: [mybox.local]
+    dir: /tmp/rr
+    env:
+      CUDA_VISIBLE_DEVICES: "0"
+      Extra_Path: /opt/bin
+`)
+	cfg, err := LoadGlobal()
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Warnings)
+	require.Contains(t, cfg.Hosts, "MyBox")
+	want := map[string]string{"CUDA_VISIBLE_DEVICES": "0", "Extra_Path": "/opt/bin"}
+	assert.Equal(t, want, cfg.Hosts["MyBox"].Env)
+
+	// rr host add loads, edits, and saves the global config; the rewrite
+	// must not change the user's keys.
+	require.NoError(t, SaveGlobal(cfg))
+	again, err := LoadGlobal()
+	require.NoError(t, err)
+	require.Contains(t, again.Hosts, "MyBox")
+	assert.Equal(t, want, again.Hosts["MyBox"].Env)
+}
+
+func TestLoad_UnknownKeyWarningKeepsCase(t *testing.T) {
+	cfg, err := Load(writeProjectConfig(t, `version: 1
+tasks:
+  Build:
+    run: make
+    runn: typo
+`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tasks.Build.runn"}, warningKeys(cfg.Warnings))
+}

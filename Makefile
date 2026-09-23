@@ -3,7 +3,7 @@
 .PHONY: test-local lint-local verify-local test-all verify-all
 
 # Read golangci-lint version from file (shared with CI)
-GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.8.0")
+GOLANGCI_LINT_VERSION := $(shell cat .golangci-version 2>/dev/null || echo "2.13.2")
 # Run the pinned binary by path: a different golangci-lint earlier on PATH (a
 # Homebrew one, say) would otherwise shadow it and quietly defeat the pin.
 # `go install` writes to GOBIN when it is set, else to the bin directory of
@@ -106,7 +106,7 @@ coverage-merged:
 	@echo "Running unit tests with coverage..."
 	@go test -race -coverprofile=coverage-unit.out -covermode=atomic ./... > /dev/null 2>&1
 	@echo "Running integration tests with coverage (tracking all packages)..."
-	@go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... ./tests/integration/... ./pkg/sshutil/... > /dev/null 2>&1 || true
+	@go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... ./tests/integration/... ./pkg/sshutil/... ./internal/cli/... > /dev/null 2>&1 || true
 	@echo "Merging coverage reports..."
 	@if [ ! -f coverage-integration.out ]; then echo "mode: atomic" > coverage-integration.out; fi
 	@go run github.com/wadey/gocovmerge@latest coverage-unit.out coverage-integration.out > coverage-merged.out
@@ -130,7 +130,7 @@ coverage-ci:
 	RR_TEST_SSH_HOST=localhost:2222 \
 	RR_TEST_SSH_KEY=$${TMPDIR:-/tmp}/rr-ci-ssh-keys/id_ed25519 \
 	RR_TEST_SSH_USER=testuser \
-	go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... ./tests/integration/... ./pkg/sshutil/... > /dev/null 2>&1; \
+	go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... ./tests/integration/... ./pkg/sshutil/... ./internal/cli/... > /dev/null 2>&1; \
 	echo "Merging coverage reports..."; \
 	if [ ! -f coverage-integration.out ]; then echo "mode: atomic" > coverage-integration.out; fi; \
 	go run github.com/wadey/gocovmerge@latest coverage-unit.out coverage-integration.out > coverage-merged.out; \

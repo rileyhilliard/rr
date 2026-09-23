@@ -156,6 +156,50 @@ func TestHandleUnknownCommand_Envelope(t *testing.T) {
 	}
 }
 
+// TestUnknownCommandError_OutsideProject checks an unknown command outside a
+// project reports the missing .rr.yaml, since the name is most likely a task
+// that config would define. A near miss of a built-in adds a "Did you mean"
+// hint to the suggestion without replacing the config error: real task names
+// like test and lint are within typo distance of built-ins (host, init).
+func TestUnknownCommandError_OutsideProject(t *testing.T) {
+	noConfig := &configDiscoveryState{ProjectErr: rrerrors.New(rrerrors.ErrConfigNotFound,
+		"No .rr.yaml found in this directory or parent directories", "Run 'rr init' to create one.")}
+
+	tests := []struct {
+		name       string
+		cmd        string
+		wantHint   string
+		wantNoHint bool
+	}{
+		{name: "typo of a built-in", cmd: "stauts", wantHint: "Did you mean: status?"},
+		{name: "task name near a built-in", cmd: "test"},
+		{name: "another task name near a built-in", cmd: "lint"},
+		{name: "no near match", cmd: "sometask", wantNoHint: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withDiscoveryState(t, noConfig)
+			err := unknownCommandError(errors.New(`unknown command "`+tt.cmd+`" for "rr"`), false)
+
+			var rrErr *rrerrors.Error
+			require.True(t, errors.As(err, &rrErr), "got %T: %v", err, err)
+			assert.Equal(t, rrerrors.ErrConfigNotFound, rrErr.Code)
+			assert.Equal(t, "No .rr.yaml found in this directory or parent directories", rrErr.Message)
+			assert.Contains(t, rrErr.Suggestion, "rr init")
+			if tt.wantHint != "" {
+				assert.Contains(t, rrErr.Suggestion, tt.wantHint)
+			}
+			if tt.wantNoHint {
+				assert.NotContains(t, rrErr.Suggestion, "Did you mean")
+			}
+		})
+	}
+
+	assert.Equal(t, "Run 'rr init' to create one.", noConfig.ProjectErr.(*rrerrors.Error).Suggestion,
+		"the hint must not leak into the shared discovery state")
+}
+
 // TestVerboseFlag_WarnsWithoutBreakingJSON checks the deprecated --verbose
 // still parses, and warns through the structured channel instead of cobra's
 // plain-text deprecation line, which corrupted JSON on stderr.

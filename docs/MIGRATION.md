@@ -5,6 +5,7 @@ This document covers breaking changes and upgrade instructions between versions.
 ## Contents
 
 - [Version compatibility](#version-compatibility)
+- [Upgrading to the next release](#upgrading-to-the-next-release-unreleased)
 - [Upgrading to v0.26.0](#upgrading-to-v0260-worktree-pruning)
 - [Upgrading to v0.24.0](#upgrading-to-v0240-commands-run-in-your-current-subdirectory)
 - [Upgrading to v0.23.0](#upgrading-to-v0230-task-args-worktrees-excludes-fallback)
@@ -25,6 +26,51 @@ version: 1  # Current schema version
 When the schema changes in incompatible ways, the version number bumps. rr refuses to load a config whose `version` is newer than it supports and tells you to upgrade rr. The schema is still at `version: 1`: every change below happened without a bump, so check the sections for the releases you're skipping.
 
 rr is pre-1.0, so breaking changes ship in minor releases. [CHANGELOG.md](../CHANGELOG.md) has the full detail for each version.
+
+## Upgrading to the next release (unreleased)
+
+These changes are on `main` and ship in the next minor release. Most affect scripts and agents that read rr's exit codes and structured output.
+
+**`rr doctor` exits 1 when a check fails.** It used to exit 0 whatever it found. Now it exits 1 on any failed check and 0 when there are only warnings. The JSON envelope still says `success: true`, since doctor itself ran, and `data.summary.all_clear` still carries the verdict. A script that runs `rr doctor` under `set -e` now stops on a real failure:
+
+```bash
+rr doctor || echo "doctor found a blocker"
+```
+
+Checks were regraded at the same time, so a missing SSH agent, a missing default key file, no `.rr.yaml`, or an offline host that the project doesn't use are warnings, not failures. An unreachable host fails only when no host in scope is reachable and `local_fallback` wouldn't take over.
+
+**Error codes changed for three kinds of failure.** Codes used to be guessed from the error message, and some were wrong. If you branch on `error.code`, update these:
+
+| Failure | Old code | New code |
+| --- | --- | --- |
+| No `.rr.yaml` found, or `--config` points at a missing file | `CONFIG_INVALID` | `CONFIG_NOT_FOUND` |
+| Host name not in the global config (`--host`, `hosts:`, `rr unlock`, `rr provision`, `rr host remove`, `rr monitor`) | `CONFIG_INVALID` or `CONFIG_NOT_FOUND` | `HOST_NOT_FOUND` |
+| rsync missing locally or on the host | `RSYNC_FAILED` | `DEPENDENCY_MISSING` |
+| `ssh-copy-id` missing (`rr setup`) | `SSH_CONNECTION_FAILED` | `DEPENDENCY_MISSING` |
+| Tools from `require:` missing on the host | `COMMAND_FAILED` | `DEPENDENCY_MISSING` |
+
+**`-v` is no longer an rr flag.** The global `-v`/`--verbose` flag had no effect, and `-v` swallowed task arguments: `rr test -v` ran the task without `-v`. Put task flags after `--`:
+
+```bash
+rr test -- -v      # passes -v to the task
+rr test -v         # CONFIG_INVALID, with a hint to use --
+```
+
+`--verbose` still parses so existing scripts keep working, but it's hidden and emits a `config` warn event. Use `RR_DEBUG=1` for debug logs.
+
+**Remove the `output:` section from `.rr.yaml`.** It was validated but never read. rr now warns about it (a `config` warn event, or a styled warning with `--pretty`) and ignores it. Unknown keys and the old `defaults.host` get the same kind of warning, so a typo no longer silently does nothing. Configs that loaded before still load.
+
+**Host, task, and env names are case-sensitive.** rr used to lowercase every key in its config files, so host `MyBox` was stored as `mybox`, task `Build` ran as `rr build`, and `env: {FOO: bar}` exported `foo=bar`. Keys are now kept exactly as written. If you worked around the old behavior, match the case used in the config: `hosts: [MyBox]` and `--host MyBox`, `rr Build`, and `$FOO` in commands that read the variable. Task and host names containing a dot now load as written instead of being split apart. Env var names must be valid shell names (letters, digits, underscores, not starting with a digit); anything else fails validation with an error naming the key.
+
+**`pull`, `logs`, and `provision` are reserved task names.** Tasks with those names already collided with the built-in commands. Rename them.
+
+**Local runs report a different connect event.** `--local` and local mode (project `local_fallback` with no `hosts:` listed) emit a connect `complete` event with `host: "local"` and `details.reason` of `local_flag` or `local_mode`, and the result carries `details.local_reason` with the same value. They used to emit a connect `warn` event with `reason: hosts_unreachable`. Consumers that matched `hosts_unreachable` to detect local runs should match the new reasons. Real fallbacks still warn with `hosts_unreachable` or `all_hosts_locked`. `--local` also works with no hosts configured now.
+
+**`rr tasks` fails on an invalid config.** It exits non-zero with an error envelope on stderr, the same error `rr <task>` gives. It used to write error envelopes to stdout. A project with no hosts configured still lists its tasks.
+
+**Parallel subtasks get the full env and setup.** Subtasks now merge host `env`, then `defaults.env`, then the task's `env`, and run host `setup_commands` plus `defaults.setup` after the `cd` into the project directory, the same as single tasks. If a subtask depended on not seeing `defaults.env`, or on setup running before the `cd`, adjust it. Env values in parallel subtasks, local and remote, used to arrive literally; they're now expanded by the shell like single-task values, so write `\$` for a literal dollar sign (a password like `pa$$word` becomes `pa\$\$word`). Local parallel subtasks also used to set env on the process, so setup commands could read it; env is now exported after setup everywhere, so a setup command that reads an env value (say `source $VENV/bin/activate`) should set that variable itself.
+
+**Parallel subtask `pull:` now runs.** Each subtask's files land in `<dest>/<name>_<index>/`, named like its log file: the subtask name with `/ \ : * ? " < > |` replaced by `-`, then its position in the flattened `parallel:` list (`test:unit` first in the list lands in `test-unit_0/`). Subtasks that run on the same host share one remote directory, so give each one its own output path (a different junit file per subtask, say) or they overwrite each other on the remote. `pull:` set on the parallel task itself does nothing and warns; move it to the subtasks.
 
 ## Upgrading to v0.26.0 (worktree pruning)
 
@@ -102,7 +148,7 @@ hosts:
   - mini
 ```
 
-Move your preferred host to the top of that list and delete `defaults.host`. rr ignores unknown keys, so a leftover `defaults.host` won't error; it just has no effect.
+Move your preferred host to the top of that list and delete `defaults.host`. A leftover `defaults.host` doesn't error; it has no effect, and current rr versions print a config warning about it.
 
 ## v0.5.x to v0.6.0 (global config separation)
 
@@ -212,7 +258,7 @@ EOF
 
 ### A setting stopped having an effect
 
-rr ignores config keys it doesn't recognize, so a removed or misspelled key (like `defaults.host`) is skipped without an error. If a setting seems to do nothing after an upgrade, check the sections above and [configuration.md](configuration.md) for its current name and location.
+rr doesn't reject config keys it doesn't recognize. Current versions print a config warning for each one (a `config` warn event, or a styled warning with `--pretty`) that names the key and the file; older versions skipped them silently. If a setting seems to do nothing after an upgrade, look for that warning, then check the sections above and [configuration.md](configuration.md) for the key's current name and location.
 
 ### Config validation failures
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -382,26 +383,19 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 }
 
 // connectLocalTarget completes the connect phase for a local target
-// (--local or local mode). Nothing is dialed and nothing went wrong, so it's
-// a normal connect completion carrying the reason, not a fallback warning.
+// (--local or local mode), and records the reason as details.local_reason
+// on the result. Nothing is dialed and nothing went wrong, so it's a normal
+// connect completion carrying the reason, not a fallback warning.
 func connectLocalTarget(ctx *WorkflowContext) {
 	ctx.Conn = localConnection()
 	reason := ctx.target.reason
+	ctx.AddResultDetail("local_reason", reason)
 
 	if PrettyMode() {
 		ctx.PhaseDisplay.RenderSuccess("Running locally ("+host.DescribeLocalReason(reason)+")", 0)
 		return
 	}
-
-	reporter := ctx.GetReporter()
-	reporter.PhaseStart("connect")
-	WritePhaseEvent(PhaseEvent{
-		Type:    "phase",
-		Phase:   "connect",
-		Status:  "complete",
-		Host:    "local",
-		Details: map[string]interface{}{"reason": reason},
-	})
+	emitLocalConnect(reason)
 }
 
 // syncPhase handles the file sync phase of the workflow.
@@ -459,16 +453,7 @@ func syncOptions() *rrsync.SyncOptions {
 func structuredSyncOptions(hostName string) *rrsync.SyncOptions {
 	return &rrsync.SyncOptions{
 		Invalidated: func(dir, lockfile string) {
-			WritePhaseEvent(PhaseEvent{
-				Type:   "phase",
-				Phase:  "sync",
-				Status: "invalidated",
-				Host:   hostName,
-				Details: map[string]interface{}{
-					"dir":      dir,
-					"lockfile": lockfile,
-				},
-			})
+			WritePhaseEvent(invalidatedEvent(hostName, dir, lockfile))
 		},
 		Warn: func(w rrsync.SyncWarning) {
 			WritePhaseEvent(PhaseEvent{
@@ -491,14 +476,26 @@ func structuredSyncOptions(hostName string) *rrsync.SyncOptions {
 	}
 }
 
+// invalidatedEvent is the sync phase event for a remote directory removed
+// by lockfile invalidation.
+func invalidatedEvent(hostName, dir, lockfile string) PhaseEvent {
+	return PhaseEvent{
+		Type:   "phase",
+		Phase:  "sync",
+		Status: "invalidated",
+		Host:   hostName,
+		Details: map[string]interface{}{
+			"dir":      dir,
+			"lockfile": lockfile,
+		},
+	}
+}
+
 // prettySyncOptions surfaces sync notices and warnings as printed lines.
 func prettySyncOptions() *rrsync.SyncOptions {
-	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	return &rrsync.SyncOptions{
 		Invalidated: func(dir, lockfile string) {
-			// Runs while the sync spinner is drawing: clear its line first.
-			fmt.Print("\r\033[K")
-			fmt.Println(muted.Render(fmt.Sprintf("Invalidating stale %s (%s changed)", dir, lockfile)))
+			printSpinnerNotice(fmt.Sprintf("Invalidating stale %s (%s changed)", dir, lockfile))
 		},
 		Warn: func(w rrsync.SyncWarning) {
 			ui.PrintWarning(w.Message)
@@ -508,6 +505,13 @@ func prettySyncOptions() *rrsync.SyncOptions {
 			fmt.Println(muted.Render("Pruned stale worktree dir " + dir))
 		},
 	}
+}
+
+// printSpinnerNotice prints a muted notice that arrives while the sync
+// spinner is drawing, clearing the spinner's line first.
+func printSpinnerNotice(msg string) {
+	fmt.Print("\r\033[K")
+	fmt.Println(lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(msg))
 }
 
 // resolveSyncConfig returns the sync config to use, falling back to defaults.
@@ -613,12 +617,15 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 // SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
 // Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
 //
-// When multiple hosts are configured, this function implements load balancing:
-// 1. Try each host with non-blocking lock acquisition
-// 2. If a host is locked, immediately try the next host
-// 3. If all hosts are locked and local_fallback is true, run locally
-// 4. If all hosts are locked and local_fallback is false, round-robin wait
-// 5. Once a lock is acquired, sync files to that host
+// A local target (--local or local mode) dials nothing, takes no lock, and
+// skips sync.
+// When multiple hosts are configured, this function implements load balancing
+// (see findAvailableHost):
+//  1. Try each host with non-blocking lock acquisition
+//  2. If a host is locked, immediately try the next host
+//  3. If all hosts are locked or unreachable, local_fallback decides whether
+//     to run locally, wait, or fail
+//  4. Once a lock is acquired, sync files to that host
 //
 // The lock-before-sync order ensures we don't waste time syncing to a host we can't use.
 func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
@@ -698,30 +705,57 @@ func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest str
 		Patterns:    pullItems,
 		DefaultDest: dest,
 	}
-
-	if !PrettyMode() {
-		reporter := wf.GetReporter()
-		reporter.PhaseStart("pull")
-		pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
-		if pullErr != nil {
-			reporter.PhaseFailed("pull", pullErr)
-		} else {
-			reporter.PhaseComplete("pull", wf.Conn.Name, time.Since(pullStart))
-		}
-		return
-	}
-
-	spinner := ui.NewSpinner("Pulling files")
-	spinner.Start()
-
-	pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
-	if pullErr != nil {
-		spinner.Fail()
-		fmt.Printf("\n%s Pull failed: %s\n", ui.SymbolFail, pullErr.Error())
-	} else {
-		spinner.Success()
+	if pullAndReport(wf.Conn, pullOpts, rrsync.Pull, "") && PrettyMode() {
 		wf.PhaseDisplay.RenderSuccess("Files pulled", time.Since(pullStart))
 	}
+}
+
+// pullFunc matches rrsync.Pull; tests swap in a fake.
+type pullFunc func(conn *host.Connection, opts rrsync.PullOptions, progress io.Writer) error
+
+// pullAndReport pulls files over conn and reports it as the pull phase:
+// started, then complete or failed events in structured mode, a spinner and
+// a failure line in pretty mode. A failed pull is reported, never returned,
+// because pulls don't change a run's exit code. Returns whether it worked.
+//
+// task names the parallel subtask being pulled, empty for a single run.
+// Several hosts pull in one parallel run, so a subtask's events carry the
+// host throughout plus details.task; a single run's events match its other
+// phases, with the host on complete only.
+func pullAndReport(conn *host.Connection, opts rrsync.PullOptions, pull pullFunc, task string) bool {
+	start := time.Now()
+
+	if !PrettyMode() {
+		ev := PhaseEvent{Type: "phase", Phase: "pull", Status: "started"}
+		if task != "" {
+			ev.Host = conn.Name
+			ev.Details = map[string]interface{}{"task": task}
+		}
+		WritePhaseEvent(ev)
+		if err := pull(conn, opts, nil); err != nil {
+			ev.Status, ev.Error = "failed", err.Error()
+			WritePhaseEvent(ev)
+			return false
+		}
+		ev.Status, ev.Host, ev.Duration = "complete", conn.Name, time.Since(start).Seconds()
+		WritePhaseEvent(ev)
+		return true
+	}
+
+	label, failure := "Pulling files", "Pull failed"
+	if task != "" {
+		label = fmt.Sprintf("Pulling %s files (%s)", task, conn.Name)
+		failure = "Pull failed for " + task
+	}
+	spinner := ui.NewSpinner(label)
+	spinner.Start()
+	if err := pull(conn, opts, nil); err != nil {
+		spinner.Fail()
+		fmt.Printf("%s %s: %s\n", ui.SymbolFail, failure, err.Error())
+		return false
+	}
+	spinner.Success()
+	return true
 }
 
 // requirementsPhase verifies that required tools are available on the remote.

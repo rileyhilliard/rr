@@ -12,6 +12,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/parallel"
+	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,7 +73,7 @@ func TestSubtaskPullItems(t *testing.T) {
 			name:    "absolute dest",
 			items:   []config.PullItem{{Src: "out.log", Dest: "/tmp/rr-out"}},
 			subtask: "lint",
-			want:    []config.PullItem{{Src: "out.log", Dest: "/tmp/rr-out/lint"}},
+			want:    []config.PullItem{{Src: "out.log", Dest: filepath.FromSlash("/tmp/rr-out/lint")}},
 		},
 	}
 
@@ -80,6 +81,44 @@ func TestSubtaskPullItems(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, subtaskPullItems(tt.items, tt.subtask))
 		})
+	}
+}
+
+// TestPullSubtaskFiles_Dirs checks each subtask pulls into the stem of its
+// log file (<name>_<index>, sanitized like the log name). The index keeps a
+// subtask listed twice, or a task named like another's stem (shard_2), from
+// sharing a dir, and the sanitizing keeps a name with a slash one level deep.
+func TestPullSubtaskFiles_Dirs(t *testing.T) {
+	withStructuredOutput(t)
+	hosts := map[string]config.Host{"box-a": {}, "box-b": {}}
+	pullCfg := []config.PullItem{{Src: "junit.xml"}}
+	tasks := []parallel.TaskInfo{
+		{Name: "shard", Index: 0, Pull: pullCfg},
+		{Name: "shard_2", Index: 1, Pull: pullCfg},
+		{Name: "shard", Index: 2, Pull: pullCfg},
+		{Name: "lint/go", Index: 3, Pull: pullCfg},
+		{Name: "test:unit", Index: 4, Pull: pullCfg},
+	}
+	result := &parallel.Result{}
+	for _, task := range tasks {
+		result.TaskResults = append(result.TaskResults,
+			parallel.TaskResult{TaskName: task.Name, TaskIndex: task.Index, Host: "box-a", Alias: "a-lan"})
+	}
+
+	var dests []string
+	captureStderr(t, func() {
+		pullSubtaskFiles(tasks, result, hosts, func(_ *host.Connection, opts rrsync.PullOptions, _ io.Writer) error {
+			for _, p := range opts.Patterns {
+				dests = append(dests, p.Dest)
+			}
+			return nil
+		})
+	})
+
+	assert.Equal(t, []string{"shard_0", "shard_2_1", "shard_2", "lint-go_3", "test-unit_4"}, dests)
+	for i, task := range tasks {
+		logStem := strings.TrimSuffix(filepath.Base(logs.TaskLogPath("run", task.Name, task.Index)), ".log")
+		assert.Equal(t, logStem, dests[i], "pull dir matches the log file for %s", task.Name)
 	}
 }
 
@@ -91,7 +130,7 @@ type pullCall struct {
 
 // TestPullSubtaskFiles covers the C2 contract: every subtask that ran on a
 // remote host and has pull config gets pulled, pass or fail, one after
-// another in subtask order, into <dest>/<subtask>/.
+// another in subtask order, into <dest>/<subtask>_<index>/.
 func TestPullSubtaskFiles(t *testing.T) {
 	oldPretty := prettyMode
 	defer func() { prettyMode = oldPretty }()
@@ -130,9 +169,9 @@ func TestPullSubtaskFiles(t *testing.T) {
 
 	require.Len(t, calls, 2, "only remote subtasks with pull config are pulled")
 	assert.Equal(t, pullCall{name: "box-a", alias: "a-lan", dir: "~/rr/proj",
-		patterns: []config.PullItem{{Src: "junit.xml", Dest: "shard-1"}}}, calls[0])
+		patterns: []config.PullItem{{Src: "junit.xml", Dest: "shard-1_0"}}}, calls[0])
 	assert.Equal(t, pullCall{name: "box-b", alias: "b-vpn", dir: "/srv/proj",
-		patterns: []config.PullItem{{Src: "junit.xml", Dest: filepath.Join("reports", "shard-2")}}}, calls[1],
+		patterns: []config.PullItem{{Src: "junit.xml", Dest: filepath.Join("reports", "shard-2_1")}}}, calls[1],
 		"a failed subtask is still pulled")
 
 	events := parsePhaseEvents(t, stderr)
@@ -153,11 +192,60 @@ func TestPullSubtaskFiles(t *testing.T) {
 	assert.Contains(t, events[3].Error, "no such file")
 }
 
+// TestPullAndReport_SingleRunShape pins the single-run pull events, which
+// share the renderer with parallel pulls: like the run's other phases, only
+// complete names the host, and there are no details.
+func TestPullAndReport_SingleRunShape(t *testing.T) {
+	withStructuredOutput(t)
+	conn := &host.Connection{Name: "box-a"}
+
+	for _, fail := range []bool{false, true} {
+		stderr := captureStderr(t, func() {
+			pullAndReport(conn, rrsync.PullOptions{}, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
+				if fail {
+					return fmt.Errorf("rsync: no such file")
+				}
+				return nil
+			}, "")
+		})
+
+		events := parsePhaseEvents(t, stderr)
+		require.Len(t, events, 2)
+		for i := range events {
+			events[i].TS = ""
+		}
+		assert.Equal(t, PhaseEvent{Type: "phase", Phase: "pull", Status: "started"}, events[0])
+		if fail {
+			assert.Equal(t, PhaseEvent{Type: "phase", Phase: "pull", Status: "failed", Error: "rsync: no such file"}, events[1])
+			continue
+		}
+		assert.Equal(t, "complete", events[1].Status)
+		assert.Equal(t, "box-a", events[1].Host)
+		assert.Nil(t, events[1].Details)
+	}
+}
+
 func TestPullSubtaskFiles_LocalRunSkips(t *testing.T) {
 	tasks := []parallel.TaskInfo{{Name: "a", Pull: []config.PullItem{{Src: "x"}}}}
 	result := &parallel.Result{TaskResults: []parallel.TaskResult{{TaskName: "a", Host: "local"}}}
 	called := false
 	pullSubtaskFiles(tasks, result, nil, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
+		called = true
+		return nil
+	})
+	assert.False(t, called)
+}
+
+// TestPullSubtaskFiles_NeverConnectedSkips checks a subtask assigned to a
+// host whose worker never connected (fail-fast cancelled it during connect)
+// isn't pulled: the result names the host but has no alias, and nothing ran
+// there.
+func TestPullSubtaskFiles_NeverConnectedSkips(t *testing.T) {
+	hosts := map[string]config.Host{"box-a": {Dir: "~/rr/proj"}}
+	tasks := []parallel.TaskInfo{{Name: "a", Pull: []config.PullItem{{Src: "x"}}}}
+	result := &parallel.Result{TaskResults: []parallel.TaskResult{{TaskName: "a", Host: "box-a", ExitCode: 1}}}
+	called := false
+	pullSubtaskFiles(tasks, result, hosts, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
 		called = true
 		return nil
 	})

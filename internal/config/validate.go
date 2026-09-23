@@ -2,10 +2,14 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // ReservedTaskNames are command names that cannot be used as task names.
@@ -89,6 +93,10 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 			}
 			seen[h] = true
 		}
+	}
+
+	if err := validateEnv("defaults.env", cfg.Defaults.Env); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'defaults' section in your .rr.yaml.")
 	}
 
 	// Check for reserved task names
@@ -270,6 +278,10 @@ func validateHost(name string, host Host) error {
 		return fmt.Errorf("host '%s' needs a 'dir' - that's where your code will sync to", name)
 	}
 
+	if err := validateEnv(fmt.Sprintf("host '%s' env", name), host.Env); err != nil {
+		return err
+	}
+
 	// Validate remote path (allows ~ for remote shell expansion). Host dirs
 	// keep ${PROJECT}-style variables until use sites expand them, so
 	// validate the expanded form; variables rr can't expand still surface.
@@ -348,6 +360,10 @@ func validateTask(name string, task TaskConfig) error {
 		return fmt.Errorf("task '%s' has output '%s' but it needs to be one of: %s", name, task.Output, strings.Join(TaskOutputModes, ", "))
 	}
 
+	if err := validateEnv(fmt.Sprintf("task '%s' env", name), task.Env); err != nil {
+		return err
+	}
+
 	// Parallel tasks are mutually exclusive with run and steps
 	if hasParallel {
 		if hasRun {
@@ -393,6 +409,50 @@ func validateTask(name string, task TaskConfig) error {
 	}
 
 	return nil
+}
+
+// envNamePattern matches names the shell can export: letters, digits, and
+// underscores, not starting with a digit.
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateEnv rejects env entries that would break the export rr builds
+// from them (export NAME="value"). Keys end up unquoted, so a malformed key
+// could also change what the command does. Values are double-quoted, so an
+// unclosed ${ or $( would leave the whole command unparseable.
+func validateEnv(context string, env map[string]string) error {
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		if !envNamePattern.MatchString(name) {
+			return fmt.Errorf("%s has an invalid variable name '%s': use letters, digits, and underscores, not starting with a digit", context, name)
+		}
+		if opener := unclosedExpansion(env[name]); opener != "" {
+			return fmt.Errorf("%s value for '%s' has a %s that is never closed: close it, or write \\$ for a literal dollar sign", context, name, opener)
+		}
+	}
+	return nil
+}
+
+// unclosedExpansion returns the innermost ${ or $( in an env value that is
+// never closed ("${" or "$("), or "" when every one is. \$ is a literal
+// dollar and opens nothing. Each expansion is matched by util.MatchExpansion,
+// which reads it the way the shell reads the value ShellDoubleQuote builds:
+// inside $( ), parentheses nest and quoted text is skipped, so $(echo ')')
+// and $(echo "(") both count as closed.
+func unclosedExpansion(v string) string {
+	for i := 0; i < len(v); i++ {
+		switch {
+		case v[i] == '\\' && i+1 < len(v) && v[i+1] == '$':
+			i++
+		case v[i] == '$':
+			end, unclosed := util.MatchExpansion(v, i)
+			if unclosed != "" {
+				return unclosed
+			}
+			if end > 0 {
+				i = end - 1
+			}
+		}
+	}
+	return ""
 }
 
 // validateLock checks lock configuration.

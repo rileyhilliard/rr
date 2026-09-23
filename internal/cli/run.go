@@ -622,10 +622,13 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 		}
 	}
 
-	// Build parallel config
+	// Build parallel config. Workers sync through the same callbacks as a
+	// single run, so invalidation, provenance and prune notices show up.
+	syncNotices := &parallelSyncNotices{}
 	parallelCfg := parallel.Config{
-		OutputMode: parallel.OutputProgress,
-		SaveLogs:   true,
+		OutputMode:  parallel.OutputProgress,
+		SaveLogs:    true,
+		SyncOptions: syncNotices.optionsFor,
 	}
 
 	// Set up log writer
@@ -644,6 +647,10 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 	// Cleanup old logs
 	_ = logs.Cleanup(resolved.Global.Logs)
 
+	if target.local && !PrettyMode() {
+		emitLocalConnect(target.reason)
+	}
+
 	// Create orchestrator
 	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
 
@@ -660,25 +667,10 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 
 	// Execute
 	result, err := orchestrator.Run(ctx)
+	syncNotices.flush()
 	if err != nil {
 		return 1, err
 	}
 
-	// Write task outputs to logs
-	if logWriter != nil {
-		writeTaskLogs(logWriter, result, "repeat")
-	}
-
-	// Render summary
-	logDirPath := ""
-	if logWriter != nil {
-		logDirPath = logWriter.Dir()
-	}
-	parallel.RenderSummary(result, logDirPath)
-
-	// Return aggregate exit code
-	if result.Failed > 0 {
-		return 1, nil
-	}
-	return 0, nil
+	return renderParallelResult(result, logWriter, "repeat", target.reason), nil
 }

@@ -239,10 +239,37 @@ rr run --repeat 5 "pytest"   # Run raw command 5x
 | `timeout` | none | Per-subtask timeout |
 | `max_parallel` | unlimited | Max concurrent tasks |
 | `forward_args` | `false` | Forward CLI args to every subtask |
+| `output` | `progress` | Output mode: `progress`, `stream`, `verbose`, or `quiet`. Any other value is a config error; on a non-parallel task it's ignored with a config warning |
+
+Subtasks get the same environment and setup as single tasks. Env merges host `env`, then `defaults.env`, then the subtask's `env` (later wins). Host `setup_commands` and `defaults.setup` run after the `cd` into the project dir.
+
+### Pulling files from subtasks
+
+Put `pull:` on the subtasks that produce files, not on the parallel task (there it has no effect and draws a config warning):
+
+```yaml
+tasks:
+  test-all:
+    parallel: [test-unit, test-integration]
+  test-unit:
+    run: pytest tests/unit --junitxml=reports/unit.xml
+    pull:
+      - src: reports/unit.xml
+        dest: ./artifacts
+  test-integration:
+    run: pytest tests/integration --junitxml=reports/integration.xml
+    pull:
+      - src: reports/integration.xml
+        dest: ./artifacts
+```
+
+Pulls run after every subtask finishes, pass or fail, one at a time from the host each subtask ran on. Each subtask's files land in `<dest>/<name>_<index>/`, named like the subtask's log file: its name with `/ \ : * ? " < > |` replaced by `-`, then its position in the `parallel:` list (here `./artifacts/test-unit_0/unit.xml` and `./artifacts/test-integration_1/integration.xml`), so shards can't overwrite each other locally. A failed pull is reported (a `pull` `failed` event with `details.task`) and doesn't change the exit code. Nothing is pulled for local runs or after Ctrl+C.
+
+Subtasks that run on the same host share one remote directory, so they must write to distinct paths. Two subtasks both writing `reports/junit.xml` on one host overwrite each other before the pull.
 
 ### Forwarding Args to Subtasks
 
-Parallel tasks reject extra args unless `forward_args: true` is set:
+Parallel tasks reject extra args, flags included, unless `forward_args: true` is set. The error is `CONFIG_INVALID`, with a hint to set `forward_args: true` and pass flags after `--`:
 
 ```yaml
 tasks:

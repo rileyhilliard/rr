@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -67,11 +68,15 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 //
 // Steps, in order: lockfile invalidation (cfg.Invalidations), rsync, the
 // provenance marker, then worktree pruning. Notices from each step go through
-// the callbacks on opts; see SyncOptions for the nil defaults.
+// the callbacks on opts; see SyncOptions for the nil defaults and for what
+// DryRun skips.
 func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer, opts *SyncOptions) error {
 	// Skip sync for local connections - we're already working with local files
 	if conn != nil && conn.IsLocal {
 		return nil
+	}
+	if opts == nil {
+		opts = &SyncOptions{}
 	}
 
 	rsyncPath, err := FindRsync()
@@ -81,12 +86,13 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 
 	// Delete remote install dirs made stale by a changed lockfile, so rsync's
 	// preserve rules don't keep them around.
-	var invalidated InvalidationNotifyFunc
-	if opts != nil {
-		invalidated = opts.Invalidated
-	}
-	if err := InvalidateStaleDirectories(conn, localDir, cfg.Invalidations, invalidated); err != nil {
+	if err := invalidateStaleDirectories(conn, localDir, cfg.Invalidations, opts.Invalidated, opts.DryRun); err != nil {
 		return err
+	}
+
+	if opts.DryRun {
+		// Clone so the append never writes into the caller's backing array.
+		cfg.Flags = append(slices.Clone(cfg.Flags), "--dry-run")
 	}
 
 	// Ensure the SSH control socket directory exists for ControlMaster
@@ -134,10 +140,9 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 		var stderrBuf bytes.Buffer
 		stderrWriter := io.MultiWriter(&stderrBuf, progress)
 
-		// Stream stdout (progress info)
-		go streamOutput(stdout, progress)
-		// Stream stderr (errors/warnings) to both buffer and progress
-		go streamOutput(stderr, stderrWriter)
+		// Stream stdout (progress info) to progress, and stderr
+		// (errors/warnings) to both the buffer and progress
+		streamPipes(stdout, stderr, progress, stderrWriter)
 
 		if err := cmd.Wait(); err != nil {
 			return handleRsyncError(err, conn.Name, stderrBuf.String())
@@ -150,17 +155,17 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 		}
 	}
 
+	if opts.DryRun {
+		return nil
+	}
+
 	// Record where this sync came from (best-effort)
 	writeSourceMarker(conn, localDir)
 
 	// Remove per-worktree remote copies whose worktree is gone (best-effort:
 	// a prune failure never fails the sync that just succeeded).
 	if cfg.PruneWorktreesEnabled() {
-		var pruned func(string)
-		if opts != nil {
-			pruned = opts.Pruned
-		}
-		if _, err := PruneStaleWorktrees(conn, localDir, PruneOptions{Pruned: pruned}); err != nil && opts != nil && opts.Warn != nil {
+		if _, err := PruneStaleWorktrees(conn, localDir, PruneOptions{Pruned: opts.Pruned}); err != nil && opts.Warn != nil {
 			opts.Warn(SyncWarning{
 				Code:    "prune_failed",
 				Message: fmt.Sprintf("couldn't prune stale worktree directories on %s: %v", conn.Name, err),
@@ -482,6 +487,19 @@ func ancestorDirs(pattern string) []string {
 	return parents
 }
 
+// streamPipes streams stdout to out and stderr to errOut, and returns once
+// both pipes reach EOF. Callers must not call cmd.Wait before then: Wait
+// closes the pipes, dropping output that hasn't been read yet.
+func streamPipes(stdout, stderr io.Reader, out, errOut io.Writer) {
+	done := make(chan struct{})
+	go func() {
+		streamOutput(stdout, out)
+		close(done)
+	}()
+	streamOutput(stderr, errOut)
+	<-done
+}
+
 // streamOutput reads from r and writes each line to w.
 // It handles both \n and \r as line delimiters since rsync uses \r for progress updates.
 func streamOutput(r io.Reader, w io.Writer) {
@@ -591,24 +609,29 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 	return errors.WrapWithCode(err, errors.ErrSync, msg, suggestion)
 }
 
-// InvalidationNotifyFunc is called when a stale directory is about to be removed.
-// dir is the relative path (e.g. "node_modules/"), lockfile is the triggering lockfile.
-// When nil, a plain fmt.Printf line is written to stdout.
+// InvalidationNotifyFunc is called when a stale directory is about to be
+// removed (or, in a dry run, would be). dir is the relative path (e.g.
+// "node_modules/"), lockfile is the triggering lockfile. When nil, nothing is
+// reported: this package never prints, so callers that want the notice pass
+// a callback.
 type InvalidationNotifyFunc func(dir, lockfile string)
 
-// InvalidateStaleDirectories checks each lockfile invalidation entry and deletes
-// the corresponding remote directories when the local lockfile is newer than the
-// remote directory. This handles the common case where a lockfile (bun.lock,
-// package-lock.json, etc.) is updated locally but the remote install directory
-// (node_modules/, .venv/, etc.) is stale and won't be re-installed because rsync
-// preserves it.
+// invalidateStaleDirectories checks each lockfile invalidation entry and
+// deletes the corresponding remote directories when the local lockfile is
+// newer than the remote directory. This handles the common case where a
+// lockfile (bun.lock, package-lock.json, etc.) is updated locally but the
+// remote install directory (node_modules/, .venv/, etc.) is stale and won't
+// be re-installed because rsync preserves it.
 //
 // Skip silently if conn is nil, local, or invalidations is empty. A remote
 // directory that doesn't exist is skipped too: there's nothing to delete, and
-// it makes a repeat call right after a successful one a silent no-op.
+// it makes a repeat call right after a successful one a silent no-op. A
+// remote directory whose age can't be read is an error: deleting it could
+// throw away a fresh install, and skipping it could leave a stale one. With
+// dryRun, each stale directory is reported but nothing is deleted.
 //
-// SyncWithOptions calls this before rsync; callers don't need to.
-func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc) error {
+// SyncWithOptions calls this before rsync.
+func invalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc, dryRun bool) error {
 	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
 		return nil
 	}
@@ -633,39 +656,22 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 		for _, dir := range inv.Dirs {
 			remotePath := remoteDir + "/" + strings.TrimSuffix(dir, "/")
 
-			// Get remote directory mtime. We try Linux stat first, then fall back
-			// to macOS stat. If the directory doesn't exist, echo "absent".
-			statCmd := fmt.Sprintf(
-				`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d" 2>/dev/null || echo 0; else echo %s; fi`,
-				util.ShellQuotePreserveTilde(remotePath), remoteDirAbsent,
-			)
-
-			stdout, _, _, execErr := conn.Client.Exec(statCmd)
-			remoteMtimeStr := strings.TrimSpace(string(stdout))
-			if execErr == nil && remoteMtimeStr == remoteDirAbsent {
+			remoteMtime, exists, err := remoteDirMtime(conn, remotePath, dir, inv.Lockfile)
+			if err != nil {
+				return err
+			}
+			if !exists {
 				continue // nothing on the remote to invalidate
 			}
 
-			var remoteMtime int64
-			if execErr != nil || remoteMtimeStr == "" {
-				// On any error, assume stale - safer to delete than to leave stale
-				remoteMtime = 0
-			} else {
-				parsed, parseErr := strconv.ParseInt(remoteMtimeStr, 10, 64)
-				if parseErr != nil {
-					remoteMtime = 0
-				} else {
-					remoteMtime = parsed
-				}
-			}
-
-			// If local lockfile is newer than remote dir (or its mtime couldn't
-			// be read), delete the remote directory so the package manager reinstalls
+			// If local lockfile is newer than remote dir, delete the remote
+			// directory so the package manager reinstalls
 			if localMtime > remoteMtime {
 				if notify != nil {
 					notify(dir, inv.Lockfile)
-				} else {
-					fmt.Printf("Invalidating stale %s (%s changed)\n", dir, inv.Lockfile)
+				}
+				if dryRun {
+					continue
 				}
 
 				rmCmd := fmt.Sprintf("rm -rf %s", util.ShellQuotePreserveTilde(remotePath))
@@ -690,6 +696,47 @@ func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalida
 // remoteDirAbsent is what the invalidation stat command prints when the
 // remote directory doesn't exist.
 const remoteDirAbsent = "absent"
+
+// remoteDirMtime returns the modification time (Unix seconds) of the remote
+// directory at remotePath, or exists=false when it isn't there. dir and
+// lockfile only name the invalidation entry in errors. Any failure to read
+// the age (the command failing to run, both stat variants failing, or
+// output that isn't a number) is an error, never a guess.
+func remoteDirMtime(conn *host.Connection, remotePath, dir, lockfile string) (mtime int64, exists bool, err error) {
+	// GNU stat first, then BSD/macOS stat. If both fail, the second one's
+	// error and exit status come back.
+	statCmd := fmt.Sprintf(
+		`d=%s; if [ -e "$d" ]; then stat -c "%%Y" "$d" 2>/dev/null || stat -f "%%m" "$d"; else echo %s; fi`,
+		util.ShellQuotePreserveTilde(remotePath), remoteDirAbsent,
+	)
+	msg := fmt.Sprintf("Couldn't read the age of remote %s to check it against %s", dir, lockfile)
+	suggestion := fmt.Sprintf("Check that %s on the remote is readable, or delete it there so the next install starts fresh.", remotePath)
+
+	stdout, stderr, exitCode, execErr := conn.Client.Exec(statCmd)
+	if execErr != nil {
+		return 0, false, errors.WrapWithCode(execErr, errors.ErrSync, msg,
+			"Check the SSH connection to the host and try again.")
+	}
+	if exitCode != 0 {
+		detail := strings.TrimSpace(string(stderr))
+		if detail == "" {
+			detail = fmt.Sprintf("stat exited with code %d", exitCode)
+		}
+		return 0, false, errors.New(errors.ErrSync, msg,
+			fmt.Sprintf("Remote error: %s. %s", detail, suggestion))
+	}
+
+	out := strings.TrimSpace(string(stdout))
+	if out == remoteDirAbsent {
+		return 0, false, nil
+	}
+	mtime, parseErr := strconv.ParseInt(out, 10, 64)
+	if parseErr != nil {
+		return 0, false, errors.New(errors.ErrSync, msg,
+			fmt.Sprintf("stat printed %q instead of a timestamp. %s", out, suggestion))
+	}
+	return mtime, true, nil
+}
 
 // ensureRemoteDir creates the remote sync directory if it doesn't exist.
 // rsync requires the target directory (or at least its parent) to exist.

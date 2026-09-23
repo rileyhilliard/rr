@@ -1,6 +1,9 @@
 package util
 
-import "testing"
+import (
+	"os/exec"
+	"testing"
+)
 
 func TestShellQuote(t *testing.T) {
 	tests := []struct {
@@ -69,6 +72,76 @@ func TestShellQuoteJoin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ShellQuoteJoin(tt.args); got != tt.expected {
 				t.Errorf("ShellQuoteJoin(%v) = %q, want %q", tt.args, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestShellDoubleQuote(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"simple", "bar", `"bar"`},
+		{"empty", "", `""`},
+		{"variable left to expand", "$HOME/.local/bin:$PATH", `"$HOME/.local/bin:$PATH"`},
+		{"double quote", `say "hi"`, `"say \"hi\""`},
+		{"backtick", "`whoami`", "\"\\`whoami\\`\""},
+		{"backslash", `C:\dir\`, `"C:\\dir\\"`},
+		{"backslash before dollar escapes it", `pa\$\$word`, `"pa\$\$word"`},
+		{"trailing backslash", `a\`, `"a\\"`},
+		{"single quote needs no escape", "it's", `"it's"`},
+		{"spaces and semicolon stay inert", "a b; rm -rf ~", `"a b; rm -rf ~"`},
+		{"command substitution copied as written", `$(echo "a\b" | tr ':' '\n')`, `"$(echo "a\b" | tr ':' '\n')"`},
+		{"escaping resumes after a substitution", `$(pwd) "x"`, `"$(pwd) \"x\""`},
+		{"escaped dollar opens no substitution", `\$(echo "x")`, `"\$(echo \"x\")"`},
+		{"unclosed substitution is escaped", `$(echo "x"`, `"$(echo \"x\""`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShellDoubleQuote(tt.input); got != tt.expected {
+				t.Errorf("ShellDoubleQuote(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestShellDoubleQuote_ShellEvaluation runs quoted values through a real sh:
+// $ expands, \$ is a literal dollar, and everything else arrives as written.
+func TestShellDoubleQuote_ShellEvaluation(t *testing.T) {
+	t.Setenv("RR_TEST_HOME", "/home/rr-test")
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"variable expands", "$RR_TEST_HOME/bin", "/home/rr-test/bin"},
+		{"escaped dollars stay literal", `pa\$\$word`, "pa$$word"},
+		{"escaped dollar before a name", `\$RR_TEST_HOME`, "$RR_TEST_HOME"},
+		{"trailing backslash", `a\`, `a\`},
+		{"backslash not before dollar", `C:\dir\n`, `C:\dir\n`},
+		{"newline", "line1\nline2", "line1\nline2"},
+		{"double quote and backtick", "say \"hi\" `whoami`", "say \"hi\" `whoami`"},
+		{"empty", "", ""},
+		{"substitution runs as written", `$(echo "a:b" | tr ':' '\n')`, "a\nb"},
+		{"quotes inside a substitution are real", `$(echo "a  b")`, "a  b"},
+		{"nested substitution", "$(echo $(echo x))", "x"},
+		{"backtick inside a substitution", "$(echo `echo hi`)", "hi"},
+		{"paren inside quotes in a substitution", `$(echo "(" ')')-"q"`, `( )-"q"`},
+		{"escaped dollar before a paren", `\$(echo x)`, "$(echo x)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := exec.Command("sh", "-c", "printf '%s' "+ShellDoubleQuote(tt.input)).CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh failed: %v: %s", err, out)
+			}
+			if got := string(out); got != tt.want {
+				t.Errorf("sh expanded ShellDoubleQuote(%q) to %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

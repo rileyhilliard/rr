@@ -105,7 +105,7 @@ Check requirement status with `rr doctor`:
 rr doctor --requirements
 ```
 
-Output shows which tools are satisfied, missing, or installable.
+Output shows which tools are satisfied, missing, or installable, plus whether rsync is on each host's non-interactive PATH. A missing requirement is a failure (doctor exits 1), since `rr run` refuses to start without it. Unreachable hosts are reported once on their host check and skipped here.
 
 ## Example Workflows
 
@@ -194,7 +194,7 @@ Run 'rr provision' to install missing tools.
 
 `rr run` and `rr exec` also accept `--skip-requirements` to bypass the check. Named tasks don't have that flag, so for a task the fix is `rr provision` or adding the tool to the host.
 
-In structured output this is an error envelope on stderr with code `COMMAND_FAILED`.
+In structured output this is an error envelope on stderr with code `DEPENDENCY_MISSING`. rr binaries before this release used `COMMAND_FAILED` for the same error, so match on either code plus a message starting `Missing required tools` if you need to support both.
 
 ## Validation
 

@@ -233,14 +233,19 @@ func TestSummary(t *testing.T) {
 			contains: "Everything looks good",
 		},
 		{
-			name:     "one issue",
+			name:     "one failure",
 			results:  []CheckResult{{Status: StatusFail}},
-			contains: "1 issue found",
+			contains: "1 failure found",
 		},
 		{
-			name:     "multiple issues",
-			results:  []CheckResult{{Status: StatusFail}, {Status: StatusWarn}},
-			contains: "2 issues found",
+			name:     "warnings only",
+			results:  []CheckResult{{Status: StatusWarn}, {Status: StatusPass}, {Status: StatusWarn}},
+			contains: "2 warnings found",
+		},
+		{
+			name:     "failures and warnings",
+			results:  []CheckResult{{Status: StatusFail}, {Status: StatusWarn}, {Status: StatusFail}},
+			contains: "2 failures and 1 warning found",
 		},
 	}
 

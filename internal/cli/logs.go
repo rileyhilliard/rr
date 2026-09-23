@@ -14,11 +14,13 @@ import (
 // logsCmd implements the `rr logs` command for viewing and managing parallel task logs.
 var logsCmd = &cobra.Command{
 	Use:   "logs",
-	Short: "View and manage parallel task logs",
-	Long: `View and manage log files from parallel task execution.
+	Short: "View and manage run and task logs",
+	Long: `View and manage log files from rr runs.
 
-Log files are stored in ~/.rr/logs/<task>-<timestamp>/ by default.
-Each run creates a directory with individual task logs and a summary.json.
+Log files are stored in ~/.rr/logs/<name>-<timestamp>/ by default, where
+<name> is the task, "run", or "exec". Single runs (rr run, rr exec, and
+named tasks) write output.log there. Parallel tasks write one log per
+subtask plus a summary.json.
 
 Commands:
   rr logs              List recent log directories
@@ -77,7 +79,7 @@ func runLogsList(cmd *cobra.Command, args []string) error {
 		fmt.Println("No log directories found.")
 		fmt.Println()
 		fmt.Printf("Logs are stored in: %s\n", ExpandLogsDir(baseDir))
-		fmt.Println("Run a parallel task to generate logs.")
+		fmt.Println("Run a command or task to generate logs.")
 		return nil
 	}
 
@@ -85,7 +87,7 @@ func runLogsList(cmd *cobra.Command, args []string) error {
 	boldStyle := lipgloss.NewStyle().Bold(true)
 	headerStyle := lipgloss.NewStyle().Foreground(ui.ColorSecondary).Bold(true)
 
-	fmt.Println(headerStyle.Render("Recent Parallel Task Logs"))
+	fmt.Println(headerStyle.Render("Recent Run Logs"))
 	fmt.Println()
 
 	for _, d := range dirs {

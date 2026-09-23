@@ -186,8 +186,8 @@ func TestExampleConfigs_NoWarnings(t *testing.T) {
 	}
 }
 
-// TestLockDefaults_Parity keeps DefaultConfig() and the viper defaults used
-// by Load in agreement for every lock setting.
+// TestLockDefaults_Parity checks that Load keeps DefaultConfig()'s value for
+// every lock setting the file leaves out.
 func TestLockDefaults_Parity(t *testing.T) {
 	cfg, err := Load(writeProjectConfig(t, "version: 1\n"))
 	require.NoError(t, err)

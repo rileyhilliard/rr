@@ -1090,10 +1090,13 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 		}
 	}
 
-	// Build parallel config
+	// Build parallel config. Workers sync through the same callbacks as a
+	// single run, so invalidation, provenance and prune notices show up.
+	syncNotices := &parallelSyncNotices{}
 	parallelCfg := parallel.Config{
-		OutputMode: parallel.OutputProgress,
-		SaveLogs:   true,
+		OutputMode:  parallel.OutputProgress,
+		SaveLogs:    true,
+		SyncOptions: syncNotices.optionsFor,
 	}
 
 	// Set up log writer
@@ -1112,6 +1115,10 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 	// Cleanup old logs
 	_ = logs.Cleanup(resolved.Global.Logs)
 
+	if target.local && !PrettyMode() {
+		emitLocalConnect(target.reason)
+	}
+
 	// Create orchestrator
 	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
 
@@ -1128,27 +1135,12 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 
 	// Execute
 	result, err := orchestrator.Run(ctx)
+	syncNotices.flush()
 	if err != nil {
 		return 1, err
 	}
 
-	// Write task outputs to logs
-	if logWriter != nil {
-		writeTaskLogs(logWriter, result, taskName+"-repeat")
-	}
-
-	// Render summary
-	logDirPath := ""
-	if logWriter != nil {
-		logDirPath = logWriter.Dir()
-	}
-	parallel.RenderSummary(result, logDirPath)
-
-	// Return aggregate exit code
-	if result.Failed > 0 {
-		return 1, nil
-	}
-	return 0, nil
+	return renderParallelResult(result, logWriter, taskName+"-repeat", target.reason), nil
 }
 
 // taskStepHandler implements exec.StepHandler to show step progress during multi-step tasks.

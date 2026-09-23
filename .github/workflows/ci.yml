@@ -181,6 +181,9 @@ jobs:
             -e PUBLIC_KEY="$(cat /tmp/rr-ci-ssh-keys/id_ed25519.pub)" \
             linuxserver/openssh-server
 
+          # The image ships without rsync; the sync tests skip without it
+          docker exec rr-ci-ssh apk add --no-cache rsync
+
           # Wait for SSH to be ready by testing actual connection
           echo "Waiting for SSH server to be ready..."
           mkdir -p ~/.ssh
@@ -210,7 +213,7 @@ jobs:
           RR_TEST_SSH_USER: testuser
         run: |
           # -coverpkg=./... ensures coverage is tracked for ALL packages, not just the test packages
-          if ! go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... -json ./tests/integration/... ./pkg/sshutil/... > integration-results.json 2>&1; then
+          if ! go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... -json ./tests/integration/... ./pkg/sshutil/... ./internal/cli/... > integration-results.json 2>&1; then
             echo "Integration tests failed. Showing failures:"
             echo ""
 

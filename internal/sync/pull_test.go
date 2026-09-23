@@ -160,6 +160,10 @@ func TestBuildPullArgs(t *testing.T) {
 		},
 	}
 
+	// BuildPullArgs creates the local destination; keep relative ones like
+	// ./reports out of the package directory.
+	t.Chdir(t.TempDir())
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			args, err := BuildPullArgs(tt.conn, tt.patterns, tt.localDest, tt.extraFlags)
@@ -520,7 +524,9 @@ func TestBuildPullArgs_RemoteDirTrailingSlash(t *testing.T) {
 }
 
 func TestPull_MultipleDestinations(t *testing.T) {
-	// Test that Pull handles multiple destination groups
+	// Test that Pull handles multiple destination groups. Pull creates the
+	// relative destinations, so run from a temp dir.
+	t.Chdir(t.TempDir())
 	conn := &host.Connection{
 		Name:  "test-host",
 		Alias: "test-alias",

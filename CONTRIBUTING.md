@@ -101,7 +101,7 @@ Always use the structured error types from `internal/errors`. This ensures consi
 
 ```go
 // Good: structured error with context and suggestion
-return errors.New(errors.ErrConfig, "config file not found", "Run 'rr init' to create one")
+return errors.New(errors.ErrConfigNotFound, "config file not found", "Run 'rr init' to create one")
 
 // Good: wrap underlying errors
 return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if the host is reachable")
@@ -109,6 +109,8 @@ return errors.WrapWithCode(err, errors.ErrSSH, "connection failed", "Check if th
 // Bad: plain error without context
 return fmt.Errorf("something went wrong")
 ```
+
+The code is the contract: `mapErrorCode` (`internal/cli/json.go`) turns it into the public code agents branch on (`ErrConfigNotFound` -> `CONFIG_NOT_FOUND`, `ErrHostNotFound` -> `HOST_NOT_FOUND`, `ErrDependency` -> `DEPENDENCY_MISSING`, and so on) by table lookup, never by reading the message. Pick the code that says what failed where the error is created.
 
 ### General style
 

@@ -87,10 +87,8 @@ func TempSyncDirWithFiles(t *testing.T, files map[string]string) string {
 // This is a placeholder test that uses the helpers defined above.
 func TestSetupHelpers(t *testing.T) {
 	t.Run("GetTestSSHHost returns default", func(t *testing.T) {
-		// Temporarily unset the env var
-		orig := os.Getenv("RR_TEST_SSH_HOST")
-		_ = os.Unsetenv("RR_TEST_SSH_HOST")
-		defer func() { _ = os.Setenv("RR_TEST_SSH_HOST", orig) }()
+		// t.Setenv restores the original value when the subtest ends.
+		t.Setenv("RR_TEST_SSH_HOST", "")
 
 		host := GetTestSSHHost()
 		if host != "localhost" {
@@ -99,8 +97,7 @@ func TestSetupHelpers(t *testing.T) {
 	})
 
 	t.Run("GetTestSSHHost returns env value", func(t *testing.T) {
-		_ = os.Setenv("RR_TEST_SSH_HOST", "testhost:2222")
-		defer func() { _ = os.Unsetenv("RR_TEST_SSH_HOST") }()
+		t.Setenv("RR_TEST_SSH_HOST", "testhost:2222")
 
 		host := GetTestSSHHost()
 		if host != "testhost:2222" {

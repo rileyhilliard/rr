@@ -3,6 +3,10 @@ package exec
 import (
 	"bytes"
 	"context"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -260,98 +264,154 @@ func TestExecuteTask_EmptyTask(t *testing.T) {
 	assert.Contains(t, err.Error(), "doesn't have anything to run")
 }
 
-func TestBuildEnvPrefix(t *testing.T) {
+func TestBuildCommand(t *testing.T) {
 	tests := []struct {
-		name     string
-		env      map[string]string
-		expected string
+		name          string
+		cmd           string
+		env           map[string]string
+		workDir       string
+		setupCommands []string
+		expected      string
 	}{
 		{
-			name:     "empty env",
-			env:      nil,
-			expected: "",
+			name:     "bare command",
+			cmd:      "echo hello",
+			expected: "{ echo hello\n}",
 		},
 		{
-			name:     "empty map",
-			env:      map[string]string{},
-			expected: "",
+			name:     "tilde workdir keeps tilde expandable",
+			cmd:      "make test",
+			workDir:  "~/rr projects/app",
+			expected: "cd ~/'rr projects/app' && { make test\n}",
 		},
 		{
-			name:     "single var",
-			env:      map[string]string{"FOO": "bar"},
-			expected: `export FOO="bar"; `,
+			name:          "cd, setup, env, then command",
+			cmd:           "make build",
+			env:           map[string]string{"CC": "gcc", "AR": "ar"},
+			workDir:       "/app",
+			setupCommands: []string{"source .venv/bin/activate"},
+			expected:      "cd '/app' && { source .venv/bin/activate\n} && export AR=\"ar\" && export CC=\"gcc\" && { make build\n}",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildEnvPrefix(tt.env)
-			if len(tt.env) > 0 {
-				// For non-empty, just verify structure since map order is undefined
-				assert.Contains(t, result, "export")
-				for k, v := range tt.env {
-					assert.Contains(t, result, k)
-					assert.Contains(t, result, v)
-				}
-			} else {
-				assert.Equal(t, tt.expected, result)
-			}
+			assert.Equal(t, tt.expected, BuildCommand(tt.cmd, tt.env, tt.workDir, tt.setupCommands))
 		})
 	}
 }
 
-func TestBuildCommand_Local(t *testing.T) {
+// taskShells are the shells a built command meets: sh and $SHELL locally,
+// the user's login shell remotely. Tests run under each one installed.
+func taskShells(t *testing.T) []string {
+	t.Helper()
+	var found []string
+	for _, name := range []string{"sh", "bash", "dash", "zsh"} {
+		if path, err := osexec.LookPath(name); err == nil {
+			found = append(found, path)
+		}
+	}
+	require.NotEmpty(t, found, "no POSIX shell found")
+	return found
+}
+
+// runInShell runs cmd the way a local task does, with shell as $SHELL.
+func runInShell(t *testing.T, shell, cmd string) (stdout, stderr string, code int) {
+	t.Helper()
+	t.Setenv("SHELL", shell)
+	var out, errOut bytes.Buffer
+	code, err := ExecuteLocal(cmd, "", &out, &errOut)
+	require.NoError(t, err)
+	return out.String(), errOut.String(), code
+}
+
+// TestBuildCommand_ShellEvaluation runs built commands through real shells:
+// $ expands, while quotes, backticks, and backslashes arrive intact.
+func TestBuildCommand_ShellEvaluation(t *testing.T) {
+	t.Setenv("HOME", "/home/rr-test")
+	dir := filepath.Join(t.TempDir(), `it's a "dir"`)
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"expands $HOME", "$HOME/.local/bin", "/home/rr-test/.local/bin"},
+		{"escaped dollar", `pa\$\$word`, "pa$$word"},
+		{"double quote", `say "hi"`, `say "hi"`},
+		{"backtick", "`echo pwned`", "`echo pwned`"},
+		{"backslash", `a\b\`, `a\b\`},
+		{"single quote", "it's", "it's"},
+		{"substitution runs as written", `$(echo "a:b" | tr ':' '\n')`, "a\nb"},
+		{"quotes inside a substitution are real", `$(echo "a  b")`, "a  b"},
+		{"nested substitution", "$(echo $(echo x))", "x"},
+		{"backtick inside a substitution", "$(echo `echo hi`)", "hi"},
+		{"escaping resumes after a substitution", `$(echo x) "y"`, `x "y"`},
+	}
+
+	for _, shell := range taskShells(t) {
+		for _, tt := range tests {
+			t.Run(filepath.Base(shell)+"/"+tt.name, func(t *testing.T) {
+				cmd := BuildCommand(`printf '%s|' "$RR_VAL"; pwd -P`, map[string]string{"RR_VAL": tt.value}, dir, nil)
+				stdout, stderr, code := runInShell(t, shell, cmd)
+				require.Equal(t, 0, code, stderr)
+
+				got, pwd, _ := strings.Cut(strings.TrimSpace(stdout), "|")
+				assert.Equal(t, tt.want, got)
+				assert.Equal(t, resolved, pwd)
+			})
+		}
+	}
+}
+
+// TestBuildCommand_ChainStopsOnFailure checks that each part of the chain
+// gates the next, and that operators inside setup commands or the task
+// command can't escape the chain.
+func TestBuildCommand_ChainStopsOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing")
+
 	tests := []struct {
 		name     string
 		cmd      string
 		env      map[string]string
 		workDir  string
-		expected string
+		setup    []string
+		want     string
+		wantFail bool
 	}{
-		{
-			name:     "simple command",
-			cmd:      "echo hello",
-			env:      nil,
-			workDir:  "",
-			expected: "echo hello",
-		},
-		{
-			name:    "command with env",
-			cmd:     "echo $FOO",
-			env:     map[string]string{"FOO": "bar"},
-			workDir: "",
-		},
+		{name: "missing workdir stops the command", cmd: "echo RAN", workDir: missing, wantFail: true},
+		{name: "missing workdir stops an || command", cmd: "false || echo RAN", workDir: missing, wantFail: true},
+		{name: "missing workdir stops the command after env", cmd: "echo RAN", workDir: missing, env: map[string]string{"A": "1"}, wantFail: true},
+		{name: "failing setup stops the command", cmd: "echo RAN", workDir: dir, setup: []string{"false"}, wantFail: true},
+		{name: "failing setup stops later setup", cmd: "echo RAN", setup: []string{"false", "echo SETUP"}, wantFail: true},
+		{name: "setup with || recovers", cmd: "echo RAN", setup: []string{"false || true"}, want: "RAN"},
+		{name: "setup with || stays inside its group", cmd: "echo RAN", workDir: missing, setup: []string{"false || true"}, wantFail: true},
+		{name: "command with || runs as written", cmd: "false || echo ok", want: "ok"},
+		{name: "command exit code propagates", cmd: "exit 3", wantFail: true},
+		{name: "command ending in &", cmd: "echo RAN &", want: "RAN"},
+		{name: "command with a trailing comment", cmd: "echo RAN # done", want: "RAN"},
+		{name: "setup with a trailing comment", cmd: "echo RAN", setup: []string{"true # ok"}, want: "RAN"},
+		{name: "env sees setup and earlier keys", cmd: `echo "$B"`, setup: []string{"export S=s"}, env: map[string]string{"A": "a", "B": "$S-$A"}, want: "s-a"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildCommand(tt.cmd, tt.env, tt.workDir, nil, true)
-			if len(tt.env) == 0 {
-				assert.Equal(t, tt.expected, result)
-			} else {
-				// Verify env prefix is present
-				assert.Contains(t, result, "export")
-				assert.Contains(t, result, tt.cmd)
-			}
-		})
+	for _, shell := range taskShells(t) {
+		for _, tt := range tests {
+			t.Run(filepath.Base(shell)+"/"+tt.name, func(t *testing.T) {
+				stdout, stderr, code := runInShell(t, shell, BuildCommand(tt.cmd, tt.env, tt.workDir, tt.setup))
+				if tt.wantFail {
+					assert.NotEqual(t, 0, code)
+					assert.Empty(t, stdout, "nothing after the failure should run")
+					return
+				}
+				require.Equal(t, 0, code, stderr)
+				assert.Equal(t, tt.want, strings.TrimSpace(stdout))
+			})
+		}
 	}
-}
-
-func TestBuildCommand_Remote(t *testing.T) {
-	result := buildCommand("make test", nil, "/home/user/project", nil, false)
-	assert.Contains(t, result, "cd")
-	assert.Contains(t, result, "/home/user/project")
-	assert.Contains(t, result, "make test")
-}
-
-func TestBuildCommand_WithSetupCommands(t *testing.T) {
-	setup := []string{"source ~/.env", "export PATH=/opt/bin:$PATH"}
-	result := buildCommand("make test", nil, "", setup, true)
-	assert.Contains(t, result, "source ~/.env")
-	assert.Contains(t, result, "export PATH=/opt/bin:$PATH")
-	assert.Contains(t, result, "make test")
-	// Should be joined with &&
-	assert.Contains(t, result, " && ")
 }
 
 func TestBuildRemoteCommand_DefaultShell(t *testing.T) {

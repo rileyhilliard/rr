@@ -4,27 +4,16 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/go-viper/mapstructure/v2"
-	"github.com/spf13/viper"
 )
 
-// withMetadata makes viper's decoder record which config keys it didn't
-// consume, so unknown keys can be reported instead of silently ignored.
-func withMetadata(md *mapstructure.Metadata) viper.DecoderConfigOption {
-	return func(dc *mapstructure.DecoderConfig) {
-		dc.Metadata = md
-	}
-}
-
 // projectWarnings collects every warning for a loaded project config.
-func projectWarnings(v *viper.Viper, cfg *Config, unused []string, path string) []Warning {
+func projectWarnings(raw map[string]interface{}, cfg *Config, unused []string, path string) []Warning {
 	var warnings []Warning
 
 	// The output: section was removed; give it a specific message rather
-	// than the generic unknown-key one. InConfig (not IsSet) so only a key
-	// actually present in the file counts.
-	hasOutput := v.InConfig("output")
+	// than the generic unknown-key one. Only a key actually present in the
+	// file counts.
+	_, hasOutput := raw["output"]
 	if hasOutput {
 		warnings = append(warnings, Warning{
 			File:       path,

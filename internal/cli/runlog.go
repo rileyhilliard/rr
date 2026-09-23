@@ -86,28 +86,36 @@ func outcomeDetails(o formatters.Outcome, exitCode int) map[string]interface{} {
 	}
 
 	if exitCode != 0 && len(o.Failures) > 0 {
-		entries := make([]map[string]string, 0, len(o.Failures))
-		for _, f := range o.Failures {
-			entry := map[string]string{"name": f.TestName}
-			if f.File != "" {
-				loc := f.File
-				if f.Line > 0 {
-					loc += ":" + util.Itoa(f.Line)
-				}
-				entry["file"] = loc
-			}
-			if f.Message != "" {
-				msg := f.Message
-				if len(msg) > maxFailureMessageLen {
-					msg = msg[:maxFailureMessageLen] + "..."
-				}
-				entry["message"] = msg
-			}
-			entries = append(entries, entry)
-		}
-		details["failures"] = entries
+		details["failures"] = failureEntries(o.Failures)
 	}
 	return details
+}
+
+// failureEntries renders parsed test failures for result details: the test
+// name, file (with :line when known), and the message truncated to
+// maxFailureMessageLen. Shared by single runs and parallel subtasks so both
+// report failures in the same shape.
+func failureEntries(failures []output.TestFailure) []map[string]string {
+	entries := make([]map[string]string, 0, len(failures))
+	for _, f := range failures {
+		entry := map[string]string{"name": f.TestName}
+		if f.File != "" {
+			loc := f.File
+			if f.Line > 0 {
+				loc += ":" + util.Itoa(f.Line)
+			}
+			entry["file"] = loc
+		}
+		if f.Message != "" {
+			msg := f.Message
+			if len(msg) > maxFailureMessageLen {
+				msg = msg[:maxFailureMessageLen] + "..."
+			}
+			entry["message"] = msg
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // renderOutcomeFailures prints the pretty-mode failure block (counts plus

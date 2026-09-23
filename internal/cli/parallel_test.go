@@ -276,7 +276,7 @@ func TestExtractTaskFailures_PytestFailures(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result, "")
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -307,7 +307,7 @@ func TestExtractTaskFailures_FallbackToOutputTail(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result, "")
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -335,7 +335,7 @@ func TestExtractTaskFailures_EmptyOutput(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result, "")
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
 	require.Len(t, failures, 1)
 
 	f := failures[0]
@@ -357,7 +357,7 @@ func TestExtractTaskFailures_SkipsPassingTasks(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result, "")
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
 	assert.Empty(t, failures)
 }
 
@@ -377,7 +377,7 @@ func TestExtractTaskFailures_TruncatesLongMessages(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result, "")
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
 	require.Len(t, failures, 1)
 
 	tests, ok := failures[0]["tests"].([]map[string]string)
@@ -406,7 +406,7 @@ func TestExtractTaskFailures_OutputTailCapped(t *testing.T) {
 		},
 	}
 
-	failures := extractTaskFailures(result, "")
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
 	require.Len(t, failures, 1)
 
 	tail, ok := failures[0]["output_tail"].(string)
@@ -438,7 +438,7 @@ func TestRenderParallelResult_MachineMode_IncludesFailures(t *testing.T) {
 	}
 
 	output := captureStderr(t, func() {
-		renderParallelResult(result, nil, "test")
+		renderParallelResult(result, nil, "test", "")
 	})
 
 	var event PhaseEvent
@@ -478,7 +478,7 @@ func TestRenderParallelResult_MachineMode_SuccessHasNoFailures(t *testing.T) {
 	}
 
 	output := captureStderr(t, func() {
-		renderParallelResult(result, nil, "test")
+		renderParallelResult(result, nil, "test", "")
 	})
 
 	var event PhaseEvent
@@ -488,6 +488,28 @@ func TestRenderParallelResult_MachineMode_SuccessHasNoFailures(t *testing.T) {
 	assert.Equal(t, "success", event.Status)
 	_, hasFailures := event.Details["failures"]
 	assert.False(t, hasFailures, "successful result should not include failures key")
+}
+
+// TestRenderParallelResult_MachineMode_NoTests pins how zero-test subtasks
+// are reported: no_tests stays a bool, as for single runs, and the subtask
+// names go in no_tests_tasks.
+func TestRenderParallelResult_MachineMode_NoTests(t *testing.T) {
+	withStructuredOutput(t)
+
+	result := &parallel.Result{
+		Passed: 2,
+		TaskResults: []parallel.TaskResult{
+			{TaskName: "shard-1", Command: "pytest tests/a", Output: []byte("collected 3 items\n\n===== 3 passed in 0.10s =====")},
+			{TaskName: "shard-2", Command: "pytest tests/b -k typo", Output: []byte("collected 0 items\n\n===== no tests ran in 0.05s =====")},
+		},
+	}
+
+	event := resultEvent(t, parseEvents(t, captureStderr(t, func() {
+		renderParallelResult(result, nil, "test", "")
+	})))
+
+	assert.Equal(t, true, event.Details["no_tests"])
+	assert.Equal(t, []interface{}{"shard-2"}, event.Details["no_tests_tasks"])
 }
 
 func TestBuildSubtaskInfos_PlaceholderSubstitution(t *testing.T) {

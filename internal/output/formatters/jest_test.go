@@ -621,7 +621,7 @@ Time:        1.234s
 }
 
 // TestJestFormatterImplementsSummaryProvider pins that JestFormatter satisfies
-// output.TestSummaryProvider. Before this existed, ExtractTestSummary bailed for
+// output.TestSummaryProvider. Before this existed, summary extraction bailed for
 // every jest/vitest run - even a fully passing one - so the result envelope
 // carried no "summary" field at all for JS test suites.
 func TestJestFormatterImplementsSummaryProvider(t *testing.T) {
@@ -706,17 +706,6 @@ func TestJestFormatterGetTestFailures(t *testing.T) {
 	require.Len(t, failures, 1)
 	assert.Contains(t, failures[0].TestName, "should multiply numbers")
 	assert.NotEmpty(t, failures[0].Message)
-}
-
-// TestExtractTestSummaryJest covers the end-to-end path that was broken: a
-// passing vitest run previously produced ok=false and no envelope summary.
-func TestExtractTestSummaryJest(t *testing.T) {
-	raw := " PASS  src/utils.test.ts\n   ✓ works (2ms)\n\nTest Suites: 1 passed, 1 total\nTests:       5 passed, 5 total\n"
-
-	summary, ok := ExtractTestSummary("bunx jest", []byte(raw))
-	require.True(t, ok, "jest output should yield a summary")
-	assert.Equal(t, 5, summary.Passed)
-	assert.Zero(t, summary.Failed)
 }
 
 // TestJestRanNothingRealOutput covers the messages jest and vitest actually

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
 	"strings"
@@ -63,6 +64,9 @@ Get started:
   rr doctor                 Diagnose connection issues`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Set explicitly: cobra only defaults it while parsing, and
+	// unknownCommandError calls SuggestionsFor directly.
+	SuggestionsMinimumDistance: 2,
 }
 
 // Execute runs the root command and handles errors with structured output.
@@ -225,6 +229,9 @@ func handleUnknownCommand(err error) int {
 func unknownCommandError(err error, pretty bool) error {
 	unknownCmd := extractUnknownCommand(err)
 
+	// Use Cobra's built-in suggestion feature (works with all registered commands including tasks)
+	suggestions := rootCmd.SuggestionsFor(unknownCmd)
+
 	// Check discoveryState for config-related issues
 	if discoveryState != nil {
 		if !pretty && discoveryState.LoadErr != nil {
@@ -248,25 +255,42 @@ func unknownCommandError(err error, pretty bool) error {
 				"Fix the validation error above, then try again.")
 		}
 
-		// Case 3: No project config found - preserve the original error details
+		// Case 3: No project config found. The name is most likely a task
+		// the missing .rr.yaml would define, so the config error stands. Real
+		// task names are often near built-ins too (test/host, lint/init), so
+		// a near miss adds a hint instead of replacing the error.
 		if discoveryState.ProjectErr != nil {
-			return discoveryState.ProjectErr
+			return withTypoHint(discoveryState.ProjectErr, suggestions)
 		}
 	}
 
-	// Use Cobra's built-in suggestion feature (works with all registered commands including tasks)
-	suggestions := rootCmd.SuggestionsFor(unknownCmd)
-
-	var suggestion string
+	suggestion := "Run 'rr --help' for available commands."
 	if len(suggestions) > 0 {
-		suggestion = fmt.Sprintf("Did you mean: %s?", strings.Join(suggestions, ", "))
-	} else {
-		suggestion = "Run 'rr --help' for available commands."
+		suggestion = didYouMean(suggestions)
 	}
 
 	return errors.New(errors.ErrExec,
 		fmt.Sprintf("Unknown command '%s'", unknownCmd),
 		suggestion)
+}
+
+// didYouMean formats cobra's command suggestions as a hint.
+func didYouMean(suggestions []string) string {
+	return fmt.Sprintf("Did you mean: %s?", strings.Join(suggestions, ", "))
+}
+
+// withTypoHint returns err with a "Did you mean" hint appended to its
+// suggestion, keeping its code and message. err itself is left unchanged
+// (it's shared discovery state), and returned as is when there are no
+// suggestions or it isn't a structured error.
+func withTypoHint(err error, suggestions []string) error {
+	var rrErr *errors.Error
+	if len(suggestions) == 0 || !stderrors.As(err, &rrErr) {
+		return err
+	}
+	hinted := *rrErr
+	hinted.Suggestion = strings.TrimSpace(rrErr.Suggestion + " " + didYouMean(suggestions))
+	return &hinted
 }
 
 // reportError writes err to stderr: the JSON error envelope in structured

@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Fixes for the bugs found in the 2026-09 docs audit. Several change what scripts and agents see, so read Breaking Changes and [MIGRATION.md](docs/MIGRATION.md) before upgrading.
+
+### Breaking Changes
+
+- **`rr doctor` exits 1 when a check fails** - It exited 0 whatever it found. Now it exits 1 on any failed check and 0 when there are only warnings, in both structured and `--pretty` modes. The envelope still says `success: true` (doctor ran), with the verdict in `data.summary.all_clear`. Checks were regraded first so only real blockers fail (see Changed).
+- **Error codes are set where errors are created** - The public code used to be guessed from the message text, and it guessed wrong. A missing `.rr.yaml` or `--config` file is now `CONFIG_NOT_FOUND` (was `CONFIG_INVALID`), an unknown host name is `HOST_NOT_FOUND` (was `CONFIG_INVALID` or `CONFIG_NOT_FOUND`), and a missing local or remote rsync, a missing `ssh-copy-id`, or missing required tools is `DEPENDENCY_MISSING` (was `RSYNC_FAILED`, `SSH_CONNECTION_FAILED`, or `COMMAND_FAILED`).
+- **The `-v` shorthand is gone** - The global `-v`/`--verbose` flag did nothing, and `-v` silently swallowed task arguments: `rr test -v` never passed `-v` to the task. `rr test -v` now fails with `CONFIG_INVALID` and a hint to use `rr test -- -v`, which passes `-v` through. `--verbose` still parses but is hidden and emits a `config` warn event; use `RR_DEBUG=1` for debug logs.
+- **Host, task, and env names are case-sensitive** - Config keys were lowercased on load (see Fixed). They are now kept as written, so anything that relied on the lowercased form breaks: a project listing `hosts: [mybox]` for a global host `MyBox`, `rr build` for a task `Build`, or a command reading `$foo` for `env: {FOO: ...}`. Match the case used in the config.
+- **`pull`, `logs`, and `provision` are reserved task names** - Tasks with those names already collided with the built-in commands. The error names the task and suggests a rename.
+- **`rr tasks` validates the project config** - An invalid `.rr.yaml` now fails `rr tasks` with a non-zero exit and an error envelope on stderr, the same error `rr <task>` gives. It used to write error envelopes to stdout. A project with no hosts configured still lists its tasks.
+- **Local runs report why they're local** - `--local` and local mode now emit a normal connect `complete` event with `host: "local"` and `details.reason` set to `local_flag` or `local_mode`, and the result carries the same value in `details.local_reason`. This covers `rr run --repeat` and parallel tasks too. They used to emit a connect `warn` event with `reason: hosts_unreachable`, which was wrong for those runs. Real fallbacks still warn, with `hosts_unreachable` or `all_hosts_locked`.
+
+### Added
+
+- **Config warnings** - Unknown keys, the removed `output:` section, the legacy `defaults.host`, `pull:` on a parallel task, and `output:` on a non-parallel task are reported instead of silently ignored. Each is emitted once per invocation: a `config` phase event with `status: "warn"` and `details.file`, `key`, `message`, and `suggestion` in structured mode, or a styled warning with `--pretty`. Configs that loaded before still load.
+- **Subtask `pull:` works in parallel tasks** - It was accepted and never ran. After every subtask finishes, pass or fail, each subtask's files are pulled one at a time into `<dest>/<name>_<index>/`, the subtask's log file name without `.log` (`test:unit` at position 0 lands in `test-unit_0/`), from the host it ran on. Structured mode emits `pull` phase events with `details.task`. A failed pull is reported without changing the exit code. Nothing is pulled for local runs or after Ctrl+C. Subtasks that run on the same host share one remote directory, so they must write to distinct paths.
+- **Parallel runs report sync notices** - Workers now sync through the same path as single runs, so lockfile invalidation, provenance warnings, and worktree pruning happen on parallel runs, and structured mode emits the same `sync` events (`invalidated`, `warn`, `pruned`) with a top-level `host` field.
+- **The `--pretty` failure block shows for named tasks** - Single tasks now get the parsed test-failure block that `rr run` prints. Both it and the JSON `details.summary`/`details.failures` come from one parse of the run log.
+- `rr doctor --requirements` checks that rsync is installed on each host.
+
+### Changed
+
+- **Doctor grades checks by whether a run would fail** - A missing SSH agent, a missing default key file, or no `.rr.yaml` is a warning. A missing requirement is a failure, because `rr run` fails on it too. An unreachable host fails only when no host in scope is reachable and `local_fallback` wouldn't take over; otherwise it's a warning.
+- **Doctor checks the project's hosts** - Inside a project, host checks cover only the hosts a run would use, not every global host. Outside a project they still cover every global host.
+- **Doctor connects the way `rr run` does** - `--path` and `--requirements` race every SSH alias instead of dialing only the first, and an unreachable host is reported once, on its `host_<name>` check. Requirement suggestions point to `rr provision`, and checks whose fix did nothing no longer claim to be fixable.
+- **Parallel subtasks get the same env and setup as single tasks** - Env merges host `env`, then `defaults.env`, then the task's `env` (later wins), and host `setup_commands` plus `defaults.setup` run after the `cd` into the project directory. Subtasks used to get only the task's `env` and the host's setup commands, run before the `cd`. Env values go through one command builder for single and parallel runs, local and remote: values are double-quoted, so `$HOME` and `$PATH` expand the same way everywhere (`PATH: "$HOME/.local/bin:$PATH"` used to arrive literally in parallel subtasks, local and remote), backticks and double quotes are literal, `\$` writes a literal dollar sign, the contents of `$(...)` run exactly as written, and exports are sorted by name. Env is exported after setup commands on every path, so local parallel setup commands no longer see it.
+- The stale-lock default is 90s everywhere: the internal `DefaultConfig()` said 3m, and `rr init` now writes `stale: 90s`.
+- Task `output` values are validated (`progress`, `stream`, `verbose`, `quiet`), including on parallel tasks.
+- The missing-tools error suggests `--skip-requirements` only for `rr run` and `rr exec`; named tasks point to `rr provision` or the project's `require:` list.
+
+### Fixed
+
+- **Lockfile invalidation never deletes a directory it couldn't check** - When `stat` failed on an existing remote dir, its age was read as 0, so any newer lockfile triggered `rm -rf` on it. A stat failure now fails the sync with an error naming the dir, and deletes nothing.
+- **A lock error on a reachable host doesn't fall back locally** - In a load-balanced run, a host that connected but couldn't take its lock (for example, `lock.dir` can't be created) was treated as unreachable, so `local_fallback` ran the command locally and reported `hosts_unreachable`. The run now fails with the lock error, as a single-host run does.
+- **A failed `cd` or setup step stops the task** - When a task had env vars, the command was joined to the setup chain with `;`, so it ran even if the `cd` into the project directory or a setup command failed: in the wrong directory, without its env, often exiting 0. A `||` inside a setup command or the task command could skip past a failure the same way. Each part is now its own group in one `&&` chain, so any failure stops the task with a non-zero exit.
+- **`rr sync --dry-run` no longer deletes remote files** - Lockfile invalidation ran before rsync regardless of `--dry-run`, and dry runs skip the lock, so a dry run could delete remote `node_modules`/`.venv` out from under another run. Dry runs now list what would be invalidated and skip the provenance marker and worktree pruning. The only remote change a dry run makes is creating the sync directory if it's missing.
+- **Env vars are validated** - Host `env`, `defaults.env`, and task `env` keys must be valid shell variable names (letters, digits, underscores, not starting with a digit), and values can't contain an unclosed `${` or `$(`. Either problem fails validation with `CONFIG_INVALID` naming the key, where it used to break the command with a shell parse error. Keys are inserted unquoted into the remote `export`, so an invalid one either broke the command or changed what it ran.
+- **Env var names keep their case** - Config keys were lowercased on load, so `env: {FOO: bar}` exported `foo=bar`. This hit host `env`, `defaults.env`, and task `env` (including parallel subtasks). Task and host names were lowercased too (`rr Build` wasn't found, and a project listing host `MyBox` got `HOST_NOT_FOUND`), and names containing a dot were split apart, so a task `test.unit` was dropped with an unknown-key warning. Keys are now kept exactly as written, and `rr host add` no longer rewrites `~/.rr/config.yaml` with lowercased keys. Unknown-key warnings name the key as written.
+- **`rr doctor --pretty` says when it's only warnings** - The summary printed the failure symbol and "N issues found" even when every issue was a warning and doctor exited 0. It now reads "N failures found", "N warnings found" (with the warning symbol), or "N failures and M warnings found", and the failure symbol shows only when doctor exits 1.
+- **Shell completions are current** - The packaged completions in `completions/` still offered `-v`/`--verbose` and were missing `prune`, `pull`, and other commands. They're regenerated, and `scripts/generate-completions.sh` now runs rr from an empty temp dir so a project's tasks never end up in them.
+- **`--local` works with no hosts configured** - It failed with `CONFIG_INVALID: No hosts configured`. Project `local_fallback` with no `hosts:` listed now runs locally as documented (it was unreachable), and load-balanced runs fall back locally when every host is unreachable, setting `details.fallback` with `reason: hosts_unreachable`.
+- **The exec event shows the command that ran** - A task using `{args}` reported the unexpanded `run:` string (`echo hi {args}`) in its exec event. The event, failure hints, and outcome parsing now use the command after arg rewriting.
+- **Parallel tasks without `forward_args` reject flags with the `--` hint** - They failed with a bare cobra error. The error is `CONFIG_INVALID` and says to set `forward_args: true` and put task flags after `--`.
+- An unknown command writes an error envelope to stderr in structured mode instead of plain text. When a task isn't registered because the config is missing or invalid, the envelope carries that config error (`CONFIG_NOT_FOUND`, `CONFIG_INVALID`); otherwise it's `COMMAND_FAILED`. Outside a project the config error keeps its code, and a near miss of a built-in command adds "Did you mean: X?" to its suggestion.
+- The remote `cd` for parallel subtasks is quoted, so a remote dir with spaces or shell metacharacters works.
+- Lockfile invalidation runs inside sync for every caller, including `rr sync` and parallel runs, and skips remote directories that don't exist, which stops the spurious "Invalidating stale node_modules/" notice when nothing was installed.
+- **`rr sync` follows the output contract** - It drew spinners and printed its summary to stdout in every mode. Structured mode now emits `connect`, `lock`, and `sync` phase events on stderr and a final `result` event (`details.dry_run`), and leaves stdout empty. `rr sync --dry-run` lists what it would transfer and delete: in `details.transfer` and `details.delete`, or under "Would transfer:" and "Would delete:" with `--pretty`. It used to show nothing.
+- **`--repeat` emits a result event** - Its sync notices also arrive as `sync` events instead of plain text on stdout. `rr run --repeat` and `rr <task> --repeat` printed the pretty summary in structured mode and no result. They now end with the same `result` event as parallel tasks (`total`, `passed`, `failed`, `failures`, `log_dir`, `no_tests`, `local_reason`).
+- The `--pretty` parallel summary pointed a single failed subtask at a log file that doesn't exist; it now names the real `<name>_<index>.log`.
+
+### Removed
+
+- **The `output:` config section** - It was validated but never read, and accepted a `cargo` formatter that doesn't exist. It now produces a config warning; remove it from `.rr.yaml`.
+- `rr doctor`'s never-wired remote checks (remote directory, write permission, stale lock). They quoted `~` so it didn't expand, measured staleness from lock start time, and suggested a flag that doesn't exist.
+
 ## [0.26.0] - 2026-09-06
 
 Worktree remote directories now get cleaned up, and host-restricted subtasks are honored inside parallel groups.
@@ -73,7 +130,7 @@ Full product/architecture/performance round on `rr monitor`. Net: three inert co
 
 ### Added
 
-- **Zero-test runs are called out** - A test run that collected nothing no longer looks identical to a clean suite: `details.no_tests` is set in the result envelope and pretty mode prints a warning. Exit codes are unchanged, so legitimate zero-test commands (`pytest --collect-only`, `go test -run NoMatch`, `jest --passWithNoTests`) keep working. Requires positive evidence in the output (a matched `no tests ran` / `collected 0 items` / `Tests no tests` line), never inference from the command string alone. Covers `rr run`/`rr exec`/tasks; parallel runs set `details.no_tests` to the list of subtask names that collected nothing.
+- **Zero-test runs are called out** - A test run that collected nothing no longer looks identical to a clean suite: `details.no_tests` is set in the result envelope and pretty mode prints a warning. Exit codes are unchanged, so legitimate zero-test commands (`pytest --collect-only`, `go test -run NoMatch`, `jest --passWithNoTests`) keep working. Requires positive evidence in the output (a matched `no tests ran` / `collected 0 items` / `Tests no tests` line), never inference from the command string alone. Covers `rr run`/`rr exec`/tasks; parallel runs set `details.no_tests: true` and list the subtasks that collected nothing in `details.no_tests_tasks`.
 - **`details.remote_cwd`** reports the subdirectory a command ran in (see Breaking Changes above), for both remote and local execution, so `local_fallback` can't make one command mean two things. The `cd` is soft: a directory that wasn't synced falls back to the project root rather than failing.
 - **Relative-path failure hints** - When a relative path fails because it resolved from a different directory than you expected, the `hint` detail names both directories and the fix (the corrected path, or which `--cwd` to pass or drop). Only fires when the path actually exists in one location and not the other, so a genuine typo doesn't get an invented explanation.
 - **Pipe-swallowed exit codes are flagged** - A piped zero-test run sets `details.piped_exit_code` and the warning points at the cause: without `pipefail` the shell reports the last stage's status, so a failing runner exits 0. Enable propagation per host with `shell: "bash -o pipefail -c"` (bash, not sh: dash lacks `pipefail`). rr does not inject `pipefail` itself, since `cmd | grep -q pattern` tolerates upstream failure on purpose.
@@ -157,6 +214,29 @@ Full product/architecture/performance round on `rr monitor`. Net: three inert co
 - Bumped `actions/upload-artifact` v6 -> v7
 - Bumped `actions/download-artifact` v7 -> v8
 
+## [0.22.0] - 2026-06-22
+
+Agent friction fixes from a review of 30 agent sessions.
+
+### Breaking Changes
+
+- **Parallel tasks reject extra args** - `rr <parallel-task> -k foo` used to drop the args silently and run the full group. It now errors, pointing to `rr run "<command> args"` for ad-hoc runs, or to `forward_args` (below).
+
+### Added
+
+- **`--no-phases`** - Suppresses the intermediate phase events on stderr (connect, sync, exec) and keeps the final result event, so callers capturing output don't need grep chains to strip phase noise.
+- **`--cwd` on `rr run` and `rr exec`** - `rr run --cwd backend "pytest"` runs in a project subdirectory without the `cd backend && ...` quoting dance. A `--cwd` that resolves outside the project root is rejected.
+- **`forward_args: true` on parallel tasks** - Appends CLI args, shell-quoted, to each subtask's command, so `rr test-backend -k bond` filters every shard. Multi-step subtasks are rejected with an error.
+
+### Changed
+
+- **Stale-lock default is 90s** (was 3m), three missed 30s heartbeats. Stealing a stale lock now prints a warning (a phase event in structured mode) instead of logging only at debug level.
+- Lockfile invalidation notices ("Invalidating stale node_modules/") are structured phase events in machine mode instead of plain text on stdout.
+
+### Fixed
+
+- `rr monitor` has colors again. Making structured output the default in v0.21.0 turned colors off everywhere, including the TUI.
+
 ## [0.21.0] - 2026-05-10
 
 ### Security
@@ -180,6 +260,16 @@ Full product/architecture/performance round on `rr monitor`. Net: three inert co
 
 - **Default output mode** - All commands default to structured JSON output. Phase events (connect, sync, lock, exec) are emitted as JSON lines to stderr. Command stdout/stderr passes through undecorated to stdout/stderr.
 - **`MachineMode()` semantics** - Now returns `true` by default (since structured is default). Commands that previously required `--machine` for JSON output now produce it without any flag.
+
+## [0.20.0] - 2026-03-28
+
+### Added
+
+- **SSH `ProxyCommand` support** - rr reads `ProxyCommand` from `~/.ssh/config` and connects through it, so bastion hosts and SOCKS proxies work. The `%h`, `%p`, `%n`, `%r`, and `%%` tokens are expanded. `ProxyJump` isn't supported; rr detects it and warns with guidance on converting it to a `ProxyCommand`.
+
+### Fixed
+
+- **rsync uses your SSH config** - rsync's ssh subprocess now gets `-F ~/.ssh/config` when that file exists, so sync and pull pick up `ProxyCommand`, `IdentityFile`, and other per-host settings the way rr's own SSH connection does.
 
 ## [0.19.2] - 2026-02-13
 

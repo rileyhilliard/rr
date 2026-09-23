@@ -161,7 +161,7 @@ test_global_flags() {
     run_test "-q flag (short)" 0 "$RR_BIN" -q tasks
     run_test "--no-color flag" 0 "$RR_BIN" --no-color tasks
     run_test "--verbose flag" 0 "$RR_BIN" --verbose tasks
-    run_test "-v flag (short)" 0 "$RR_BIN" -v tasks
+    run_test "-v flag rejected (removed shorthand)" 1 "$RR_BIN" -v tasks
     run_test "--machine flag" 0 "$RR_BIN" --machine tasks
     run_test "-m flag (short)" 0 "$RR_BIN" -m tasks
 }

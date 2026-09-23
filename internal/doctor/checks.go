@@ -138,18 +138,23 @@ func FixableCount(results []CheckResult) int {
 	return count
 }
 
-// Summary returns a summary string of the check results.
+// Summary returns a summary string of the check results. Failures and
+// warnings are counted separately because only failures make doctor exit 1.
 func Summary(results []CheckResult) string {
 	counts := CountByStatus(results)
 	warn := counts[StatusWarn]
 	fail := counts[StatusFail]
 
-	if fail == 0 && warn == 0 {
+	switch {
+	case fail == 0 && warn == 0:
 		return "Everything looks good"
+	case warn == 0:
+		return fmt.Sprintf("%d failure%s found", fail, pluralize(fail))
+	case fail == 0:
+		return fmt.Sprintf("%d warning%s found", warn, pluralize(warn))
+	default:
+		return fmt.Sprintf("%d failure%s and %d warning%s found", fail, pluralize(fail), warn, pluralize(warn))
 	}
-
-	total := warn + fail
-	return fmt.Sprintf("%d issue%s found", total, pluralize(total))
 }
 
 func pluralize(n int) string {

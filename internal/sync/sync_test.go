@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -1140,13 +1141,13 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 	}
 
 	t.Run("skips nil connection", func(t *testing.T) {
-		err := InvalidateStaleDirectories(nil, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(nil, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
 	t.Run("skips local connection", func(t *testing.T) {
 		conn := &host.Connection{IsLocal: true}
-		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1158,7 +1159,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Client: mock,
 			Host:   config.Host{Dir: "~/rr/myapp"},
 		}
-		err := InvalidateStaleDirectories(conn, localDir, nil, nil)
+		err := invalidateStaleDirectories(conn, localDir, nil, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1171,7 +1172,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "~/rr/myapp"},
 		}
 		// No bun.lock in localDir - should be a no-op
-		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1187,7 +1188,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 		mock.GetFS().MkdirAll(remoteNodeModulesPath)
 
 		// Respond to the stat command with mtime=0 (stale)
-		statPattern := `.*stat.*node_modules.*`
+		statPattern := `node_modules.*stat`
 		mock.SetCommandResponse(statPattern, sshtesting.CommandResponse{
 			Stdout:   []byte("0\n"),
 			ExitCode: 0,
@@ -1200,7 +1201,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1220,7 +1221,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 		// Remote mtime is in the future relative to lockfile
 		remoteMtime := localInfo.ModTime().Unix() + 3600
 
-		statPattern := `.*stat.*node_modules.*`
+		statPattern := `node_modules.*stat`
 		mock.SetCommandResponse(statPattern, sshtesting.CommandResponse{
 			Stdout:   []byte(fmt.Sprintf("%d\n", remoteMtime)),
 			ExitCode: 0,
@@ -1242,7 +1243,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err = InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err = invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 		// We can't easily assert rm was NOT called with MockClient's current API,
 		// but the function should succeed with no error.
@@ -1271,7 +1272,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, multiDirInvalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, multiDirInvalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1291,18 +1292,20 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil, false)
 		assert.NoError(t, err)
 	})
 }
 
 // statFakeClient wraps MockClient so the invalidation stat command reflects
 // the mock filesystem (existing dir -> mtime 0, missing dir -> "absent") and
-// records every executed command.
+// records every executed command. Setting stat overrides the stat command's
+// result, to simulate it failing.
 type statFakeClient struct {
 	*sshtesting.MockClient
 	mu       gosync.Mutex
 	commands []string
+	stat     *sshtesting.CommandResponse
 }
 
 var statCmdPathRe = regexp.MustCompile(`^d='?([^';]+)'?;`)
@@ -1312,6 +1315,9 @@ func (c *statFakeClient) Exec(cmd string) ([]byte, []byte, int, error) {
 	c.commands = append(c.commands, cmd)
 	c.mu.Unlock()
 	if m := statCmdPathRe.FindStringSubmatch(cmd); m != nil {
+		if c.stat != nil {
+			return c.stat.Stdout, c.stat.Stderr, c.stat.ExitCode, c.stat.Error
+		}
 		if c.GetFS().Exists(m[1]) {
 			return []byte("0\n"), nil, 0, nil
 		}
@@ -1361,13 +1367,13 @@ func TestInvalidateStaleDirectories_Idempotent(t *testing.T) {
 	var notified []string
 	notify := func(dir, lockfile string) { notified = append(notified, dir+"|"+lockfile) }
 
-	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	require.NoError(t, invalidateStaleDirectories(conn, localDir, testInvalidations, notify, false))
 	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified)
 	assert.Equal(t, 1, client.rmCount("node_modules"))
 	assert.False(t, client.GetFS().Exists("/root/rr/myapp/node_modules"))
 
 	// Second pass: the dir is gone, so there is nothing to invalidate or announce.
-	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	require.NoError(t, invalidateStaleDirectories(conn, localDir, testInvalidations, notify, false))
 	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified, "second call must not re-announce")
 	assert.Equal(t, 1, client.rmCount("node_modules"), "second call must not rm again")
 }
@@ -1377,7 +1383,7 @@ func TestInvalidateStaleDirectories_MissingRemoteDirIsSilent(t *testing.T) {
 	require.NoError(t, client.GetFS().Remove("/root/rr/myapp/node_modules"))
 
 	called := false
-	err := InvalidateStaleDirectories(conn, localDir, testInvalidations, func(string, string) { called = true })
+	err := invalidateStaleDirectories(conn, localDir, testInvalidations, func(string, string) { called = true }, false)
 	require.NoError(t, err)
 	assert.False(t, called)
 	assert.Zero(t, client.rmCount("node_modules"))
@@ -1430,32 +1436,96 @@ func TestSyncWithOptions_InvalidationErrorStopsSync(t *testing.T) {
 	assert.Contains(t, err.Error(), "stale remote directory node_modules/")
 }
 
-func TestSync_InvalidatesWithDefaultNotice(t *testing.T) {
-	requireRsync(t)
-	localDir, conn, client := invalidationFixture(t)
-
-	out := captureStdout(t, func() {
-		_ = Sync(conn, localDir, badRsyncFlagCfg(), nil)
-	})
-
-	assert.Equal(t, 1, client.rmCount("node_modules"))
-	assert.Contains(t, out, "Invalidating stale node_modules/ (bun.lock changed)")
-}
-
-func TestSyncWithOptions_DoubleInvalidationIsHarmless(t *testing.T) {
-	// Mirrors workflow.go today: an explicit InvalidateStaleDirectories call
-	// followed by SyncWithOptions, which invalidates again.
+func TestSyncWithOptions_DryRunReportsButKeepsStaleDirs(t *testing.T) {
 	requireRsync(t)
 	localDir, conn, client := invalidationFixture(t)
 
 	var notified []string
-	notify := func(dir, lockfile string) { notified = append(notified, dir) }
+	err := SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{
+		DryRun: true,
+		Invalidated: func(dir, lockfile string) {
+			notified = append(notified, dir+"|"+lockfile)
+		},
+	})
+	require.Error(t, err, "rsync should fail on the bogus flag")
 
-	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
-	_ = SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{Invalidated: notify})
+	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified, "dry run still reports what it would invalidate")
+	assert.Zero(t, client.rmCount("node_modules"), "dry run must not delete anything")
+	assert.True(t, client.GetFS().Exists("/root/rr/myapp/node_modules"))
+}
 
-	assert.Equal(t, []string{"node_modules/"}, notified)
-	assert.Equal(t, 1, client.rmCount("node_modules"))
+// TestSyncWithOptions_NilInvalidatedPrintsNothing checks the sync package
+// never writes to stdout itself: with no Invalidated callback the stale dir
+// is still removed (or, in a dry run, kept), just not announced.
+func TestSyncWithOptions_NilInvalidatedPrintsNothing(t *testing.T) {
+	requireRsync(t)
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry_run=%v", dryRun), func(t *testing.T) {
+			localDir, conn, client := invalidationFixture(t)
+
+			out := captureStdout(t, func() {
+				_ = SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{DryRun: dryRun})
+			})
+
+			assert.Empty(t, out)
+			wantRm := 1
+			if dryRun {
+				wantRm = 0
+			}
+			assert.Equal(t, wantRm, client.rmCount("node_modules"))
+		})
+	}
+}
+
+// TestInvalidateStaleDirectories_UnreadableAgeFails checks that when the
+// remote dir exists but its age can't be read, invalidation fails the sync
+// with a sync error instead of guessing: the dir is neither deleted nor
+// announced.
+func TestInvalidateStaleDirectories_UnreadableAgeFails(t *testing.T) {
+	tests := []struct {
+		name     string
+		resp     sshtesting.CommandResponse
+		wantText string
+	}{
+		{
+			name:     "exec error",
+			resp:     sshtesting.CommandResponse{Error: fmt.Errorf("connection reset")},
+			wantText: "connection reset",
+		},
+		{
+			name:     "both stat variants fail",
+			resp:     sshtesting.CommandResponse{Stderr: []byte("stat: cannot read 'node_modules': Permission denied"), ExitCode: 1},
+			wantText: "Permission denied",
+		},
+		{
+			name:     "empty output",
+			resp:     sshtesting.CommandResponse{Stdout: []byte("\n")},
+			wantText: `stat printed ""`,
+		},
+		{
+			name:     "unparsable output",
+			resp:     sshtesting.CommandResponse{Stdout: []byte("Mon Sep 21\n")},
+			wantText: `stat printed "Mon Sep 21"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			localDir, conn, client := invalidationFixture(t)
+			client.stat = &tt.resp
+			notified := false
+
+			err := invalidateStaleDirectories(conn, localDir, testInvalidations, func(string, string) { notified = true }, false)
+
+			require.Error(t, err)
+			assert.True(t, errors.IsCode(err, errors.ErrSync), "want a sync error, got: %v", err)
+			assert.Contains(t, err.Error(), "Couldn't read the age of remote node_modules/")
+			assert.Contains(t, err.Error(), tt.wantText)
+			assert.False(t, notified)
+			assert.Zero(t, client.rmCount("node_modules"), "a dir whose age wasn't read must not be deleted")
+			assert.True(t, client.GetFS().Exists("/root/rr/myapp/node_modules"))
+		})
+	}
 }
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -1486,4 +1556,22 @@ func TestFindRsync_MissingIsDependency(t *testing.T) {
 	_, err := FindRsync()
 	require.Error(t, err)
 	assert.True(t, errors.IsCode(err, errors.ErrDependency), "got %v", err)
+}
+
+func TestStreamPipes_ReadsBothPipesToEOF(t *testing.T) {
+	var stdoutLines, stderrLines []string
+	for i := range 2000 {
+		stdoutLines = append(stdoutLines, fmt.Sprintf("out %d", i))
+		stderrLines = append(stderrLines, fmt.Sprintf("err %d", i))
+	}
+	var out, errOut bytes.Buffer
+
+	streamPipes(
+		strings.NewReader(strings.Join(stdoutLines, "\n")),
+		strings.NewReader(strings.Join(stderrLines, "\r")),
+		&out, &errOut,
+	)
+
+	assert.Equal(t, strings.Join(stdoutLines, "\n")+"\n", out.String())
+	assert.Equal(t, strings.Join(stderrLines, "\n")+"\n", errOut.String())
 }

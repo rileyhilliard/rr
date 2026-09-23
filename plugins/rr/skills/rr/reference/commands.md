@@ -13,7 +13,8 @@ These work with any command:
 - `--no-strict-host-key-checking` - Skip SSH host key verification (CI only)
 - `--no-color` - Disable colored output
 - `-q` / `--quiet` - Suppress non-essential output
-- `-v` / `--verbose` - Verbose output
+
+There's no `-v` global flag. `rr test -- -v` passes `-v` to the task; `rr test -v` without the `--` errors with a hint to add it. The old global `--verbose` still parses but is hidden, has no effect, and emits a `config` warn event. Use `RR_DEBUG=1` for debug logs.
 
 ## Core Commands
 
@@ -82,6 +83,10 @@ rr test tests/test_api.py  # Extra args appended to single-command tasks
 rr test -- -k login -x     # Flag-like args go after --
 ```
 
+rr parses flags before the task does, so `rr test -k login` fails with a hint to use `--`. For a parallel task without `forward_args: true`, extra args fail with `CONFIG_INVALID` and a hint to set `forward_args: true` and use `--`. `pull`, `logs`, `provision`, and every other built-in command name are reserved and can't be task names.
+
+With `--pretty`, a failed test task prints a failure block (failing tests with `file:line` and message) after the status line.
+
 **Single-command and multi-step task flags:** `--host`, `--tag`, `--probe-timeout`, `--local`, `--repeat`, `--tail`, plus `--skip-deps` and `--from <task>` when the task has `depends`. Tasks don't take `--cwd`, `--pull`, or `--skip-requirements`; they always run from the project root.
 
 **Parallel task flags:** `--host`, `--tag`, `--local`, `--stream`, `--verbose`, `--quiet`, `--fail-fast`, `--max-parallel N`, `--no-logs`, `--dry-run`.
@@ -96,6 +101,8 @@ List all available tasks.
 rr tasks
 rr tasks --json
 ```
+
+`rr tasks` validates the project config (it doesn't need hosts). An invalid config exits 1 with the error envelope on stderr.
 
 ## Host Management
 
@@ -149,7 +156,12 @@ rr doctor --path          # Compare login vs interactive shell PATH on hosts
 rr doctor --pretty        # Human-readable report (default is a JSON envelope)
 ```
 
-Doctor exits 0 even when checks fail. Read `data.summary.all_clear` in the JSON output.
+Doctor grades each check by whether a run would fail, and exits 1 if any check fails, 0 if there are only warnings. The JSON envelope says `success: true` either way; `data.summary.fail` counts failures, and `data.summary.all_clear` is true only when nothing failed or warned.
+
+- Inside a project, host checks cover only the project's hosts; outside a project, every global host.
+- An unreachable host is a warning while another host is reachable or `local_fallback` would take over, and a failure otherwise. It's reported once, on its `host_<name>` check, even with `--path`/`--requirements`.
+- A missing SSH agent (`ssh_agent`), missing default key (`ssh_key`), or missing `.rr.yaml` (`config_file`) is a warning.
+- `--requirements` checks each host's `require:` tools (`requirements_<host>`, a failure when any are missing; the suggestion points to `rr provision` when rr can install them) and remote rsync (`rsync_remote_<host>`).
 
 ### `rr monitor`
 

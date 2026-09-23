@@ -316,14 +316,21 @@ var doctorCmd = &cobra.Command{
 	Long: `Run diagnostic checks to identify and fix common issues.
 
 Checks:
-  - SSH connectivity to all hosts
-  - rsync availability
-  - Configuration validity
-  - Lock file status
-  - Network latency
+  - Configuration validity (project and global config, reserved task names)
+  - SSH keys, agent, and key permissions
+  - SSH connectivity to the project's hosts (every global host outside a
+    project), and which remote directory this tree syncs to
+  - Local rsync
+  - With --requirements: the project's required tools and rsync on each host
+  - With --path: PATH differences between login and interactive shells
+
+Checks are graded by whether a run would fail. Exits 1 if any check fails
+and 0 when there are only warnings. An unreachable host is a warning while
+another host is reachable or local_fallback would take over.
 
 Examples:
   rr doctor
+  rr doctor --requirements
   rr doctor --fix`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return errors.NewNotImplemented("doctor")
@@ -444,19 +451,22 @@ Examples:
 var unlockCmd = &cobra.Command{
 	Use:   "unlock [host]",
 	Short: "Release lock on remote host",
-	Long: `Force-release the project lock on a remote host.
+	Long: `Force-release the lock on a remote host.
 
 Use this when a lock is stuck due to a crashed process or lost connection.
-The lock is project-specific, so this only releases the lock for the current
-directory's project.
+The lock is per host, not per project: it's the rr.lock directory under the
+project's lock.dir (default /tmp/rr-locks), so releasing it frees the host for
+every project that shares that lock.dir.
 
-If no host is specified, uses the default host. With --all, releases locks
-on all configured hosts.
+If no host is specified and only one host is configured, that host is
+unlocked; otherwise --pretty shows a picker and structured mode asks you to
+name one. With --all, releases locks on the project's hosts, or on every
+configured host when run outside a project.
 
 Examples:
-  rr unlock              # Unlock default host
+  rr unlock              # Unlock the only host, or pick one
   rr unlock dev-box      # Unlock specific host
-  rr unlock --all        # Unlock all configured hosts`,
+  rr unlock --all        # Unlock the project's hosts`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hostArg := ""

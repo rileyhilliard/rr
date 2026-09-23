@@ -98,16 +98,26 @@ func runCaptured(t *testing.T, fn func()) (stdout, stderr string) {
 }
 
 // assertLocalTargetConnect checks the connect phase of a local-target run: a
-// normal complete event on host local carrying the reason, and no fallback
-// warning or result fallback, because nothing went wrong.
+// normal complete event on host local carrying the reason, the reason again
+// as details.local_reason on the result, and no fallback warning or result
+// fallback, because nothing went wrong.
 func assertLocalTargetConnect(t *testing.T, events []PhaseEvent, wantReason string) {
+	t.Helper()
+	assertLocalConnectEvents(t, events, wantReason)
+	result := resultEvent(t, events)
+	assert.Equal(t, wantReason, result.Details["local_reason"])
+	assert.NotContains(t, result.Details, "fallback")
+}
+
+// assertLocalConnectEvents checks the connect events of a local-target run:
+// one complete on host local with the reason, and no fallback warning.
+func assertLocalConnectEvents(t *testing.T, events []PhaseEvent, wantReason string) {
 	t.Helper()
 	assert.Empty(t, eventsWith(events, "connect", "warn"), "a local target is not a fallback")
 	complete := eventsWith(events, "connect", "complete")
 	require.Len(t, complete, 1)
 	assert.Equal(t, "local", complete[0].Host)
 	assert.Equal(t, wantReason, complete[0].Details["reason"])
-	assert.NotContains(t, resultEvent(t, events).Details, "fallback")
 }
 
 func TestResolveExecTarget(t *testing.T) {
@@ -328,7 +338,8 @@ tests/test_math.py:12: ZeroDivisionError
 }
 
 // TestRunRepeatedAndParallel_LocalWithoutHosts checks --repeat and parallel
-// tasks honor --local before resolving hosts, so zero hosts is fine.
+// tasks honor --local before resolving hosts, so zero hosts is fine, and
+// report the local target the same way single runs do.
 func TestRunRepeatedAndParallel_LocalWithoutHosts(t *testing.T) {
 	t.Run("rr run --repeat --local", func(t *testing.T) {
 		withStructuredOutput(t)
@@ -337,11 +348,51 @@ func TestRunRepeatedAndParallel_LocalWithoutHosts(t *testing.T) {
 
 		var exitCode int
 		var runErr error
-		runCaptured(t, func() {
+		stdout, stderr := runCaptured(t, func() {
 			exitCode, runErr = runRepeated("true", 2, "", "", true)
 		})
 		require.NoError(t, runErr)
 		assert.Equal(t, 0, exitCode)
+		assert.Empty(t, stdout, "structured mode prints no summary")
+		events := parseEvents(t, stderr)
+		assertLocalTargetConnect(t, events, host.LocalReasonFlag)
+		result := resultEvent(t, events)
+		assert.Equal(t, "success", result.Status)
+		assert.EqualValues(t, 2, result.Details["passed"])
+	})
+
+	t.Run("rr <task> --repeat --local", func(t *testing.T) {
+		withStructuredOutput(t)
+		withGlobalHosts(t)
+		inProject(t, "version: 1\ntasks:\n  t:\n    run: \"false\"\n")
+
+		var exitCode int
+		var runErr error
+		stdout, stderr := runCaptured(t, func() {
+			exitCode, runErr = runTaskRepeated("t", 2, "", "", true)
+		})
+		require.NoError(t, runErr)
+		assert.Equal(t, 1, exitCode)
+		assert.Empty(t, stdout, "structured mode prints no summary")
+		events := parseEvents(t, stderr)
+		assertLocalTargetConnect(t, events, host.LocalReasonFlag)
+		result := resultEvent(t, events)
+		assert.Equal(t, "failed", result.Status)
+		assert.EqualValues(t, 2, result.Details["failed"])
+	})
+
+	t.Run("rr run --repeat --pretty prints the summary", func(t *testing.T) {
+		withPrettyOutput(t)
+		withGlobalHosts(t)
+		inProject(t, "version: 1\n")
+
+		var runErr error
+		stdout, _ := runCaptured(t, func() {
+			_, runErr = runRepeated("true", 2, "", "", true)
+		})
+		require.NoError(t, runErr)
+		assert.Contains(t, stdout, "Parallel Execution Summary")
+		assert.Contains(t, stdout, "2 passed")
 	})
 
 	t.Run("parallel task --local", func(t *testing.T) {
@@ -351,11 +402,25 @@ func TestRunRepeatedAndParallel_LocalWithoutHosts(t *testing.T) {
 
 		var exitCode int
 		var runErr error
-		runCaptured(t, func() {
+		_, stderr := runCaptured(t, func() {
 			exitCode, runErr = RunParallelTask(ParallelTaskOptions{TaskName: "both", Local: true, NoLogs: true})
 		})
 		require.NoError(t, runErr)
 		assert.Equal(t, 0, exitCode)
+		assertLocalTargetConnect(t, parseEvents(t, stderr), host.LocalReasonFlag)
+	})
+
+	t.Run("parallel task in local mode", func(t *testing.T) {
+		withStructuredOutput(t)
+		withGlobalHosts(t)
+		inProject(t, "version: 1\nlocal_fallback: on-unreachable\ntasks:\n  a:\n    run: \"true\"\n  both:\n    parallel: [a]\n")
+
+		var runErr error
+		_, stderr := runCaptured(t, func() {
+			_, runErr = RunParallelTask(ParallelTaskOptions{TaskName: "both", NoLogs: true})
+		})
+		require.NoError(t, runErr)
+		assertLocalTargetConnect(t, parseEvents(t, stderr), host.LocalReasonMode)
 	})
 }
 

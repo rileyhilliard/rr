@@ -11,29 +11,6 @@ type Detector interface {
 	Detect(command string, output []byte) int
 }
 
-// ExtractFailures detects the test framework from command/output and extracts
-// structured failure information. Returns nil if no failures found or format unknown.
-func ExtractFailures(command string, rawOutput []byte) []output.TestFailure {
-	formatter := detectFormatter(command, rawOutput)
-	if formatter == nil {
-		return nil
-	}
-
-	// Process all output through the formatter
-	outputStr := string(rawOutput)
-	lines := strings.Split(outputStr, "\n")
-	for _, line := range lines {
-		formatter.ProcessLine(line)
-	}
-
-	// Extract failures if formatter supports it
-	if provider, ok := formatter.(output.TestSummaryProvider); ok {
-		return provider.GetTestFailures()
-	}
-
-	return nil
-}
-
 // TestSummary holds aggregate test counts extracted from raw output.
 type TestSummary struct {
 	Passed  int `json:"passed"`
@@ -77,43 +54,9 @@ func hasIntentionalZeroFlag(command string) bool {
 	return false
 }
 
-// DetectNoTests reports whether the command's output shows the test runner ran
-// no tests at all. False when no framework was recognized, when the command
-// explicitly asked for a zero-test run, or when any results were parsed.
-func DetectNoTests(command string, rawOutput []byte) bool {
-	if hasIntentionalZeroFlag(command) {
-		return false
-	}
-
-	formatter := detectFormatter(command, rawOutput)
-	if formatter == nil {
-		return false
-	}
-	for _, line := range strings.Split(string(rawOutput), "\n") {
-		formatter.ProcessLine(line)
-	}
-
-	reporter, ok := formatter.(output.NoTestsReporter)
-	return ok && reporter.RanNothing()
-}
-
-// ExtractTestSummary detects the test framework from command/output and
-// returns aggregate counts. ok is false when no framework matched or the
-// output contained no recognizable test results.
-func ExtractTestSummary(command string, rawOutput []byte) (TestSummary, bool) {
-	formatter := detectFormatter(command, rawOutput)
-	if formatter == nil {
-		return TestSummary{}, false
-	}
-
-	for _, line := range strings.Split(string(rawOutput), "\n") {
-		formatter.ProcessLine(line)
-	}
-	return summarize(formatter, command)
-}
-
 // summarize reads aggregate counts from a formatter that has already
-// processed the output. See ExtractTestSummary.
+// processed the output. ok is false when the output contained no
+// recognizable test results.
 func summarize(formatter output.Formatter, command string) (TestSummary, bool) {
 	provider, ok := formatter.(output.TestSummaryProvider)
 	if !ok {

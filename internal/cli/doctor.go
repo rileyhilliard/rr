@@ -382,32 +382,30 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 
 // outputDoctorTextResults outputs just the summary after progressive category rendering.
 func outputDoctorTextResults(_ []doctor.Check, results []doctor.CheckResult) {
-	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
-	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
-	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
-
 	// Render summary divider
 	fmt.Println(strings.Repeat("\u2501", 60))
 	fmt.Println()
 
-	// Summary
-	counts := doctor.CountByStatus(results)
-	if !doctor.HasIssues(results) {
-		fmt.Printf("%s %s\n", successStyle.Render(ui.SymbolSuccess), "Everything looks good")
-	} else {
-		total := counts[doctor.StatusFail] + counts[doctor.StatusWarn]
-		fmt.Printf("%s %d issue%s found\n",
-			errorStyle.Render(ui.SymbolFail),
-			total,
-			pluralSuffix(total),
-		)
+	printDoctorSummary(results)
+}
 
-		fixable := doctor.FixableCount(results)
-		if fixable > 0 && !doctorFix {
-			fmt.Println()
-			fmt.Printf("  Run with %s to attempt automatic fixes where possible.\n",
-				mutedStyle.Render("--fix"))
-		}
+// printDoctorSummary prints the verdict line. The failure symbol is used
+// only when a check failed, matching the exit code (reportDoctorResults):
+// a warnings-only run exits 0 and gets the warning symbol.
+func printDoctorSummary(results []doctor.CheckResult) {
+	symbol := lipgloss.NewStyle().Foreground(ui.ColorSuccess).Render(ui.SymbolSuccess)
+	switch {
+	case doctor.HasFailures(results):
+		symbol = lipgloss.NewStyle().Foreground(ui.ColorError).Render(ui.SymbolFail)
+	case doctor.HasIssues(results):
+		symbol = lipgloss.NewStyle().Foreground(ui.ColorWarning).Render(ui.SymbolWarning)
+	}
+	fmt.Printf("%s %s\n", symbol, doctor.Summary(results))
+
+	if doctor.HasIssues(results) && doctor.FixableCount(results) > 0 && !doctorFix {
+		fmt.Println()
+		fmt.Printf("  Run with %s to attempt automatic fixes where possible.\n",
+			lipgloss.NewStyle().Foreground(ui.ColorMuted).Render("--fix"))
 	}
 
 	fmt.Println()
@@ -465,27 +463,7 @@ func outputDoctorText(checks []doctor.Check, results []doctor.CheckResult) error
 	fmt.Println(strings.Repeat("\u2501", 60))
 	fmt.Println()
 
-	// Summary
-	counts := doctor.CountByStatus(results)
-	if !doctor.HasIssues(results) {
-		fmt.Printf("%s %s\n", successStyle.Render(ui.SymbolSuccess), "Everything looks good")
-	} else {
-		total := counts[doctor.StatusFail] + counts[doctor.StatusWarn]
-		fmt.Printf("%s %d issue%s found\n",
-			errorStyle.Render(ui.SymbolFail),
-			total,
-			pluralSuffix(total),
-		)
-
-		fixable := doctor.FixableCount(results)
-		if fixable > 0 && !doctorFix {
-			fmt.Println()
-			fmt.Printf("  Run with %s to attempt automatic fixes where possible.\n",
-				mutedStyle.Render("--fix"))
-		}
-	}
-
-	fmt.Println()
+	printDoctorSummary(results)
 	return nil
 }
 
@@ -639,14 +617,6 @@ func capitalizeFirst(s string) string {
 		return string(s[0]-32) + s[1:]
 	}
 	return s
-}
-
-// pluralSuffix returns "s" if n != 1.
-func pluralSuffix(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
 
 // formatProbeError formats a probe error for display.

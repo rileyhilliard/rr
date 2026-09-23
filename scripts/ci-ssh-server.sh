@@ -64,6 +64,10 @@ start_server() {
         sleep 1
     done
 
+    # The image ships without rsync; the sync tests skip without it
+    docker exec "$CONTAINER_NAME" apk add --no-cache rsync >/dev/null
+    echo "Installed rsync in container"
+
     # Add to known_hosts to avoid host key verification prompts
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh

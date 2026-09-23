@@ -8,7 +8,7 @@ rr host list        # See configured hosts
 rr status           # Check connectivity per SSH alias
 ```
 
-`rr doctor` exits 0 even when checks fail; read `data.summary.all_clear`.
+`rr doctor` exits 1 when a check fails and 0 when there are only warnings. Details are in `data.categories[].results[]`; `data.summary.all_clear` is true only with no failures or warnings. Inside a project it checks only the project's hosts.
 
 ## Common Issues
 
@@ -134,7 +134,7 @@ hosts:
 
 ### Requirements Check Fails
 
-**Symptoms:** "Missing required tools: ..." error (code `COMMAND_FAILED`)
+**Symptoms:** "Missing required tools: ..." error (code `DEPENDENCY_MISSING`; `COMMAND_FAILED` on rr binaries before this release)
 
 **Options:**
 1. Install them: `rr provision` (or `rr provision --yes`)
@@ -165,14 +165,14 @@ Or in project config (overrides global):
 local_fallback: on-unreachable
 ```
 
-A local fallback shows up as a `connect` phase event with `"status":"warn"`, or as `details.fallback` on the result when hosts were locked.
+A local fallback shows up as a `connect` phase event with `"status":"warn"` and `details.reason` (`hosts_unreachable` or `all_hosts_locked`), plus `details.fallback` on the result. A deliberate local run is a normal `connect` `complete` event with `host: local` and `details.reason` of `local_flag` (`--local`) or `local_mode` (`local_fallback` on with no hosts listed). Neither needs any host configured.
 
 ### Task Args Rejected
 
 | Error | Fix |
 |-------|-----|
 | "rr parses flags before the task sees them" | Put task args after `--`: `rr test -- -k foo` |
-| "parallel task '...' doesn't accept extra arguments" | Set `forward_args: true` on the task, or use `rr run "<cmd> <args>"` |
+| "parallel task '...' doesn't accept extra arguments" (`CONFIG_INVALID`) | Set `forward_args: true` on the task and pass args after `--`, or use `rr run "<cmd> <args>"` |
 | "This task is a compound command ..." | Add an `{args}` placeholder to the task's `run` |
 | "Can't pass arguments to multi-step tasks" | Use `rr run` for a one-off command |
 
