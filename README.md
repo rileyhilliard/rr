@@ -268,7 +268,7 @@ tasks:
 
 `rr test-pipeline` runs only the pipeline shards, and `rr test` runs everything. A shard you add to `test-pipeline` is picked up by `test` automatically. To keep a subtask on specific machines (a GPU box, say, or away from a production host), give it a `hosts:` list, and the parallel scheduler honors it.
 
-Each parallel run writes per-task logs and a `summary.json` to `~/.rr/logs/<task>-<timestamp>/`. `rr logs` lists recent runs. A subtask's `pull:` runs after the whole group finishes, pass or fail, and lands in `<dest>/<subtask>/` so shards don't overwrite each other's reports. Subtasks that share a host also share its remote directory, so give each one its own output path.
+Each parallel run writes per-task logs and a `summary.json` to `~/.rr/logs/<task>-<timestamp>/`. `rr logs` lists recent runs. A subtask's `pull:` runs after the whole group finishes, pass or fail, and lands in `<dest>/<subtask>_<index>/`, named like the subtask's log file, so shards don't overwrite each other's reports. Subtasks that share a host also share its remote directory, so give each one its own output path.
 
 Output modes:
 

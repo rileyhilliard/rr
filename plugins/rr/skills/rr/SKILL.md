@@ -227,7 +227,7 @@ rr test --tail 50            # reprint the last 50 log lines after the result
 - **Zero tests isn't success.** Check `details.no_tests` after narrowing with `-k`, `-run`, or paths.
 - **Locks are per host, shared across projects.** A run from another project on the same host blocks you. With several hosts, rr tries the next free one. If all are locked it waits up to `lock.wait_timeout` (1m) for one to free up, then fails, or runs locally when `local_fallback: always`. With one host it waits up to `lock.timeout` (5m).
 - **`rr unlock` with no host only works when one host is configured.** With several, the host picker only appears in `--pretty` mode; otherwise pass a name (`rr unlock mini`) or `--all`.
-- **Parallel subtasks on the same host share one remote directory.** Have each write reports to its own path (`reports/unit.xml`, not `reports/junit.xml` for all). Pulled files land locally in `<dest>/<subtask>/`.
+- **Parallel subtasks on the same host share one remote directory.** Have each write reports to its own path (`reports/unit.xml`, not `reports/junit.xml` for all). Pulled files land locally in `<dest>/<subtask>_<index>/`, named like the subtask's log file (`test:unit` first in the list lands in `test-unit_0/`).
 - **Custom `sync.exclude` replaces the defaults.** Include `.git`, `node_modules`, `.venv` yourself.
 - **Relative paths follow your cwd** for `run`/`exec` (see Where Commands Run). If a path fails, read `details.hint`.
 
@@ -272,7 +272,7 @@ tasks:
       - test                         # Then this
 ```
 
-Subtask `pull:` runs after all subtasks finish, pass or fail, into `<dest>/<subtask>/`. A failed pull doesn't change the exit code. Subtasks get the same env and setup as single tasks: host `env`, then `defaults.env`, then task `env`; host `setup_commands` and `defaults.setup` run after `cd` into the project dir.
+Subtask `pull:` runs after all subtasks finish, pass or fail, into `<dest>/<subtask>_<index>/`. A failed pull doesn't change the exit code. Subtasks get the same env and setup as single tasks: host `env`, then `defaults.env`, then task `env`; host `setup_commands` and `defaults.setup` run after `cd` into the project dir.
 
 Parallel task flags: `--stream`, `--verbose`, `--quiet`, `--fail-fast`, `--max-parallel N`, `--no-logs`, `--dry-run`, `--local`, `--host`, `--tag`. `--dry-run` shows the flattened subtask list and commands.
 

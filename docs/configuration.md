@@ -111,7 +111,7 @@ hosts:
 | `ssh` | list | yes | SSH connection strings, tried in order. |
 | `dir` | string | yes | Working directory on remote. Supports variable expansion. |
 | `tags` | list | no | Tags for filtering with `--tag` flag. |
-| `env` | map | no | Environment variables for commands on this host. |
+| `env` | map | no | Environment variables for commands on this host. See [How commands are built](#how-commands-are-built). |
 | `shell` | string | no | Shell invocation format (e.g., `zsh -l -c`). Default uses `$SHELL -l -c`. |
 | `setup_commands` | list | no | Commands to run before each command (e.g., `source ~/.nvm/nvm.sh`). |
 | `require` | list | no | Tools that must exist on this host (verified before running commands). |
@@ -286,7 +286,31 @@ defaults:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `defaults.setup` | list | `[]` | Commands prepended (with `&&`) before every command, after host `setup_commands`. Applies to tasks and parallel subtasks, locally and on remote hosts, and to ad-hoc `rr run` / `rr exec` on remote hosts only. |
-| `defaults.env` | map | `{}` | Environment variables for all tasks, including parallel subtasks. Overrides host env; overridden by task env. |
+| `defaults.env` | map | `{}` | Environment variables for all tasks, including parallel subtasks. Overrides host env; overridden by task env. See [How commands are built](#how-commands-are-built). |
+
+### How commands are built
+
+Every task command, single or parallel, local or remote, runs as one shell command chained with `&&`:
+
+1. `cd` into the project directory (remote runs only).
+2. Each setup command: host `setup_commands`, then `defaults.setup`.
+3. One `export KEY="value"` per env key, in sorted key order. Host `env`, then `defaults.env`, then the task's `env`; a later layer replaces an earlier key.
+4. The task command.
+
+If any step fails, nothing after it runs and the task exits non-zero. `||`, `;`, and `&` inside a setup command or the task command only affect that command. Env is exported after setup, so setup commands can't read env values, but a value can use variables that setup exported and keys that sort before it.
+
+Env values are double-quoted, so the shell expands some things and leaves the rest alone:
+
+| In a value | Result |
+|------------|--------|
+| `$VAR`, `${VAR}`, `${VAR:-default}`, `$(cmd)`, `$((1+1))` | Expanded by the shell that runs the task |
+| `\$` | A literal `$`: `pa\$\$word` becomes `pa$$word` |
+| `~` | Literal. Use `$HOME` instead: `PATH: "$HOME/.local/bin:$PATH"` |
+| Double quotes, backticks, single quotes, spaces, `;`, `\|`, `&`, globs, newlines, other backslashes | Literal |
+
+Two edge cases follow from the quoting. A literal backslash can't sit directly before an expanded variable, because `\$` always means a literal `$`. A `"` inside `$(...)` is a literal character, so quote with `'...'` inside a substitution.
+
+Names must be valid shell variable names: letters, digits, and underscores, not starting with a digit. A value with an unclosed `${` or `$(` is rejected when the config loads, with an error naming the key. Commands run in the remote user's login shell (or `$SHELL` locally), which must be POSIX-compatible; fish is not supported.
 
 ## Host resolution order
 
@@ -593,7 +617,7 @@ tasks:
 | `setup` | string | no | Command to run once per host before parallel subtasks. |
 | `depends` | list | no | Task dependencies to run before this task. |
 | `hosts` | list | no | Restrict this task to specific hosts. |
-| `env` | map | no | Environment variables for this task. |
+| `env` | map | no | Environment variables for this task. See [How commands are built](#how-commands-are-built). |
 | `require` | list | no | Tools that must exist for this task. |
 | `pull` | list | no | Files to download from the remote after the task runs (see [Pulling files back](#pulling-files-back)). On a parallel task itself it has no effect and warns; set it on the subtasks. |
 | `fail_fast` | bool | no | Stop all tasks on first failure (parallel/depends tasks). |
@@ -924,7 +948,7 @@ Sources are paths or globs relative to the host's `dir`. `dest` defaults to the 
 **Subtasks of a parallel task** pull too, with three differences:
 
 - Pulls run after every subtask has finished, pass or fail, one at a time, each from the host its subtask ran on.
-- Each subtask's files land in `<dest>/<subtask>/` (`./<subtask>/` when `dest` is unset), so shards with the same output paths don't overwrite each other locally. A subtask listed more than once in `parallel:` lands in `<dest>/<subtask>_<index>/`, the same name its log file uses.
+- Each subtask's files land in `<dest>/<name>_<index>/` (`./<name>_<index>/` when `dest` is unset), the same stem as the subtask's log file: the name with `/ \ : * ? " < > |` replaced by `-`, then the subtask's position in the flattened `parallel:` list, starting at 0. `test:unit` listed first lands in `test-unit_0/`. The index makes every directory unique, so shards with the same output paths, or a subtask listed twice, don't overwrite each other locally.
 - Nothing is pulled after Ctrl+C.
 
 Subtasks that run on the same host share one remote directory, so they overwrite each other there unless each writes to its own path, such as a junit file named after the subtask. `pull:` on the parallel task itself does nothing and produces a config warning.
@@ -1225,6 +1249,8 @@ Fields that accept durations use Go's duration format:
 | "task 'X' has both 'parallel' and 'depends'" | Parallel tasks can't have dependencies; use depends inside subtasks instead |
 | "parallel task 'X' references non-existent task 'Y'" | Add the missing subtask or fix the reference |
 | "task 'X' has output 'Y' but it needs to be one of: ..." | Use `progress`, `stream`, `verbose`, or `quiet` |
+| "... has an invalid variable name 'X'" | Env names must be letters, digits, and underscores, not starting with a digit |
+| "... value for 'X' has a ${ that is never closed" | Close the `${` or `$(`, or write `\$` for a literal dollar sign |
 | "Config file has some issues" | A value has the wrong shape, e.g. an unknown `local_fallback` mode. Use `never`, `on-unreachable`, `always`, or a boolean there. |
 
 Unknown keys don't fail validation, but each one produces a config warning naming the key and the file, so a misspelled key doesn't silently do nothing. Removed keys (`output:`, the global `defaults.host`) and settings that have no effect where they're placed (`pull:` on a parallel task, `output:` on a non-parallel task) warn the same way. Warnings are emitted once per command: a `config` phase event with `status: "warn"` in structured mode, or a styled warning with `--pretty`. The config still loads.

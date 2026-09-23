@@ -1173,7 +1173,7 @@ stateDiagram-v2
 
 **Worktree isolation** (`internal/config/expand.go`): in a linked git worktree, `${PROJECT}` expands to `<repo>@<worktree>` so each worktree syncs to its own remote dir instead of clobbering the main checkout. `sync.worktree_isolation: false` turns this off. `rr status` shows the remote dir per host, `rr doctor` warns when a worktree shares the main checkout's dir, and `rr prune [--dry-run] [--host]` cleans hosts that haven't been synced to since a worktree was removed.
 
-**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run. In a parallel run, `pullSubtaskFiles` (`internal/cli/parallel.go`) pulls each subtask's files after the whole run finishes, one subtask at a time, from the host and alias the subtask used, into `<dest>/<subtask>/` (`<dest>/<subtask>_<index>/` for a subtask listed more than once, matching its log file name). It emits `pull` phase events with `details.task`, and skips local subtasks and Ctrl+C.
+**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run. In a parallel run, `pullSubtaskFiles` (`internal/cli/parallel.go`) pulls each subtask's files after the whole run finishes, one subtask at a time, from the host and alias the subtask used, into `<dest>/<stem>/`, where `<stem>` is the subtask's log file name without `.log` (`logs.TaskLogPath`), so every pull directory is unique. It emits `pull` phase events with `details.task`, and skips local subtasks and Ctrl+C.
 
 ### Tasks and Dependencies
 
@@ -1425,7 +1425,7 @@ flowchart LR
     style result fill:#dcfce7,stroke:#10b981,stroke-width:2px
 ```
 
-For single commands and tasks, `attachRunOutcome` (`internal/cli/runlog.go`) reads the tail of the run log and calls `formatters.ParseRunOutcome` once. The returned `Outcome` (summary, failures with file, line and full message, no-tests evidence, piped exit code) feeds both the JSON `details`, where failure messages are truncated, and the `--pretty` failure block (`renderOutcomeFailures`). For parallel groups, each subtask's captured output goes through `formatters.ParseRunOutcome` once (`parseTaskOutcomes` in `internal/cli/parallel.go`), and `failureEntries` in `runlog.go` builds the JSON failure list for both paths, and pretty mode renders failures with `parallel.RenderSummary`.
+For single commands and tasks, `attachRunOutcome` (`internal/cli/runlog.go`) reads the tail of the run log and calls `formatters.ParseRunOutcome` once. The returned `Outcome` (summary, failures with file, line and full message, no-tests evidence, piped exit code) feeds both the JSON `details`, where failure messages are truncated, and the `--pretty` failure block (`renderOutcomeFailures`). For parallel groups, each subtask's captured output goes through `formatters.ParseRunOutcome` once (`parseTaskOutcomes` in `internal/cli/parallel.go`). `failureEntries` in `runlog.go` builds the JSON failure list for single and parallel runs. In pretty mode, `parallel.RenderSummary` renders the parallel failures.
 
 ### Formatter Interface
 
@@ -1493,7 +1493,7 @@ func detectFormatter(command string, rawOutput []byte) output.Formatter {
 }
 ```
 
-Each `Detect` scores both the command string and the output. The exported helpers built on it are `ParseRunOutcome` (`outcome.go`) and `ExtractFailures`, which `internal/parallel/summary.go` uses for the pretty summary. `no_tests` needs positive evidence in the output (for example pytest's `no tests ran`), and commands using flags meant to run nothing (`--collect-only`, `--passWithNoTests`, `--listTests`, ...) are exempt.
+Each `Detect` scores both the command string and the output. The exported helpers built on it is `ParseRunOutcome` (`outcome.go`). Parallel runs parse each subtask once and pass the outcomes to `parallel.RenderSummary`. `no_tests` needs positive evidence in the output (for example pytest's `no tests ran`), and commands using flags meant to run nothing (`--collect-only`, `--passWithNoTests`, `--listTests`, ...) are exempt.
 
 ---
 

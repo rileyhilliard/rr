@@ -263,7 +263,7 @@ tasks:
         dest: ./artifacts
 ```
 
-Pulls run after every subtask finishes, pass or fail, one at a time from the host each subtask ran on. Each subtask's files land in `<dest>/<subtask>/` (here `./artifacts/test-unit/unit.xml`), so shards can't overwrite each other locally. A failed pull is reported (a `pull` `failed` event with `details.task`) and doesn't change the exit code. Nothing is pulled for local runs or after Ctrl+C.
+Pulls run after every subtask finishes, pass or fail, one at a time from the host each subtask ran on. Each subtask's files land in `<dest>/<name>_<index>/`, named like the subtask's log file: its name with `/ \ : * ? " < > |` replaced by `-`, then its position in the `parallel:` list (here `./artifacts/test-unit_0/unit.xml` and `./artifacts/test-integration_1/integration.xml`), so shards can't overwrite each other locally. A failed pull is reported (a `pull` `failed` event with `details.task`) and doesn't change the exit code. Nothing is pulled for local runs or after Ctrl+C.
 
 Subtasks that run on the same host share one remote directory, so they must write to distinct paths. Two subtasks both writing `reports/junit.xml` on one host overwrite each other before the pull.
 
