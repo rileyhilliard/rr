@@ -1,6 +1,9 @@
 package util
 
-import "testing"
+import (
+	"os/exec"
+	"testing"
+)
 
 func TestShellQuote(t *testing.T) {
 	tests := []struct {
@@ -86,6 +89,8 @@ func TestShellDoubleQuote(t *testing.T) {
 		{"double quote", `say "hi"`, `"say \"hi\""`},
 		{"backtick", "`whoami`", "\"\\`whoami\\`\""},
 		{"backslash", `C:\dir\`, `"C:\\dir\\"`},
+		{"backslash before dollar escapes it", `pa\$\$word`, `"pa\$\$word"`},
+		{"trailing backslash", `a\`, `"a\\"`},
 		{"single quote needs no escape", "it's", `"it's"`},
 		{"spaces and semicolon stay inert", "a b; rm -rf ~", `"a b; rm -rf ~"`},
 	}
@@ -94,6 +99,39 @@ func TestShellDoubleQuote(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ShellDoubleQuote(tt.input); got != tt.expected {
 				t.Errorf("ShellDoubleQuote(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestShellDoubleQuote_ShellEvaluation runs quoted values through a real sh:
+// $ expands, \$ is a literal dollar, and everything else arrives as written.
+func TestShellDoubleQuote_ShellEvaluation(t *testing.T) {
+	t.Setenv("RR_TEST_HOME", "/home/rr-test")
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"variable expands", "$RR_TEST_HOME/bin", "/home/rr-test/bin"},
+		{"escaped dollars stay literal", `pa\$\$word`, "pa$$word"},
+		{"escaped dollar before a name", `\$RR_TEST_HOME`, "$RR_TEST_HOME"},
+		{"trailing backslash", `a\`, `a\`},
+		{"backslash not before dollar", `C:\dir\n`, `C:\dir\n`},
+		{"newline", "line1\nline2", "line1\nline2"},
+		{"double quote and backtick", "say \"hi\" `whoami`", "say \"hi\" `whoami`"},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := exec.Command("sh", "-c", "printf '%s' "+ShellDoubleQuote(tt.input)).CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh failed: %v: %s", err, out)
+			}
+			if got := string(out); got != tt.want {
+				t.Errorf("sh expanded ShellDoubleQuote(%q) to %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

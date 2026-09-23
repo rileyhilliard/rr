@@ -94,7 +94,7 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 		}
 	}
 
-	if err := validateEnvNames("defaults.env", cfg.Defaults.Env); err != nil {
+	if err := validateEnv("defaults.env", cfg.Defaults.Env); err != nil {
 		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'defaults' section in your .rr.yaml.")
 	}
 
@@ -277,7 +277,7 @@ func validateHost(name string, host Host) error {
 		return fmt.Errorf("host '%s' needs a 'dir' - that's where your code will sync to", name)
 	}
 
-	if err := validateEnvNames(fmt.Sprintf("host '%s' env", name), host.Env); err != nil {
+	if err := validateEnv(fmt.Sprintf("host '%s' env", name), host.Env); err != nil {
 		return err
 	}
 
@@ -359,7 +359,7 @@ func validateTask(name string, task TaskConfig) error {
 		return fmt.Errorf("task '%s' has output '%s' but it needs to be one of: %s", name, task.Output, strings.Join(TaskOutputModes, ", "))
 	}
 
-	if err := validateEnvNames(fmt.Sprintf("task '%s' env", name), task.Env); err != nil {
+	if err := validateEnv(fmt.Sprintf("task '%s' env", name), task.Env); err != nil {
 		return err
 	}
 
@@ -410,23 +410,68 @@ func validateTask(name string, task TaskConfig) error {
 	return nil
 }
 
-// validateLock checks lock configuration.
 // envNamePattern matches names the shell can export: letters, digits, and
 // underscores, not starting with a digit.
 var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// validateEnvNames rejects env keys the shell can't export. Keys end up
-// unquoted in the remote command (export NAME="value"), so this also keeps
-// a malformed key from changing what the command does.
-func validateEnvNames(context string, env map[string]string) error {
+// validateEnv rejects env entries that would break the export rr builds
+// from them (export NAME="value"). Keys end up unquoted, so a malformed key
+// could also change what the command does. Values are double-quoted, so an
+// unclosed ${ or $( would leave the whole command unparseable.
+func validateEnv(context string, env map[string]string) error {
 	for _, name := range slices.Sorted(maps.Keys(env)) {
 		if !envNamePattern.MatchString(name) {
 			return fmt.Errorf("%s has an invalid variable name '%s': use letters, digits, and underscores, not starting with a digit", context, name)
+		}
+		if opener := unclosedExpansion(env[name]); opener != "" {
+			return fmt.Errorf("%s value for '%s' has a %s that is never closed: close it, or write \\$ for a literal dollar sign", context, name, opener)
 		}
 	}
 	return nil
 }
 
+// unclosedExpansion returns the innermost ${ or $( in an env value that is
+// never closed ("${" or "$("), or "" when every one is. \$ is a literal dollar and
+// opens nothing. Inside $( ), parentheses nest and single-quoted text is
+// skipped, so $(echo ')') counts as closed. Double quotes are no help there:
+// ShellDoubleQuote escapes them, so they reach the shell as literal
+// characters and a paren between them still counts.
+func unclosedExpansion(v string) string {
+	var closers []byte
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		inSubst := len(closers) > 0 && closers[len(closers)-1] == ')'
+		switch {
+		case c == '\\' && i+1 < len(v) && v[i+1] == '$':
+			i++
+		case c == '$' && i+1 < len(v) && v[i+1] == '{':
+			closers = append(closers, '}')
+			i++
+		case c == '$' && i+1 < len(v) && v[i+1] == '(':
+			closers = append(closers, ')')
+			i++
+		case inSubst && c == '(':
+			closers = append(closers, ')')
+		case inSubst && c == '\'':
+			end := strings.IndexByte(v[i+1:], '\'')
+			if end < 0 {
+				end = len(v) // an unclosed quote swallows everything after it
+			}
+			i += end + 1
+		case len(closers) > 0 && c == closers[len(closers)-1]:
+			closers = closers[:len(closers)-1]
+		}
+	}
+	if len(closers) == 0 {
+		return ""
+	}
+	if closers[len(closers)-1] == '}' {
+		return "${"
+	}
+	return "$("
+}
+
+// validateLock checks lock configuration.
 func validateLock(lock LockConfig) error {
 	if lock.Timeout < 0 {
 		return fmt.Errorf("lock.timeout can't be negative - that doesn't make sense")

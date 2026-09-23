@@ -372,6 +372,38 @@ func TestExecuteTaskWithSetupCommands(t *testing.T) {
 	assert.Contains(t, stdout.String(), "from_setup")
 }
 
+// TestExecuteTaskStopsOnFailedStep checks, through the remote login shell,
+// that a failed cd or setup command stops the task command from running.
+func TestExecuteTaskStopsOnFailedStep(t *testing.T) {
+	conn := GetSSHConnection(t)
+	defer CleanupRemoteDir(t, conn, conn.Host.Dir)
+	EnsureRemoteDir(t, conn, conn.Host.Dir)
+
+	tests := []struct {
+		name    string
+		workDir string
+		setup   []string
+	}{
+		{name: "missing work dir", workDir: conn.Host.Dir + "/missing"},
+		{name: "failing setup command", workDir: conn.Host.Dir, setup: []string{"false"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := &config.TaskConfig{Run: "false || echo RAN"}
+			env := map[string]string{"MY_VAR": "x"}
+			opts := &exec.TaskExecOptions{SetupCommands: tt.setup}
+
+			var stdout, stderr bytes.Buffer
+			result, err := exec.ExecuteTask(context.Background(), conn, task, nil, env, tt.workDir, &stdout, &stderr, opts)
+
+			require.NoError(t, err)
+			assert.NotEqual(t, 0, result.ExitCode)
+			assert.NotContains(t, stdout.String(), "RAN")
+		})
+	}
+}
+
 // TestBuildRemoteCommand tests the BuildRemoteCommand function.
 func TestBuildRemoteCommand(t *testing.T) {
 	hostCfg := &config.Host{

@@ -835,7 +835,7 @@ func TestValidateHost_ExpandableVariablesAllowed(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpanded variable")
 }
 
-func TestValidate_EnvNames(t *testing.T) {
+func TestValidate_Env(t *testing.T) {
 	validHost := Host{SSH: []string{"box"}, Dir: "/tmp/rr"}
 
 	tests := []struct {
@@ -849,6 +849,19 @@ func TestValidate_EnvNames(t *testing.T) {
 		{name: "leading digit", env: map[string]string{"1FOO": "x"}, wantErr: "1FOO"},
 		{name: "space", env: map[string]string{"FOO BAR": "x"}, wantErr: "FOO BAR"},
 		{name: "shell metacharacter", env: map[string]string{"X;rm": "x"}, wantErr: "X;rm"},
+		{name: "value with closed expansions", env: map[string]string{"P": "${HOME}/bin:$(go env GOPATH)/bin:$PATH"}},
+		{name: "value with nested expansions", env: map[string]string{"P": "${A:-${B}}$(dirname $(pwd))"}},
+		{name: "value with arithmetic", env: map[string]string{"N": "$((1 + (2 * 3)))"}},
+		{name: "value with a single-quoted paren", env: map[string]string{"V": `$(echo ')')`}},
+		{name: "value with a bare brace", env: map[string]string{"V": "{a}"}},
+		{name: "value with escaped dollar brace", env: map[string]string{"V": `\${not closed`}},
+		{name: "value with escaped dollar paren", env: map[string]string{"V": `pa\$(ss`}},
+		{name: "value with unclosed ${", env: map[string]string{"UNCLOSED": "${HOME/bin"}, wantErr: "UNCLOSED"},
+		{name: "value with unclosed $(", env: map[string]string{"UNCLOSED": "$(go env GOPATH/bin"}, wantErr: "UNCLOSED"},
+		{name: "value with unclosed nested expansion", env: map[string]string{"UNCLOSED": "${A:-$(pwd}"}, wantErr: "UNCLOSED' has a $( that"},
+		{name: "value with unclosed arithmetic", env: map[string]string{"UNCLOSED": "$((1 + 2)"}, wantErr: "UNCLOSED"},
+		{name: "value with a double-quoted paren", env: map[string]string{"UNCLOSED": `$(echo "(")`}, wantErr: "UNCLOSED"},
+		{name: "value with an unclosed single quote", env: map[string]string{"UNCLOSED": `$(echo ')`}, wantErr: "UNCLOSED"},
 	}
 
 	for _, tt := range tests {

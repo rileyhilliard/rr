@@ -361,16 +361,16 @@ func TestHostWorker_FullCommand_MergesEnvAndSetup(t *testing.T) {
 			name:     "host, defaults and task layers",
 			resolved: &config.ResolvedConfig{Project: project},
 			taskEnv:  map[string]string{"FROM_TASK": "t"},
-			want:     `cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS="d"; export FROM_HOST="h"; export FROM_TASK="t"; make test`,
+			want:     "cd '/srv/app' && { source ~/.profile\n} && { source .venv/bin/activate\n} && export FROM_DEFAULTS=\"d\" && export FROM_HOST=\"h\" && export FROM_TASK=\"t\" && { make test\n}",
 		},
 		{
 			name:     "setup step with no task env still gets host and defaults",
 			resolved: &config.ResolvedConfig{Project: project},
-			want:     `cd '/srv/app' && source ~/.profile && source .venv/bin/activate && export FROM_DEFAULTS="d"; export FROM_HOST="h"; make test`,
+			want:     "cd '/srv/app' && { source ~/.profile\n} && { source .venv/bin/activate\n} && export FROM_DEFAULTS=\"d\" && export FROM_HOST=\"h\" && { make test\n}",
 		},
 		{
 			name: "no project config",
-			want: `cd '/srv/app' && source ~/.profile && export FROM_HOST="h"; make test`,
+			want: "cd '/srv/app' && { source ~/.profile\n} && export FROM_HOST=\"h\" && { make test\n}",
 		},
 	}
 
@@ -398,8 +398,8 @@ func TestHostWorker_FullCommand_TaskEnvWins(t *testing.T) {
 		}}},
 		host: config.Host{Env: map[string]string{"K": "host"}},
 	}
-	assert.Equal(t, `export K="task"; run`, w.fullCommand("run", map[string]string{"K": "task"}, ""))
-	assert.Equal(t, `export K="defaults"; run`, w.fullCommand("run", nil, ""))
+	assert.Contains(t, w.fullCommand("run", map[string]string{"K": "task"}, ""), `export K="task" &&`)
+	assert.Contains(t, w.fullCommand("run", nil, ""), `export K="defaults" &&`)
 }
 
 // TestLocalWorker_DefaultsEnvAndSetup checks local parallel runs get

@@ -11,14 +11,35 @@ func ShellQuote(s string) string {
 	return "'" + escaped + "'"
 }
 
-// ShellDoubleQuote wraps s in double quotes for a POSIX shell, escaping the
-// characters that stay special inside them (\ " `) but leaving $ alone, so
-// the shell still expands $VAR, ${VAR}, and $(...) in s. Use it for values
-// the user expects expanded, like PATH=$HOME/.local/bin:$PATH; use ShellQuote
-// for anything that must stay literal.
+// ShellDoubleQuote wraps s in double quotes for a POSIX shell so the shell
+// still expands $VAR, ${VAR}, and $(...) in it. Use it for values the user
+// expects expanded, like PATH=$HOME/.local/bin:$PATH; use ShellQuote for
+// anything that must stay literal.
+//
+// The escaping rule: " and ` are escaped, so they arrive literally. A
+// backslash directly before $ is kept as the shell's escape, so \$ yields a
+// literal dollar ("pa\$\$word" -> pa$$word). Every other backslash, trailing
+// ones included, is escaped and arrives literally.
 func ShellDoubleQuote(s string) string {
-	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`").Replace(s)
-	return `"` + escaped + `"`
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			b.WriteByte('\\')
+			if i+1 == len(s) || s[i+1] != '$' {
+				b.WriteByte('\\')
+			}
+		case '"', '`':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // ShellQuoteJoin quotes each argument and joins them with single spaces.

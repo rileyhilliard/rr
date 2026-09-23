@@ -193,27 +193,42 @@ func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env 
 }
 
 // BuildCommand builds the shell command a task runs, local or remote, single
-// or parallel: cd into workDir (skipped when empty), each setup command, then
-// env exported ahead of cmd, the parts joined with && so a failure stops the
-// chain.
+// or parallel. The parts run in order, each gated on the one before by &&:
+// cd into workDir (skipped when empty), each setup command, one export per
+// env key, then cmd. If any part fails, nothing after it runs and the
+// command exits non-zero.
 //
-// Env keys are exported in sorted order. Values are double-quoted with
-// util.ShellDoubleQuote, so the shell expands $VAR references in them (e.g.
-// PATH: "$HOME/.local/bin:$PATH") while quotes and backticks stay literal.
+// Setup commands and cmd are user shell text, so each sits in its own brace
+// group: operators inside it (||, ;, &) stay confined to that part instead
+// of binding to the chain.
+//
+// Env keys are exported in sorted order, one export each, so a value can
+// reference setup's variables or an earlier key. Values are double-quoted
+// with util.ShellDoubleQuote, so the shell expands $VAR references in them
+// (e.g. PATH: "$HOME/.local/bin:$PATH") while quotes and backticks stay
+// literal.
 func BuildCommand(cmd string, env map[string]string, workDir string, setupCommands []string) string {
 	var parts []string
 	if workDir != "" {
 		parts = append(parts, "cd "+util.ShellQuotePreserveTilde(workDir))
 	}
-	parts = append(parts, setupCommands...)
-
-	var exports strings.Builder
-	for _, k := range slices.Sorted(maps.Keys(env)) {
-		fmt.Fprintf(&exports, "export %s=%s; ", k, util.ShellDoubleQuote(env[k]))
+	for _, setup := range setupCommands {
+		parts = append(parts, shellGroup(setup))
 	}
-	parts = append(parts, exports.String()+cmd)
+	for _, k := range slices.Sorted(maps.Keys(env)) {
+		parts = append(parts, fmt.Sprintf("export %s=%s", k, util.ShellDoubleQuote(env[k])))
+	}
+	parts = append(parts, shellGroup(cmd))
 
 	return strings.Join(parts, " && ")
+}
+
+// shellGroup wraps user shell text in a brace group so it acts as a single
+// command in an && chain. The } goes on its own line because a closing
+// brace after a comment, a trailing &, or text without a final ; would not
+// be read as the end of the group.
+func shellGroup(s string) string {
+	return "{ " + s + "\n}"
 }
 
 // ExecuteLocalTask is a convenience function for local task execution.
