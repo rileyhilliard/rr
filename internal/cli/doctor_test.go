@@ -83,47 +83,6 @@ func TestCapitalizeFirst(t *testing.T) {
 	}
 }
 
-func TestPluralSuffix(t *testing.T) {
-	tests := []struct {
-		name string
-		n    int
-		want string
-	}{
-		{
-			name: "zero returns s",
-			n:    0,
-			want: "s",
-		},
-		{
-			name: "one returns empty",
-			n:    1,
-			want: "",
-		},
-		{
-			name: "two returns s",
-			n:    2,
-			want: "s",
-		},
-		{
-			name: "large number returns s",
-			n:    100,
-			want: "s",
-		},
-		{
-			name: "negative returns s",
-			n:    -1,
-			want: "s",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := pluralSuffix(tt.n)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestDoctorOutput_JSONMarshaling(t *testing.T) {
 	output := DoctorOutput{
 		Categories: []CategoryOutput{
@@ -914,28 +873,6 @@ func TestCapitalizeFirst_UnicodeEdgeCases(t *testing.T) {
 	}
 }
 
-func TestPluralSuffix_EdgeCases(t *testing.T) {
-	tests := []struct {
-		n    int
-		want string
-	}{
-		{-10, "s"},
-		{-1, "s"},
-		{0, "s"},
-		{1, ""},
-		{2, "s"},
-		{10, "s"},
-		{1000, "s"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("n=%d", tt.n), func(t *testing.T) {
-			result := pluralSuffix(tt.n)
-			assert.Equal(t, tt.want, result)
-		})
-	}
-}
-
 func TestDoctorOutput_FullStructure(t *testing.T) {
 	output := DoctorOutput{
 		Categories: []CategoryOutput{
@@ -1515,9 +1452,8 @@ func TestOutputDoctorText_WithIssues(t *testing.T) {
 		_ = outputDoctorText(checks, results)
 	})
 
-	// Should contain issue count
-	assert.Contains(t, output, "issue")
-	assert.Contains(t, output, "found")
+	// Should contain failure count
+	assert.Contains(t, output, "1 failure found")
 	// Should contain the failing check message
 	assert.Contains(t, output, "SSH key not found")
 	// Should contain suggestion
@@ -1541,8 +1477,45 @@ func TestOutputDoctorText_MultipleIssues(t *testing.T) {
 		_ = outputDoctorText(checks, results)
 	})
 
-	// Should report 3 issues (2 fail + 1 warn)
-	assert.Contains(t, output, "3 issues found")
+	// Should report failures and warnings separately (2 fail + 1 warn)
+	assert.Contains(t, output, ui.SymbolFail+" 2 failures and 1 warning found")
+}
+
+// A warnings-only run exits 0, so the --pretty summary must not use the
+// failure symbol.
+func TestDoctorSummary_WarningsOnly(t *testing.T) {
+	checks := []doctor.Check{
+		&mockCheck{name: "check1", category: "SSH"},
+		&mockCheck{name: "check2", category: "HOSTS"},
+	}
+	results := []doctor.CheckResult{
+		{Status: doctor.StatusWarn, Message: "SSH agent not running"},
+		{Status: doctor.StatusWarn, Message: "mini-local unreachable"},
+	}
+
+	out, err := runDoctorOutput(t, "pretty", checks, results)
+	requireDoctorExit(t, err, 0)
+	assert.Contains(t, out, ui.SymbolWarning+" 2 warnings found")
+	assert.NotContains(t, out, ui.SymbolFail)
+
+	full := captureOutput(func() { _ = outputDoctorText(checks, results) })
+	assert.Contains(t, full, ui.SymbolWarning+" 2 warnings found")
+	assert.NotContains(t, full, ui.SymbolFail)
+}
+
+func TestDoctorSummary_FailureUsesFailSymbol(t *testing.T) {
+	checks := []doctor.Check{
+		&mockCheck{name: "check1", category: "CONFIG"},
+		&mockCheck{name: "check2", category: "SSH"},
+	}
+	results := []doctor.CheckResult{
+		{Status: doctor.StatusFail, Message: "Config missing"},
+		{Status: doctor.StatusWarn, Message: "SSH agent not running"},
+	}
+
+	out, err := runDoctorOutput(t, "pretty", checks, results)
+	requireDoctorExit(t, err, 1)
+	assert.Contains(t, out, ui.SymbolFail+" 1 failure and 1 warning found")
 }
 
 func TestOutputDoctorText_SingularIssue(t *testing.T) {
@@ -1558,8 +1531,8 @@ func TestOutputDoctorText_SingularIssue(t *testing.T) {
 		_ = outputDoctorText(checks, results)
 	})
 
-	// Should use singular "issue" not "issues"
-	assert.Contains(t, output, "1 issue found")
+	// Should use singular "failure" not "failures"
+	assert.Contains(t, output, "1 failure found")
 }
 
 func TestOutputDoctorText_FixableHint(t *testing.T) {

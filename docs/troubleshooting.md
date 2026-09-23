@@ -65,7 +65,7 @@ DEPENDENCIES
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✕ 1 issue found
+⚠ 1 warning found
 ```
 
 ## SSH connection failures

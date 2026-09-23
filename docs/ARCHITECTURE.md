@@ -370,7 +370,7 @@ HOSTS
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✗ 3 issues found
+✗ 1 failure and 2 warnings found
 
   Run with --fix to attempt automatic fixes where possible.
 ```

@@ -12,6 +12,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -25,10 +26,8 @@ const (
 
 // Load reads project config from the specified path.
 func Load(path string) (*Config, error) {
-	v := viper.New()
-	v.SetConfigFile(path)
-
-	if err := v.ReadInConfig(); err != nil {
+	raw, err := readConfigFile(path)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, errors.WrapWithCode(err, errors.ErrConfigNotFound,
 				"Can't find the config file",
@@ -39,7 +38,7 @@ func Load(path string) (*Config, error) {
 			"Something's off with your .rr.yaml. Check that it's valid YAML.")
 	}
 
-	cfg, err := parseConfig(v, path)
+	cfg, err := parseConfig(raw, path)
 	if err != nil {
 		return nil, err
 	}
@@ -97,16 +96,14 @@ func LoadGlobal() (*GlobalConfig, error) {
 		return DefaultGlobalConfig(), nil
 	}
 
-	v := viper.New()
-	v.SetConfigFile(path)
-
-	if err := v.ReadInConfig(); err != nil {
+	raw, err := readConfigFile(path)
+	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Couldn't read global config",
 			"Check your ~/.rr/config.yaml for valid YAML syntax.")
 	}
 
-	return parseGlobalConfig(v, path)
+	return parseGlobalConfig(raw, path)
 }
 
 // SaveGlobal writes global config to ~/.rr/config.yaml.
@@ -134,22 +131,49 @@ func SaveGlobal(cfg *GlobalConfig) error {
 	return nil
 }
 
-// parseGlobalConfig converts viper config to GlobalConfig struct.
-func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
+// readConfigFile reads a YAML config file into a generic map.
+//
+// It uses yaml.v3 directly rather than viper: viper lowercases every map key
+// and splits keys on dots, which mangles env var names (FOO -> foo), task
+// names, and host names, all of which are case-sensitive and may contain dots.
+func readConfigFile(path string) (map[string]interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// decodeConfig decodes a raw config map onto out, which holds the defaults.
+// Keys absent from raw keep their default values. md records keys that
+// matched no field so they can be reported as unknown.
+func decodeConfig(raw map[string]interface{}, out interface{}, md *mapstructure.Metadata, hook mapstructure.DecodeHookFunc) error {
+	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook:       hook,
+		WeaklyTypedInput: true,
+		Metadata:         md,
+		Result:           out,
+	})
+	if err != nil {
+		return err
+	}
+	return dec.Decode(raw)
+}
+
+// parseGlobalConfig converts a raw config map to a GlobalConfig struct.
+func parseGlobalConfig(raw map[string]interface{}, path string) (*GlobalConfig, error) {
 	cfg := DefaultGlobalConfig()
 
-	// Set duration defaults for global config
-	v.SetDefault("defaults.probe_timeout", "2s")
-	v.SetDefault("defaults.local_fallback", "never")
-
 	var md mapstructure.Metadata
-	if err := v.Unmarshal(cfg, viper.DecodeHook(
-		mapstructure.ComposeDecodeHookFunc(
-			mapstructure.StringToTimeDurationHookFunc(),
-			mapstructure.StringToSliceHookFunc(","),
-			localFallbackModeDecodeHook(),
-		),
-	), withMetadata(&md)); err != nil {
+	if err := decodeConfig(raw, cfg, &md, mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+		localFallbackModeDecodeHook(),
+	)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Global config has some issues",
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
@@ -459,30 +483,25 @@ func ResolveRewritePaths(resolved *ResolvedConfig) bool {
 	return true
 }
 
-// parseConfig converts viper config to our Config struct with defaults merged in.
-func parseConfig(v *viper.Viper, path string) (*Config, error) {
+// parseConfig converts a raw config map to our Config struct with defaults merged in.
+func parseConfig(raw map[string]interface{}, path string) (*Config, error) {
 	// Start with defaults
 	cfg := DefaultConfig()
 
-	// Set up duration parsing for lock timeouts
-	setDurationDefaults(v)
-
-	// Unmarshal with custom decoders for DependencyItem and PullItem
+	// Decode with custom decoders for DependencyItem and PullItem
 	var md mapstructure.Metadata
-	if err := v.Unmarshal(cfg, viper.DecodeHook(
-		mapstructure.ComposeDecodeHookFunc(
-			mapstructure.StringToTimeDurationHookFunc(),
-			dependencyItemDecodeHook(),
-			pullItemDecodeHook(),
-			localFallbackModeDecodeHook(),
-		),
-	), withMetadata(&md)); err != nil {
+	if err := decodeConfig(raw, cfg, &md, mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		dependencyItemDecodeHook(),
+		pullItemDecodeHook(),
+		localFallbackModeDecodeHook(),
+	)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Config file has some issues",
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
 
-	cfg.Warnings = projectWarnings(v, cfg, md.Unused, path)
+	cfg.Warnings = projectWarnings(raw, cfg, md.Unused, path)
 
 	return cfg, nil
 }
@@ -555,17 +574,4 @@ func pullItemDecodeHook() mapstructure.DecodeHookFunc {
 
 		return data, nil
 	}
-}
-
-// setDurationDefaults configures viper to handle duration strings for project config.
-func setDurationDefaults(v *viper.Viper) {
-	// Viper handles duration parsing automatically for time.Duration fields
-	// but we need to help with nested structs using DecodeHook
-
-	// Set defaults that will be merged
-	v.SetDefault("lock.enabled", true)
-	v.SetDefault("lock.timeout", "5m")
-	v.SetDefault("lock.wait_timeout", "1m")
-	v.SetDefault("lock.stale", "90s")
-	v.SetDefault("lock.dir", "/tmp/rr-locks")
 }
