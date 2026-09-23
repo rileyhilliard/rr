@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.27.0] - 2026-09-23
 
-Fixes for the bugs found in the 2026-09 docs audit. Several change what scripts and agents see, so read Breaking Changes and [MIGRATION.md](docs/MIGRATION.md) before upgrading.
+Fixes for the bugs found while auditing the docs against the code. Several change what scripts and agents see, so read Breaking Changes and [MIGRATION.md](docs/MIGRATION.md) before upgrading.
 
 ### Breaking Changes
 
@@ -29,6 +29,7 @@ Fixes for the bugs found in the 2026-09 docs audit. Several change what scripts 
 
 ### Changed
 
+- **README and docs rewritten** - The README leads with running agents' test suites on dedicated hosts, and `docs/` was checked against the code: wrong defaults, missing commands and flags, and features that didn't exist are corrected.
 - **Doctor grades checks by whether a run would fail** - A missing SSH agent, a missing default key file, or no `.rr.yaml` is a warning. A missing requirement is a failure, because `rr run` fails on it too. An unreachable host fails only when no host in scope is reachable and `local_fallback` wouldn't take over; otherwise it's a warning.
 - **Doctor checks the project's hosts** - Inside a project, host checks cover only the hosts a run would use, not every global host. Outside a project they still cover every global host.
 - **Doctor connects the way `rr run` does** - `--path` and `--requirements` race every SSH alias instead of dialing only the first, and an unreachable host is reported once, on its `host_<name>` check. Requirement suggestions point to `rr provision`, and checks whose fix did nothing no longer claim to be fixable.
@@ -40,9 +41,7 @@ Fixes for the bugs found in the 2026-09 docs audit. Several change what scripts 
 ### Fixed
 
 - **Lockfile invalidation never deletes a directory it couldn't check** - When `stat` failed on an existing remote dir, its age was read as 0, so any newer lockfile triggered `rm -rf` on it. A stat failure now fails the sync with an error naming the dir, and deletes nothing.
-- **A lock error on a reachable host doesn't fall back locally** - In a load-balanced run, a host that connected but couldn't take its lock (for example, `lock.dir` can't be created) was treated as unreachable, so `local_fallback` ran the command locally and reported `hosts_unreachable`. The run now fails with the lock error, as a single-host run does.
 - **A failed `cd` or setup step stops the task** - When a task had env vars, the command was joined to the setup chain with `;`, so it ran even if the `cd` into the project directory or a setup command failed: in the wrong directory, without its env, often exiting 0. A `||` inside a setup command or the task command could skip past a failure the same way. Each part is now its own group in one `&&` chain, so any failure stops the task with a non-zero exit.
-- **`rr sync --dry-run` no longer deletes remote files** - Lockfile invalidation ran before rsync regardless of `--dry-run`, and dry runs skip the lock, so a dry run could delete remote `node_modules`/`.venv` out from under another run. Dry runs now list what would be invalidated and skip the provenance marker and worktree pruning. The only remote change a dry run makes is creating the sync directory if it's missing.
 - **Env vars are validated** - Host `env`, `defaults.env`, and task `env` keys must be valid shell variable names (letters, digits, underscores, not starting with a digit), and values can't contain an unclosed `${` or `$(`. Either problem fails validation with `CONFIG_INVALID` naming the key, where it used to break the command with a shell parse error. Keys are inserted unquoted into the remote `export`, so an invalid one either broke the command or changed what it ran.
 - **Env var names keep their case** - Config keys were lowercased on load, so `env: {FOO: bar}` exported `foo=bar`. This hit host `env`, `defaults.env`, and task `env` (including parallel subtasks). Task and host names were lowercased too (`rr Build` wasn't found, and a project listing host `MyBox` got `HOST_NOT_FOUND`), and names containing a dot were split apart, so a task `test.unit` was dropped with an unknown-key warning. Keys are now kept exactly as written, and `rr host add` no longer rewrites `~/.rr/config.yaml` with lowercased keys. Unknown-key warnings name the key as written.
 - **`rr doctor --pretty` says when it's only warnings** - The summary printed the failure symbol and "N issues found" even when every issue was a warning and doctor exited 0. It now reads "N failures found", "N warnings found" (with the warning symbol), or "N failures and M warnings found", and the failure symbol shows only when doctor exits 1.

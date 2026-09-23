@@ -5,7 +5,7 @@ This document covers breaking changes and upgrade instructions between versions.
 ## Contents
 
 - [Version compatibility](#version-compatibility)
-- [Upgrading to the next release](#upgrading-to-the-next-release-unreleased)
+- [Upgrading to v0.27.0](#upgrading-to-v0270-doctor-exit-codes-error-codes-case-sensitive-names)
 - [Upgrading to v0.26.0](#upgrading-to-v0260-worktree-pruning)
 - [Upgrading to v0.24.0](#upgrading-to-v0240-commands-run-in-your-current-subdirectory)
 - [Upgrading to v0.23.0](#upgrading-to-v0230-task-args-worktrees-excludes-fallback)
@@ -27,9 +27,9 @@ When the schema changes in incompatible ways, the version number bumps. rr refus
 
 rr is pre-1.0, so breaking changes ship in minor releases. [CHANGELOG.md](../CHANGELOG.md) has the full detail for each version.
 
-## Upgrading to the next release (unreleased)
+## Upgrading to v0.27.0 (doctor exit codes, error codes, case-sensitive names)
 
-These changes are on `main` and ship in the next minor release. Most affect scripts and agents that read rr's exit codes and structured output.
+Most of these changes affect scripts and agents that read rr's exit codes and structured output.
 
 **`rr doctor` exits 1 when a check fails.** It used to exit 0 whatever it found. Now it exits 1 on any failed check and 0 when there are only warnings. The JSON envelope still says `success: true`, since doctor itself ran, and `data.summary.all_clear` still carries the verdict. A script that runs `rr doctor` under `set -e` now stops on a real failure:
 
