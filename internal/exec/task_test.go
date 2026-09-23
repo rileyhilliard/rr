@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	rrerrors "github.com/rileyhilliard/rr/internal/errors"
@@ -609,14 +610,27 @@ func TestExecuteTask_MultiStepConnectionLost(t *testing.T) {
 		},
 	}
 
+	steps := &recordingStepHandler{}
+
 	var stdout, stderr bytes.Buffer
-	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr, nil)
+	result, err := ExecuteTask(context.Background(), conn, task, nil, nil, "", &stdout, &stderr,
+		&TaskExecOptions{StepHandler: steps})
 
 	require.Error(t, err)
 	assert.True(t, sshutil.IsConnectionLost(err))
+	assert.Equal(t, []int{0, -1}, steps.completed, "the cut-off step still gets its completion line")
 	require.NotNil(t, result)
 	assert.Equal(t, -1, result.ExitCode)
 	assert.Equal(t, 1, result.FailedStep)
 	require.Len(t, result.StepResults, 2)
 	assert.Equal(t, -1, result.StepResults[1].ExitCode)
+}
+
+// recordingStepHandler records the exit code of each completed step.
+type recordingStepHandler struct{ completed []int }
+
+func (h *recordingStepHandler) OnStepStart(int, int, config.TaskStep) {}
+
+func (h *recordingStepHandler) OnStepComplete(_, _ int, _ config.TaskStep, _ time.Duration, exitCode int) {
+	h.completed = append(h.completed, exitCode)
 }

@@ -156,6 +156,9 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 			result.StepResults = append(result.StepResults, stepResult)
 			result.FailedStep = i
 			result.ExitCode = exitCode
+			if opts.StepHandler != nil {
+				opts.StepHandler.OnStepComplete(stepNum, totalSteps, step, stepDuration, exitCode)
+			}
 			return result, err
 		}
 

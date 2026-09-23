@@ -116,6 +116,10 @@ func (c *Connection) Close() error {
 	return nil
 }
 
+// aliveTimeout bounds Alive's keepalive. A healthy connection answers in
+// milliseconds, even over a VPN.
+var aliveTimeout = 5 * time.Second
+
 // Alive reports whether the connection is still usable. A local connection
 // is always alive; a nil one never is.
 //
@@ -124,6 +128,11 @@ func (c *Connection) Close() error {
 // exchange on the existing connection, cheap enough to call before every use.
 // Connections die silently (network changes, a laptop going to sleep, remote
 // restarts), and reusing a dead one fails with a confusing error.
+//
+// A peer that goes quiet without closing TCP never answers, and the request
+// would wait until the OS gives up on the connection, which can take minutes.
+// After aliveTimeout the connection counts as dead and is closed, which also
+// releases the blocked request.
 func (c *Connection) Alive() bool {
 	if c == nil {
 		return false
@@ -135,8 +144,18 @@ func (c *Connection) Alive() bool {
 		return false
 	}
 	// wantReply=true makes the remote answer, confirming the connection works.
-	_, _, err := c.Client.SendRequest("keepalive@openssh.com", true, nil)
-	return err == nil
+	reply := make(chan error, 1)
+	go func() {
+		_, _, err := c.Client.SendRequest("keepalive@openssh.com", true, nil)
+		reply <- err
+	}()
+	select {
+	case err := <-reply:
+		return err == nil
+	case <-time.After(aliveTimeout):
+		_ = c.Client.Close()
+		return false
+	}
 }
 
 // Selector manages host selection and connection caching.
