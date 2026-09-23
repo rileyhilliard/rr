@@ -212,8 +212,8 @@ Useful `details` keys on the result event:
 Parallel tasks print nothing on stdout by default (only with `--stream` or `--verbose`). The result event has `total`, `passed`, `failed`, `log_dir`, and `failures` (per subtask: `task`, `host`, `exit_code`, `log_file`, parsed test failures or an `output_tail`). Use `--stream` to see live output prefixed with `[host:task]`.
 
 ```bash
-rr test 2>/dev/null          # command output only
-rr test --no-phases          # keep only the final result JSON on stderr
+rr test 2>/dev/null          # stdout only: drops phase events, the result event, AND the command's own stderr
+rr test --no-phases          # drops phase events only; command stderr and the final result event still go to stderr
 rr test --tail 50            # reprint the last 50 log lines after the result
 ```
 

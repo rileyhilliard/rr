@@ -391,7 +391,7 @@ sync:
 |-------|------|---------|-------------|
 | `exclude` | list | see below | Patterns for files not sent to remote. |
 | `preserve` | list | see below | Patterns for files not deleted on remote. |
-| `respect_gitignore` | bool | `true` | Apply your `.gitignore` files as extra exclude rules. Explicit `exclude`/`preserve` patterns take precedence. |
+| `respect_gitignore` | bool | `true` | Apply the repository-root `.gitignore` as extra exclude rules. Nested `.gitignore` files are not read. Explicit `exclude`/`preserve` patterns take precedence. |
 | `flags` | list | `[]` | Extra flags passed to rsync. |
 | `invalidations` | list | see below | Lockfiles that, when changed, delete remote install directories so they get reinstalled. |
 | `worktree_isolation` | bool | `true` | Give each linked git worktree its own remote directory (`${PROJECT}` becomes `repo@worktree`). |
@@ -495,7 +495,7 @@ lock:
 
 ### How locking works
 
-1. Before running a command, `rr` atomically creates a `rr.lock/` directory inside the lock `dir` on the remote, with an `info.json` describing the holder. There is one lock per host, shared by every project that uses it.
+1. Before running a command, `rr` atomically creates a `rr.lock/` directory inside the lock `dir` on the remote, with an `info.json` describing the holder. There is one lock per host and lock `dir`: projects share a lock only when they use the same host and the same `lock.dir`.
 2. While it holds the lock, `rr` touches `info.json` every 30s as a heartbeat
 3. If another instance holds the lock, `rr` waits up to `timeout`
 4. If the holder's heartbeat is older than `stale`, the lock is considered abandoned and taken over with a warning

@@ -94,7 +94,7 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 | `HOST_NOT_FOUND` | Unknown host name | Check `rr host list` |
 | `SSH_TIMEOUT` | Connection timed out | Check network/VPN |
 | `SSH_AUTH_FAILED` | Key rejected | Run `rr setup <host>` |
-| `SSH_HOST_KEY` | Host key unknown or changed | Accept or verify the key with `ssh` |
+| `SSH_HOST_KEY` | Host key unknown or changed | Unknown key: verify the fingerprint through a trusted channel, then `ssh -o StrictHostKeyChecking=accept-new <alias> exit`. Changed key: never auto-accept; verify the new fingerprint, then `ssh-keygen -R <host>` |
 | `SSH_CONNECTION_FAILED` | SSH connection error | Check host reachability |
 | `RSYNC_FAILED` | File sync failed | Check disk space/permissions |
 | `LOCK_HELD` | Another process has lock | Run `rr unlock` |

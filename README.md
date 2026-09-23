@@ -57,6 +57,8 @@ Splitting the suite is where the time goes down. Break a suite into shards (by p
 
 ```yaml
 # Simplified from OpenData's .rr.yaml
+local_fallback: never   # a run that silently lands on the laptop must never count as a pass
+
 tasks:
     test:
         description: Run all tests in parallel
@@ -77,7 +79,9 @@ tasks:
 
 Agents working on OpenData iterate with scoped runs like `rr test-opendata -- tests/test_services/test_foo.py -x`, which run only the tests touching their change, and treat the full `rr test` as the gate before a commit. None of it runs on the laptop.
 
-I built rr because my laptop fan spun up and the battery drained every time I ran tests, while a few much faster machines sat idle in the corner. Agents running tests all day made that a lot worse.
+I built rr for two reasons. The first was my laptop: the fan spun up and the battery drained every time I ran tests, while a few much faster machines sat idle in the corner.
+
+The bigger one was multi-agent coding. When several agents work on the same project at once, each in its own worktree, each one runs the test suite whenever it wants to check its work. They don't know about each other. Run locally, their suites start at the same moment on the same machine, compete for CPU, and collide on shared ports, test databases, and caches, so tests fail for reasons that have nothing to do with the code. rr puts those runs in a queue. Each run takes a lock on a free runner, and the next one goes to another host or waits its turn, so every agent gets a clean run of its suite and none of them step on each other.
 
 ![Pi7_GIF_CMP](https://github.com/user-attachments/assets/9ffe029e-af38-4a77-8c77-156fae378db7)
 

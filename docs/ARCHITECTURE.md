@@ -681,7 +681,9 @@ lock:
   # Holders heartbeat every 30s, so this only trips when the holder died.
   stale: 90s
 
-  # Parent directory for the lock on the remote (lock is <dir>/rr.lock/)
+  # Parent directory for the lock on the remote (lock is <dir>/rr.lock/).
+  # Coordination is path-based: projects share a lock only if they use the
+  # same dir on the same host. Different lock.dir values mean separate locks.
   dir: /tmp/rr-locks
 
 # ─────────────────────────────────────────────────────────────────────────────

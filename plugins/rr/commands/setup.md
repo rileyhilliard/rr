@@ -211,13 +211,14 @@ FOR each host in data.hosts:
       -> Parse alias.error for diagnosis:
          "connection timed out" -> Network/VPN issue
          "authentication failed" -> Key not deployed or not in the agent
-         "host key verification failed" -> First connection or changed key
+         "host key verification failed" -> Unknown key (first connection) or changed key
 ```
 
 **Fix connectivity issues:**
 - Timeout: Check `ping <hostname>`, verify network/VPN
 - Auth: Run `ssh-copy-id <alias>` or `rr setup <host>`
-- Host key: `ssh -o StrictHostKeyChecking=accept-new <alias> exit`
+- Unknown host key (first connection): verify the host's fingerprint through a trusted channel first (for example, run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host's console), then accept it with `ssh -o StrictHostKeyChecking=accept-new <alias> exit`
+- Changed host key: don't accept it automatically. A changed key can mean the host was reinstalled or that the connection is being intercepted. Confirm the new fingerprint through a trusted channel, then remove the old entry with `ssh-keygen -R <hostname>` and connect again
 
 ### Step 4: Test Execution
 
@@ -230,7 +231,7 @@ stdout has the command output; stderr has JSON phase events and a final `{"type"
 
 **Expected:** Output contains "rr-test-ok", exit code 0
 
-**If fails:** Read the JSON error envelope on stderr (`error.code`, `error.suggestion`) and check:
+**If fails:** If the command ran and exited nonzero, stderr ends with a `{"type":"result","status":"failed",...}` event: read its `exit_code` and `details`. If rr failed before the command started (connection, lock, sync), stderr has a JSON error envelope instead: read `error.code` and `error.suggestion`, and check:
 - Lock issues (`LOCK_HELD`): `rr unlock <host>` then retry
 - Directory issues: Verify `dir` in `~/.rr/config.yaml`
 

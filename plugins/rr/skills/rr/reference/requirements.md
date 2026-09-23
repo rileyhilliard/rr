@@ -189,8 +189,10 @@ When requirements are missing, rr shows actionable errors:
 
 ```text
 Missing required tools: cargo (can install), golangci-lint
-Run 'rr provision' to install missing tools, or use --skip-requirements to bypass.
+Run 'rr provision' to install missing tools.
 ```
+
+`rr run` and `rr exec` also accept `--skip-requirements` to bypass the check. Named tasks don't have that flag, so for a task the fix is `rr provision` or adding the tool to the host.
 
 In structured output this is an error envelope on stderr with code `COMMAND_FAILED`.
 
