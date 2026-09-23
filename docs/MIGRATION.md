@@ -5,9 +5,13 @@ This document covers breaking changes and upgrade instructions between versions.
 ## Contents
 
 - [Version compatibility](#version-compatibility)
-- [v0.4.x to v0.5.x](#v04x-to-v05x-global-config-separation) (current)
-- [v1.x to v2.x](#v1x-to-v2x-future)
-- [v0.x to v1.x](#v0x-to-v1x)
+- [Upgrading to v0.26.0](#upgrading-to-v0260-worktree-pruning)
+- [Upgrading to v0.24.0](#upgrading-to-v0240-commands-run-in-your-current-subdirectory)
+- [Upgrading to v0.23.0](#upgrading-to-v0230-task-args-worktrees-excludes-fallback)
+- [Upgrading to v0.22.0](#upgrading-to-v0220-parallel-tasks-reject-extra-args)
+- [Upgrading to v0.21.0](#upgrading-to-v0210-structured-output-by-default)
+- [Upgrading to v0.10.0](#upgrading-to-v0100-defaultshost-removed)
+- [v0.5.x to v0.6.0](#v05x-to-v060-global-config-separation)
 - [Troubleshooting upgrades](#troubleshooting-upgrades)
 
 ## Version compatibility
@@ -18,9 +22,89 @@ rr uses semantic versioning. The config file includes a `version` field to help 
 version: 1  # Current schema version
 ```
 
-When the schema changes in incompatible ways, the version number bumps and rr will warn you if your config needs updating.
+When the schema changes in incompatible ways, the version number bumps. rr refuses to load a config whose `version` is newer than it supports and tells you to upgrade rr. The schema is still at `version: 1`: every change below happened without a bump, so check the sections for the releases you're skipping.
 
-## v0.4.x to v0.5.x (Global Config Separation)
+rr is pre-1.0, so breaking changes ship in minor releases. [CHANGELOG.md](../CHANGELOG.md) has the full detail for each version.
+
+## Upgrading to v0.26.0 (worktree pruning)
+
+- **Syncs delete stale worktree directories.** `sync.prune_worktrees` defaults to `true`: after each sync, rr removes remote `<repo>@<worktree>` directories whose git worktree no longer exists locally. If you keep anything in those remote directories that you need after deleting the local worktree, set `sync.prune_worktrees: false` and run `rr prune` yourself.
+- **`prune` is a reserved task name.** A task called `prune` in `.rr.yaml` now fails validation. Rename it.
+- **Go 1.26.8 is required to build from source** (`go install`, `make build`).
+
+## Upgrading to v0.24.0 (commands run in your current subdirectory)
+
+`rr run` and `rr exec` now `cd` into the subdirectory you invoked them from before running. Before, every ad-hoc command ran at the project root.
+
+```bash
+cd backend
+rr run "make"               # now uses backend/Makefile, not the root one
+rr run "cat ../README.md"   # root-relative paths need ../
+rr run --cwd . "make"       # run at the project root, the old behavior
+```
+
+Named tasks are unaffected: `rr test` runs the same way from any directory. The directory a command ran in is reported as `details.remote_cwd`.
+
+## Upgrading to v0.23.0 (task args, worktrees, excludes, fallback)
+
+**Task args are shell-quoted.** Extra args appended to a single-command task arrive as quoted arguments, so `rr test "-k foo bar"` is one argument and globs or `$VARS` in appended args are no longer expanded remotely. Put globs in the task's `run` string instead.
+
+**Compound tasks need an `{args}` placeholder.** A task whose `run` contains pipes, `&&`, redirections, `$()`, or backticks errors when given extra args, since before they silently landed on the last command in the pipeline. Mark where args go:
+
+```yaml
+tasks:
+  test:
+    run: pytest {args:-.} -n 4 | tail -20
+```
+
+**Worktrees get their own remote directory.** In a linked git worktree, `${PROJECT}` expands to `repo@worktree-name`. The first sync from an existing worktree is a cold sync into the new directory, and the old shared directory is left in place for you to delete. To keep the old layout, set `sync.worktree_isolation: false`.
+
+**Default excludes use bare patterns.** `.git/`, `.venv/`, and `node_modules/` became `.git`, `.venv`, and `node_modules`. A custom `sync.exclude` list replaces the defaults, so update yours the same way if it has the trailing-slash forms and you sync from worktrees (where `.git` is a file).
+
+**`local_fallback` takes a mode.** Valid values are `never`, `on-unreachable`, and `always`. Booleans still work (`true` = `always`, `false` = `never`). With `always`, when every host is locked by a live process, rr now waits up to `lock.wait_timeout` (default `1m`) before running locally, where before it fell back immediately.
+
+**Local paths in commands are rewritten.** `rr run`/`rr exec` rewrite absolute paths under the project to the remote project directory, and task args become project-relative. Set `rewrite_paths: false` (in the project config or global `defaults`) to pass paths through untouched.
+
+## Upgrading to v0.22.0 (parallel tasks reject extra args)
+
+Passing args to a parallel task used to drop them silently. It's now an error. To forward args to each subtask, set `forward_args: true` on the parallel task (with `{args}` placeholders in the subtasks where needed), or run the command ad hoc with `rr run "<command> <args>"`.
+
+## Upgrading to v0.21.0 (structured output by default)
+
+**Output is structured JSON unless you ask for `--pretty`.** All commands emit JSON phase events (connect, sync, lock, exec) on stderr and pass command stdout/stderr through undecorated. Spinners, colors, and formatted summaries need `--pretty` / `-p`:
+
+```bash
+# Before
+rr run "make test"             # human-readable
+rr run --machine "make test"   # JSON
+
+# After
+rr run --pretty "make test"    # human-readable
+rr run "make test"             # JSON
+```
+
+`--machine` / `-m` still parses but does nothing. Drop it from scripts at your convenience. `--no-phases` (v0.22.0) suppresses the intermediate phase events and keeps the final result event. `rr monitor` is still an interactive TUI.
+
+**Locks go stale much sooner, down from 10 minutes.** Active locks are refreshed by a 30-second heartbeat, and a lock without a refresh for `lock.stale` is reclaimed. The current default is `90s` in a project with `.rr.yaml`. `lock.timeout` no longer has to be larger than `lock.stale`.
+
+**Sync respects `.gitignore`.** `sync.respect_gitignore` defaults to `true`, so gitignored files stop reaching the remote. If a remote command needs a gitignored file (a generated config, a local `.env`), set `sync.respect_gitignore: false`. Negation patterns (`!path`) were mishandled before v0.22.3, so use v0.22.3 or later if you rely on them.
+
+**AI agent directories are excluded.** `.claude/`, `.cursor/`, `.aider/`, and `.copilot/` are no longer synced by default.
+
+## Upgrading to v0.10.0 (`defaults.host` removed)
+
+`defaults.host` in `~/.rr/config.yaml` no longer does anything. Host priority comes from the order of the `hosts` list in `.rr.yaml`, first entry first:
+
+```yaml
+# .rr.yaml
+hosts:
+  - gpu-box   # tried first
+  - mini
+```
+
+Move your preferred host to the top of that list and delete `defaults.host`. rr ignores unknown keys, so a leftover `defaults.host` won't error; it just has no effect.
+
+## v0.5.x to v0.6.0 (global config separation)
 
 Host definitions have moved from `.rr.yaml` to `~/.rr/config.yaml`. This allows you to define hosts once and share project configs with your team.
 
@@ -29,6 +113,8 @@ Host definitions have moved from `.rr.yaml` to `~/.rr/config.yaml`. This allows 
 - **Hosts are now global**: Host definitions moved from project `.rr.yaml` to `~/.rr/config.yaml`
 - **Projects reference hosts by name**: Instead of defining hosts, projects now just reference them with `host: <name>`
 - **New global defaults**: Settings like `default`, `local_fallback`, and `probe_timeout` are now in the global config
+
+Later releases changed some of this: v0.10.0 removed `defaults.host` (see [above](#upgrading-to-v0100-defaultshost-removed)), and `.rr.yaml` accepts `local_fallback` again as a per-project override.
 
 ### Migration steps
 
@@ -122,174 +208,11 @@ EOF
 - **Shareable project configs**: Team members can share `.rr.yaml` without overwriting each other's SSH settings
 - **Personal machine names**: Use your own names for hosts without affecting others
 
-## v1.x to v2.x (future)
-
-No breaking changes yet. This section will be updated when v2 is released.
-
-## v0.x to v1.x
-
-If you're upgrading from early pre-release versions, here's what changed:
-
-### Config changes
-
-**Hosts moved to global config**
-
-Host definitions now live in `~/.rr/config.yaml` (global) instead of `.rr.yaml` (per-project). This allows you to commit `.rr.yaml` to version control without including personal SSH settings.
-
-```yaml
-# Before: hosts in .rr.yaml (per-project)
-# After: hosts in ~/.rr/config.yaml (global)
-```
-
-Move your `hosts:` section from `.rr.yaml` to `~/.rr/config.yaml`. Your project's `.rr.yaml` now references hosts by name:
-
-```yaml
-# ~/.rr/config.yaml (global - not shared)
-version: 1
-hosts:
-  mini:
-    ssh: [mini-local, mini-tailscale]
-    dir: ~/projects/${PROJECT}
-
-# .rr.yaml (project - can be committed)
-version: 1
-host: mini   # Reference to global host
-sync:
-  exclude:
-    - .git/
-```
-
-**Schema version added**
-
-Add `version: 1` at the top of both config files:
-
-```yaml
-# Before (v0.x)
-hosts:
-  mini:
-    ssh: [mini-local]
-
-# After (v1.x) in ~/.rr/config.yaml
-version: 1
-
-hosts:
-  mini:
-    ssh: [mini-local]
-    dir: ~/projects/${PROJECT}
-```
-
-**Host SSH field is now a list**
-
-SSH aliases must be specified as a list, even if you only have one:
-
-```yaml
-# Before (v0.x) - single string worked
-hosts:
-  mini:
-    ssh: mini-local
-
-# After (v1.x) - must be a list
-hosts:
-  mini:
-    ssh:
-      - mini-local
-```
-
-**Lock config restructured**
-
-Lock settings moved under a `lock` key:
-
-```yaml
-# Before (v0.x)
-lock_timeout: 5m
-lock_stale: 10m
-
-# After (v1.x)
-lock:
-  enabled: true
-  timeout: 5m
-  stale: 10m
-```
-
-**Task `run` field renamed from `command`**
-
-Tasks now use `run` instead of `command`:
-
-```yaml
-# Before (v0.x)
-tasks:
-  test:
-    command: pytest
-
-# After (v1.x)
-tasks:
-  test:
-    run: pytest
-```
-
-### CLI changes
-
-**`rr exec` replaces `rr run --no-sync`**
-
-The `--no-sync` flag was removed. Use `rr exec` instead:
-
-```bash
-# Before
-rr run --no-sync "make test"
-
-# After
-rr exec "make test"
-```
-
-**`rr status` replaces `rr hosts`**
-
-The `hosts` command was renamed to `status`:
-
-```bash
-# Before
-rr hosts
-
-# After
-rr status
-```
-
-**Host management moved to subcommands**
-
-Host operations are now under `rr host`:
-
-```bash
-# Before
-rr add-host mini
-rr remove-host mini
-
-# After
-rr host add
-rr host remove mini
-```
-
-### Environment variable changes
-
-**`RR_HOST` environment variable**
-
-You can set the preferred host via environment variable (equivalent to `--host` flag):
-
-```bash
-export RR_HOST=gpu-box
-rr run "make test"  # Uses gpu-box
-```
-
 ## Troubleshooting upgrades
 
-### "Unknown field" errors
+### A setting stopped having an effect
 
-If you see errors about unknown fields after upgrading:
-
-```
-Error: Invalid configuration in .rr.yaml
-  Line 5: Unknown field 'command' in task definition
-```
-
-Check the migration notes above for renamed fields. The error message usually suggests the correct field name.
+rr ignores config keys it doesn't recognize, so a removed or misspelled key (like `defaults.host`) is skipped without an error. If a setting seems to do nothing after an upgrade, check the sections above and [configuration.md](configuration.md) for its current name and location.
 
 ### Config validation failures
 

@@ -105,7 +105,12 @@ Then verify requirements with doctor:
 rr doctor --requirements
 ```
 
-**If tools are missing**, rr shows which ones and whether they can be auto-installed.
+**If tools are missing**, rr shows which ones and whether they can be auto-installed. Install the ones with built-in installers:
+
+```bash
+rr provision --check   # Report what's missing
+rr provision --yes     # Install without prompts
+```
 
 ### Manual Installation
 
@@ -162,7 +167,7 @@ rr run "make test"  # or appropriate command for the project
 
 ## LLM Workflow (Machine Interface)
 
-When setting up rr programmatically, use `--machine` for structured JSON output that's easier to parse.
+rr emits structured JSON by default (`doctor`, `status`, and `tasks` print a `{"success":...,"data":...}` envelope on stdout), so no extra flags are needed.
 
 ### Step 1: Check Global Config
 
@@ -181,17 +186,18 @@ rr host add --name <name> --ssh "<alias>" --dir "~/projects/\${PROJECT}" --skip-
 ### Step 2: Check Project Config
 
 ```bash
-rr doctor --machine 2>&1
+rr doctor
 ```
 
 **Parse response:**
-- `success: true` with config checks passing -> Project config OK
-- `error.code == "CONFIG_NOT_FOUND"` -> Run `rr init --non-interactive --host <host>`
+- `data.summary.all_clear == true` -> Setup OK (doctor exits 0 even when checks fail, so don't rely on the exit code)
+- Otherwise look at `data.categories[].results[]` entries with `status` `"fail"` or `"warn"`
+- A `CONFIG` result "No config file found" -> Run `rr init --non-interactive --host <host>`
 
 ### Step 3: Verify Connectivity
 
 ```bash
-rr status --machine
+rr status
 ```
 
 **Parse `data.hosts[]` array:**
@@ -203,27 +209,30 @@ FOR each host in data.hosts:
   ELSE:
     -> FOR each alias in host.aliases:
       -> Parse alias.error for diagnosis:
-         "timeout" -> Network/VPN issue
-         "auth" -> Key not deployed
-         "host key" -> First connection
+         "connection timed out" -> Network/VPN issue
+         "authentication failed" -> Key not deployed or not in the agent
+         "host key verification failed" -> Unknown key (first connection) or changed key
 ```
 
 **Fix connectivity issues:**
 - Timeout: Check `ping <hostname>`, verify network/VPN
 - Auth: Run `ssh-copy-id <alias>` or `rr setup <host>`
-- Host key: `ssh -o StrictHostKeyChecking=accept-new <alias> exit`
+- Unknown host key (first connection): verify the host's fingerprint through a trusted channel first (for example, run `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host's console), then accept it with `ssh -o StrictHostKeyChecking=accept-new <alias> exit`
+- Changed host key: don't accept it automatically. A changed key can mean the host was reinstalled or that the connection is being intercepted. Confirm the new fingerprint through a trusted channel, then remove the old entry with `ssh-keygen -R <hostname>` and connect again
 
 ### Step 4: Test Execution
 
 ```bash
-rr exec "echo rr-test-ok" 2>&1
+rr exec "echo rr-test-ok"
 echo "Exit code: $?"
 ```
 
+stdout has the command output; stderr has JSON phase events and a final `{"type":"result",...}` line.
+
 **Expected:** Output contains "rr-test-ok", exit code 0
 
-**If fails:** Parse error and check:
-- Lock issues: `rr unlock` then retry
+**If fails:** If the command ran and exited nonzero, stderr ends with a `{"type":"result","status":"failed",...}` event: read its `exit_code` and `details`. If rr failed before the command started (connection, lock, sync), stderr has a JSON error envelope instead: read `error.code` and `error.suggestion`, and check:
+- Lock issues (`LOCK_HELD`): `rr unlock <host>` then retry
 - Directory issues: Verify `dir` in `~/.rr/config.yaml`
 
 ### Step 5: Verify Requirements
@@ -235,22 +244,22 @@ Use the `require` field and doctor command:
 grep -A5 "require:" .rr.yaml
 
 # Verify requirements with doctor
-rr doctor --requirements --machine
+rr doctor --requirements
 ```
 
 **Parse response:**
-- `success: true` with all requirements satisfied -> Requirements OK
-- Requirements missing -> Check which tools need installation
+- `REQUIREMENTS` category results all `"pass"` -> Requirements OK
+- Otherwise the `message` lists missing tools, marked "(can install)" when rr has an installer
 
 **IF tools missing:**
-- Check if auto-installable (doctor shows "(can install)")
-- Install via SSH directly (see installation commands above)
-- Or add `--skip-requirements` to bypass checks
+- Run `rr provision --yes` for tools marked "(can install)"
+- Install the rest via SSH (see installation commands above)
+- Or add `--skip-requirements` to `rr run`/`rr exec` to bypass checks
 
 ### Step 6: Final Verification
 
 ```bash
-rr test 2>&1
+rr test
 echo "Exit code: $?"
 ```
 

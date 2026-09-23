@@ -14,8 +14,8 @@ host: dev-server
 
 sync:
   exclude:
-    - .git/
-    - node_modules/
+    - .git          # bare patterns: in linked worktrees .git is a file
+    - node_modules  # and node_modules may be a symlink
     - dist/
     - build/
     - coverage/
@@ -70,7 +70,3 @@ tasks:
       - test
       - test
     fail_fast: false
-
-output:
-  format: jest
-  timing: true

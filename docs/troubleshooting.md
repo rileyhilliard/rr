@@ -9,6 +9,7 @@ This guide covers common issues and their solutions.
 - [rsync issues](#rsync-issues)
 - [Lock contention](#lock-contention)
 - [Config validation errors](#config-validation-errors)
+- [Task and output surprises](#task-and-output-surprises)
 - [Platform-specific issues](#platform-specific-issues)
 - [Debug tips](#debug-tips)
 
@@ -17,40 +18,51 @@ This guide covers common issues and their solutions.
 The `rr doctor` command checks your setup and reports issues:
 
 ```bash
-rr doctor           # Run all diagnostic checks
-rr doctor --fix     # Attempt automatic fixes where possible
-rr doctor --json    # Output diagnostics in JSON format (for scripts)
+rr doctor                 # Run all diagnostic checks (JSON envelope on stdout)
+rr doctor --pretty        # Human-readable report
+rr doctor --fix           # Attempt automatic fixes where possible
+rr doctor --requirements  # Also check required tools on each host
+rr doctor --path          # Compare login vs interactive shell PATH on each host
 ```
 
-Example output:
+Like every rr command, doctor prints structured JSON by default. It exits 0 even when checks fail, so scripts should read `data.summary.all_clear` (and `data.summary.fail`/`warn`) instead of the exit code.
+
+Example `--pretty` output:
 
 ```
+Road Runner Diagnostic Report
+
 CONFIG
-  [PASS] config_file: Config file: .rr.yaml
-  [PASS] config_schema: Schema valid
-  [PASS] config_hosts: 2 hosts configured
+  ● Config file: .rr.yaml
+  ● Schema valid
+  ● 2 hosts configured, 5 tasks defined
+  ● No reserved task names
 
 SSH
-  [PASS] ssh_key: SSH key found: ~/.ssh/id_ed25519.pub
-  [PASS] ssh_agent: SSH agent running with 1 key loaded
-  [PASS] ssh_key_permissions: SSH key permissions OK
+  ● SSH key found: ~/.ssh/id_ed25519
+  ● SSH agent running with 1 key loaded
+  ● SSH key permissions OK
 
 HOSTS
-  [PASS] host_mini: mini
-  [FAIL] host_server: all aliases failed
-         Suggestion: Host may be offline or blocked by firewall
+  ● mini
+    ● mini-lan: Connected (12ms)
+  ✕ server
+    ✕ server.example.com: Connection refused
+      ...
 
 DEPENDENCIES
-  [PASS] rsync_local: rsync 3.2.7 (local)
+  ● rsync 3.2.7 (local)
 
-1 issue found
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✕ 1 issue found
 ```
 
 ## SSH connection failures
 
 ### "Connection refused"
 
-**Symptom:** `rr doctor` shows "all aliases failed" with "connection refused"
+**Symptom:** `rr doctor` shows "Connection refused" for an alias, or `rr run` fails with `SSH_CONNECTION_FAILED`
 
 **Causes and fixes:**
 
@@ -79,7 +91,7 @@ DEPENDENCIES
 
 ### "Permission denied (publickey)"
 
-**Symptom:** SSH connects but auth fails
+**Symptom:** SSH connects but auth fails (`SSH_AUTH_FAILED`, "authentication failed")
 
 **Fixes:**
 
@@ -107,7 +119,7 @@ DEPENDENCIES
 
 ### "Connection timed out"
 
-**Symptom:** SSH hangs then times out
+**Symptom:** SSH hangs then times out (`SSH_TIMEOUT`, "connection timed out")
 
 **Causes:**
 
@@ -130,7 +142,7 @@ rr run --probe-timeout 10s "make test"
 
 ### "handshake failed" but ssh command works
 
-**Symptom:** `rr monitor` or `rr doctor` shows "handshake failed", but `ssh user@host` works fine from the terminal.
+**Symptom:** `rr monitor` shows "handshake failed", or `rr doctor`/`rr run` report "authentication failed" (`SSH_AUTH_FAILED`), but `ssh user@host` works fine from the terminal.
 
 **Cause:** Your SSH key is passphrase-protected and not loaded in the agent. The `ssh` command can prompt for the passphrase or use macOS Keychain automatically, but rr's Go SSH library cannot prompt interactively.
 
@@ -157,7 +169,7 @@ This ensures the key is automatically added to the agent and the passphrase is s
 
 ### "SSH agent not running"
 
-**Symptom:** `rr doctor` shows "SSH_AUTH_SOCK not set"
+**Symptom:** `rr doctor` shows "SSH agent not running" (`SSH_AUTH_SOCK` isn't set).
 
 **Fix:**
 
@@ -179,9 +191,9 @@ fi
 
 ### "SSH config contains Match directive" warning
 
-**Symptom:** Warning appears when connecting about unsupported `Match` directives
+**Symptom:** Warning like "Host 'myserver' not found in SSH config (config has a Match block at line 12 that may hide later entries)"
 
-**Cause:** The SSH config parser doesn't support OpenSSH's `Match` directives. Host entries after the first `Match` line in your `~/.ssh/config` may not be recognized.
+**Cause:** rr's SSH config parser doesn't support OpenSSH's `Match` directives. Host entries after the first `Match` line in your `~/.ssh/config` aren't recognized.
 
 **Fixes:**
 
@@ -207,11 +219,21 @@ fi
        dir: ~/projects/${PROJECT}
    ```
 
+### "uses ProxyJump which is not yet supported"
+
+rr reads `HostName`, `Port`, `User`, `IdentityFile`, `IdentityAgent`, and `ProxyCommand` from `~/.ssh/config`, but not `ProxyJump`. Replace it with the equivalent `ProxyCommand`:
+
+```
+Host myserver
+    HostName 10.0.0.5
+    ProxyCommand ssh -W %h:%p bastion
+```
+
 ### "command not found" on remote
 
 **Symptom:** Commands like `go test` or `npm run` fail with "command not found" even though they work when you SSH manually.
 
-**Cause:** SSH sessions don't source shell config files (`.zshrc`, `.bashrc`) by default, so tools installed via Homebrew or nvm aren't in PATH.
+**Cause:** rr runs commands with `${SHELL:-/bin/bash} -c` after sourcing `~/.bashrc` and `~/.zshrc`. That's a non-login shell, so anything set up in `~/.zprofile`, `~/.bash_profile`, or `~/.profile` (Homebrew's `shellenv` usually lives there) is missing, and many `.bashrc` files return early for non-interactive shells. `rr doctor --path` shows the PATH difference between login and interactive shells on each host.
 
 **Fixes:**
 
@@ -259,9 +281,25 @@ sudo apt install rsync
 sudo dnf install rsync
 ```
 
-### "rsync not found on remote"
+### rsync missing on the remote
 
-Install rsync on the remote host using the same commands above.
+`rr doctor` only checks for rsync locally. Check the remote yourself and install it with the same commands above:
+
+```bash
+rr exec "rsync --version"
+```
+
+### "rsync version too old"
+
+The `--info=progress2` flag rr uses needs rsync 3.1.0 or newer on your machine. See [macOS](#macos) below for replacing the system rsync.
+
+### "Partial transfer due to error" (rsync exit 23)
+
+Usually a permission problem on the remote, or a local path that is a file where the remote has a directory (or the reverse). If you set a custom `sync.exclude` from before v0.23, change `.git/`, `.venv/`, and `node_modules/` to the bare patterns `.git`, `.venv`, and `node_modules`: in a linked git worktree `.git` is a file, and the trailing-slash pattern doesn't match it.
+
+### "remote ... was last synced from ...; now syncing from ..."
+
+Each sync writes a `.rr-source` marker on the remote. This warning means the remote directory was last synced from a different checkout or machine, so two trees are sharing one remote copy. Give them different `dir` values, or leave `sync.worktree_isolation` on (the default) so each git worktree gets its own `<repo>@<worktree>` directory.
 
 ### "rsync: connection unexpectedly closed"
 
@@ -293,57 +331,51 @@ rr exec "ls -la \${HOME}/projects/"
    rr sync --dry-run
    ```
 
-3. **Exclude large directories** you don't need:
+3. **Exclude large directories** you don't need. A custom list replaces the default excludes, so keep the ones you still want:
    ```yaml
    sync:
      exclude:
-       - .git/
-       - node_modules/
+       - .git
+       - node_modules
+       - .venv
        - "*.zip"
        - build/
    ```
 
+4. **First sync from a git worktree is slow.** Each linked worktree syncs to its own remote directory, so the first sync copies everything (including a fresh `node_modules`/`.venv` install). Later syncs are incremental. `rr prune` removes directories for worktrees you've deleted.
+
 ## Lock contention
 
-### "Lock held by another process"
+### "Lock timeout" or "All hosts are locked"
 
-**Symptom:** Command waits or fails with lock timeout
+**Symptom:** The command waits, then fails with `LOCK_HELD` and one of:
+
+- `Lock timeout after 5m0s - someone else is using this remote` (single host, `lock.timeout`)
+- `All hosts are locked - timed out after 1m0s` (several hosts, `lock.wait_timeout`)
+
+The error names the holder: user, hostname, pid, command, and how long it has held the lock.
+
+**How locking works:** there's one lock per host, a directory at `<lock.dir>/rr.lock` (default `/tmp/rr-locks/rr.lock`). It isn't per project, so a run from another project on the same host blocks you too. The holder refreshes the lock every 30 seconds. A lock that hasn't been refreshed for `lock.stale` (default 90s) is taken over automatically, and a lock left by a dead rr process on your own machine is cleared right away with a warning.
 
 **Causes:**
 
-1. **Another `rr` instance is running** - Wait for it to finish
-2. **Previous run crashed** - Lock is stale
-
-**Check lock status:**
-
-```bash
-rr doctor
-# Look for "stale locks" in the output
-```
+1. **Another `rr` run is using the host** - Wait for it, or add more hosts so rr can pick a free one
+2. **A holder hung without exiting** - Its heartbeat keeps the lock fresh; release it by hand
 
 **Release a stuck lock:**
 
 ```bash
-rr unlock              # Release lock (shows picker if multiple hosts)
 rr unlock gpu-box      # Release lock on specific host
-rr unlock --all        # Release locks on all configured hosts
+rr unlock --all        # Release locks on the project's hosts
+rr unlock              # With one host configured; with several, --pretty shows a picker
 ```
 
-The lock is project-specific (based on your current directory), so this only affects locks for your project.
-
-**When do locks get stuck?**
-
-- Process crashed or was killed (Ctrl+C during lock phase)
-- Network disconnected during a run
-- SSH connection dropped unexpectedly
-
-Stale locks are automatically cleaned up after the configured `stale` duration (default: 1 hour), but you can use `rr unlock` if you need to release one immediately.
-
-**Increase lock timeout** for long-running commands:
+**Wait longer** before giving up:
 
 ```yaml
 lock:
-  timeout: 30m
+  timeout: 30m        # single host
+  wait_timeout: 5m    # all hosts locked
 ```
 
 **Disable locking** if you're the only user:
@@ -355,13 +387,15 @@ lock:
 
 ## Config validation errors
 
-### "No config file found"
+### "No config file found" / "Can't find the config file"
 
 **Fix:**
 
 ```bash
 rr init
 ```
+
+`rr doctor` reports "No config file found" when there's no `.rr.yaml` in the current directory or any parent. If you passed `--config`, check that path.
 
 ### "No hosts configured"
 
@@ -390,7 +424,7 @@ The host referenced in your project's `.rr.yaml` doesn't exist in `~/.rr/config.
 2. Remove the reference from `.rr.yaml`
 3. Check for typos in the host name
 
-### "Host 'X' has no SSH aliases"
+### "host 'X' needs at least one SSH connection"
 
 Each host needs at least one SSH connection string in the global config:
 
@@ -403,7 +437,7 @@ hosts:
     dir: ${HOME}/projects
 ```
 
-### "Host 'X' has no dir"
+### "host 'X' needs a 'dir'"
 
 Each host needs a working directory in the global config:
 
@@ -416,9 +450,9 @@ hosts:
     dir: ${HOME}/projects/${PROJECT}  # Add this
 ```
 
-### "Reserved task name"
+### "Can't use 'X' as a task name - that's a built-in command"
 
-You can't name a task after a built-in command. Rename your task:
+You can't name a task after a built-in command (`run`, `exec`, `sync`, `prune`, and so on). Rename your task:
 
 ```yaml
 tasks:
@@ -430,6 +464,49 @@ tasks:
   start:
     run: make run
 ```
+
+## Task and output surprises
+
+### "rr parses flags before the task sees them"
+
+`rr test -k foo` fails because rr tries to parse `-k` as its own flag. Put task arguments after `--`:
+
+```bash
+rr test -- -k foo
+```
+
+### "parallel task 'X' doesn't accept extra arguments"
+
+Parallel tasks drop args unless the task sets `forward_args: true`. Subtasks that are compound commands also need an `{args}` placeholder. For a one-off, run the command directly: `rr run "pytest tests/api -k foo"`.
+
+### "This task is a compound command ..."
+
+The task's `run` has a pipe, `&&`, `;`, redirection, or `$()`, so appended args would land on the last command in the chain. Add an `{args}` placeholder where they belong:
+
+```yaml
+tasks:
+  test:
+    run: pytest {args:-tests/} -n 4 | tail -20
+```
+
+### Relative path works locally but not through rr
+
+`rr run` and `rr exec` run in the remote equivalent of your current subdirectory. From `backend/`, `rr run "make"` uses `backend/Makefile`. Use `rr run --cwd . "..."` to run at the project root. When this is why a path failed, the result event's `details.hint` names both directories.
+
+### Tests "pass" but nothing ran
+
+Check the result event for `details.no_tests`. A filter that matches nothing can exit 0. If `details.piped_exit_code` is also set, the command pipes into something like `tail`, and without `pipefail` the shell reports the last stage's exit code. Turn it on per host:
+
+```yaml
+# ~/.rr/config.yaml
+hosts:
+  myhost:
+    shell: "bash -o pipefail -c"
+```
+
+### No JSON, or JSON mixed into my output
+
+Structured output is the default: JSON phase events and a final `{"type":"result",...}` event go to stderr, and the command's own stdout/stderr pass through. Use `--pretty` for spinners and colors, `--no-phases` to keep only the final result event, or `2>/dev/null` to drop rr's events entirely. The full raw output of every run is in the file named by `details.log_file`.
 
 ## Platform-specific issues
 
@@ -499,12 +576,21 @@ chmod 644 ~/.ssh/*.pub
 
 ## Debug tips
 
-### Verbose output
+### See what happened
 
 ```bash
-# See more detail about what rr is doing
-rr run --verbose "make test"
+# Human-readable phases
+rr run --pretty "make test"
+
+# Structured events: each phase, then the result with details
+rr run "make test" 2>events.jsonl
+grep '"type":"result"' events.jsonl
+
+# Lock acquisition debug logging
+RR_DEBUG=1 rr run "make test"
 ```
+
+The global `-v`/`--verbose` flag is accepted but doesn't add output today. Every run's raw output is saved to `~/.rr/logs/`; the result event's `details.log_file` has the exact path.
 
 ### Test SSH directly
 
@@ -532,7 +618,7 @@ yq . .rr.yaml
 
 ### Still stuck?
 
-1. Run `rr doctor` and share the output
-2. Try the command with `--verbose`
+1. Run `rr doctor --pretty` and share the output
+2. Try the command with `--pretty` and check the log file from `details.log_file`
 3. Check if SSH works directly: `ssh user@host "echo ok"`
 4. Open an issue at https://github.com/rileyhilliard/rr/issues

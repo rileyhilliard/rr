@@ -7,16 +7,16 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 ## Finding something to work on
 
 - Look for issues labeled [`good first issue`](https://github.com/rileyhilliard/rr/labels/good%20first%20issue) for starter tasks
-- Check the [ARCHITECTURE.md](ARCHITECTURE.md) to understand the design before diving into code
+- Check [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) to understand the design before diving into code
 - Not sure where to start? Open an issue and ask
 
 ## Development setup
 
 **Requirements:**
 
-- Go 1.22 or later
+- Go 1.26.8 or later (the `go` directive in `go.mod`)
 - lefthook (for git hooks)
-- golangci-lint (for linting)
+- golangci-lint, pinned in `.golangci-version` (`make setup` installs it)
 - shellcheck (optional, for shell script linting)
 - rsync (installed on both local and remote machines)
 - SSH access to at least one remote host (for integration tests)
@@ -26,12 +26,12 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 ```bash
 git clone https://github.com/rileyhilliard/rr.git
 cd rr
-make setup    # Installs lefthook hooks and dependencies
+make setup    # Installs lefthook hooks, the pinned golangci-lint, goimports, and Go modules
 make build
 ./rr --help
 ```
 
-This installs lefthook git hooks that run formatting and linting automatically before each commit.
+This installs lefthook git hooks. Pre-commit runs `gofmt`, `goimports`, `go vet`, `go mod tidy`, `golangci-lint --fix`, YAML/JSON syntax checks, and shellcheck (if installed). Pre-push runs the unit tests, lint, and a 50% coverage check.
 
 **Manual dependency install (if needed):**
 
@@ -39,18 +39,23 @@ This installs lefthook git hooks that run formatting and linting automatically b
 # macOS
 brew install lefthook golangci-lint shellcheck
 
-# Or via Go (lefthook and golangci-lint only)
-go install github.com/evilmartians/lefthook@latest
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+# Or via Go
+go install github.com/evilmartians/lefthook/v2@latest
+make install-linter    # golangci-lint at the version in .golangci-version
 ```
+
+The Makefile runs golangci-lint from `$(go env GOBIN)` (or `$(go env GOPATH)/bin`), so a different version installed elsewhere, such as Homebrew's, is not used by `make lint`.
 
 ## Running tests
 
 **Unit tests:**
 
 ```bash
-make test
+make test          # Runs `rr test` if rr is on your PATH, otherwise `go test ./...`
+make test-local    # Always runs `go test ./...` locally
 ```
+
+The Makefile's `test`, `test-integration`, `test-all`, `verify`, and `verify-all` targets go through `rr` when it's installed, which syncs to the hosts in `.rr.yaml` and falls back to local execution if none are reachable. Use the `*-local` targets to skip rr.
 
 **Integration tests:**
 
@@ -67,8 +72,10 @@ go test -v ./tests/integration/... ./pkg/sshutil/...
 RR_TEST_SKIP_SSH=1 go test ./tests/integration/...
 
 # Option 3: Local SSH (requires SSH enabled on your machine)
-RR_TEST_SSH_HOST=localhost make test-integration
+RR_TEST_SSH_HOST=localhost RR_TEST_SSH_KEY=~/.ssh/id_ed25519 go test -v ./tests/integration/...
 ```
+
+Tests that need a live server skip unless both `RR_TEST_SSH_HOST` and `RR_TEST_SSH_KEY` are set.
 
 **Linting:**
 
@@ -79,8 +86,9 @@ make lint
 **Full verification:**
 
 ```bash
-make verify    # Runs lint + test
-make ci        # Full CI suite (format, lint, coverage, build)
+make verify    # Runs lint + unit tests
+make ci        # Format check, lint, 50% unit coverage check, build
+make coverage-ci  # Unit + integration coverage against a Docker SSH server, 60% minimum (matches CI)
 ```
 
 ## Code style guidelines
@@ -120,7 +128,7 @@ return fmt.Errorf("something went wrong")
 
 1. Fork the repo and create a branch from `main`
 2. Make your changes with clear, focused commits
-3. Ensure `make ci` passes (runs format, lint, coverage, build)
+3. Ensure `make ci` passes (runs format check, lint, coverage, build)
 4. Update documentation if you changed behavior
 5. Open a PR with a clear description of what and why
 
@@ -129,27 +137,29 @@ return fmt.Errorf("something went wrong")
 Your PR must pass these automated checks:
 
 - **Format check** - Code must be `gofmt` formatted
-- **Lint** - No golangci-lint violations
-- **Tests** - All tests pass on Go 1.22, 1.23, and 1.24
-- **Coverage** - Minimum 50% test coverage
+- **Lint** - No golangci-lint violations (version from `.golangci-version`)
+- **Tests** - Unit tests pass with `-race`, on the Go version from `go.mod`
+- **Integration tests** - `./tests/integration/...` and `./pkg/sshutil/...` pass against a Docker SSH server
+- **Coverage** - Merged unit + integration coverage is at least 60%
 - **Security** - No known vulnerabilities (govulncheck)
 - **Build** - Binary compiles successfully
 
+The workflow is `.github/workflows/ci.yml`.
+
 ### Branch protection
 
-The `main` branch has these protections enabled:
+A repository ruleset on `main` enforces:
 
-- Require PR reviews before merging
-- Require all CI status checks to pass
-- Require branches to be up to date before merging
-- Dismiss stale reviews when new commits are pushed
+- Changes land through a pull request (no direct pushes)
+- Squash merge is the only allowed merge method
+- No force pushes or branch deletion
 
 ### Commit messages
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). The lefthook commit-msg hook enforces this format:
 
 ```
-<type>: <description>
+<type>(<optional scope>): <description>
 
 [optional body]
 ```
@@ -171,8 +181,8 @@ Focus on the "why" over the "what" in the body when helpful.
 
 To add a new command:
 
-1. Create a new file in `internal/cli/` (e.g., `mycommand.go`)
-2. Define the command using Cobra:
+1. Put the implementation in a new file in `internal/cli/` (e.g., `mycommand.go`)
+2. Define the Cobra command in `internal/cli/commands.go` and register it in that file's `init()`, next to the others:
 
 ```go
 var myCmd = &cobra.Command{
@@ -180,30 +190,28 @@ var myCmd = &cobra.Command{
     Short: "One-line description",
     Long:  `Longer description if needed.`,
     RunE: func(cmd *cobra.Command, args []string) error {
-        // Implementation here
-        return nil
+        return myCommand(MyOptions{...})
     },
 }
 
-func init() {
-    rootCmd.AddCommand(myCmd)
-    // Add flags here
-    myCmd.Flags().StringP("flag", "f", "", "Flag description")
-}
+// in init():
+myCmd.Flags().BoolVar(&myDryRun, "dry-run", false, "Flag description")
+rootCmd.AddCommand(myCmd)
 ```
 
-3. Register the command in `init()` - Cobra handles this automatically
-4. Add tests in a `*_test.go` file alongside your command
-5. Update shell completions if needed
+3. Add the command name to `ReservedTaskNames` in `internal/config/validate.go` so a task in `.rr.yaml` can't shadow it
+4. Support both output modes: structured JSON is the default, and `--pretty` switches to human output. Check `PrettyMode()` and use the helpers in `internal/cli/json.go` (`WriteJSONSuccess`, `WriteJSONError`, `WritePhaseEvent`)
+5. Add tests in a `*_test.go` file alongside your command
+6. Regenerate shell completions with `make completions` (writes `completions/`, which release archives include)
 
-Check existing commands like `run.go` or `status.go` for patterns.
+Check existing commands like `prune.go` or `status.go` for patterns.
 
 ## Adding output formatters
 
 Output formatters parse test runner output (pytest, jest, go test) to extract failures and show summaries.
 
 1. Create a new file in `internal/output/formatters/` (e.g., `myrunner.go`)
-2. Implement the `Formatter` interface:
+2. Implement the `output.Formatter` interface (`internal/output/formatter.go`) plus `Detect` from the `formatters.Detector` interface:
 
 ```go
 type MyFormatter struct {
@@ -231,8 +239,9 @@ func (f *MyFormatter) Summary(exitCode int) string {
 }
 ```
 
-3. Register in `internal/output/formatters/registry.go`
-4. Add tests with sample output from the test runner
+3. Add it to the list in `detectFormatter()` in `internal/output/formatters/detect.go`. The highest `Detect` score wins, and scores below 50 are ignored
+4. To feed structured failures and counts into the result envelope (`details.failures`, `details.summary`), also implement `output.TestSummaryProvider`; implement `output.NoTestsReporter` if the runner can report that it collected zero tests
+5. Add tests with sample output from the test runner
 
 See `gotest.go` or `pytest.go` for real examples.
 

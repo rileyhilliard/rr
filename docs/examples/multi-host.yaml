@@ -10,7 +10,7 @@
 # With multiple hosts configured, rr automatically distributes work:
 # - Tries hosts in order with non-blocking lock checks
 # - If a host is locked, immediately tries the next available host
-# - If all hosts are locked, waits and round-robins until one is free
+# - If all hosts are locked, waits up to lock.wait_timeout for one to free up
 
 version: 1
 
@@ -23,9 +23,9 @@ hosts:
 
 sync:
   exclude:
-    - .git/
-    - node_modules/
-    - .venv/
+    - .git          # bare patterns: .git is a file in linked worktrees
+    - node_modules
+    - .venv
     - __pycache__/
     - build/
     - dist/
@@ -37,7 +37,7 @@ lock:
   enabled: true
   timeout: 10m       # How long to wait when acquiring lock on a single host
   wait_timeout: 2m   # How long to round-robin when all hosts are locked
-  stale: 30m         # Consider locks older than this as stale
+  stale: 30m         # Consider a lock abandoned when its heartbeat is older than this
 
 tasks:
   test:
@@ -49,12 +49,18 @@ tasks:
     hosts:
       - linux-server
     run: make build-linux OUTDIR=dist
+    pull:
+      - src: dist/myapp-linux-amd64
+        dest: ./dist/
 
   build-arm:
     description: Build ARM binary (outputs to dist/myapp-linux-arm64)
     hosts:
       - raspberry-pi
     run: make build-arm OUTDIR=dist
+    pull:
+      - src: dist/myapp-linux-arm64
+        dest: ./dist/
 
   # Cross-platform release: build on multiple architectures in parallel
   release:
@@ -63,7 +69,7 @@ tasks:
       - build-linux
       - build-arm
     fail_fast: true
-    # After task completes, pull artifacts back (see usage below)
+    # Subtask pull: isn't applied inside a parallel run (see usage below)
 
   docker-build:
     description: Build Docker image
@@ -106,18 +112,19 @@ tasks:
 #   rr flake-check              # Run tests 5x to detect flaky tests
 #
 # Pulling build artifacts back:
-#   After running builds on remote hosts, pull artifacts back with rsync:
+#   rr build-linux and rr build-arm pull their binaries into ./dist/ via the
+#   task's pull: setting. Parallel runs (rr release) don't apply subtask pull:,
+#   so fetch artifacts afterwards with rr pull:
 #
 #   rr release && \
-#     rsync -av linux-server:~/projects/myapp/dist/ ./dist/ && \
-#     rsync -av raspberry-pi:~/projects/myapp/dist/ ./dist/
-#
-#   Or use a Makefile target that wraps this workflow.
+#     rr pull dist/myapp-linux-amd64 --host linux-server --dest ./dist/ && \
+#     rr pull dist/myapp-linux-arm64 --host raspberry-pi --dest ./dist/
 #
 # Load balancing behavior:
 #   - With multiple hosts and no --host flag, rr tries each host until one is free
-#   - If local_fallback is true and all hosts are locked, runs locally immediately
-#   - Otherwise waits up to wait_timeout, checking hosts in round-robin fashion
+#   - With local_fallback: always and all hosts locked, runs locally right away
+#     (after waiting up to wait_timeout if one of the holders is on this machine)
+#   - Otherwise waits up to wait_timeout, cycling through the hosts, then fails
 #
 # Flake detection:
 #   - Use --repeat N to run a command/task N times in parallel

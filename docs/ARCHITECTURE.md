@@ -66,7 +66,7 @@ The rise of Tailscale and similar mesh VPNs has made remote development practica
 | Task definitions          | P1       | Named tasks with pre-configured commands                 |
 | Output formatters         | P1       | Pluggable formatters (generic, pytest, jest, go test)    |
 | Shell completions         | P1       | Bash, zsh, fish completions                              |
-| Multi-host load balancing | P2       | Round-robin or least-recently-used across host pool      |
+| Multi-host load balancing | P2       | First unlocked host in priority order, wait when all busy |
 | Parallel task execution   | P2       | Run multiple tasks concurrently on different hosts       |
 
 ---
@@ -92,14 +92,24 @@ Primary Commands:
   run <cmd>         Sync files and execute a command on remote
   exec <cmd>        Execute command without syncing (when you just ran sync)
   sync              Sync files only, no command execution
+  pull <patterns>   Pull files from the remote project dir to local
   <task>            Run a named task (if defined in config)
+  tasks             List tasks defined in .rr.yaml
 
 Setup & Status:
   init              Create starter config with guided prompts
   setup <host>      Configure SSH keys for a host
+  host              Manage hosts in ~/.rr/config.yaml (add, list, remove)
+  provision         Install tools listed under require: on remote hosts
   status            Show connectivity and selected host
-  monitor           Real-time dashboard of host metrics
+  monitor           Real-time dashboard of host metrics (--once for a snapshot)
   doctor            Diagnose common issues
+
+Maintenance:
+  unlock [host]     Release a stuck lock on a remote host (--all for every project host)
+  prune             Remove remote sync dirs for deleted git worktrees
+  logs              List run logs in ~/.rr/logs (logs clean to prune them)
+  update            Update rr to the latest release
 
 Help:
   help [command]    Show help for a command
@@ -128,26 +138,42 @@ Help:
 
 ### Reserved Command Names
 
-These names cannot be used as task names (with helpful error if attempted):
+These names cannot be used as task names (`ReservedTaskNames` in `internal/config/validate.go`):
 
 ```
-run, exec, sync, init, setup, status, monitor, doctor, help, version, completion, update, host
+run, exec, sync, prune, init, setup, status, monitor, doctor, help, version, completion, update, host, unlock, tasks
 ```
 
-If a user has a task named `run`, we error during config load:
+If a user has a task named `run`, config validation fails:
 
 ```
-Error: Task name 'run' conflicts with built-in command.
-  Rename your task or use: rr run --task run
+Can't use 'run' as a task name - that's a built-in command
+  Pick a different name, like 'my-run' or 'do-run'.
 ```
 
 ---
 
 ## Terminal Output States
 
+### Output Modes
+
+Structured output is the default for every command. Workflow commands (`run`, `exec`, `sync`, tasks) write one JSON event per line to stderr and pass the command's own stdout/stderr through untouched. `--pretty` (`-p`) switches to the spinner and color UI shown in the examples below. `--machine` (`-m`) is kept for compatibility and does nothing, since structured is already the default. `--no-phases` drops the intermediate `phase` events and keeps the final `result` event.
+
+The split lives in `internal/cli/phase_reporter.go`: `NewPhaseReporter` returns a `StructuredReporter` (JSON events via `WritePhaseEvent` in `internal/cli/json.go`) or a `PrettyReporter` (wraps `ui.PhaseDisplay`).
+
+```
+{"type":"phase","phase":"connect","status":"complete","host":"mini","duration_s":0.12,"ts":"..."}
+{"type":"phase","phase":"lock","status":"complete","host":"mini","duration_s":0.05,"ts":"..."}
+{"type":"phase","phase":"sync","status":"complete","host":"mini","duration_s":1.2,"ts":"..."}
+{"type":"phase","phase":"exec","status":"started","details":{"command":"pytest -n auto"},"ts":"..."}
+{"type":"result","status":"failed","exit_code":1,"host":"mini","duration_s":4.8,"details":{"exec_duration_s":3.3,"log_file":"~/.rr/logs/run-20260101-120000/output.log","summary":{"passed":45,"failed":2,"skipped":0,"errors":0},"failures":[...]},"ts":"..."}
+```
+
+Keys that can appear in the result `details` include `log_file`, `summary`, `failures`, `no_tests`, `piped_exit_code`, `hint`, `path_rewrites`, `remote_cwd`, `fallback`, and `broken_pipe`. Sync can also emit `warn` (provenance mismatch), `invalidated` (lockfile-triggered directory removal) and `pruned` (stale worktree dir) events, and lock can emit `warn` when it steals a stale or dead-holder lock.
+
 ### State Indicators
 
-Every operation goes through clear phases with consistent visual language:
+In `--pretty` mode, every operation goes through clear phases with consistent visual language:
 
 ```
 PHASE INDICATORS:
@@ -168,16 +194,16 @@ COLORS:
 ### Example: Successful Run
 
 ```bash
-$ rr test
+$ rr test --pretty
 
 ◐ Connecting...
 ● Connected to mini via mini-local                          0.1s
 
-◐ Syncing 234 files...
-● Synced                                                    1.2s
-
 ◐ Acquiring lock...
 ● Lock acquired                                             0.0s
+
+◐ Syncing 234 files...
+● Synced                                                    1.2s
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -197,13 +223,14 @@ $ pytest -n auto
 $ rr test
 
 ◐ Connecting...
-  ○ mini-local                                         timeout (2s)
   ● mini (tailscale)                                        0.3s
-● Connected to mini via mini (tailscale)                    2.3s
+● Connected to mini via mini (tailscale)                    0.8s
 
-◐ Syncing...
+◐ Acquiring lock...
 ...
 ```
+
+Both aliases are dialed at once. The Tailscale alias answered first, so rr waited the 500ms preference window for `mini-local` and then settled. A dead LAN address costs at most that grace period, not a full probe timeout. Alias failures that arrive before a winner is chosen are listed with a `○`.
 
 ### Example: Failed Command with Pytest Formatter
 
@@ -211,8 +238,8 @@ $ rr test
 $ rr test
 
 ● Connected to mini via mini-local                          0.1s
-● Synced (47 files)                                         0.8s
 ● Lock acquired                                             0.0s
+● Synced (47 files)                                         0.8s
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -237,58 +264,55 @@ FAILED tests/test_users.py::test_duplicate - IntegrityError
 
 ```
 
+This per-failure block is what parallel task groups print through `parallel.RenderSummary`. For a single command or task, the same parsed data goes into `details.summary` and `details.failures` in the structured result; the pretty-mode renderer for single runs (`explainRunFailure` in `internal/cli/run.go`) only fires when the stream formatter provides test results, and single runs currently install `GenericFormatter`, which doesn't.
+
 ### Example: Lock Contention
 
 ```bash
 $ rr test
 
 ● Connected to mini via mini-local                          0.1s
-● Synced (12 files changed)                                 0.3s
 
 ◐ Waiting for lock...
   Held by: alice@macbook since 2m ago
 
 ◐ Waiting for lock... (30s)
 ● Lock acquired                                            34.2s
+● Synced (12 files changed)                                 0.3s
 ...
 ```
 
+The lock is taken before sync so rr never overwrites files under a command that another run is still executing.
+
 ### Example: SSH Setup
 
+`rr setup` takes one SSH target (an alias from `~/.ssh/config` or `user@host`) and does not edit rr's config. Hosts are added with `rr host add` or `rr init`.
+
 ```bash
-$ rr setup mini
+$ rr setup dev@192.168.1.50
 
-Configuring SSH access for host: mini
+Setting up SSH for 'dev@192.168.1.50'
 
-◐ Checking for SSH keys...
-● Found key: ~/.ssh/id_ed25519.pub
+✓ Using SSH key: ~/.ssh/id_ed25519 (ed25519)
 
-◐ Testing mini-local...
-✗ mini-local: Permission denied (publickey)
+◐ Testing SSH connection...
+✗ Testing SSH connection
 
-  Your SSH key isn't authorized on this host.
+○ Connection works but authentication failed
 
-? Copy your public key to mini-local? [Y/n] y
+? Copy SSH key to remote host? [Y/n] y
 
-  Enter password for dev@192.168.1.50: ********
+  dev@192.168.1.50's password: ********
 
-● Key copied to mini-local
+● Copying SSH key
+● Verifying passwordless login
 
-◐ Testing mini-local...
-● mini-local: Connected (12ms)
+✓ Setup complete for 'dev@192.168.1.50'
 
-◐ Testing mini (fallback)...
-● mini: Connected (45ms)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-✓ Host 'mini' is ready
-
-  Both connection methods work:
-    mini-local  192.168.1.50    12ms  (LAN)
-    mini        100.64.0.5      45ms  (Tailscale)
-
-  Added to config: .rr.yaml
+You can now:
+  rr init        - Create a config file using this host
+  rr sync        - Sync files to remote
+  rr run <cmd>   - Run commands remotely
 ```
 
 ### Example: Doctor Output
@@ -397,34 +421,23 @@ Every error follows this structure:
 **Lock held:**
 
 ```
-✗ Lock acquisition timed out after 5m
+✗ Lock timeout after 5m0s - someone else is using this remote
 
-  Lock held by: alice@macbook
-  Lock age: 12m (exceeds stale threshold of 10m)
-
-  The lock appears stale. The holder may have crashed.
-
-  To force release:
-    rr run --force-unlock "your command"
-
-  To wait longer:
-    rr run --lock-timeout=15m "your command"
+  Lock holder: <user, pid, command and age from info.json>. Wait for it to
+  finish or run 'rr unlock mini' if it's stuck.
 ```
+
+There is no flag to force or extend a single run's lock wait. Stuck locks are released with `rr unlock`, and the wait is set by `lock.timeout` in `.rr.yaml`. Locks whose holder stopped heartbeating (older than `lock.stale`, default 90s) and locks held by a dead `rr` process on the same machine are reclaimed automatically with a warning.
 
 **Config error:**
 
 ```
-✗ Invalid configuration in .rr.yaml
+✗ task 'ci' step 3 has on_fail='skip' but it needs to be 'stop' or 'continue'
 
-  Line 15: Unknown field 'host' in task definition
-
-    14 │ tasks:
-    15 │   test:
-    16 │     host: mini          ← Did you mean 'hosts'?
-    17 │     run: pytest
-
-  Fix: Rename 'host' to 'hosts' (plural, takes a list)
+  Check your task config in .rr.yaml.
 ```
+
+Validation (`internal/config/validate.go`) checks values after parsing. Unknown keys are ignored by the Viper/mapstructure decode rather than reported with line numbers.
 
 **rsync not found:**
 
@@ -509,29 +522,54 @@ hosts:
     env:
       CUDA_VISIBLE_DEVICES: "0,1"
 
+    # Optional: shell used to run commands (default: $SHELL -l -c)
+    shell: "bash -o pipefail -c"
+
+    # Optional: commands prepended to every command on this host
+    setup_commands:
+      - source ~/.cargo/env
+
+    # Optional: tools that must exist on this host (see rr provision)
+    require: [nvidia-smi]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DEFAULTS
 # Personal default settings
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults:
-  # Which host to use by default (if not specified)
-  host: mini
-
-  # Fall back to local execution if all remotes fail
-  # Useful for CI environments or when traveling
-  local_fallback: false
+  # Local execution fallback: never (default), on-unreachable, or always.
+  # on-unreachable: run locally only when no host can be reached.
+  # always: also run locally when every host is locked (after lock.wait_timeout
+  # if the holder is on this machine). Booleans still parse: true = always.
+  local_fallback: never
 
   # SSH probe timeout
   probe_timeout: 2s
+
+  # Rewrite local absolute paths in commands to the remote project dir
+  rewrite_paths: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGS
+# Run log retention (single runs and parallel tasks)
+# ─────────────────────────────────────────────────────────────────────────────
+
+logs:
+  dir: ~/.rr/logs
+  keep_runs: 10     # per task name; 0 disables run-count cleanup
+  keep_days: 0      # 0 = disabled
+  max_size_mb: 0    # 0 = disabled
 ```
+
+There is no default host setting. Host priority comes from the order of the project's `hosts:` list, or alphabetical order when the project doesn't name hosts.
 
 **Project config** (`.rr.yaml`):
 
 ```yaml
 # .rr.yaml
 # Road Runner project configuration
-# Docs: https://github.com/yourorg/rr#configuration
+# Docs: https://github.com/rileyhilliard/rr/blob/main/docs/configuration.md
 
 # Schema version (for future migrations)
 version: 1
@@ -550,25 +588,52 @@ hosts:
 # Or use a single host (mutually exclusive with hosts:)
 # host: mini
 
+# Overrides defaults.local_fallback from the global config.
+# With a non-never mode and no hosts listed here, rr runs locally.
+local_fallback: on-unreachable
+
+# Overrides defaults.rewrite_paths from the global config
+rewrite_paths: true
+
+# setup is prepended to tasks and ad-hoc commands (after host setup_commands).
+# env applies to tasks: host env < project defaults env < task env.
+defaults:
+  setup:
+    - source .venv/bin/activate
+  env:
+    PYTHONUNBUFFERED: "1"
+
+# Tools every host must have before sync (checked in the requirements phase)
+require: [python3, uv]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SYNC
 # Configure file synchronization behavior
 # ─────────────────────────────────────────────────────────────────────────────
 
 sync:
+  # Translate .gitignore into rsync filter rules (default: true)
+  respect_gitignore: true
+
   # Patterns to exclude from sync (not sent to remote)
-  # Uses rsync pattern syntax
+  # Uses rsync pattern syntax. A custom list replaces the defaults below.
+  # .git, .venv and node_modules are bare patterns because in a linked
+  # worktree .git is a file and node_modules may be a symlink.
   exclude:
-    - .git/
-    - .venv/
+    - .git
+    - .venv
     - __pycache__/
     - "*.pyc"
-    - node_modules/
+    - node_modules
     - .mypy_cache/
     - .pytest_cache/
     - .ruff_cache/
     - .DS_Store
     - "*.log"
+    - .claude/
+    - .cursor/
+    - .aider/
+    - .copilot/
 
   # Patterns to preserve on remote (not deleted even if missing locally)
   # Useful for: virtual environments, downloaded data, build caches
@@ -582,6 +647,21 @@ sync:
   # Common additions: --compress, --info=progress2
   flags: []
 
+  # Delete preserved remote dirs when a lockfile changes locally, so a stale
+  # node_modules/.venv isn't reused. Defaults cover bun, npm, yarn, pnpm,
+  # poetry and pipenv lockfiles.
+  invalidations:
+    - lockfile: bun.lock
+      dirs: [node_modules/]
+
+  # Linked git worktrees sync to "<repo>@<worktree>" instead of "<repo>"
+  # (default: true)
+  worktree_isolation: true
+
+  # After each sync, remove "<repo>@<worktree>" dirs on that host whose
+  # worktree no longer exists locally (default: true). See rr prune.
+  prune_worktrees: true
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LOCK
 # Prevent concurrent executions on shared hosts
@@ -591,11 +671,20 @@ lock:
   # Enable/disable locking (default: true)
   enabled: true
 
-  # How long to wait for a lock before giving up
+  # How long to wait for a single host's lock before giving up
   timeout: 5m
 
-  # Consider a lock stale after this duration (holder probably crashed)
-  stale: 10m
+  # With multiple hosts, how long to cycle through them when all are locked
+  wait_timeout: 1m
+
+  # A lock whose info.json hasn't been touched for this long is stale.
+  # Holders heartbeat every 30s, so this only trips when the holder died.
+  stale: 90s
+
+  # Parent directory for the lock on the remote (lock is <dir>/rr.lock/).
+  # Coordination is path-based: projects share a lock only if they use the
+  # same dir on the same host. Different lock.dir values mean separate locks.
+  dir: /tmp/rr-locks
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TASKS
@@ -638,23 +727,42 @@ tasks:
       - name: build
         run: make build
 
+  # Dependencies run first; a {parallel: [...]} item runs as one concurrent stage
+  release:
+    depends: [{parallel: [lint, typecheck]}, test]
+    run: make release
+
+  # Parallel group: subtasks are spread across hosts by internal/parallel
+  test-all:
+    parallel: [test-unit, test-integration]
+    setup: uv sync        # once per host, before any subtask
+    fail_fast: false
+    max_parallel: 0       # 0 = unlimited
+
+  test-unit:
+    run: pytest tests/unit {args}   # {args} / {args:-default} placeholders
+    pull: [coverage.xml]            # fetched after the command, pass or fail
+
+  test-integration:
+    hosts: [gpu-box]                # pins this subtask, honored in parallel runs too
+    run: pytest tests/integration
+
 # ─────────────────────────────────────────────────────────────────────────────
 # OUTPUT
 # Configure terminal output formatting
 # ─────────────────────────────────────────────────────────────────────────────
 
 output:
+  # Every key in this section is validated at load time but not read
+  # anywhere else yet. Color is on only with --pretty and off with --no-color; test
+  # output is always auto-detected (pytest, jest/vitest, go test).
+
   # Color mode: auto, always, never
-  # "auto" disables color when output is piped
   color: auto
 
-  # Output formatter for command output
-  # auto: detect from command (pytest, jest, go test, etc.)
-  # generic: simple pass-through with error highlighting
-  # pytest, jest, go, cargo: tool-specific formatters
+  # Accepted: auto, generic, pytest, jest, go, cargo (there is no cargo formatter)
   format: auto
 
-  # Show timing for each phase
   timing: true
 
   # Verbosity: quiet, normal, verbose
@@ -693,25 +801,7 @@ rr run "make build"
 
 ### Zero-Config Mode
 
-If no global hosts are configured and user runs `rr run`, we offer to create one:
-
-```bash
-$ rr run "pytest"
-
-No configuration found. Let's set one up.
-
-? SSH host or alias to use: mini-local
-? Add a fallback host? (e.g., Tailscale): mini
-
-Testing connections...
-  ● mini-local: Connected (12ms)
-  ● mini: Connected (48ms)
-
-Created .rr.yaml with host 'mini'
-
-Proceeding with: rr run "pytest"
-...
-```
+There is no interactive setup inside `rr run`. With no hosts in `~/.rr/config.yaml`, `config.ResolveHosts` returns a config error that points at `rr init` (no project config) or `rr host add` (project config present). The exception is local mode: if `local_fallback` is set to a non-`never` mode and there are no hosts, or the project sets `local_fallback` without listing hosts, commands run locally with no sync or lock.
 
 ---
 
@@ -734,7 +824,7 @@ Proceeding with: rr run "pytest"
 
 The killer feature is **single binary distribution**. Users run `brew install rr` or download a binary—no runtime dependencies. This matches the "just works" philosophy.
 
-Go's SSH library means we don't shell out to `ssh`, giving us better error handling, connection pooling, and cross-platform consistency.
+Go's SSH library means probing, locking and command execution don't shell out to `ssh`, giving us better error handling, connection reuse, and cross-platform consistency. File transfer is the exception: `rr sync` and `rr pull` run the system `rsync`, which uses the system `ssh` with a ControlMaster socket under `/tmp/rr-ssh-<uid>` so repeated transfers reuse one connection.
 
 ### System Architecture
 
@@ -751,6 +841,7 @@ flowchart TB
         sync[Sync Engine]
         exec[Command Executor]
         lock[Lock Manager]
+        par[Parallel Orchestrator]
     end
 
     subgraph output["Output Layer"]
@@ -770,11 +861,15 @@ flowchart TB
     end
 
     cmd --> host
+    cmd --> par
     cfg --> cmd
     comp --> cmd
-    host --> sync
+    host --> lock
+    lock --> sync
     host --> exec
-    exec --> lock
+    par --> host
+    par --> lock
+    par --> sync
     sync --> ssh
     exec --> ssh
     exec --> local
@@ -798,36 +893,41 @@ flowchart TB
 **CLI Layer**
 
 - Parse commands and flags using Cobra
-- Load and merge configuration (file → env → flags) using Viper
-- Generate shell completions for task names
+- Load the global and project YAML files with Viper and merge them into a `config.ResolvedConfig` (no environment-variable overrides)
+- Register each task in `.rr.yaml` as a top-level Cobra command at startup, which is how task names show up in completions
+- Rewrite local absolute paths in commands to the remote project dir (`pathrewrite.go`)
+- Emit structured JSON phase and result events, or pretty output with `--pretty` (`phase_reporter.go`, `json.go`)
+- Tee command output to a per-run log and extract test summaries from it (`runlog.go`)
 - Validate inputs before passing to core
 
 **Core Engine**
 
-- **Host Selector**: Probe hosts in order, cache connectivity results, handle fallback
-- **Sync Engine**: Build rsync command with configured excludes/preserves, show progress
-- **Command Executor**: Execute commands via SSH or locally, handle streaming output
-- **Lock Manager**: Acquire/release locks on remote, detect stale locks, handle timeout
+- **Host Selector**: Resolve which hosts the project may use, dial each host's SSH aliases in parallel (earlier aliases preferred), cache the connection, handle local fallback. Multi-host load balancing (try-lock each host, wait when all are busy) lives in `internal/cli/loadbalance.go`.
+- **Sync Engine**: Build the rsync command with excludes/preserves and `.gitignore` filters, invalidate stale install dirs, write the `.rr-source` provenance marker, prune stale worktree dirs, show progress
+- **Command Executor**: Execute commands via SSH or locally, handle streaming output, run task steps
+- **Lock Manager**: Acquire/release the per-host lock, heartbeat while held, reclaim stale and dead-holder locks, handle timeout
+- **Parallel Orchestrator**: Spread a parallel task's subtasks across hosts with a work-stealing queue (`internal/parallel`)
 
 **Output Layer**
 
-- **Stream Handler**: Multiplex stdout/stderr, handle ANSI codes, buffer lines
-- **Formatters**: Parse output for known tools (pytest, jest), extract failures
+- **Stream Handler**: Multiplex stdout/stderr, buffer lines, tee raw output to the run log, survive broken pipes
+- **Formatters**: Parse output for known tools (pytest, jest/vitest, go test), extract counts and failures
 - **TUI Components**: Progress indicators, spinners, colored output using Bubble Tea
 
 **Transport Layer**
 
-- **SSH Client**: Connection pooling, keep-alive, exec/shell modes
-- **Local Executor**: os/exec wrapper for local fallback
+- **SSH Client** (`pkg/sshutil`): Dial using `~/.ssh/config` settings (including ProxyCommand), agent and key-file auth, exec/stream/PTY/interactive/shell modes
+- **Local Executor**: os/exec wrapper for `--local` and local fallback
 
 **Setup & Diagnostics**
 
 - **SSH Key Manager**: Check for keys, generate if needed, run ssh-copy-id
-- **Doctor Checks**: Validate config, test connectivity, check dependencies
+- **Doctor Checks**: Validate config, test connectivity, check dependencies, check remote dirs and stale locks, check `require:` tools, flag worktrees that share a remote dir
+- **Requirements and provisioning**: `internal/require` checks `require:` tools on the remote (cached per host) before sync; `rr provision` installs missing ones with the installers in `internal/exec/provision.go`
 
 ### Package Dependencies
 
-This diagram shows the simplified package dependency graph with key relationships:
+This diagram shows the main internal packages and their key imports. Leaf utility packages (`errors`, `util`, `logger`) are left out:
 
 ```mermaid
 flowchart TB
@@ -839,12 +939,26 @@ flowchart TB
         cli[internal/cli]
     end
 
+    subgraph orchestration["Orchestration"]
+        parallel[parallel]
+        deps[deps]
+    end
+
     subgraph core["Core Packages"]
         host[host]
         sync[sync]
         lock[lock]
         exec[exec]
         config[config]
+        require[require]
+    end
+
+    subgraph features["Feature Packages"]
+        monitor[monitor]
+        doctor[doctor]
+        setup[setup]
+        output[output]
+        ui[ui]
     end
 
     subgraph infra["Infrastructure"]
@@ -853,133 +967,161 @@ flowchart TB
 
     cmd --> cli
 
+    cli --> parallel
+    cli --> deps
     cli --> host
     cli --> sync
     cli --> lock
     cli --> exec
     cli --> config
+    cli --> require
+    cli --> monitor
+    cli --> doctor
+    cli --> setup
+    cli --> output
 
+    parallel --> host
+    parallel --> lock
+    parallel --> sync
+    parallel --> output
+    deps --> exec
+    deps --> host
+
+    host --> config
     host --> sshutil
     sync --> host
     lock --> host
+    exec --> host
+    require --> exec
+    monitor --> host
+    monitor --> lock
+    doctor --> host
+    doctor --> lock
+    output --> ui
 
     style entry fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
     style cli_layer fill:#14532d,stroke:#34d399,stroke-width:2px,color:#dcfce7
+    style orchestration fill:#3b0764,stroke:#c084fc,stroke-width:2px,color:#f3e8ff
     style core fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
+    style features fill:#164e63,stroke:#22d3ee,stroke-width:2px,color:#cffafe
     style infra fill:#831843,stroke:#f472b6,stroke-width:2px,color:#fce7f3
-
-    style cmd fill:#1e3a8a,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
-    style cli fill:#14532d,stroke:#34d399,stroke-width:2px,color:#dcfce7
-    style host fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
-    style sync fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
-    style lock fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
-    style exec fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
-    style config fill:#78350f,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
-    style sshutil fill:#831843,stroke:#f472b6,stroke-width:2px,color:#fce7f3
 ```
 
 **Key dependencies:**
 - `cmd/rr` is the entry point, calls `internal/cli`
-- `cli` orchestrates `host`, `sync`, `lock`, `exec`, and `config`
+- `cli` orchestrates everything; `workflow.go` drives the connect, lock, requirements and sync phases shared by `run`, `exec`, `sync` and tasks
+- `parallel` runs parallel task groups and reuses `host`, `lock` and `sync` per host worker; `parallel/logs` writes run logs for both parallel and single runs
+- `deps` resolves `depends:` chains into stages and runs them through `exec`
 - `host` uses `pkg/sshutil` for SSH operations
-- `sync` and `lock` both depend on `host` for connection management
+- `sync`, `lock`, `exec`, `monitor` and `doctor` all take a `host.Connection`
 
 ### The `rr run` Command Flow
 
-This sequence diagram shows what happens when you run `rr run "make test"`:
+This sequence diagram shows what happens when you run `rr run "make test"`. Phases 1 through 5 live in `SetupWorkflow` (`internal/cli/workflow.go`) and are shared with `exec` (which skips sync), `sync` (which skips execution) and task commands. `Run` in `internal/cli/run.go` handles the rest.
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant CLI as cli/run.go
+    participant CLI as cli/run.go + workflow.go
     participant Config as config
     participant Host as host/selector
-    participant Sync as sync
     participant Lock as lock
-    participant Exec as exec
+    participant Sync as sync
+    participant Exec as sshutil / exec
 
     User->>CLI: rr run "make test"
 
     rect rgb(30, 58, 138)
         Note over CLI,Config: Phase 1: Load Config
-        CLI->>Config: Find() + Load()
-        Config-->>CLI: config
+        CLI->>Config: LoadResolved() + ValidateResolved()
+        Config-->>CLI: global + project config
     end
 
     rect rgb(20, 83, 45)
         Note over CLI,Host: Phase 2: Select Host + Connect
         CLI->>Host: Select(preferredHost)
-        loop Try each SSH alias
-            Host->>Host: ProbeAndConnect(alias)
-            alt Success
-                Note over Host: Return connection
-            else Failure
-                Note over Host: Try next alias
-            end
-        end
-        Host-->>CLI: Connection
-    end
-
-    rect rgb(120, 53, 15)
-        Note over CLI,Sync: Phase 3: Sync Files
-        CLI->>Sync: Sync(conn, workDir, excludes)
-        Sync-->>CLI: files synced
+        Host->>Host: DialAliases (all aliases in parallel, earlier preferred)
+        Host-->>CLI: Connection (or local fallback)
     end
 
     rect rgb(88, 28, 135)
-        Note over CLI,Lock: Phase 4: Acquire Lock
-        CLI->>Lock: Acquire(conn, projectHash)
+        Note over CLI,Lock: Phase 3: Acquire Lock
+        CLI->>Lock: Acquire(conn, lockCfg, command)
         alt Lock acquired
             Lock-->>CLI: Lock handle
+            CLI->>Lock: StartHeartbeat()
         else Lock held by other
-            Lock->>Lock: Wait and retry
+            Lock->>Lock: Poll every 2s until lock.timeout
         end
     end
 
+    rect rgb(55, 65, 81)
+        Note over CLI: Phase 4: Check Requirements
+        CLI->>Exec: require.CheckAll (project + host + task require:)
+    end
+
+    rect rgb(120, 53, 15)
+        Note over CLI,Sync: Phase 5: Sync Files
+        CLI->>Sync: InvalidateStaleDirectories()
+        CLI->>Sync: SyncWithOptions(conn, projectRoot, syncCfg)
+        Sync-->>CLI: synced (+ .rr-source marker, worktree prune)
+    end
+
     rect rgb(131, 24, 67)
-        Note over CLI,Exec: Phase 5: Execute Command
-        CLI->>Exec: ExecStream(command)
-        Exec-->>User: streaming output
+        Note over CLI,Exec: Phase 6: Execute Command
+        CLI->>CLI: RewriteLocalPaths + subdir cd + BuildRemoteCommand
+        CLI->>Exec: ExecStreamContext(fullCmd)
+        Exec-->>User: raw output (teed to ~/.rr/logs/run-*/output.log)
         Exec-->>CLI: exit code
     end
 
     CLI->>Lock: Release()
-    CLI->>User: exit code + summary
+    CLI->>Sync: Pull (only with --pull)
+    CLI->>CLI: attachRunOutcome (summary, failures from run log)
+    CLI->>User: result event (or pretty summary) + exit code
 ```
 
 **Phase summary:**
-1. **Load Config** - Find and parse `.rr.yaml`
-2. **Select Host** - Probe SSH aliases in order, connect to first available
-3. **Sync Files** - rsync local files to remote working directory
-4. **Acquire Lock** - Prevent concurrent execution on shared hosts
-5. **Execute** - Run command, stream output, capture exit code
-6. **Cleanup** - Release lock, return result
+1. **Load Config** - Find and parse `.rr.yaml` (walking up from the cwd) and `~/.rr/config.yaml`
+2. **Select Host** - Dial the host's SSH aliases in parallel, keep the preferred winner
+3. **Acquire Lock** - Take the per-host lock and start the 30s heartbeat
+4. **Check Requirements** - Verify `require:` tools exist on the remote; fail with a pointer to `rr provision`
+5. **Sync Files** - Delete invalidated install dirs, rsync the project root, write `.rr-source`, prune stale worktree dirs
+6. **Execute** - Rewrite local paths, `cd` into the matching subdirectory, run the command, stream output, capture exit code
+7. **Cleanup** - Release lock, pull files if requested, extract test results from the run log, emit the result
+
+Locking happens before sync so a run never rewrites files under another run's command. With more than one host and no `--host`/`--tag`, phases 2 and 3 are merged into `setupWorkflowLoadBalanced` (`internal/cli/loadbalance.go`): each host is connected and `lock.TryAcquire`d in priority order, the first free one wins, and only that host is synced. When every host is locked, the `local_fallback` mode decides: `always` runs locally (after waiting `lock.wait_timeout` if a holder is on this machine), otherwise rr cycles through the locked hosts until `lock.wait_timeout` and then errors. A local fallback is reported loudly (`details.fallback` in the result, repeated warning in pretty mode).
+
+**Path rewriting** (`internal/cli/pathrewrite.go`): unless `rewrite_paths: false`, absolute paths under the local project root in an ad-hoc command are replaced with the remote project dir (`RewriteLocalPaths`, boundary-aware, symlink-aware, tilde dirs become `$HOME` form). Task args are rewritten to `./`-relative form instead (`RewriteArgsToRelative`) because each host may use a different remote dir. Rewrites are reported in `details.path_rewrites`. `checkForeignPaths` warns about remaining `/Users/` or `/home/` paths outside the project, and rejects a command whose leading `cd` targets one of them that exists locally.
+
+**Subdirectory mapping**: when invoked from a subdirectory of the project, ad-hoc commands `cd` into the same subdirectory on the remote (a soft `cd` that falls back to the project root, reported as `details.remote_cwd`). `--cwd` sets it explicitly and fails if it escapes the project root. Named tasks run from the project root.
+
+**Run logs** (`internal/cli/runlog.go`): every run, exec and task tees raw output to `~/.rr/logs/<name>-<timestamp>/output.log` via `logs.OpenRunLog`, using the same directory layout and retention (`logs:` in the global config) as parallel runs. After the command finishes, `attachRunOutcome` reads back the tail of that log and uses `formatters.ExtractTestSummary` and `formatters.ExtractFailures` to fill `details.summary`, `details.failures` and `details.no_tests`. `--tail N` reprints the last N log lines after the result. `rr logs` lists these directories and `rr logs clean` applies retention.
 
 ### Host Selection Flow
 
-The host selector implements a probe-and-select pattern with ordered fallback:
+The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`):
 
 ```mermaid
 flowchart TB
-    start([Select Host]) --> load[Load host config]
-    load --> first_alias[Try first SSH alias]
+    start([Select Host]) --> cached{Cached connection<br/>alive?}
+    cached -->|Yes| done([Return connection])
+    cached -->|No| load[Resolve host<br/>--host, project hosts list, or first global host]
 
-    first_alias --> probe{Probe SSH<br/>timeout 2s}
+    load --> dial[Dial every SSH alias in parallel<br/>probe_timeout each, default 2s]
 
-    probe -->|Success| connected[Connected]
-    probe -->|Timeout/Error| next{More aliases?}
+    dial --> result{Any alias<br/>connected?}
 
-    next -->|Yes| try_next[Try next alias]
-    try_next --> probe
-
-    next -->|No| fallback{Local fallback<br/>enabled?}
+    result -->|Yes| grace[Wait up to 500ms for an<br/>earlier-listed alias to win]
+    grace --> connected[Connected<br/>close losing dials]
+    result -->|All failed| fallback{Local fallback<br/>enabled?}
 
     fallback -->|Yes| local[Use local execution]
-    fallback -->|No| fail[Error: No hosts available]
+    fallback -->|No| fail[Error: every alias failure<br/>aggregated with a suggestion]
 
     connected --> cache[Cache connection]
     local --> cache
-    cache --> done([Return connection])
+    cache --> done
 
     fail --> error([Return error])
 
@@ -989,42 +1131,47 @@ flowchart TB
     style connected fill:#065f46,stroke:#10b981,stroke-width:2px,color:#d1fae5
     style local fill:#78350f,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
     style fail fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fee2e2
-    style probe fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
-    style next fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
+    style cached fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
+    style result fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
     style fallback fill:#374151,stroke:#9ca3af,stroke-width:2px,color:#e5e7eb
 ```
 
 **Selection logic:**
-1. Load configured SSH aliases for the host (e.g., `[mini-local, mini-tailscale]`)
-2. Probe each alias in order with a 2-second timeout
-3. Return first successful connection and cache it
-4. If all fail and `local_fallback: true`, execute locally
-5. Otherwise, return error with diagnostic info
+1. Reuse the cached connection if it is for the requested host and answers a `keepalive@openssh.com` request
+2. Resolve the host: `--host`, else the project's `hosts:` list (or `host:`), else all global hosts in alphabetical order
+3. Dial all of the host's SSH aliases at once (e.g., `[mini-local, mini-tailscale]`) with `probe_timeout` (default 2s, `--probe-timeout` overrides)
+4. If a later alias connects first, wait up to 500ms (`DefaultPreferenceGrace`) for an earlier one, so LAN beats VPN when both work without a dead LAN address adding a full timeout
+5. If all fail and `local_fallback` is `on-unreachable` or `always`, execute locally
+6. Otherwise, return one error listing every alias failure
+
+The same `DialAliases` path backs the monitor's connection pool, so failover behaves the same in `rr run` and `rr monitor`. Choosing between hosts (as opposed to aliases of one host) is done by the load-balanced workflow described above, and for parallel tasks by `internal/parallel`.
 
 ### Lock Management
 
-Locking prevents concurrent runs on shared remotes. The lock is a directory on the remote host (atomic mkdir) containing metadata about the lock holder.
+Locking prevents concurrent runs on shared remotes. The lock is a directory on the remote host (atomic mkdir) containing metadata about the lock holder. There is one lock per host, not per project: only one rr command runs on a host at a time, since rr jobs usually saturate the machine.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CheckLock: Acquire requested
+    [*] --> CheckDeadHolder: Acquire requested
 
-    CheckLock --> CheckStale: Lock exists
-    CheckLock --> CreateLock: Lock doesn't exist
+    CheckDeadHolder --> RemoveLock: Holder is a dead rr process on this machine
+    CheckDeadHolder --> CheckStale: Otherwise
 
-    CheckStale --> RemoveStaleLock: Lock age > stale threshold
-    CheckStale --> WaitForLock: Lock is fresh
+    CheckStale --> RemoveLock: info.json mtime older than lock.stale
+    CheckStale --> CreateLock: Lock is fresh or absent
 
-    RemoveStaleLock --> CreateLock: Stale lock removed
-
-    WaitForLock --> CheckLock: Poll interval elapsed
-    WaitForLock --> Timeout: timeout exceeded
+    RemoveLock --> CheckDeadHolder: Lock removed (warning emitted)
 
     CreateLock --> LockAcquired: mkdir succeeds
-    CreateLock --> CheckLock: mkdir fails (race)
+    CreateLock --> Wait: mkdir fails (held)
 
-    LockAcquired --> [*]: Work complete → Release
-    Timeout --> [*]: Error returned
+    Wait --> CheckDeadHolder: 2s elapsed
+    Wait --> Timeout: lock.timeout exceeded
+
+    LockAcquired --> Heartbeat: StartHeartbeat()
+    Heartbeat --> Heartbeat: touch info.json every 30s
+    Heartbeat --> [*]: Release() stops heartbeat, rm -rf lock dir
+    Timeout --> [*]: Error names the holder and suggests rr unlock
 
     style LockAcquired fill:#dcfce7,stroke:#10b981,stroke-width:2px
     style Timeout fill:#fee2e2,stroke:#ef4444,stroke-width:2px
@@ -1033,59 +1180,100 @@ stateDiagram-v2
 **Lock file structure:**
 
 ```
-/tmp/rr-<project-hash>.lock/
-├── info.json    # {"user": "alice", "host": "macbook", "started": "..."}
-└── pid          # PID on remote (for potential kill)
+/tmp/rr-locks/rr.lock/     # <lock.dir>/rr.lock, lock.dir defaults to /tmp/rr-locks
+└── info.json              # {"user", "hostname", "started", "pid", "command", "machine_token"}
 ```
+
+- **Staleness** is judged by `info.json`'s mtime, falling back to its `started` field when `stat` fails. The holder's heartbeat touches the file every 30s and stops after 3 consecutive SSH failures, so a lock only goes stale (default 90s) when the holder is gone.
+- **Dead-holder reclaim**: when `info.json` shows the lock came from this machine (matched by a per-machine token, not hostname alone) and its PID is no longer running, the lock is removed immediately instead of waiting for the stale threshold. The info file is re-read just before removal to avoid deleting a lock that changed hands.
+- **Non-blocking variant**: `lock.TryAcquire` returns `lock.ErrLocked` at once. The load-balanced workflow uses it to move to the next host.
+- **Parallel runs**: each host worker takes the lock with the blocking `Acquire` before its first sync, holds it for the whole run, and calls `UpdateCommand` as each subtask starts, so `rr monitor` and lock errors show the current subtask.
+- **Manual release**: `rr unlock [host]` (or `--all`) calls `lock.ForceRelease`. `rr doctor` reports stale locks.
+
+### Sync Details
+
+`sync.SyncWithOptions` (`internal/sync/sync.go`) wraps the rsync call with a few steps that keep the remote mirror honest:
+
+1. **Lockfile invalidation** (`InvalidateStaleDirectories`, run just before sync): for each `sync.invalidations` entry whose lockfile changed since the last sync, the listed remote dirs (usually preserved `node_modules/` or `.venv/`) are deleted so the next install starts clean.
+2. **Provenance check**: the remote root holds a `.rr-source` marker (`internal/sync/marker.go`) with the source path, hostname, branch, HEAD and worktree of the last sync. If it names a different tree or machine, sync emits a `source_mismatch` warning before overwriting. rsync is told to protect the marker so `--delete` never removes it.
+3. **rsync**: `BuildArgs` combines excludes, preserves (protected from `--delete`), extra `flags`, and, with `respect_gitignore`, explicit `+`/`-` filter rules translated from `.gitignore` so negations behave like git's.
+4. **Marker write**: `.rr-source` is rewritten after a successful sync.
+5. **Worktree prune**: with `sync.prune_worktrees` (default on), `PruneStaleWorktrees` removes sibling `<repo>@<worktree>` dirs on that host whose worktree git no longer lists locally. It only acts when the host `dir` ends in `${PROJECT}`, skips dirs whose marker came from another machine, and never fails the sync.
+
+**Worktree isolation** (`internal/config/expand.go`): in a linked git worktree, `${PROJECT}` expands to `<repo>@<worktree>` so each worktree syncs to its own remote dir instead of clobbering the main checkout. `sync.worktree_isolation: false` turns this off. `rr status` shows the remote dir per host, `rr doctor` warns when a worktree shares the main checkout's dir, and `rr prune [--dry-run] [--host]` cleans hosts that haven't been synced to since a worktree was removed.
+
+**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run.
+
+### Tasks and Dependencies
+
+Tasks from `.rr.yaml` are registered as Cobra commands at startup (`registerTasksFromConfig` in `internal/cli/root.go`), so `rr test` works like a built-in. `internal/cli/task.go` handles three shapes:
+
+- **Single command or steps**: runs through the same `SetupWorkflow` as `rr run`, then `exec.ExecuteTask`. Steps stop on the first failure unless `on_fail: continue`. Extra CLI args are shell-quoted and either substituted into `{args}`/`{args:-default}` or appended; compound commands without a placeholder reject appended args.
+- **`depends:`**: `internal/deps` resolves the chain into sequential stages (a `{parallel: [...]}` item is one concurrent stage), detects cycles, and runs it. `--skip-deps` and `--from <task>` trim the plan.
+- **`parallel:`**: handed to `internal/parallel` (next section). Nested parallel references are flattened first.
+
+### Parallel Task Execution
+
+`parallel.Orchestrator` (`internal/parallel/orchestrator.go`) runs a parallel group's subtasks across hosts:
+
+- **Work-stealing queue**: subtasks go into a shared channel and one worker per host pulls from it, so fast hosts take more work. Workers are capped by `max_parallel` and the number of subtasks. After each host's first task, slower hosts wait briefly before taking another so faster hosts get first pick.
+- **Per-host setup**: on its first task a worker connects, takes that host's lock (held until the run ends), syncs once, and runs the group's `setup:` command once. A setup failure fails that host's subtasks.
+- **Host pins**: a subtask with `hosts:` only runs on those hosts. `pickWorkerHosts` adds a worker for a pinned host even when it falls outside the first `max_parallel` hosts; workers that can't run a pinned subtask put it back on the queue; if none of its hosts is available it fails with the restriction named. `--host`/`--tag` that excludes every allowed host fails before the run starts.
+- **Failover**: a host whose connection fails is marked unavailable and its task is requeued for another host. The run fails only when no host can take the remaining work. `fail_fast` cancels the rest on the first failure.
+- **No hosts**: with no remote hosts (local mode) subtasks run locally, one after another.
+- **Output and logs**: `OutputManager` renders progress, stream, verbose or quiet modes. Each subtask's output is saved to `~/.rr/logs/<task>-<timestamp>/<subtask>_<index>.log` with a `summary.json`, and the structured result carries per-subtask failures and a `no_tests` list.
+
+`rr run --repeat N` and `rr <task> --repeat N` use the same orchestrator to run one command N times across hosts for flake hunting.
+
+### Requirements and Provisioning
+
+`require:` lists at project, host and task level are merged and checked in the requirements phase, after the lock and before sync (`requirementsPhase` in `internal/cli/workflow.go`). `internal/require` runs the checks over SSH and caches results per host for the process lifetime. A missing tool fails the run with a pointer to `rr provision` or `--skip-requirements`. `rr provision` checks every project host (or `--host`), and with confirmation (or `--yes`) installs missing tools using the built-in installers in `internal/exec/provision.go`; `--check` reports without installing.
 
 ### SSH Key Setup Flow
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant CLI
-    participant KeyMgr as Key Manager
-    participant SSH
+    participant CLI as cli/setup.go
+    participant KeyMgr as internal/setup
+    participant SSH as host.Probe
 
-    User->>CLI: rr setup mini
-    CLI->>KeyMgr: CheckLocalKeys()
+    User->>CLI: rr setup dev@mini
+    CLI->>KeyMgr: FindLocalKeys()
 
     alt No keys found
-        KeyMgr->>User: Generate new key? [Y/n]
+        KeyMgr->>User: Generate one now? [Y/n]
         User->>KeyMgr: Y
         KeyMgr->>KeyMgr: ssh-keygen -t ed25519
-        KeyMgr->>User: Key generated
     end
 
-    loop For each SSH alias in host
-        CLI->>SSH: TestConnection(alias)
-        alt Auth success
-            SSH-->>CLI: Connected
-            CLI->>User: ● alias: Connected
-        else Auth failure
-            SSH-->>CLI: Permission denied
-            CLI->>User: Copy key to alias? [Y/n]
-            User->>CLI: Y
-            CLI->>KeyMgr: CopyKey(alias)
-            KeyMgr->>User: Enter password:
-            User->>KeyMgr: ********
-            KeyMgr->>KeyMgr: ssh-copy-id
-            KeyMgr-->>CLI: Key copied
-            CLI->>SSH: TestConnection(alias)
-            SSH-->>CLI: Connected
-        end
+    CLI->>KeyMgr: GetPreferredKey() (ed25519 > ecdsa > rsa)
+    CLI->>SSH: Probe(target, 10s)
+
+    alt Auth failure, or TestPasswordlessAuth fails
+        CLI->>User: Copy SSH key to remote host? [Y/n]
+        User->>CLI: Y
+        CLI->>KeyMgr: CopyKey(target, key)
+        KeyMgr->>User: ssh-copy-id password prompt
+        User->>KeyMgr: ********
+        KeyMgr-->>CLI: Key copied
+        CLI->>KeyMgr: TestPasswordlessAuth(target)
+    else Connection refused / timeout
+        CLI->>User: Error with suggestion
     end
 
-    CLI->>User: ✓ Host 'mini' is ready
+    CLI->>User: ✓ Setup complete
 ```
 
 **Security decisions:**
 
 1. **No passwords in config**: SSH keys only. This is a security requirement, not a convenience tradeoff.
 
-2. **ssh-copy-id for key copying**: We shell out to ssh-copy-id rather than reimplementing. It handles edge cases (authorized_keys permissions, creating .ssh directory) correctly.
+2. **ssh-copy-id for key copying**: We shell out to ssh-copy-id rather than reimplementing. It handles edge cases (authorized_keys permissions, creating .ssh directory) correctly. When it isn't installed, `CopyKeyManual` prints the manual steps.
 
-3. **Key generation**: Prefer ed25519, fall back to rsa if ed25519 unavailable (old systems).
+3. **Key generation**: New keys are always ed25519. Existing keys are picked in the order ed25519, ecdsa, rsa.
+
+4. **Host key checking**: `pkg/sshutil` verifies host keys against `known_hosts` by default. `--no-strict-host-key-checking` turns this off for CI.
 
 ---
 
@@ -1094,57 +1282,89 @@ sequenceDiagram
 | Component           | Library                                                                                                           | Rationale                                            |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | CLI framework       | [Cobra](https://github.com/spf13/cobra)                                                                           | Industry standard, great docs, built-in completions  |
-| Config management   | [Viper](https://github.com/spf13/viper)                                                                           | Pairs with Cobra, handles file + env + flags merging |
+| Config management   | [Viper](https://github.com/spf13/viper)                                                                           | Pairs with Cobra, reads the YAML config files        |
 | SSH                 | [golang.org/x/crypto/ssh](https://pkg.go.dev/golang.org/x/crypto/ssh)                                             | Official Go SSH implementation                       |
 | SSH config parsing  | [kevinburke/ssh_config](https://github.com/kevinburke/ssh_config)                                                 | Parse ~/.ssh/config for user settings                |
 | TUI/Styling         | [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [Lip Gloss](https://github.com/charmbracelet/lipgloss) | Modern, handles terminal edge cases                  |
 | Interactive prompts | [Huh](https://github.com/charmbracelet/huh)                                                                       | Part of Charm ecosystem, for setup wizard            |
 | YAML                | [gopkg.in/yaml.v3](https://pkg.go.dev/gopkg.in/yaml.v3)                                                           | Standard Go YAML library                             |
-| Schema validation   | [gojsonschema](https://github.com/xeipuuv/gojsonschema)                                                           | Validate config with helpful errors                  |
 | Testing             | [testify](https://github.com/stretchr/testify)                                                                    | Assertions and mocking                               |
 
 ---
 
 ## Project Structure
 
+Test files are omitted. Packages with a `testing/` subdirectory hold fakes for other packages' tests.
+
 ```
 rr/
 ├── cmd/
 │   └── rr/
-│       └── main.go              # Entry point
+│       └── main.go              # Entry point, sets version info, calls cli.Execute()
 ├── internal/
-│   ├── cli/                     # Cobra command definitions
-│   │   ├── root.go
-│   │   ├── run.go
-│   │   ├── exec.go
-│   │   ├── sync.go
-│   │   ├── setup.go
-│   │   ├── status.go
-│   │   ├── monitor.go
-│   │   ├── doctor.go
-│   │   └── init.go
+│   ├── cli/                     # Cobra commands and workflow glue
+│   │   ├── root.go              # Root command, global flags, task registration
+│   │   ├── commands.go          # Command definitions (run, exec, sync, pull, unlock, ...)
+│   │   ├── workflow.go          # SetupWorkflow: config, connect, lock, requirements, sync
+│   │   ├── loadbalance.go       # Multi-host connect + try-lock, all-locked handling
+│   │   ├── run.go               # rr run / exec execution and result reporting
+│   │   ├── task.go              # Named tasks, steps, depends, args
+│   │   ├── parallel.go          # Parallel task groups (wraps internal/parallel)
+│   │   ├── pathrewrite.go       # Local-to-remote path rewriting
+│   │   ├── runlog.go            # Per-run log tee, test summary extraction, --tail
+│   │   ├── phase_reporter.go    # Structured vs pretty phase reporting
+│   │   ├── json.go              # JSON phase events and envelopes, error codes
+│   │   ├── sync.go, pull.go, prune.go, unlock.go
+│   │   ├── setup.go, init.go, host.go, provision.go
+│   │   ├── status.go, doctor.go, fix.go
+│   │   ├── monitor.go, monitor_once.go
+│   │   ├── logs.go, update.go, version.go
+│   │   └── argcheck.go, flags.go, sigpipe_*.go
 │   ├── config/                  # Configuration loading
-│   │   ├── config.go
-│   │   ├── schema.go
-│   │   ├── validate.go
-│   │   └── expand.go            # Variable expansion
+│   │   ├── types.go             # Config structs and defaults
+│   │   ├── loader.go            # Find, load, resolve hosts and local_fallback
+│   │   ├── validate.go          # Validation, reserved task names
+│   │   ├── expand.go            # ${PROJECT}/${USER}/${HOME}, worktree naming, {args}
+│   │   ├── tasks.go             # Task lookup, env/setup merging
+│   │   └── update.go            # In-place YAML edits (e.g. add setup_commands)
 │   ├── host/                    # Host selection
-│   │   ├── selector.go
-│   │   └── probe.go
+│   │   ├── selector.go          # Selector, caching, local fallback, tag selection
+│   │   ├── dial.go              # Parallel alias dialing with preference grace
+│   │   ├── probe.go             # Probe, categorized ProbeError
+│   │   ├── cache.go             # Connection cache
+│   │   └── validate.go
 │   ├── sync/                    # rsync wrapper
-│   │   ├── sync.go
+│   │   ├── sync.go              # Sync, rsync args, .gitignore filters, invalidations
+│   │   ├── marker.go            # .rr-source provenance marker
+│   │   ├── prune.go             # Stale worktree dir pruning
+│   │   ├── pull.go              # rsync from remote to local
+│   │   ├── rsync.go             # rsync discovery and version checks
 │   │   └── progress.go
 │   ├── exec/                    # Command execution
-│   │   ├── executor.go
-│   │   ├── ssh.go
-│   │   └── local.go
+│   │   ├── executor.go          # Missing-tool detection
+│   │   ├── task.go              # Task/step execution, BuildRemoteCommand
+│   │   ├── local.go             # Local execution
+│   │   ├── path.go              # Remote PATH probing
+│   │   └── provision.go         # Tool installers for rr provision
 │   ├── lock/                    # Lock management
-│   │   └── lock.go
+│   │   ├── lock.go              # Acquire, TryAcquire, heartbeat, stale detection
+│   │   ├── info.go              # info.json holder metadata
+│   │   ├── machinetoken.go      # Per-machine token for dead-holder detection
+│   │   ├── pid_unix.go, pid_windows.go
+│   │   └── errors.go
+│   ├── parallel/                # Parallel task orchestration
+│   │   ├── orchestrator.go      # Work-stealing queue, host workers, requeue
+│   │   ├── worker.go            # Per-host connect, lock, sync, setup, exec
+│   │   ├── output.go            # Progress/stream/verbose/quiet output modes
+│   │   ├── summary.go           # Result summary rendering
+│   │   ├── types.go
+│   │   └── logs/                # Run log directories and retention (all runs)
+│   ├── deps/                    # depends: resolution into stages and execution
+│   ├── require/                 # require: checks with per-host cache
 │   ├── setup/                   # SSH key setup
 │   │   ├── keys.go
 │   │   └── copy.go
-│   ├── doctor/                  # Diagnostics
-│   │   └── checks.go
+│   ├── doctor/                  # Diagnostics (config, ssh, hosts, deps, remote, path, requirements, worktree)
 │   ├── monitor/                 # Host monitoring dashboard
 │   │   ├── model.go             # Bubble Tea model and state
 │   │   ├── view.go              # List view, header, help overlay
@@ -1157,28 +1377,31 @@ rr/
 │   │   ├── alerts.go            # Threshold alert state machine
 │   │   ├── history.go           # Ring buffers for sparklines
 │   │   └── graphs.go            # Braille sparkline rendering
-│   ├── output/                  # Output formatting
-│   │   ├── stream.go
-│   │   ├── formatter.go
-│   │   ├── state.go             # Progress state management
+│   ├── output/                  # Output handling
+│   │   ├── stream.go            # StreamHandler, line buffering, log tee
+│   │   ├── formatter.go         # Formatter interface, Generic/Passthrough formatters
+│   │   ├── state.go             # Phase tracking
 │   │   └── formatters/
-│   │       ├── generic.go
+│   │       ├── detect.go        # Framework detection, summary/failure extraction
 │   │       ├── pytest.go
 │   │       ├── jest.go
 │   │       └── gotest.go
-│   └── ui/                      # TUI components
-│       ├── spinner.go
-│       ├── progress.go
-│       └── prompt.go
+│   ├── ui/                      # TUI components (spinners, progress, phase display, host picker)
+│   ├── errors/                  # Structured errors with codes and suggestions
+│   ├── logger/                  # Minimal logging interface
+│   └── util/                    # Shell quoting, string helpers
 ├── pkg/                         # Potentially reusable packages
-│   └── sshutil/
+│   └── sshutil/                 # SSH client, ~/.ssh/config parsing, ProxyCommand
 ├── configs/
-│   └── schema.json              # JSON Schema for validation
-├── completions/                 # Generated shell completions
+│   └── schema.json              # JSON Schema for .rr.yaml (editor support, not used at runtime)
+├── completions/                 # Generated shell completions (bash, zsh, fish, powershell)
+├── scripts/                     # install.sh, e2e-test.sh, ci-ssh-server.sh, completions
+├── tests/integration/           # Integration tests (need an SSH host)
 ├── docs/
 │   ├── configuration.md
-│   ├── formatters.md
-│   └── troubleshooting.md
+│   ├── troubleshooting.md
+│   ├── ssh-setup.md
+│   └── examples/
 ├── .goreleaser.yaml
 ├── go.mod
 └── README.md
@@ -1188,7 +1411,7 @@ rr/
 
 ## Output Formatter Architecture
 
-Formatters transform raw command output into structured, readable summaries.
+Formatters turn raw test-runner output into counts and structured failures. Live output is never rewritten by a test formatter: structured mode passes stdout/stderr through raw, and `--pretty` only applies `GenericFormatter` (error-line highlighting). Test parsing happens after the command exits, against the saved output.
 
 ```mermaid
 flowchart LR
@@ -1197,89 +1420,106 @@ flowchart LR
         stderr[stderr stream]
     end
 
-    subgraph formatter["Formatter Pipeline"]
-        detect[Auto-detect<br/>tool type]
-        parse[Parse output<br/>line by line]
-        extract[Extract<br/>failures/errors]
-        summarize[Build<br/>summary]
+    subgraph live["Live"]
+        stream[StreamHandler]
+        term[Terminal<br/>raw, or Generic in --pretty]
+        log[Run log<br/>~/.rr/logs/.../output.log]
     end
 
-    subgraph output["Formatted Output"]
-        live[Live output<br/>passthrough]
-        summary[Failure<br/>summary]
+    subgraph post["After exit"]
+        detect[detectFormatter<br/>command + output score]
+        parse[Replay lines through<br/>pytest / jest / gotest]
+        extract[Counts, failures,<br/>no-tests evidence]
     end
 
-    stdout --> detect
-    stderr --> detect
+    subgraph result["Result"]
+        details[details.summary<br/>details.failures<br/>details.no_tests]
+    end
+
+    stdout --> stream
+    stderr --> stream
+    stream --> term
+    stream --> log
+    log --> detect
     detect --> parse
-    parse --> live
     parse --> extract
-    extract --> summarize
-    summarize --> summary
+    extract --> details
 
     style input fill:#fef3c7,stroke:#f59e0b,stroke-width:2px
-    style formatter fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
-    style output fill:#dcfce7,stroke:#10b981,stroke-width:2px
+    style live fill:#dbeafe,stroke:#3b82f6,stroke-width:2px
+    style post fill:#f3e8ff,stroke:#a855f7,stroke-width:2px
+    style result fill:#dcfce7,stroke:#10b981,stroke-width:2px
 ```
+
+For single commands and tasks, `attachRunOutcome` (`internal/cli/runlog.go`) reads the tail of the run log. For parallel groups, each subtask's captured output goes through `formatters.ExtractFailures` and `formatters.DetectNoTests` in `internal/cli/parallel.go`, and pretty mode renders failures with `parallel.RenderSummary`.
 
 ### Formatter Interface
 
+From `internal/output/formatter.go`:
+
 ```go
 type Formatter interface {
-    // Name returns the formatter identifier
+    // Name returns the formatter identifier.
     Name() string
 
-    // Detect returns confidence (0-100) this formatter handles the output
-    Detect(command string, initialOutput []byte) int
+    // ProcessLine transforms a single line of output.
+    ProcessLine(line string) string
 
-    // ProcessLine handles a single line of output
-    ProcessLine(line string) (display string, data *LineData)
-
-    // Summary generates the final summary after command completes
-    Summary(exitCode int) *Summary
+    // Summary generates a final summary after command completion.
+    Summary(exitCode int) string
 }
 
-type LineData struct {
-    Type     LineType  // Normal, Error, Failure, Pass, Skip
+// Optional: formatters that track test results.
+type TestSummaryProvider interface {
+    GetTestFailures() []TestFailure
+    GetTestCounts() (passed, failed, skipped, errors int)
+}
+
+// Optional: positive evidence that the runner collected zero tests.
+type NoTestsReporter interface {
+    RanNothing() bool
+}
+
+type TestFailure struct {
     TestName string
-    FilePath string
+    File     string
     Line     int
     Message  string
 }
-
-type Summary struct {
-    Passed   int
-    Failed   int
-    Skipped  int
-    Failures []Failure
-}
 ```
+
+The pytest, jest (also matches vitest) and go test formatters in `internal/output/formatters/` implement all three, plus `Detect(command string, output []byte) int`.
 
 ### Auto-Detection Logic
 
+From `internal/output/formatters/detect.go`:
+
 ```go
-func DetectFormatter(command string, output []byte) Formatter {
-    // Check command first
-    if strings.Contains(command, "pytest") {
-        return &PytestFormatter{}
-    }
-    if strings.Contains(command, "jest") || strings.Contains(command, "vitest") {
-        return &JestFormatter{}
-    }
-    if strings.Contains(command, "go test") {
-        return &GoTestFormatter{}
+func detectFormatter(command string, rawOutput []byte) output.Formatter {
+    formatters := []detectorFormatter{
+        NewPytestFormatter(),
+        NewGoTestFormatter(),
+        NewJestFormatter(),
     }
 
-    // Fall back to output detection
+    var bestFormatter output.Formatter
+    bestScore := 0
     for _, f := range formatters {
-        if f.Detect("", output) > 50 {
-            return f
+        if score := f.Detect(command, rawOutput); score > bestScore {
+            bestScore = score
+            bestFormatter = f
         }
     }
 
-    return &GenericFormatter{}
+    // Only return if we have a reasonable confidence
+    if bestScore >= 50 {
+        return bestFormatter
+    }
+    return nil
 }
 ```
+
+Each `Detect` scores both the command string and the output. The exported helpers built on it are `ExtractTestSummary`, `ExtractFailures`, `DetectNoTests` and `FormatFailureSummary`. `no_tests` needs positive evidence in the output (for example pytest's `no tests ran`), and commands using flags meant to run nothing (`--collect-only`, `--passWithNoTests`, `--listTests`, ...) are exempt.
 
 ---
 
@@ -1287,37 +1527,30 @@ func DetectFormatter(command string, output []byte) Formatter {
 
 ### Release Artifacts
 
-Each release produces:
+GoReleaser (`.goreleaser.yaml`) builds linux, darwin and windows for amd64 and arm64 with `CGO_ENABLED=0`. Each release produces:
 
-- `rr-darwin-amd64` (macOS Intel)
-- `rr-darwin-arm64` (macOS Apple Silicon)
-- `rr-linux-amd64`
-- `rr-linux-arm64`
-- `rr-windows-amd64.exe`
-- SHA256 checksums
-- Homebrew formula
-- Shell completions (bash, zsh, fish)
+- `rr_<os>_<arch>.tar.gz` archives (`.zip` on Windows), each with the binary, README, LICENSE and `completions/`
+- `checksums.txt`
+- A Homebrew cask pushed to `rileyhilliard/homebrew-tap`
 
 ### Installation Methods
 
 ```bash
 # Homebrew (macOS/Linux) - recommended
-brew install yourorg/tap/rr
+brew install rileyhilliard/tap/rr
 
 # Go install
-go install github.com/yourorg/rr@latest
+go install github.com/rileyhilliard/rr/cmd/rr@latest
 
-# Direct download
-curl -sSL https://get.rr.dev | sh
+# Install script (macOS/Linux)
+curl -sSL https://raw.githubusercontent.com/rileyhilliard/rr/main/scripts/install.sh | bash
 
-# Manual
-curl -LO https://github.com/yourorg/rr/releases/latest/download/rr-$(uname -s)-$(uname -m)
-chmod +x rr-* && sudo mv rr-* /usr/local/bin/rr
+# Manual: download rr_<os>_<arch>.tar.gz from the GitHub releases page
 ```
 
 ### Shell Completions
 
-Generated automatically and included in releases:
+Pre-generated completions ship in `completions/` (built by `scripts/generate-completions.sh`), and `rr completion` generates them on demand:
 
 ```bash
 # After install, add to shell config:
@@ -1329,14 +1562,18 @@ echo 'eval "$(rr completion zsh)"' >> ~/.zshrc
 
 # Fish
 rr completion fish > ~/.config/fish/completions/rr.fish
+
+# PowerShell
+rr completion powershell | Out-String | Invoke-Expression
 ```
 
 Completions include:
 
 - All commands and subcommands
-- Task names from current directory's config
-- Host names from config
-- Flag values where applicable
+- Task names from the current directory's config (tasks are registered as commands at startup)
+- Flag names
+
+Host names and flag values are not completed; there are no custom completion functions.
 
 ---
 
@@ -1803,7 +2040,7 @@ Anything else falls back to the Linux command path, which degrades to whatever s
 | rsync not available on target    | Low        | High   | Check in `rr doctor`, clear install instructions          |
 | SSH config parsing edge cases    | Medium     | Medium | Fall back gracefully, allow explicit user@host            |
 | Windows SSH support              | Medium     | Low    | Windows is lower priority; document WSL as alternative    |
-| Output formatter false positives | Medium     | Low    | Auto-detect has confidence threshold, `--format` override |
+| Output formatter false positives | Medium     | Low    | Auto-detect needs a score of 50+; parsing only feeds `details`, never rewrites live output |
 | Lock file permission issues      | Low        | High   | Document in troubleshooting, `rr doctor` checks           |
 | Name collision (`rr`)            | Low        | Medium | Check for conflicts at install, document alternatives     |
 
@@ -1816,16 +2053,14 @@ Resolved:
 - ✅ SSH keys only, no password support — security requirement
 - ✅ Config file name: `.rr.yaml`
 - ✅ Task invocation: `rr <taskname>` not `rr task <name>`
+- ✅ Pulling artifacts back: shipped as `rr pull`, `--pull`, and a task-level `pull:` list (one-way rsync, no bidirectional sync)
+- ✅ Multi-host parallelism: shipped as `parallel:` task groups spread across hosts, plus `--repeat N`. Running the same command on every host at once (fleet-style) is still out of scope.
 
 Still open:
 
 1. **Project naming**: `rr` is short but may conflict with Mozilla rr (record-replay debugger). Same namespace concerns as `fd` vs `find`. Alternatives if needed: `rem`, `rrun`, `offload`. Decision: Ship as `rr`, rename if conflicts prove problematic.
 
-2. **Bidirectional sync**: Should we support pulling artifacts back (coverage reports, build outputs)? Recommendation: Not in v1. Add `rr pull` in v2 if requested.
-
-3. **Watch mode**: Auto-sync on file changes? Recommendation: Not in v1. Mutagen does this well; we're solving a different problem.
-
-4. **Multi-host parallel**: Run same command on multiple hosts? Recommendation: Not in v1. Different use case (closer to Ansible territory).
+2. **Watch mode**: Auto-sync on file changes? Recommendation: Not in v1. Mutagen does this well; we're solving a different problem.
 
 ---
 
@@ -1841,16 +2076,19 @@ PRIMARY COMMANDS
   run <cmd>           Sync files and execute command on remote
   exec <cmd>          Execute command without syncing
   sync                Sync files only
+  pull <patterns>     Pull files from remote to local
   <task>              Run a named task from config
+  tasks               List tasks defined in config
 
 SETUP COMMANDS
   init                Create config file with guided prompts
-  setup <host>        Configure SSH key authentication for host
+  setup <target>      Configure SSH key authentication for an SSH alias or user@host
+  provision           Install tools listed under require: on remote hosts
 
 STATUS COMMANDS
-  status              Show selected host and connectivity
-  monitor             Real-time dashboard of all host metrics
-  doctor              Run diagnostic checks
+  status              Show selected host, connectivity and remote dirs
+  monitor             Real-time dashboard of all host metrics (--once [--json] for a snapshot)
+  doctor              Run diagnostic checks (--fix, --path, --requirements, --json)
 
 HOST MANAGEMENT
   host list           List configured hosts (alias: ls)
@@ -1858,15 +2096,34 @@ HOST MANAGEMENT
   host remove <name>  Remove a host (alias: rm)
 
 MAINTENANCE
+  unlock [host]       Release a stuck lock (--all for every project host)
+  prune               Remove remote dirs of deleted git worktrees (--dry-run, --host)
+  logs                List run log directories (logs clean applies retention)
   update              Check for and install latest version
+  completion <shell>  Generate completions (bash, zsh, fish, powershell)
 
 GLOBAL FLAGS
       --config string                 Config file (default is .rr.yaml)
+  -p, --pretty                        Human-readable output with spinners and colors (default is structured JSON)
+  -m, --machine                       No-op, kept for compatibility (structured is the default)
+      --no-phases                     Suppress intermediate phase events; the final result event is still emitted
       --no-color                      Disable colored output
       --no-strict-host-key-checking   Disable SSH host key verification (insecure, for CI/automation only)
   -q, --quiet                         Suppress non-essential output
   -v, --verbose                       Verbose output
   -h, --help                          Show help
+
+RUN/EXEC FLAGS
+      --host string            Target host name
+      --tag string             Select host by tag
+      --local                  Force local execution
+      --cwd string             Remote subdirectory to run in (relative to project root)
+      --probe-timeout string   SSH probe timeout
+      --pull stringArray       Pull files from remote after the command
+      --pull-dest string       Destination for pulled files
+      --tail int               Print the last N lines of the run log after completion
+      --skip-requirements      Skip require: checks
+      --repeat int             (run only) Run N times in parallel across hosts
 
 EXAMPLES
   # Sync and run a command

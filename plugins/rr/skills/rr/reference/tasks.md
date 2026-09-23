@@ -21,14 +21,30 @@ Run with: `rr test`, `rr build`
 
 ## Task Arguments
 
-Extra arguments are appended to single-command tasks:
+Extra arguments are appended to single-command tasks. Flag-like args must come after `--`, because rr parses flags first:
 
 ```bash
-rr test tests/test_api.py    # Runs: pytest -v tests/test_api.py
-rr test -k "test_login"      # Runs: pytest -v -k "test_login"
+rr test tests/test_api.py      # Runs: pytest -v tests/test_api.py
+rr test -- -k "test_login"     # Runs: pytest -v -k test_login
 ```
 
-**Note:** Args are only supported for tasks with a single `run` command, not multi-step tasks.
+Args are shell-quoted before they reach the remote shell, so `rr test -- -k "a or b"` stays one argument and globs/`$VARS` in args are not expanded.
+
+Use an `{args}` placeholder to put args somewhere other than the end:
+
+```yaml
+tasks:
+  test:
+    run: pytest {args:-tests/} -n 4 | tail -20
+```
+
+- `{args}` - replaced by the args (empty if none)
+- `{args:-default}` - replaced by the args, or `default` when none are given
+- `{{args}}` - a literal `{args}`
+
+A task whose `run` is a compound command (pipes, `&&`, `;`, redirections, `$()`, backticks) errors when given args without a placeholder, since appended args would land on the last command in the pipeline.
+
+Args are only supported for tasks with a single `run` command. Multi-step tasks reject them.
 
 ## Task-Specific Requirements
 
@@ -206,7 +222,7 @@ tasks:
 
 Each instance runs independently and is distributed across available hosts via work-stealing. This is useful for detecting flaky tests by running the same test suite multiple times in parallel.
 
-For ad-hoc flake detection without config changes, use `--repeat`:
+For ad-hoc flake detection without config changes, use `--repeat` (on `rr run` and single-command tasks without `depends`):
 
 ```bash
 rr test --repeat 5           # Run test task 5x
@@ -220,8 +236,26 @@ rr run --repeat 5 "pytest"   # Run raw command 5x
 | `parallel` | required | List of subtask names |
 | `setup` | none | Command to run once per host before subtasks |
 | `fail_fast` | `false` | Stop on first failure |
-| `timeout` | none | Overall timeout |
+| `timeout` | none | Per-subtask timeout |
 | `max_parallel` | unlimited | Max concurrent tasks |
+| `forward_args` | `false` | Forward CLI args to every subtask |
+
+### Forwarding Args to Subtasks
+
+Parallel tasks reject extra args unless `forward_args: true` is set:
+
+```yaml
+tasks:
+  test-backend:
+    parallel: [test-backend-api, test-backend-services]
+    forward_args: true
+  test-backend-api:
+    run: pytest tests/api {args}
+  test-backend-services:
+    run: pytest tests/services {args}
+```
+
+`rr test-backend -- -k bond` runs both subtasks with `-k bond`. Subtasks that are compound commands need an `{args}` placeholder, and multi-step subtasks can't receive forwarded args. A filter that matches nothing in one subtask leaves it with zero tests (pytest exits 5); the result event lists those under `no_tests_tasks`.
 
 ### Parallel Task Flags
 
@@ -232,10 +266,15 @@ rr run --repeat 5 "pytest"   # Run raw command 5x
 | `--quiet` | Summary only |
 | `--fail-fast` | Stop on first failure (overrides config) |
 | `--max-parallel N` | Limit concurrent tasks |
+| `--no-logs` | Don't save output to log files |
 | `--dry-run` | Show plan without executing |
 | `--local` | Force local execution |
+| `--host` / `--tag` | Restrict the host pool |
 
 ### Output Modes
+
+These apply to `--pretty` mode. In the default structured mode, a parallel task prints nothing to stdout unless you pass `--stream` (prefixed live output) or `--verbose`, and reports everything in one result event on stderr (`total`, `passed`, `failed`, `log_dir`, and per-subtask `failures`).
+
 
 - **progress** (default): Live status indicators with spinners
 - **stream**: Real-time output with `[host:task]` prefixes
@@ -262,7 +301,9 @@ For example, with 6 tasks across 3 hosts of varying speeds:
 
 Task output is saved to `~/.rr/logs/<task>-<timestamp>/`:
 - One file per subtask
-- Summary file with timing and results
+- `summary.json` with timing and results
+
+Single-command runs (`rr run`, `rr exec`, single tasks) also log to `~/.rr/logs/<name>-<timestamp>/output.log`, reported as `details.log_file`. Manage with `rr logs` and `rr logs clean`.
 
 ## Host Restrictions
 
@@ -279,3 +320,5 @@ tasks:
     run: make build
     hosts: [fast, gpu-box]  # Multiple allowed hosts
 ```
+
+Restrictions also apply to subtasks inside parallel tasks: a restricted subtask only runs on its allowed hosts, and fails with the restriction named if none of them is available. `--host`/`--tag` that excludes every allowed host fails up front.

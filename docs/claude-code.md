@@ -15,6 +15,8 @@ Once installed, Claude understands:
 
 - **Commands**: `rr run`, `rr exec`, `rr sync`, `rr doctor`, `rr monitor`, and all subcommands
 - **Two-config system**: Global hosts at `~/.rr/config.yaml`, project settings at `.rr.yaml`
+- **Structured output**: Reading the JSON phase and result events rr writes to stderr by default, including test summaries, failures, and error codes
+- **Task arguments**: `--` before flag-like args, `{args}` placeholders, and `forward_args` for parallel tasks
 - **Workflows**: Initial setup, daily development, multi-host load balancing
 - **Troubleshooting**: Connection issues, slow syncs, stuck locks
 
@@ -58,7 +60,8 @@ plugins/rr/
 │   └── setup.md        # /rr:setup - guided setup workflow
 └── skills/
     └── rr/
-        └── SKILL.md    # rr knowledge - auto-invoked when relevant
+        ├── SKILL.md    # rr knowledge - auto-invoked when relevant
+        └── reference/  # config, commands, tasks, requirements, JSON output, troubleshooting
 ```
 
 - **Commands** (`/rr:setup`): User-invoked actions
@@ -78,10 +81,6 @@ cp -r /path/to/rr/plugins/rr/skills/* ~/.claude/skills/
 cp /path/to/rr/plugins/rr/commands/*.md ~/.claude/commands/
 ```
 
-### Project-level
-
-When working in the rr repository, skills and commands are automatically available.
-
 ## What Claude Learns
 
 | Topic | Coverage |
@@ -91,7 +90,8 @@ When working in the rr repository, skills and commands are automatically availab
 | Host management | Adding, removing, listing hosts |
 | Sync | Exclude/preserve patterns, rsync flags |
 | Locking | How distributed locks work, unlocking stuck locks |
-| Tasks | Defining and running named tasks |
+| Tasks | Defining and running named tasks, passing args, parallel tasks, dependencies |
+| Output | JSON events, result details, error codes, exit codes |
 | Load balancing | Multi-host setup, failover behavior |
 | Troubleshooting | Common issues and fixes |
 

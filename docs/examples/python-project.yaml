@@ -14,8 +14,8 @@ host: build-box
 
 sync:
   exclude:
-    - .git/
-    - .venv/
+    - .git   # bare patterns: .git is a file in linked worktrees
+    - .venv
     - __pycache__/
     - "*.pyc"
     - .mypy_cache/
@@ -73,7 +73,3 @@ tasks:
       - test
       - test
     fail_fast: false
-
-output:
-  format: pytest
-  timing: true

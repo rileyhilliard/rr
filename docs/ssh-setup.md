@@ -74,6 +74,8 @@ ssh user@your-remote-machine "echo 'SSH is working'"
 
 If this prints "SSH is working" without asking for a password, you're done.
 
+This first connection also matters for another reason: rr verifies host keys against `~/.ssh/known_hosts` and never prompts to accept a new one. Connect with `ssh` once per hostname or alias you list in rr's config, so the key gets recorded. Otherwise rr fails with a host key error (`SSH_HOST_KEY`).
+
 ## Using ssh-agent (for passphrase-protected keys)
 
 If you set a passphrase on your key, you'll want ssh-agent to remember it so you don't type it constantly.
@@ -175,9 +177,25 @@ rr setup user@new-machine
 ```
 
 This will:
-1. Generate a key if you don't have one
-2. Copy your public key to the remote
-3. Test the connection
+1. Generate an ed25519 key if you don't have one
+2. Test the connection
+3. If authentication fails, offer to copy your public key to the remote, then test again
+
+## How rr uses your SSH config
+
+rr doesn't shell out to `ssh`. It uses its own SSH client, which reads `~/.ssh/config` but only understands part of it:
+
+| Option | Supported |
+|--------|-----------|
+| `HostName`, `Port`, `User`, `IdentityFile` | Yes |
+| `IdentityAgent` (1Password, Secretive, YubiKey agents) | Yes |
+| `ProxyCommand` | Yes |
+| `ProxyJump` | No. rr warns; use `ProxyCommand ssh -W %h:%p <jump-host>` instead |
+| `Match` blocks | No. Host entries after the first `Match` line aren't seen, so put the hosts rr uses above it |
+
+For authentication, rr tries the SSH agent first, then the `IdentityFile` from your config, then `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, and `~/.ssh/id_ecdsa`. It can't prompt for a passphrase, so passphrase-protected keys have to be loaded in the agent.
+
+For throwaway CI machines where host keys change on every run, `--no-strict-host-key-checking` skips host key verification. Don't use it for machines you care about.
 
 ## Troubleshooting
 
@@ -231,9 +249,14 @@ nc -zv your-remote-machine 22
 
 ### "Host key verification failed"
 
-The remote machine's key changed (reinstalled OS, different machine at same IP, etc.).
+Either you haven't connected with `ssh` yet (rr won't add new keys to `known_hosts` for you), or the remote machine's key changed (reinstalled OS, different machine at same IP, etc.).
 
-If you trust the change:
+First connection:
+```bash
+ssh -o StrictHostKeyChecking=accept-new your-remote-machine exit
+```
+
+If the key changed and you trust the change:
 ```bash
 ssh-keygen -R your-remote-machine
 ssh user@your-remote-machine   # Accept the new key

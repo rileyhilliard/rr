@@ -66,8 +66,9 @@ hosts:
       - linux
 
 defaults:
-  # Fall back to local if all remotes are down
-  local_fallback: true
+  # Fall back to local if all remotes are down (use "always" to also
+  # fall back when every host is busy)
+  local_fallback: on-unreachable
 
   # Longer timeout for flaky connections
   probe_timeout: 5s
