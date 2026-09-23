@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"maps"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,6 +92,10 @@ func Validate(cfg *Config, opts ...ValidationOption) error {
 			}
 			seen[h] = true
 		}
+	}
+
+	if err := validateEnvNames("defaults.env", cfg.Defaults.Env); err != nil {
+		return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check the 'defaults' section in your .rr.yaml.")
 	}
 
 	// Check for reserved task names
@@ -270,6 +277,10 @@ func validateHost(name string, host Host) error {
 		return fmt.Errorf("host '%s' needs a 'dir' - that's where your code will sync to", name)
 	}
 
+	if err := validateEnvNames(fmt.Sprintf("host '%s' env", name), host.Env); err != nil {
+		return err
+	}
+
 	// Validate remote path (allows ~ for remote shell expansion). Host dirs
 	// keep ${PROJECT}-style variables until use sites expand them, so
 	// validate the expanded form; variables rr can't expand still surface.
@@ -348,6 +359,10 @@ func validateTask(name string, task TaskConfig) error {
 		return fmt.Errorf("task '%s' has output '%s' but it needs to be one of: %s", name, task.Output, strings.Join(TaskOutputModes, ", "))
 	}
 
+	if err := validateEnvNames(fmt.Sprintf("task '%s' env", name), task.Env); err != nil {
+		return err
+	}
+
 	// Parallel tasks are mutually exclusive with run and steps
 	if hasParallel {
 		if hasRun {
@@ -396,6 +411,22 @@ func validateTask(name string, task TaskConfig) error {
 }
 
 // validateLock checks lock configuration.
+// envNamePattern matches names the shell can export: letters, digits, and
+// underscores, not starting with a digit.
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateEnvNames rejects env keys the shell can't export. Keys end up
+// unquoted in the remote command (export NAME="value"), so this also keeps
+// a malformed key from changing what the command does.
+func validateEnvNames(context string, env map[string]string) error {
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		if !envNamePattern.MatchString(name) {
+			return fmt.Errorf("%s has an invalid variable name '%s': use letters, digits, and underscores, not starting with a digit", context, name)
+		}
+	}
+	return nil
+}
+
 func validateLock(lock LockConfig) error {
 	if lock.Timeout < 0 {
 		return fmt.Errorf("lock.timeout can't be negative - that doesn't make sense")

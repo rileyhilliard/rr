@@ -834,3 +834,50 @@ func TestValidateHost_ExpandableVariablesAllowed(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpanded variable")
 }
+
+func TestValidate_EnvNames(t *testing.T) {
+	validHost := Host{SSH: []string{"box"}, Dir: "/tmp/rr"}
+
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{name: "upper case", env: map[string]string{"FOO": "x"}},
+		{name: "mixed case with digits and underscores", env: map[string]string{"_My_Var2": "x"}},
+		{name: "dot", env: map[string]string{"app.name": "x"}, wantErr: "app.name"},
+		{name: "leading digit", env: map[string]string{"1FOO": "x"}, wantErr: "1FOO"},
+		{name: "space", env: map[string]string{"FOO BAR": "x"}, wantErr: "FOO BAR"},
+		{name: "shell metacharacter", env: map[string]string{"X;rm": "x"}, wantErr: "X;rm"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sources := map[string]func() error{
+				"host env": func() error {
+					h := validHost
+					h.Env = tt.env
+					return ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{"box": h}})
+				},
+				"defaults.env": func() error {
+					return Validate(&Config{Version: 1, Defaults: ProjectDefaults{Env: tt.env}})
+				},
+				"task env": func() error {
+					return Validate(&Config{Version: 1, Tasks: map[string]TaskConfig{
+						"t": {Run: "true", Env: tt.env},
+					}})
+				},
+			}
+			for source, validate := range sources {
+				err := validate()
+				if tt.wantErr == "" {
+					assert.NoError(t, err, source)
+					continue
+				}
+				require.Error(t, err, source)
+				assert.Contains(t, err.Error(), tt.wantErr, source)
+				assert.Contains(t, err.Error(), "env", source)
+			}
+		})
+	}
+}

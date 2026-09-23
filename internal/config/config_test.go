@@ -1887,7 +1887,6 @@ defaults:
   env:
     FOO: bar
     MixedCase: "1"
-    app.name: demo
 tasks:
   Build:
     run: make
@@ -1904,7 +1903,7 @@ tasks:
 
 	assert.Empty(t, cfg.Warnings)
 	assert.Equal(t, []string{"MyBox"}, cfg.Hosts)
-	assert.Equal(t, map[string]string{"FOO": "bar", "MixedCase": "1", "app.name": "demo"}, cfg.Defaults.Env)
+	assert.Equal(t, map[string]string{"FOO": "bar", "MixedCase": "1"}, cfg.Defaults.Env)
 	require.Contains(t, cfg.Tasks, "Build")
 	require.Contains(t, cfg.Tasks, "test.unit")
 	require.Contains(t, cfg.Tasks, "CI")
@@ -1922,14 +1921,14 @@ hosts:
     dir: /tmp/rr
     env:
       CUDA_VISIBLE_DEVICES: "0"
-      Path.Extra: /opt/bin
+      Extra_Path: /opt/bin
 `)
 	cfg, err := LoadGlobal()
 	require.NoError(t, err)
 
 	assert.Empty(t, cfg.Warnings)
 	require.Contains(t, cfg.Hosts, "MyBox")
-	want := map[string]string{"CUDA_VISIBLE_DEVICES": "0", "Path.Extra": "/opt/bin"}
+	want := map[string]string{"CUDA_VISIBLE_DEVICES": "0", "Extra_Path": "/opt/bin"}
 	assert.Equal(t, want, cfg.Hosts["MyBox"].Env)
 
 	// rr host add loads, edits, and saves the global config; the rewrite
