@@ -2,11 +2,15 @@ package integration
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/rileyhilliard/rr/internal/cli"
 	"github.com/rileyhilliard/rr/internal/config"
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
@@ -324,6 +328,43 @@ func TestLoadBalancing_SequentialLockAttempts(t *testing.T) {
 
 	// Cleanup
 	lck2.Release()
+}
+
+// TestLoadBalancing_LockErrorIsNotUnreachable checks that when every host
+// connects but its lock fails for a reason other than being held (here
+// lock.dir can't be created), rr returns the lock error instead of reporting
+// the hosts unreachable and falling back to local execution.
+func TestLoadBalancing_LockErrorIsNotUnreachable(t *testing.T) {
+	home := setupParallelSSHHome(t)
+
+	globalCfg := fmt.Sprintf(`version: 1
+hosts:
+  host-a:
+    ssh: [%[1]s]
+    dir: /tmp/rr-lb-lockerr/a
+  host-b:
+    ssh: [%[1]s]
+    dir: /tmp/rr-lb-lockerr/b
+`, parallelTestAlias)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".rr"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".rr", "config.yaml"), []byte(globalCfg), 0644))
+
+	// /proc rejects mkdir on Linux, so the lock dir can never be created.
+	projectCfg := `version: 1
+hosts: [host-a, host-b]
+local_fallback: true
+lock:
+  dir: /proc/rr-lb-lockerr
+`
+	projectDir := TempSyncDirWithFiles(t, map[string]string{".rr.yaml": projectCfg})
+	t.Chdir(projectDir)
+
+	marker := filepath.Join(projectDir, "ran-locally")
+	_, err := cli.Run(cli.RunOptions{Command: "touch " + marker, Quiet: true})
+
+	require.Error(t, err)
+	assert.True(t, rrerrors.IsCode(err, rrerrors.ErrLock), "want a lock error, got: %v", err)
+	assert.NoFileExists(t, marker, "a lock failure must not fall back to local execution")
 }
 
 // =============================================================================

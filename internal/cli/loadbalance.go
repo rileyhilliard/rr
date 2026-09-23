@@ -19,6 +19,7 @@ type hostAttempt struct {
 	hostName   string
 	conn       *host.Connection
 	connErr    error
+	lockErr    error          // Lock failure other than lock.ErrLocked (host connected)
 	lockHolder string         // Who holds the lock (if locked)
 	lockInfo   *lock.LockInfo // Structured holder info (nil if unreadable)
 }
@@ -171,7 +172,9 @@ func emitFallbackWarning(fb fallbackDetail) {
 //  3. If all hosts are locked, following local_fallback: run locally right
 //     away, wait (lock.wait_timeout) and then run locally, or round-robin
 //     wait and error when fallback is off
-//  4. If no host is reachable and local_fallback is on, running locally
+//  4. If a host connected but its lock failed for a reason other than being
+//     held, returning that lock error
+//  5. If no host is reachable and local_fallback is on, running locally
 //
 // Returns:
 //   - result with conn, lock, and state information on success
@@ -254,9 +257,11 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 			continue
 		}
 
-		// Other error (SSH issues, permissions, etc.)
+		// Other lock error (permission denied on lock.dir, SSH failure
+		// mid-acquire, etc.). The host connected, so this is not
+		// unreachability; it's reported below if no host works out.
 		conn.Close()
-		attempt.connErr = err
+		attempt.lockErr = err
 		attempts = append(attempts, attempt)
 	}
 
@@ -294,6 +299,14 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		default:
 			// Fallback disabled for busy hosts: wait, then error
 			return roundRobinWait(ctx, lockedHosts, lockCfg, opts.Command, attempts, holders)
+		}
+	}
+
+	// A host connected but its lock failed: return that error, as the
+	// single-host path does, rather than calling the hosts unreachable.
+	for _, a := range attempts {
+		if a.lockErr != nil {
+			return nil, a.lockErr
 		}
 	}
 
