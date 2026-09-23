@@ -140,10 +140,9 @@ func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConf
 		var stderrBuf bytes.Buffer
 		stderrWriter := io.MultiWriter(&stderrBuf, progress)
 
-		// Stream stdout (progress info)
-		go streamOutput(stdout, progress)
-		// Stream stderr (errors/warnings) to both buffer and progress
-		go streamOutput(stderr, stderrWriter)
+		// Stream stdout (progress info) to progress, and stderr
+		// (errors/warnings) to both the buffer and progress
+		streamPipes(stdout, stderr, progress, stderrWriter)
 
 		if err := cmd.Wait(); err != nil {
 			return handleRsyncError(err, conn.Name, stderrBuf.String())
@@ -488,6 +487,19 @@ func ancestorDirs(pattern string) []string {
 	return parents
 }
 
+// streamPipes streams stdout to out and stderr to errOut, and returns once
+// both pipes reach EOF. Callers must not call cmd.Wait before then: Wait
+// closes the pipes, dropping output that hasn't been read yet.
+func streamPipes(stdout, stderr io.Reader, out, errOut io.Writer) {
+	done := make(chan struct{})
+	go func() {
+		streamOutput(stdout, out)
+		close(done)
+	}()
+	streamOutput(stderr, errOut)
+	<-done
+}
+
 // streamOutput reads from r and writes each line to w.
 // It handles both \n and \r as line delimiters since rsync uses \r for progress updates.
 func streamOutput(r io.Reader, w io.Writer) {
@@ -603,24 +615,19 @@ func handleRsyncError(err error, hostName string, stderrOutput string) error {
 // fmt.Printf line is written to stdout.
 type InvalidationNotifyFunc func(dir, lockfile string)
 
-// InvalidateStaleDirectories checks each lockfile invalidation entry and deletes
-// the corresponding remote directories when the local lockfile is newer than the
-// remote directory. This handles the common case where a lockfile (bun.lock,
-// package-lock.json, etc.) is updated locally but the remote install directory
-// (node_modules/, .venv/, etc.) is stale and won't be re-installed because rsync
-// preserves it.
+// invalidateStaleDirectories checks each lockfile invalidation entry and
+// deletes the corresponding remote directories when the local lockfile is
+// newer than the remote directory. This handles the common case where a
+// lockfile (bun.lock, package-lock.json, etc.) is updated locally but the
+// remote install directory (node_modules/, .venv/, etc.) is stale and won't
+// be re-installed because rsync preserves it.
 //
 // Skip silently if conn is nil, local, or invalidations is empty. A remote
 // directory that doesn't exist is skipped too: there's nothing to delete, and
-// it makes a repeat call right after a successful one a silent no-op.
+// it makes a repeat call right after a successful one a silent no-op. With
+// dryRun, each stale directory is reported but nothing is deleted.
 //
-// SyncWithOptions calls this before rsync; callers don't need to.
-func InvalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc) error {
-	return invalidateStaleDirectories(conn, localDir, invalidations, notify, false)
-}
-
-// invalidateStaleDirectories is InvalidateStaleDirectories with a dry-run
-// mode that reports each stale directory but deletes nothing.
+// SyncWithOptions calls this before rsync.
 func invalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc, dryRun bool) error {
 	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
 		return nil

@@ -46,7 +46,7 @@ type SyncOptions struct {
 	DryRun bool
 	// Invalidated is called for each stale remote directory removed by
 	// lockfile invalidation before rsync runs. Nil prints a plain line to
-	// stdout (see InvalidateStaleDirectories).
+	// stdout.
 	Invalidated InvalidationNotifyFunc
 	// Warn receives non-fatal warnings (nil to ignore).
 	Warn func(SyncWarning)

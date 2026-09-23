@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -1140,13 +1141,13 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 	}
 
 	t.Run("skips nil connection", func(t *testing.T) {
-		err := InvalidateStaleDirectories(nil, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(nil, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
 	t.Run("skips local connection", func(t *testing.T) {
 		conn := &host.Connection{IsLocal: true}
-		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1158,7 +1159,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Client: mock,
 			Host:   config.Host{Dir: "~/rr/myapp"},
 		}
-		err := InvalidateStaleDirectories(conn, localDir, nil, nil)
+		err := invalidateStaleDirectories(conn, localDir, nil, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1171,7 +1172,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "~/rr/myapp"},
 		}
 		// No bun.lock in localDir - should be a no-op
-		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1200,7 +1201,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1242,7 +1243,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err = InvalidateStaleDirectories(conn, localDir, invalidations, nil)
+		err = invalidateStaleDirectories(conn, localDir, invalidations, nil, false)
 		assert.NoError(t, err)
 		// We can't easily assert rm was NOT called with MockClient's current API,
 		// but the function should succeed with no error.
@@ -1271,7 +1272,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, multiDirInvalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, multiDirInvalidations, nil, false)
 		assert.NoError(t, err)
 	})
 
@@ -1291,7 +1292,7 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 			Host:   config.Host{Dir: "/root/rr/myapp"},
 		}
 
-		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil)
+		err := invalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil, false)
 		assert.NoError(t, err)
 	})
 }
@@ -1361,13 +1362,13 @@ func TestInvalidateStaleDirectories_Idempotent(t *testing.T) {
 	var notified []string
 	notify := func(dir, lockfile string) { notified = append(notified, dir+"|"+lockfile) }
 
-	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	require.NoError(t, invalidateStaleDirectories(conn, localDir, testInvalidations, notify, false))
 	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified)
 	assert.Equal(t, 1, client.rmCount("node_modules"))
 	assert.False(t, client.GetFS().Exists("/root/rr/myapp/node_modules"))
 
 	// Second pass: the dir is gone, so there is nothing to invalidate or announce.
-	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	require.NoError(t, invalidateStaleDirectories(conn, localDir, testInvalidations, notify, false))
 	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified, "second call must not re-announce")
 	assert.Equal(t, 1, client.rmCount("node_modules"), "second call must not rm again")
 }
@@ -1377,7 +1378,7 @@ func TestInvalidateStaleDirectories_MissingRemoteDirIsSilent(t *testing.T) {
 	require.NoError(t, client.GetFS().Remove("/root/rr/myapp/node_modules"))
 
 	called := false
-	err := InvalidateStaleDirectories(conn, localDir, testInvalidations, func(string, string) { called = true })
+	err := invalidateStaleDirectories(conn, localDir, testInvalidations, func(string, string) { called = true }, false)
 	require.NoError(t, err)
 	assert.False(t, called)
 	assert.Zero(t, client.rmCount("node_modules"))
@@ -1472,22 +1473,6 @@ func TestSync_InvalidatesWithDefaultNotice(t *testing.T) {
 	assert.Contains(t, out, "Invalidating stale node_modules/ (bun.lock changed)")
 }
 
-func TestSyncWithOptions_DoubleInvalidationIsHarmless(t *testing.T) {
-	// Mirrors workflow.go today: an explicit InvalidateStaleDirectories call
-	// followed by SyncWithOptions, which invalidates again.
-	requireRsync(t)
-	localDir, conn, client := invalidationFixture(t)
-
-	var notified []string
-	notify := func(dir, lockfile string) { notified = append(notified, dir) }
-
-	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
-	_ = SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{Invalidated: notify})
-
-	assert.Equal(t, []string{"node_modules/"}, notified)
-	assert.Equal(t, 1, client.rmCount("node_modules"))
-}
-
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	orig := os.Stdout
@@ -1516,4 +1501,22 @@ func TestFindRsync_MissingIsDependency(t *testing.T) {
 	_, err := FindRsync()
 	require.Error(t, err)
 	assert.True(t, errors.IsCode(err, errors.ErrDependency), "got %v", err)
+}
+
+func TestStreamPipes_ReadsBothPipesToEOF(t *testing.T) {
+	var stdoutLines, stderrLines []string
+	for i := range 2000 {
+		stdoutLines = append(stdoutLines, fmt.Sprintf("out %d", i))
+		stderrLines = append(stderrLines, fmt.Sprintf("err %d", i))
+	}
+	var out, errOut bytes.Buffer
+
+	streamPipes(
+		strings.NewReader(strings.Join(stdoutLines, "\n")),
+		strings.NewReader(strings.Join(stderrLines, "\r")),
+		&out, &errOut,
+	)
+
+	assert.Equal(t, strings.Join(stdoutLines, "\n")+"\n", out.String())
+	assert.Equal(t, strings.Join(stderrLines, "\n")+"\n", errOut.String())
 }

@@ -203,10 +203,9 @@ func runRsyncPull(rsyncPath string, args []string, hostName string, progress io.
 		var stderrBuf bytes.Buffer
 		stderrWriter := io.MultiWriter(&stderrBuf, progress)
 
-		// Stream stdout (progress info)
-		go streamOutput(stdout, progress)
-		// Stream stderr (errors/warnings) to both buffer and progress
-		go streamOutput(stderr, stderrWriter)
+		// Stream stdout (progress info) to progress, and stderr
+		// (errors/warnings) to both the buffer and progress
+		streamPipes(stdout, stderr, progress, stderrWriter)
 
 		if err := cmd.Wait(); err != nil {
 			return handlePullError(err, hostName, stderrBuf.String())
