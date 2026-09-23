@@ -40,7 +40,7 @@ The connect event says where the command runs and why:
 | No host reachable, `local_fallback` on | `status: warn`, `host: local`, `details.local_fallback: true` | `hosts_unreachable` | `{reason}` |
 | Every host locked, `local_fallback` on | `status: warn`, `host: local`, `details.local_fallback: true` | `all_hosts_locked` | `{reason, waited_s, holders}` |
 
-The result of a `--local` or local-mode run carries the same value in `details.local_reason`; `details.fallback` appears only for runtime fallbacks, never alongside it. `--local` and local mode need no configured hosts. Transition note: rr binaries older than this release report a `--local` run as a connect `warn` event with `reason: hosts_unreachable`. Treat that as `local_flag` when you passed `--local`.
+The result of a `--local` or local-mode run carries the same value in `details.local_reason`; `details.fallback` appears only for runtime fallbacks, never alongside it. `--local` and local mode need no configured hosts. Transition note: rr binaries older than v0.27.0 report a `--local` run as a connect `warn` event with `reason: hosts_unreachable`. Treat that as `local_flag` when you passed `--local`.
 
 ### Config warnings
 
@@ -129,7 +129,7 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 | `DEPENDENCY_MISSING` | A required tool is missing: local or remote `rsync`, `ssh-copy-id` (for `rr setup`), or a `require:` tool (`Missing required tools: ...`) | `rr provision`, or install it |
 | `UNKNOWN` | Unclassified error | Read `message` |
 
-Codes are set where the error is created, never guessed from the message. Transition note: rr binaries older than this release report missing required tools as `COMMAND_FAILED` with a message starting `Missing required tools`, and an unknown host as `CONFIG_NOT_FOUND` or `CONFIG_INVALID`. Treat `COMMAND_FAILED` + `Missing required tools` the same as `DEPENDENCY_MISSING`. Always read `message` and `suggestion`.
+Codes are set where the error is created, never guessed from the message. Transition note: rr binaries older than v0.27.0 report missing required tools as `COMMAND_FAILED` with a message starting `Missing required tools`, and an unknown host as `CONFIG_NOT_FOUND` or `CONFIG_INVALID`. Treat `COMMAND_FAILED` + `Missing required tools` the same as `DEPENDENCY_MISSING`. Always read `message` and `suggestion`.
 
 ## Exit Code Contract
 
