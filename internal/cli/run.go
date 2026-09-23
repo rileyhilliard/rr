@@ -644,6 +644,10 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 	// Cleanup old logs
 	_ = logs.Cleanup(resolved.Global.Logs)
 
+	if target.local && !PrettyMode() {
+		emitLocalConnect(target.reason)
+	}
+
 	// Create orchestrator
 	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
 

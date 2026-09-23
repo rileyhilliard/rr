@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -382,26 +383,19 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 }
 
 // connectLocalTarget completes the connect phase for a local target
-// (--local or local mode). Nothing is dialed and nothing went wrong, so it's
-// a normal connect completion carrying the reason, not a fallback warning.
+// (--local or local mode), and records the reason as details.local_reason
+// on the result. Nothing is dialed and nothing went wrong, so it's a normal
+// connect completion carrying the reason, not a fallback warning.
 func connectLocalTarget(ctx *WorkflowContext) {
 	ctx.Conn = localConnection()
 	reason := ctx.target.reason
+	ctx.AddResultDetail("local_reason", reason)
 
 	if PrettyMode() {
 		ctx.PhaseDisplay.RenderSuccess("Running locally ("+host.DescribeLocalReason(reason)+")", 0)
 		return
 	}
-
-	reporter := ctx.GetReporter()
-	reporter.PhaseStart("connect")
-	WritePhaseEvent(PhaseEvent{
-		Type:    "phase",
-		Phase:   "connect",
-		Status:  "complete",
-		Host:    "local",
-		Details: map[string]interface{}{"reason": reason},
-	})
+	emitLocalConnect(reason)
 }
 
 // syncPhase handles the file sync phase of the workflow.
@@ -701,30 +695,57 @@ func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest str
 		Patterns:    pullItems,
 		DefaultDest: dest,
 	}
-
-	if !PrettyMode() {
-		reporter := wf.GetReporter()
-		reporter.PhaseStart("pull")
-		pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
-		if pullErr != nil {
-			reporter.PhaseFailed("pull", pullErr)
-		} else {
-			reporter.PhaseComplete("pull", wf.Conn.Name, time.Since(pullStart))
-		}
-		return
-	}
-
-	spinner := ui.NewSpinner("Pulling files")
-	spinner.Start()
-
-	pullErr := rrsync.Pull(wf.Conn, pullOpts, nil)
-	if pullErr != nil {
-		spinner.Fail()
-		fmt.Printf("\n%s Pull failed: %s\n", ui.SymbolFail, pullErr.Error())
-	} else {
-		spinner.Success()
+	if pullAndReport(wf.Conn, pullOpts, rrsync.Pull, "") && PrettyMode() {
 		wf.PhaseDisplay.RenderSuccess("Files pulled", time.Since(pullStart))
 	}
+}
+
+// pullFunc matches rrsync.Pull; tests swap in a fake.
+type pullFunc func(conn *host.Connection, opts rrsync.PullOptions, progress io.Writer) error
+
+// pullAndReport pulls files over conn and reports it as the pull phase:
+// started, then complete or failed events in structured mode, a spinner and
+// a failure line in pretty mode. A failed pull is reported, never returned,
+// because pulls don't change a run's exit code. Returns whether it worked.
+//
+// task names the parallel subtask being pulled, empty for a single run.
+// Several hosts pull in one parallel run, so a subtask's events carry the
+// host throughout plus details.task; a single run's events match its other
+// phases, with the host on complete only.
+func pullAndReport(conn *host.Connection, opts rrsync.PullOptions, pull pullFunc, task string) bool {
+	start := time.Now()
+
+	if !PrettyMode() {
+		ev := PhaseEvent{Type: "phase", Phase: "pull", Status: "started"}
+		if task != "" {
+			ev.Host = conn.Name
+			ev.Details = map[string]interface{}{"task": task}
+		}
+		WritePhaseEvent(ev)
+		if err := pull(conn, opts, nil); err != nil {
+			ev.Status, ev.Error = "failed", err.Error()
+			WritePhaseEvent(ev)
+			return false
+		}
+		ev.Status, ev.Host, ev.Duration = "complete", conn.Name, time.Since(start).Seconds()
+		WritePhaseEvent(ev)
+		return true
+	}
+
+	label, failure := "Pulling files", "Pull failed"
+	if task != "" {
+		label = fmt.Sprintf("Pulling %s files (%s)", task, conn.Name)
+		failure = "Pull failed for " + task
+	}
+	spinner := ui.NewSpinner(label)
+	spinner.Start()
+	if err := pull(conn, opts, nil); err != nil {
+		spinner.Fail()
+		fmt.Printf("%s %s: %s\n", ui.SymbolFail, failure, err.Error())
+		return false
+	}
+	spinner.Success()
+	return true
 }
 
 // requirementsPhase verifies that required tools are available on the remote.

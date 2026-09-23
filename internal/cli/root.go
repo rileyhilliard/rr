@@ -63,6 +63,9 @@ Get started:
   rr doctor                 Diagnose connection issues`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	// Set explicitly: cobra only defaults it while parsing, and
+	// unknownCommandError calls SuggestionsFor directly.
+	SuggestionsMinimumDistance: 2,
 }
 
 // Execute runs the root command and handles errors with structured output.
@@ -225,6 +228,9 @@ func handleUnknownCommand(err error) int {
 func unknownCommandError(err error, pretty bool) error {
 	unknownCmd := extractUnknownCommand(err)
 
+	// Use Cobra's built-in suggestion feature (works with all registered commands including tasks)
+	suggestions := rootCmd.SuggestionsFor(unknownCmd)
+
 	// Check discoveryState for config-related issues
 	if discoveryState != nil {
 		if !pretty && discoveryState.LoadErr != nil {
@@ -248,14 +254,13 @@ func unknownCommandError(err error, pretty bool) error {
 				"Fix the validation error above, then try again.")
 		}
 
-		// Case 3: No project config found - preserve the original error details
-		if discoveryState.ProjectErr != nil {
+		// Case 3: No project config found - preserve the original error
+		// details. A near miss of a built-in (rr stauts) is a typo, not a
+		// task missing its config, so the suggestion wins when there is one.
+		if discoveryState.ProjectErr != nil && len(suggestions) == 0 {
 			return discoveryState.ProjectErr
 		}
 	}
-
-	// Use Cobra's built-in suggestion feature (works with all registered commands including tasks)
-	suggestions := rootCmd.SuggestionsFor(unknownCmd)
 
 	var suggestion string
 	if len(suggestions) > 0 {

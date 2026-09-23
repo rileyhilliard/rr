@@ -82,6 +82,21 @@ func resolveTargetHosts(resolved *config.ResolvedConfig, target execTarget, host
 	return config.ResolveHosts(resolved, hostFlag)
 }
 
+// emitLocalConnect writes the structured connect phase for a local target:
+// started, then complete on host local with details.reason. Nothing is
+// dialed and nothing went wrong, so it's a normal completion, not a fallback
+// warning.
+func emitLocalConnect(reason string) {
+	(&StructuredReporter{}).PhaseStart("connect")
+	WritePhaseEvent(PhaseEvent{
+		Type:    "phase",
+		Phase:   "connect",
+		Status:  "complete",
+		Host:    "local",
+		Details: map[string]interface{}{"reason": reason},
+	})
+}
+
 // localConnection is the connection used for local execution.
 func localConnection() *host.Connection {
 	return &host.Connection{

@@ -72,7 +72,7 @@ func TestSubtaskPullItems(t *testing.T) {
 			name:    "absolute dest",
 			items:   []config.PullItem{{Src: "out.log", Dest: "/tmp/rr-out"}},
 			subtask: "lint",
-			want:    []config.PullItem{{Src: "out.log", Dest: "/tmp/rr-out/lint"}},
+			want:    []config.PullItem{{Src: "out.log", Dest: filepath.FromSlash("/tmp/rr-out/lint")}},
 		},
 	}
 
@@ -81,6 +81,37 @@ func TestSubtaskPullItems(t *testing.T) {
 			assert.Equal(t, tt.want, subtaskPullItems(tt.items, tt.subtask))
 		})
 	}
+}
+
+// TestPullSubtaskFiles_DuplicateNames checks a subtask listed twice pulls
+// into <name>_<index>/, the stem of its log file, so the second run's files
+// don't overwrite the first's. Unique names keep <name>/.
+func TestPullSubtaskFiles_DuplicateNames(t *testing.T) {
+	withStructuredOutput(t)
+	hosts := map[string]config.Host{"box-a": {}, "box-b": {}}
+	pullCfg := []config.PullItem{{Src: "junit.xml"}}
+	tasks := []parallel.TaskInfo{
+		{Name: "shard", Index: 0, Pull: pullCfg},
+		{Name: "lint", Index: 1, Pull: pullCfg},
+		{Name: "shard", Index: 2, Pull: pullCfg},
+	}
+	result := &parallel.Result{TaskResults: []parallel.TaskResult{
+		{TaskName: "shard", TaskIndex: 0, Host: "box-a"},
+		{TaskName: "lint", TaskIndex: 1, Host: "box-a"},
+		{TaskName: "shard", TaskIndex: 2, Host: "box-b"},
+	}}
+
+	var dests []string
+	captureStderr(t, func() {
+		pullSubtaskFiles(tasks, result, hosts, func(_ *host.Connection, opts rrsync.PullOptions, _ io.Writer) error {
+			for _, p := range opts.Patterns {
+				dests = append(dests, p.Dest)
+			}
+			return nil
+		})
+	})
+
+	assert.Equal(t, []string{"shard_0", "lint", "shard_2"}, dests)
 }
 
 // pullCall records one call to the injected pull function.
@@ -151,6 +182,39 @@ func TestPullSubtaskFiles(t *testing.T) {
 	assert.Equal(t, "box-b", events[3].Host)
 	assert.Equal(t, "shard-2", events[3].Details["task"])
 	assert.Contains(t, events[3].Error, "no such file")
+}
+
+// TestPullAndReport_SingleRunShape pins the single-run pull events, which
+// share the renderer with parallel pulls: like the run's other phases, only
+// complete names the host, and there are no details.
+func TestPullAndReport_SingleRunShape(t *testing.T) {
+	withStructuredOutput(t)
+	conn := &host.Connection{Name: "box-a"}
+
+	for _, fail := range []bool{false, true} {
+		stderr := captureStderr(t, func() {
+			pullAndReport(conn, rrsync.PullOptions{}, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
+				if fail {
+					return fmt.Errorf("rsync: no such file")
+				}
+				return nil
+			}, "")
+		})
+
+		events := parsePhaseEvents(t, stderr)
+		require.Len(t, events, 2)
+		for i := range events {
+			events[i].TS = ""
+		}
+		assert.Equal(t, PhaseEvent{Type: "phase", Phase: "pull", Status: "started"}, events[0])
+		if fail {
+			assert.Equal(t, PhaseEvent{Type: "phase", Phase: "pull", Status: "failed", Error: "rsync: no such file"}, events[1])
+			continue
+		}
+		assert.Equal(t, "complete", events[1].Status)
+		assert.Equal(t, "box-a", events[1].Host)
+		assert.Nil(t, events[1].Details)
+	}
 }
 
 func TestPullSubtaskFiles_LocalRunSkips(t *testing.T) {

@@ -156,6 +156,36 @@ func TestHandleUnknownCommand_Envelope(t *testing.T) {
 	}
 }
 
+// TestUnknownCommandError_SuggestsBuiltinOutsideProject checks a mistyped
+// built-in outside a project suggests the command instead of reporting the
+// missing .rr.yaml, which only explains an unknown task.
+func TestUnknownCommandError_SuggestsBuiltinOutsideProject(t *testing.T) {
+	noConfig := &configDiscoveryState{ProjectErr: rrerrors.New(rrerrors.ErrConfigNotFound,
+		"No .rr.yaml found in this directory or parent directories", "Run 'rr init' to create one.")}
+
+	tests := []struct {
+		name     string
+		cmd      string
+		wantCode string
+		wantText string
+	}{
+		{name: "typo of a built-in", cmd: "stauts", wantCode: rrerrors.ErrExec, wantText: "Did you mean: status?"},
+		{name: "no near match", cmd: "sometask", wantCode: rrerrors.ErrConfigNotFound, wantText: "rr init"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withDiscoveryState(t, noConfig)
+			err := unknownCommandError(errors.New(`unknown command "`+tt.cmd+`" for "rr"`), false)
+
+			var rrErr *rrerrors.Error
+			require.True(t, errors.As(err, &rrErr), "got %T: %v", err, err)
+			assert.Equal(t, tt.wantCode, rrErr.Code)
+			assert.Contains(t, rrErr.Suggestion, tt.wantText)
+		})
+	}
+}
+
 // TestVerboseFlag_WarnsWithoutBreakingJSON checks the deprecated --verbose
 // still parses, and warns through the structured channel instead of cobra's
 // plain-text deprecation line, which corrupted JSON on stderr.

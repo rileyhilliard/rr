@@ -77,43 +77,9 @@ func hasIntentionalZeroFlag(command string) bool {
 	return false
 }
 
-// DetectNoTests reports whether the command's output shows the test runner ran
-// no tests at all. False when no framework was recognized, when the command
-// explicitly asked for a zero-test run, or when any results were parsed.
-func DetectNoTests(command string, rawOutput []byte) bool {
-	if hasIntentionalZeroFlag(command) {
-		return false
-	}
-
-	formatter := detectFormatter(command, rawOutput)
-	if formatter == nil {
-		return false
-	}
-	for _, line := range strings.Split(string(rawOutput), "\n") {
-		formatter.ProcessLine(line)
-	}
-
-	reporter, ok := formatter.(output.NoTestsReporter)
-	return ok && reporter.RanNothing()
-}
-
-// ExtractTestSummary detects the test framework from command/output and
-// returns aggregate counts. ok is false when no framework matched or the
-// output contained no recognizable test results.
-func ExtractTestSummary(command string, rawOutput []byte) (TestSummary, bool) {
-	formatter := detectFormatter(command, rawOutput)
-	if formatter == nil {
-		return TestSummary{}, false
-	}
-
-	for _, line := range strings.Split(string(rawOutput), "\n") {
-		formatter.ProcessLine(line)
-	}
-	return summarize(formatter, command)
-}
-
 // summarize reads aggregate counts from a formatter that has already
-// processed the output. See ExtractTestSummary.
+// processed the output. ok is false when the output contained no
+// recognizable test results.
 func summarize(formatter output.Formatter, command string) (TestSummary, bool) {
 	provider, ok := formatter.(output.TestSummaryProvider)
 	if !ok {

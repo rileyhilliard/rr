@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,7 +19,6 @@ import (
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
-	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/internal/util"
 )
 
@@ -173,6 +171,10 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		_ = logs.Cleanup(resolved.Global.Logs)
 	}
 
+	if target.local && !PrettyMode() {
+		emitLocalConnect(target.reason)
+	}
+
 	// Create orchestrator with host priority order preserved
 	orchestrator := parallel.NewOrchestrator(tasks, hosts, hostOrder, resolved, parallelCfg)
 
@@ -201,10 +203,13 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		pullSubtaskFiles(tasks, result, hosts, rrsync.Pull)
 	}
 
-	return renderParallelResult(result, logWriter, opts.TaskName), nil
+	return renderParallelResult(result, logWriter, opts.TaskName, target.reason), nil
 }
 
-func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, taskName string) int {
+// renderParallelResult writes the logs and reports the run's result.
+// localReason is the target's reason when it was local (see execTarget),
+// recorded as details.local_reason; empty for a remote target.
+func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, taskName, localReason string) int {
 	if logWriter != nil {
 		writeTaskLogs(logWriter, result, taskName)
 	}
@@ -214,9 +219,12 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		logDir = logWriter.Dir()
 	}
 
+	outcomes := parseTaskOutcomes(result)
+	noTests := tasksWithoutTests(result, outcomes)
+
 	if PrettyMode() {
 		parallel.RenderSummary(result, logDir)
-		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+		if len(noTests) > 0 {
 			warnNoTests(map[string]interface{}{
 				"no_tests":       true,
 				"no_tests_tasks": noTests,
@@ -235,13 +243,16 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 		if logDir != "" {
 			details["log_dir"] = logDir
 		}
+		if localReason != "" {
+			details["local_reason"] = localReason
+		}
 		if result.Failed > 0 {
-			details["failures"] = extractTaskFailures(result, logDir)
+			details["failures"] = extractTaskFailures(result, outcomes, logDir)
 		}
 		// no_tests stays a bool here as it is for single runs - one key, one
 		// type, so consumers can branch on it without sniffing. The subtask
 		// names go in their own field.
-		if noTests := tasksWithoutTests(result); len(noTests) > 0 {
+		if len(noTests) > 0 {
 			details["no_tests"] = true
 			details["no_tests_tasks"] = noTests
 		}
@@ -262,16 +273,27 @@ func renderParallelResult(result *parallel.Result, logWriter *logs.LogWriter, ta
 const maxOutputTailLines = 20
 const maxFailureMessageLen = 500
 
+// parseTaskOutcomes parses each subtask's output once (see
+// formatters.ParseRunOutcome). The result is index-aligned with
+// result.TaskResults.
+func parseTaskOutcomes(result *parallel.Result) []formatters.Outcome {
+	outcomes := make([]formatters.Outcome, len(result.TaskResults))
+	for i := range result.TaskResults {
+		tr := &result.TaskResults[i]
+		outcomes[i] = formatters.ParseRunOutcome(tr.Command, tr.Output)
+	}
+	return outcomes
+}
+
 // tasksWithoutTests names the subtasks whose runner collected zero tests.
 // Sharded suites make this easy to miss: the aggregate says "3 passed" while
 // one shard's path filter matched nothing. Reported per subtask, never fatal -
 // forwarded filters (forward_args) legitimately leave some shards empty.
-func tasksWithoutTests(result *parallel.Result) []string {
+func tasksWithoutTests(result *parallel.Result, outcomes []formatters.Outcome) []string {
 	var names []string
 	for i := range result.TaskResults {
-		tr := &result.TaskResults[i]
-		if formatters.DetectNoTests(tr.Command, tr.Output) {
-			names = append(names, tr.TaskName)
+		if outcomes[i].NoTests {
+			names = append(names, result.TaskResults[i].TaskName)
 		}
 	}
 	return names
@@ -279,7 +301,7 @@ func tasksWithoutTests(result *parallel.Result) []string {
 
 // extractTaskFailures builds structured failure info for machine-mode output.
 // When logDir is non-empty, each failure carries the path of its saved log.
-func extractTaskFailures(result *parallel.Result, logDir string) []map[string]interface{} {
+func extractTaskFailures(result *parallel.Result, outcomes []formatters.Outcome, logDir string) []map[string]interface{} {
 	var failures []map[string]interface{}
 	for i := range result.TaskResults {
 		tr := &result.TaskResults[i]
@@ -298,28 +320,8 @@ func extractTaskFailures(result *parallel.Result, logDir string) []map[string]in
 			entry["log_file"] = logs.TaskLogPath(logDir, tr.TaskName, tr.TaskIndex)
 		}
 
-		parsed := formatters.ExtractFailures(tr.Command, tr.Output)
-		if len(parsed) > 0 {
-			tests := make([]map[string]string, 0, len(parsed))
-			for _, f := range parsed {
-				tf := map[string]string{"name": f.TestName}
-				if f.File != "" {
-					loc := f.File
-					if f.Line > 0 {
-						loc += ":" + util.Itoa(f.Line)
-					}
-					tf["file"] = loc
-				}
-				if f.Message != "" {
-					msg := f.Message
-					if len(msg) > maxFailureMessageLen {
-						msg = msg[:maxFailureMessageLen] + "..."
-					}
-					tf["message"] = msg
-				}
-				tests = append(tests, tf)
-			}
-			entry["tests"] = tests
+		if parsed := outcomes[i].Failures; len(parsed) > 0 {
+			entry["tests"] = failureEntries(parsed)
 		} else if len(tr.Output) > 0 {
 			lines := strings.Split(strings.TrimSpace(string(tr.Output)), "\n")
 			start := 0
@@ -472,21 +474,23 @@ func (n *parallelSyncNotices) flush() {
 	}
 }
 
-// pullFunc matches rrsync.Pull; tests swap in a fake.
-type pullFunc func(conn *host.Connection, opts rrsync.PullOptions, progress io.Writer) error
-
 // pullSubtaskFiles runs each subtask's `pull:` after the whole parallel run
 // has finished, whatever the subtask's exit code. Pulls run one at a time in
 // subtask order, from the host the subtask ran on, through the alias that
 // reached it. Each subtask's files land in <dest>/<subtask>/ so shards with
-// the same output paths don't overwrite each other locally. Subtasks that
-// never reached a remote host (local runs, no host available) are skipped.
-// A failed pull is reported but doesn't change the run's exit code, same as
-// single tasks.
+// the same output paths don't overwrite each other locally; a subtask listed
+// more than once uses <subtask>_<index>/, the stem of its log file (see
+// logs.TaskLogPath). Subtasks that never reached a remote host (local runs,
+// no host available) are skipped. A failed pull is reported but doesn't
+// change the run's exit code, same as single tasks.
 func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, pull pullFunc) {
 	ranOn := make(map[int]*parallel.TaskResult, len(result.TaskResults))
 	for i := range result.TaskResults {
 		ranOn[result.TaskResults[i].TaskIndex] = &result.TaskResults[i]
+	}
+	nameCount := make(map[string]int, len(tasks))
+	for _, t := range tasks {
+		nameCount[t.Name]++
 	}
 
 	for _, t := range tasks {
@@ -498,48 +502,25 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 		if !remote {
 			continue // "local" or "none": nothing on a remote to pull
 		}
-		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
-		pullOpts := rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, t.Name)}
-		pullOne(t.Name, conn, pullOpts, pull)
-	}
-}
-
-// pullOne pulls one subtask's files and reports it as a pull phase.
-func pullOne(taskName string, conn *host.Connection, opts rrsync.PullOptions, pull pullFunc) {
-	start := time.Now()
-	details := map[string]interface{}{"task": taskName}
-
-	if !PrettyMode() {
-		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "started", Host: conn.Name, Details: details})
-		if err := pull(conn, opts, nil); err != nil {
-			WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "failed", Host: conn.Name, Error: err.Error(), Details: details})
-			return
+		dir := t.Name
+		if nameCount[t.Name] > 1 {
+			dir = fmt.Sprintf("%s_%d", t.Name, t.Index)
 		}
-		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "complete", Host: conn.Name,
-			Duration: time.Since(start).Seconds(), Details: details})
-		return
+		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
+		pullAndReport(conn, rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, dir)}, pull, t.Name)
 	}
-
-	spinner := ui.NewSpinner(fmt.Sprintf("Pulling %s files (%s)", taskName, conn.Name))
-	spinner.Start()
-	if err := pull(conn, opts, nil); err != nil {
-		spinner.Fail()
-		fmt.Printf("%s Pull failed for %s: %s\n", ui.SymbolFail, taskName, err.Error())
-		return
-	}
-	spinner.Success()
 }
 
 // subtaskPullItems rewrites a subtask's pull items so each lands in
-// <dest>/<subtask>/ (./<subtask>/ when dest is unset).
-func subtaskPullItems(items []config.PullItem, subtask string) []config.PullItem {
+// <dest>/<dir>/ (./<dir>/ when dest is unset).
+func subtaskPullItems(items []config.PullItem, dir string) []config.PullItem {
 	out := make([]config.PullItem, 0, len(items))
 	for _, item := range items {
 		dest := item.Dest
 		if dest == "" {
 			dest = "."
 		}
-		out = append(out, config.PullItem{Src: item.Src, Dest: filepath.Join(dest, subtask)})
+		out = append(out, config.PullItem{Src: item.Src, Dest: filepath.Join(dest, dir)})
 	}
 	return out
 }
