@@ -11,6 +11,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
@@ -144,13 +145,14 @@ func CleanupRemoteDir(t *testing.T, conn *host.Connection, dir string) {
 		return
 	}
 	// Use rm -rf to clean up, ignore errors
-	_, _, _, _ = conn.Client.Exec(fmt.Sprintf("rm -rf %q", dir))
+	_, _, _, _ = conn.Client.Exec("rm -rf " + util.ShellQuote(dir))
 }
 
 // CreateRemoteFile creates a file with content on the remote host.
 func CreateRemoteFile(t *testing.T, conn *host.Connection, path, content string) {
 	t.Helper()
-	cmd := fmt.Sprintf("mkdir -p \"$(dirname %q)\" && cat > %q << 'EOF'\n%s\nEOF", path, path, content)
+	quoted := util.ShellQuote(path)
+	cmd := fmt.Sprintf("mkdir -p \"$(dirname %s)\" && cat > %s << 'EOF'\n%s\nEOF", quoted, quoted, content)
 	_, stderr, exitCode, err := conn.Client.Exec(cmd)
 	if err != nil {
 		t.Fatalf("Failed to create remote file %s: %v", path, err)
@@ -163,7 +165,7 @@ func CreateRemoteFile(t *testing.T, conn *host.Connection, path, content string)
 // ReadRemoteFile reads a file from the remote host.
 func ReadRemoteFile(t *testing.T, conn *host.Connection, path string) string {
 	t.Helper()
-	stdout, stderr, exitCode, err := conn.Client.Exec(fmt.Sprintf("cat %q", path))
+	stdout, stderr, exitCode, err := conn.Client.Exec("cat " + util.ShellQuote(path))
 	if err != nil {
 		t.Fatalf("Failed to read remote file %s: %v", path, err)
 	}
@@ -176,7 +178,7 @@ func ReadRemoteFile(t *testing.T, conn *host.Connection, path string) string {
 // RemoteFileExists checks if a file exists on the remote host.
 func RemoteFileExists(t *testing.T, conn *host.Connection, path string) bool {
 	t.Helper()
-	_, _, exitCode, err := conn.Client.Exec(fmt.Sprintf("test -e %q", path))
+	_, _, exitCode, err := conn.Client.Exec("test -e " + util.ShellQuote(path))
 	if err != nil {
 		return false
 	}
@@ -186,7 +188,7 @@ func RemoteFileExists(t *testing.T, conn *host.Connection, path string) bool {
 // RemoteDirExists checks if a directory exists on the remote host.
 func RemoteDirExists(t *testing.T, conn *host.Connection, path string) bool {
 	t.Helper()
-	_, _, exitCode, err := conn.Client.Exec(fmt.Sprintf("test -d %q", path))
+	_, _, exitCode, err := conn.Client.Exec("test -d " + util.ShellQuote(path))
 	if err != nil {
 		return false
 	}
@@ -196,7 +198,7 @@ func RemoteDirExists(t *testing.T, conn *host.Connection, path string) bool {
 // EnsureRemoteDir creates a directory on the remote host if it doesn't exist.
 func EnsureRemoteDir(t *testing.T, conn *host.Connection, path string) {
 	t.Helper()
-	_, stderr, exitCode, err := conn.Client.Exec(fmt.Sprintf("mkdir -p %q", path))
+	_, stderr, exitCode, err := conn.Client.Exec("mkdir -p " + util.ShellQuote(path))
 	if err != nil {
 		t.Fatalf("Failed to create remote directory %s: %v", path, err)
 	}
@@ -217,7 +219,7 @@ func RequireRemoteRsync(t *testing.T, conn *host.Connection) {
 // ListRemoteDir lists files in a remote directory.
 func ListRemoteDir(t *testing.T, conn *host.Connection, path string) []string {
 	t.Helper()
-	stdout, _, exitCode, err := conn.Client.Exec(fmt.Sprintf("ls -1 %q 2>/dev/null", path))
+	stdout, _, exitCode, err := conn.Client.Exec("ls -1 " + util.ShellQuote(path) + " 2>/dev/null")
 	if err != nil || exitCode != 0 {
 		return nil
 	}

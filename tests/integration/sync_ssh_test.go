@@ -2,13 +2,13 @@ package integration
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -297,7 +297,7 @@ func TestSyncDryRunChangesNothing(t *testing.T) {
 	// A remote node_modules older than the local lockfile is stale.
 	EnsureRemoteDir(t, conn, remoteDir+"/node_modules")
 	CreateRemoteFile(t, conn, remoteDir+"/node_modules/installed.txt", "old install")
-	_, _, code, err := conn.Client.Exec(fmt.Sprintf("touch -d '2000-01-01' %q", remoteDir+"/node_modules"))
+	_, _, code, err := conn.Client.Exec("touch -d '2000-01-01' " + util.ShellQuote(remoteDir+"/node_modules"))
 	require.NoError(t, err)
 	require.Equal(t, 0, code)
 	CreateRemoteFile(t, conn, remoteDir+"/remote-only.txt", "a real sync would delete this")
