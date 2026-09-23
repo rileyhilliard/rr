@@ -244,7 +244,7 @@ func TestLoadAndValidateConfig_NoConfig(t *testing.T) {
 	t.Setenv("HOME", tmpDir)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.Error(t, err)
 	// Should fail because no config file and no hosts in global config
 	assert.True(t, strings.Contains(err.Error(), "No config file found") ||
@@ -285,7 +285,7 @@ host: dev
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, ctx.Resolved)
 	require.NotNil(t, ctx.Resolved.Project)
@@ -434,7 +434,7 @@ func TestLoadAndValidateConfig_InvalidYAML(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.Error(t, err)
 }
 
@@ -463,7 +463,7 @@ hosts: {}
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "No hosts")
 }
@@ -1497,7 +1497,7 @@ host: prod
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, ctx.Resolved)
 	require.NotNil(t, ctx.Resolved.Project)
@@ -1542,7 +1542,7 @@ sync:
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, ctx.Resolved)
 	require.NotNil(t, ctx.Resolved.Project)
@@ -1586,7 +1586,7 @@ lock:
 	require.NoError(t, err)
 
 	ctx := &WorkflowContext{}
-	err = loadAndValidateConfig(ctx)
+	err = loadAndValidateConfig(ctx, WorkflowOptions{})
 	require.NoError(t, err)
 	require.NotNil(t, ctx.Resolved)
 	require.NotNil(t, ctx.Resolved.Project)

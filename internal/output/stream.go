@@ -181,13 +181,6 @@ func (h *StreamHandler) StderrLines() int {
 	return h.stderrLines
 }
 
-// GetFormatter returns the current formatter, or nil if none is set.
-func (h *StreamHandler) GetFormatter() Formatter {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.formatter
-}
-
 // WriteStdout writes a line to stdout after processing.
 func (h *StreamHandler) WriteStdout(line string) error {
 	h.mu.Lock()

@@ -284,7 +284,7 @@ func hostRemove(name string) error {
 			available = append(available, k)
 		}
 		sort.Strings(available)
-		return errors.New(errors.ErrConfig,
+		return errors.New(errors.ErrHostNotFound,
 			fmt.Sprintf("Host '%s' not found", name),
 			fmt.Sprintf("Available hosts: %s", strings.Join(available, ", ")))
 	}

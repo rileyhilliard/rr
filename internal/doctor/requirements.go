@@ -70,15 +70,16 @@ func (c *RequirementsCheck) Run() CheckResult {
 		}
 	}
 
-	suggestion := "Install the missing tools manually"
+	suggestion := fmt.Sprintf("Install the missing tools on %s, then re-run 'rr doctor --requirements'", c.HostName)
 	if installable > 0 {
-		suggestion = fmt.Sprintf("%d of %d can be auto-installed. Run the failing command to trigger installation prompts.",
-			installable, len(missing))
+		suggestion = fmt.Sprintf("%d of %d can be auto-installed: run 'rr provision --host %s' (or 'rr doctor --requirements --fix')",
+			installable, len(missing), c.HostName)
 	}
 
+	// Fail, not warn: rr run refuses to start when a requirement is missing.
 	return CheckResult{
 		Name:       c.Name(),
-		Status:     StatusWarn,
+		Status:     StatusFail,
 		Message:    fmt.Sprintf("Requirements (%s): %d missing: %s", c.HostName, len(missing), strings.Join(missingNames, ", ")),
 		Suggestion: suggestion,
 		Fixable:    installable > 0,
@@ -138,19 +139,4 @@ func NewRequirementsCheck(hostName string, hostCfg config.Host, conn *host.Conne
 		Conn:         conn,
 		Requirements: reqs,
 	}
-}
-
-// NewRequirementsChecks creates requirement checks for all connected hosts.
-func NewRequirementsChecks(hosts map[string]config.Host, connections map[string]*host.Connection, projectCfg *config.Config) []Check {
-	var checks []Check
-
-	for hostName := range hosts {
-		conn := connections[hostName]
-		check := NewRequirementsCheck(hostName, hosts[hostName], conn, projectCfg)
-		if len(check.Requirements) > 0 || conn != nil {
-			checks = append(checks, check)
-		}
-	}
-
-	return checks
 }

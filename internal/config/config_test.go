@@ -18,11 +18,7 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Empty(t, cfg.Host) // Project config has optional host reference
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Equal(t, 5*time.Minute, cfg.Lock.Timeout)
-	assert.Equal(t, 3*time.Minute, cfg.Lock.Stale)
-	assert.Equal(t, "auto", cfg.Output.Color)
-	assert.Equal(t, "auto", cfg.Output.Format)
-	assert.True(t, cfg.Output.Timing)
-	assert.Equal(t, "normal", cfg.Output.Verbosity)
+	assert.Equal(t, 90*time.Second, cfg.Lock.Stale)
 
 	// Monitor defaults
 	assert.Equal(t, "1s", cfg.Monitor.Interval)
@@ -408,9 +404,6 @@ tasks:
   test:
     description: Run tests
     run: go test ./...
-output:
-  color: always
-  verbosity: verbose
 `
 	err := os.WriteFile(configPath, []byte(content), 0644)
 	require.NoError(t, err)
@@ -423,7 +416,7 @@ output:
 	assert.True(t, cfg.Lock.Enabled)
 	assert.Len(t, cfg.Tasks, 2)
 	assert.Equal(t, "make build", cfg.Tasks["build"].Run)
-	assert.Equal(t, "always", cfg.Output.Color)
+	assert.Empty(t, cfg.Warnings)
 }
 
 func TestLoadNotFound(t *testing.T) {
@@ -1065,53 +1058,8 @@ func TestValidateTask(t *testing.T) {
 	}
 }
 
-func TestValidateOutput(t *testing.T) {
-	tests := []struct {
-		name    string
-		output  OutputConfig
-		wantErr bool
-	}{
-		{
-			name:    "all defaults",
-			output:  OutputConfig{},
-			wantErr: false,
-		},
-		{
-			name:    "valid explicit values",
-			output:  OutputConfig{Color: "always", Format: "pytest", Verbosity: "verbose"},
-			wantErr: false,
-		},
-		{
-			name:    "invalid color",
-			output:  OutputConfig{Color: "rainbow"},
-			wantErr: true,
-		},
-		{
-			name:    "invalid format",
-			output:  OutputConfig{Format: "unknown"},
-			wantErr: true,
-		},
-		{
-			name:    "invalid verbosity",
-			output:  OutputConfig{Verbosity: "extreme"},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateOutput(tt.output)
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestIsReservedTaskName(t *testing.T) {
-	reserved := []string{"run", "exec", "sync", "init", "setup", "status", "monitor", "doctor", "help", "version", "completion", "update"}
+	reserved := []string{"run", "exec", "sync", "init", "setup", "status", "monitor", "doctor", "help", "version", "completion", "update", "pull", "logs", "provision"}
 	for _, name := range reserved {
 		assert.True(t, IsReservedTaskName(name), "expected %q to be reserved", name)
 	}

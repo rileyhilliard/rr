@@ -231,8 +231,10 @@ func (cd *ConnectionDisplay) Success(hostName, alias string) {
 	)
 }
 
-// SuccessLocal completes the connection display for local fallback.
-func (cd *ConnectionDisplay) SuccessLocal() {
+// SuccessLocal completes the connection display for a local fallback.
+// detail says why, e.g. "all remote hosts unreachable" (see
+// host.DescribeLocalReason), and renders as "Running locally (<detail>)".
+func (cd *ConnectionDisplay) SuccessLocal(detail string) {
 	cd.mu.Lock()
 	defer cd.mu.Unlock()
 
@@ -249,8 +251,9 @@ func (cd *ConnectionDisplay) SuccessLocal() {
 	symbolStyle := lipgloss.NewStyle().Foreground(ColorWarning)
 	timingStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 
-	fmt.Fprintf(cd.w, "%s Running locally (all remote hosts unreachable) %s\n",
+	fmt.Fprintf(cd.w, "%s Running locally (%s) %s\n",
 		symbolStyle.Render(SymbolComplete),
+		detail,
 		timingStyle.Render(formatDuration(totalDuration)),
 	)
 }

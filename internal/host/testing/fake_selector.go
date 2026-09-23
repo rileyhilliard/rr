@@ -180,7 +180,7 @@ func (s *FakeSelector) SelectHost(hostName string) (*host.Connection, error) {
 
 	fakeHost, ok := s.hosts[hostName]
 	if !ok {
-		return nil, errors.New(errors.ErrConfig,
+		return nil, errors.New(errors.ErrHostNotFound,
 			"Host not found: "+hostName,
 			"Check your host configuration.")
 	}
@@ -288,7 +288,7 @@ func (s *FakeSelector) resolveHost(preferred string) (string, *FakeHost, error) 
 	if preferred != "" {
 		fakeHost, ok := s.hosts[preferred]
 		if !ok {
-			return "", nil, errors.New(errors.ErrConfig,
+			return "", nil, errors.New(errors.ErrHostNotFound,
 				"Host not found: "+preferred,
 				"Check your host configuration.")
 		}

@@ -54,9 +54,6 @@ lock:
   timeout: 30s
   stale: 2m
   dir: /tmp/rr-locks
-output:
-  color: auto
-  timing: true
 `
 	err = os.WriteFile(configPath, []byte(projectContent), 0644)
 	require.NoError(t, err)
@@ -92,10 +89,7 @@ output:
 	assert.Equal(t, 30*time.Second, cfg.Lock.Timeout)
 	assert.Equal(t, 2*time.Minute, cfg.Lock.Stale)
 	assert.Equal(t, "/tmp/rr-locks", cfg.Lock.Dir)
-
-	// Verify output config
-	assert.Equal(t, "auto", cfg.Output.Color)
-	assert.True(t, cfg.Output.Timing)
+	assert.Empty(t, cfg.Warnings)
 }
 
 func TestConfigValidation(t *testing.T) {

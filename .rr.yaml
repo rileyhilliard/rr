@@ -137,7 +137,3 @@ tasks:
       - lint
     fail_fast: true
     max_parallel: 2
-
-# Output formatting
-output:
-  format: go # Use Go test formatter for nice output

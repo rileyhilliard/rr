@@ -5,7 +5,6 @@ import (
 	stderrors "errors"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -149,7 +148,7 @@ func ErrorToJSON(err error) *JSONError {
 	var rrErr *errors.Error
 	if stderrors.As(err, &rrErr) {
 		return &JSONError{
-			Code:       mapErrorCode(rrErr.Code, rrErr.Message),
+			Code:       mapErrorCode(rrErr.Code),
 			Message:    rrErr.Message,
 			Suggestion: rrErr.Suggestion,
 		}
@@ -168,27 +167,25 @@ func ErrorToJSON(err error) *JSONError {
 	}
 }
 
-// mapErrorCode maps internal error codes to machine-readable codes.
-func mapErrorCode(internalCode, message string) string {
-	// First check internal code
-	switch internalCode {
-	case errors.ErrConfig:
-		// Distinguish between not found and invalid
-		msgLower := strings.ToLower(message)
-		if strings.Contains(msgLower, "not found") || strings.Contains(msgLower, "couldn't find") {
-			return ErrCodeConfigNotFound
-		}
-		return ErrCodeConfigInvalid
-	case errors.ErrSSH:
-		return ErrCodeSSHConnectionFail
-	case errors.ErrSync:
-		return ErrCodeRsyncFailed
-	case errors.ErrLock:
-		return ErrCodeLockHeld
-	case errors.ErrExec:
-		return ErrCodeCommandFailed
-	}
+// internalToPublicCode maps each internal error code to its machine-readable
+// public code. Errors are classified where they're created, so this is a pure
+// lookup: message text never affects the result.
+var internalToPublicCode = map[string]string{
+	errors.ErrConfig:         ErrCodeConfigInvalid,
+	errors.ErrConfigNotFound: ErrCodeConfigNotFound,
+	errors.ErrHostNotFound:   ErrCodeHostNotFound,
+	errors.ErrDependency:     ErrCodeDependencyMissing,
+	errors.ErrSSH:            ErrCodeSSHConnectionFail,
+	errors.ErrSync:           ErrCodeRsyncFailed,
+	errors.ErrLock:           ErrCodeLockHeld,
+	errors.ErrExec:           ErrCodeCommandFailed,
+}
 
+// mapErrorCode maps an internal error code to its public code, or UNKNOWN.
+func mapErrorCode(internalCode string) string {
+	if code, ok := internalToPublicCode[internalCode]; ok {
+		return code
+	}
 	return ErrCodeUnknown
 }
 

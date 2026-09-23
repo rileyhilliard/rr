@@ -61,6 +61,7 @@ type WorkflowContext struct {
 	ResultDetails map[string]interface{}
 
 	// Internal state
+	target     execTarget // local or remote, decided once in loadAndValidateConfig
 	selector   *host.Selector
 	signalChan chan os.Signal
 	ctx        context.Context
@@ -151,19 +152,16 @@ func (w *WorkflowContext) Close() {
 	})
 }
 
-// loadAndValidateConfig loads and validates both global and project config.
-func loadAndValidateConfig(ctx *WorkflowContext) error {
-	resolved, err := config.LoadResolved(Config())
+// loadAndValidateConfig loads and validates both global and project config
+// and decides the execution target (see execTarget).
+func loadAndValidateConfig(ctx *WorkflowContext, opts WorkflowOptions) error {
+	resolved, target, err := loadRunConfig(opts.Local, opts.Host, opts.Tag)
 	if err != nil {
 		return err
 	}
 
-	// Validate the resolved configuration
-	if err := config.ValidateResolved(resolved); err != nil {
-		return err
-	}
-
 	ctx.Resolved = resolved
+	ctx.target = target
 	return nil
 }
 
@@ -219,18 +217,12 @@ func subdirOffset(projectRoot string) string {
 	return filepath.ToSlash(rel)
 }
 
-// setupHostSelector creates and configures the host selector.
-// It uses ResolveHosts to determine which hosts this project can use.
+// setupHostSelector creates and configures the host selector for a remote
+// target. It uses ResolveHosts to determine which hosts this project can use.
+// A local target never gets here (see connectLocalTarget).
 func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 	// Resolve local_fallback from project config (overrides global)
 	localFallback := config.ResolveLocalFallback(ctx.Resolved)
-
-	// If --local flag is set, force local execution (empty hosts + local fallback)
-	if opts.Local {
-		ctx.selector = host.NewSelector(make(map[string]config.Host))
-		ctx.selector.SetLocalFallback(true)
-		return
-	}
 
 	// Get the hosts this project is allowed to use
 	// (respects project.Hosts list if specified, otherwise uses all global hosts)
@@ -313,7 +305,7 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		return err
 	}
 
-	var usedLocalFallback bool
+	var fallbackReason string
 
 	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
@@ -323,7 +315,8 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		case host.EventConnected:
 			connDisplay.AddAttempt(event.Alias, ui.StatusSuccess, event.Latency, "")
 		case host.EventLocalFallback:
-			usedLocalFallback = true
+			fallbackReason = event.Reason
+			ctx.AddResultDetail("fallback", fallbackDetail{Reason: event.Reason})
 		}
 	})
 
@@ -337,8 +330,8 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		return err
 	}
 
-	if usedLocalFallback {
-		connDisplay.SuccessLocal()
+	if fallbackReason != "" {
+		connDisplay.SuccessLocal(host.DescribeLocalReason(fallbackReason))
 	} else {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}
@@ -361,10 +354,11 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 				Host:   "local",
 				Details: map[string]interface{}{
 					"local_fallback": true,
-					"reason":         "hosts_unreachable",
+					"reason":         event.Reason,
 					"message":        event.Message,
 				},
 			})
+			ctx.AddResultDetail("fallback", fallbackDetail{Reason: event.Reason})
 		}
 	})
 
@@ -385,6 +379,29 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 	}
 	reporter.PhaseComplete("connect", host, time.Since(connectStart))
 	return nil
+}
+
+// connectLocalTarget completes the connect phase for a local target
+// (--local or local mode). Nothing is dialed and nothing went wrong, so it's
+// a normal connect completion carrying the reason, not a fallback warning.
+func connectLocalTarget(ctx *WorkflowContext) {
+	ctx.Conn = localConnection()
+	reason := ctx.target.reason
+
+	if PrettyMode() {
+		ctx.PhaseDisplay.RenderSuccess("Running locally ("+host.DescribeLocalReason(reason)+")", 0)
+		return
+	}
+
+	reporter := ctx.GetReporter()
+	reporter.PhaseStart("connect")
+	WritePhaseEvent(PhaseEvent{
+		Type:    "phase",
+		Phase:   "connect",
+		Status:  "complete",
+		Host:    "local",
+		Details: map[string]interface{}{"reason": reason},
+	})
 }
 
 // syncPhase handles the file sync phase of the workflow.
@@ -418,23 +435,7 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 
 	syncCfg := resolveSyncConfig(ctx)
 
-	invalidationNotify := func(dir, lockfile string) {
-		WritePhaseEvent(PhaseEvent{
-			Type:   "phase",
-			Phase:  "sync",
-			Status: "invalidated",
-			Details: map[string]interface{}{
-				"dir":      dir,
-				"lockfile": lockfile,
-			},
-		})
-	}
-	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, invalidationNotify); err != nil {
-		reporter.PhaseFailed("sync", err)
-		return err
-	}
-
-	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions())
+	err := rrsync.SyncWithOptions(ctx.Conn, ctx.WorkDir, syncCfg, nil, structuredSyncOptions(""))
 	if err != nil {
 		reporter.PhaseFailed("sync", err)
 		return err
@@ -444,14 +445,37 @@ func syncStructured(ctx *WorkflowContext, syncStart time.Time) error {
 	return nil
 }
 
-// structuredSyncOptions surfaces sync warnings as phase events.
-func structuredSyncOptions() *rrsync.SyncOptions {
+// syncOptions returns the sync callbacks for the active output mode.
+func syncOptions() *rrsync.SyncOptions {
+	if PrettyMode() {
+		return prettySyncOptions()
+	}
+	return structuredSyncOptions("")
+}
+
+// structuredSyncOptions surfaces sync notices and warnings as phase events.
+// hostName goes in the events' host field; parallel runs set it because they
+// sync several hosts, single runs leave it empty.
+func structuredSyncOptions(hostName string) *rrsync.SyncOptions {
 	return &rrsync.SyncOptions{
+		Invalidated: func(dir, lockfile string) {
+			WritePhaseEvent(PhaseEvent{
+				Type:   "phase",
+				Phase:  "sync",
+				Status: "invalidated",
+				Host:   hostName,
+				Details: map[string]interface{}{
+					"dir":      dir,
+					"lockfile": lockfile,
+				},
+			})
+		},
 		Warn: func(w rrsync.SyncWarning) {
 			WritePhaseEvent(PhaseEvent{
 				Type:    "phase",
 				Phase:   "sync",
 				Status:  "warn",
+				Host:    hostName,
 				Details: w.Details,
 			})
 		},
@@ -460,15 +484,22 @@ func structuredSyncOptions() *rrsync.SyncOptions {
 				Type:    "phase",
 				Phase:   "sync",
 				Status:  "pruned",
+				Host:    hostName,
 				Details: map[string]interface{}{"dir": dir},
 			})
 		},
 	}
 }
 
-// prettySyncOptions surfaces sync warnings as printed warnings.
+// prettySyncOptions surfaces sync notices and warnings as printed lines.
 func prettySyncOptions() *rrsync.SyncOptions {
+	muted := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	return &rrsync.SyncOptions{
+		Invalidated: func(dir, lockfile string) {
+			// Runs while the sync spinner is drawing: clear its line first.
+			fmt.Print("\r\033[K")
+			fmt.Println(muted.Render(fmt.Sprintf("Invalidating stale %s (%s changed)", dir, lockfile)))
+		},
 		Warn: func(w rrsync.SyncWarning) {
 			ui.PrintWarning(w.Message)
 		},
@@ -491,12 +522,6 @@ func resolveSyncConfig(ctx *WorkflowContext) config.SyncConfig {
 func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 	syncCfg := resolveSyncConfig(ctx)
 
-	// Delete stale remote directories when lockfiles have changed before syncing.
-	// Pretty mode: nil notify falls back to fmt.Printf in sync package.
-	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, nil); err != nil {
-		return err
-	}
-
 	syncProgress := ui.NewInlineProgress("Syncing files", os.Stdout)
 	syncProgress.SetUseFakeProgress(false) // Use real rsync progress
 	progressWriter := ui.NewProgressWriter(syncProgress, nil)
@@ -516,12 +541,6 @@ func syncWithProgress(ctx *WorkflowContext, syncStart time.Time) error {
 // syncQuiet syncs files with minimal output (spinner only).
 func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	syncCfg := resolveSyncConfig(ctx)
-
-	// Delete stale remote directories when lockfiles have changed before syncing.
-	// Pretty mode: nil notify falls back to fmt.Printf in sync package.
-	if err := rrsync.InvalidateStaleDirectories(ctx.Conn, ctx.WorkDir, syncCfg.Invalidations, nil); err != nil {
-		return err
-	}
 
 	syncSpinner := ui.NewSpinner("Syncing files")
 	syncSpinner.Start()
@@ -603,11 +622,6 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 //
 // The lock-before-sync order ensures we don't waste time syncing to a host we can't use.
 func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
-	// Validate mutually exclusive flags
-	if err := ValidateLocalAndTag(opts.Local, opts.Tag); err != nil {
-		return nil, err
-	}
-
 	pd := ui.NewPhaseDisplay(os.Stdout)
 	ctx := &WorkflowContext{
 		StartTime:    time.Now(),
@@ -618,42 +632,24 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	// Set up signal handler early to ensure cleanup on Ctrl+C
 	ctx.setupSignalHandler()
 
-	// Load and validate config
-	if err := loadAndValidateConfig(ctx); err != nil {
+	// Load and validate config, and decide local vs remote. This also
+	// rejects --local with --tag before any config is read.
+	if err := loadAndValidateConfig(ctx, opts); err != nil {
+		ctx.Close()
 		return nil, err
 	}
 
 	// Determine working directory
 	if err := setupWorkDir(ctx, opts); err != nil {
+		ctx.Close()
 		return nil, err
 	}
 
-	// Create host selector
-	setupHostSelector(ctx, opts)
-
-	// Check if we have multiple hosts (load balancing scenario)
-	hostCount := ctx.selector.HostCount()
-	useLoadBalancing := hostCount > 1 && opts.Host == "" && opts.Tag == ""
-
-	if useLoadBalancing {
-		// Multi-host: use load-balanced workflow (Connect + Lock combined, then Sync)
-		if err := setupWorkflowLoadBalanced(ctx, opts); err != nil {
-			ctx.Close()
-			return nil, err
-		}
-	} else {
-		// Single host or explicit host/tag: use original workflow order
-		// Phase 1: Connect
-		if err := connectPhase(ctx, opts); err != nil {
-			ctx.Close()
-			return nil, err
-		}
-
-		// Phase 2: Acquire lock (moved before sync for consistency)
-		if err := lockPhase(ctx, opts); err != nil {
-			ctx.Close()
-			return nil, err
-		}
+	if ctx.target.local {
+		connectLocalTarget(ctx)
+	} else if err := connectRemote(ctx, opts); err != nil {
+		ctx.Close()
+		return nil, err
 	}
 
 	// Phase 3: Check requirements (before sync)
@@ -669,6 +665,24 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	}
 
 	return ctx, nil
+}
+
+// connectRemote picks a remote host and takes its lock. With several hosts
+// and no --host/--tag it load-balances (connect + lock combined); otherwise
+// it connects, then locks.
+func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
+	setupHostSelector(ctx, opts)
+
+	if ctx.selector.HostCount() > 1 && opts.Host == "" && opts.Tag == "" {
+		return setupWorkflowLoadBalanced(ctx, opts)
+	}
+
+	// Phase 1: Connect
+	if err := connectPhase(ctx, opts); err != nil {
+		return err
+	}
+	// Phase 2: Acquire lock (before sync)
+	return lockPhase(ctx, opts)
 }
 
 // ExecutePullPhase downloads files from remote after command execution.
@@ -750,9 +764,16 @@ func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return nil
 	}
 
-	// Report missing requirements with actionable suggestion
-	missingStr := require.FormatMissing(missing)
-	return errors.New(errors.ErrExec,
-		"Missing required tools: "+missingStr,
-		"Run 'rr provision' to install missing tools, or use --skip-requirements to bypass.")
+	return missingRequirementsError(require.FormatMissing(missing), opts.TaskName)
+}
+
+// missingRequirementsError reports required tools missing on the remote.
+// Only rr run and rr exec have --skip-requirements, so the suggestion
+// mentions it only when no task is running (taskName is empty).
+func missingRequirementsError(missing, taskName string) error {
+	suggestion := "Run 'rr provision' to install missing tools, or use --skip-requirements to bypass."
+	if taskName != "" {
+		suggestion = "Run 'rr provision' to install missing tools, or remove them from 'require:' in your config."
+	}
+	return errors.New(errors.ErrDependency, "Missing required tools: "+missing, suggestion)
 }

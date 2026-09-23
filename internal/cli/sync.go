@@ -131,7 +131,7 @@ func Sync(opts SyncOptions) error {
 		syncCfg.Flags = append(slices.Clone(syncCfg.Flags), "--dry-run", "-v")
 	}
 
-	err = sync.Sync(conn, workDir, syncCfg, nil)
+	err = sync.SyncWithOptions(conn, workDir, syncCfg, nil, syncOptions())
 	if err != nil {
 		spinner.Fail()
 		return err

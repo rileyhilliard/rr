@@ -296,7 +296,7 @@ func TestPhaseTrackerCompleteConnectionLocal(t *testing.T) {
 
 	pt.StartConnection()
 	pt.AddConnectionAttempt("remote-host", ui.StatusTimeout, 5*time.Second, "")
-	pt.CompleteConnectionLocal()
+	pt.CompleteConnectionLocal("all remote hosts locked")
 
 	assert.Equal(t, "local", pt.ConnectedHost())
 	assert.Equal(t, "local", pt.ConnectedAlias())
@@ -304,7 +304,8 @@ func TestPhaseTrackerCompleteConnectionLocal(t *testing.T) {
 	events := pt.Events()
 	require.Len(t, events, 1)
 	assert.True(t, events[0].Success)
-	assert.Contains(t, events[0].Message, "locally")
+	assert.Equal(t, "Running locally (all remote hosts locked)", events[0].Message)
+	assert.Contains(t, buf.String(), "Running locally (all remote hosts locked)")
 }
 
 func TestPhaseTrackerFailConnection(t *testing.T) {

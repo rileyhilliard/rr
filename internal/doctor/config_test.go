@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConfigFileCheck(t *testing.T) {
@@ -226,5 +229,46 @@ func TestNewConfigChecks(t *testing.T) {
 		if check.Category() != "CONFIG" {
 			t.Errorf("expected CONFIG category, got %s", check.Category())
 		}
+	}
+}
+
+// Outside a project, rr still runs against global hosts, so a missing
+// .rr.yaml must not fail doctor.
+func TestConfigChecks_NoProjectConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Chdir(dir)
+
+	fileResult := (&ConfigFileCheck{}).Run()
+	assert.Equal(t, StatusWarn, fileResult.Status, fileResult.Message)
+	assert.False(t, fileResult.Fixable, "Fix() is a no-op, so the result must not claim to be fixable")
+
+	schemaResult := (&ConfigSchemaCheck{}).Run()
+	assert.Equal(t, StatusPass, schemaResult.Status, schemaResult.Message)
+}
+
+func TestConfigHostsCheck_NoHosts(t *testing.T) {
+	tests := []struct {
+		name    string
+		project string
+		want    CheckStatus
+	}{
+		{name: "no local fallback fails", project: "version: 1\n", want: StatusFail},
+		{name: "local fallback warns", project: "version: 1\nlocal_fallback: true\n", want: StatusWarn},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(home, ".rr"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".rr", "config.yaml"), []byte("version: 1\nhosts: {}\n"), 0o644))
+			t.Setenv("HOME", home)
+
+			cfgPath := filepath.Join(home, ".rr.yaml")
+			require.NoError(t, os.WriteFile(cfgPath, []byte(tt.project), 0o644))
+
+			result := (&ConfigHostsCheck{ConfigPath: cfgPath}).Run()
+			assert.Equal(t, tt.want, result.Status, result.Message)
+		})
 	}
 }

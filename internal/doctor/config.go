@@ -26,13 +26,14 @@ func (c *ConfigFileCheck) Run() CheckResult {
 		}
 	}
 
+	// No project config is a warning: rr runs without .rr.yaml, using every
+	// host from the global config.
 	if path == "" {
 		return CheckResult{
 			Name:       c.Name(),
-			Status:     StatusFail,
-			Message:    "No config file found",
+			Status:     StatusWarn,
+			Message:    "No project config (.rr.yaml) found; using global hosts only",
 			Suggestion: "Run 'rr init' to create a .rr.yaml config file",
-			Fixable:    true,
 		}
 	}
 
@@ -58,12 +59,21 @@ func (c *ConfigSchemaCheck) Category() string { return "CONFIG" }
 
 func (c *ConfigSchemaCheck) Run() CheckResult {
 	path, err := config.Find(c.ConfigPath)
-	if err != nil || path == "" {
-		// ConfigFileCheck should catch this
+	if err != nil {
+		// ConfigFileCheck reports the lookup error
+		return CheckResult{
+			Name:       c.Name(),
+			Status:     StatusFail,
+			Message:    "Cannot validate schema: config file not found",
+			Suggestion: "Check the --config path, or run 'rr init' to create a .rr.yaml",
+		}
+	}
+	if path == "" {
+		// Nothing to validate; ConfigFileCheck already warns about it
 		return CheckResult{
 			Name:    c.Name(),
-			Status:  StatusFail,
-			Message: "Cannot validate schema: no config file",
+			Status:  StatusPass,
+			Message: "No project config to validate",
 		}
 	}
 
@@ -122,14 +132,27 @@ func (c *ConfigHostsCheck) Run() CheckResult {
 
 	// Try to load project config for task count
 	numTasks := 0
+	var projectCfg *config.Config
 	path, _ := config.Find(c.ConfigPath)
 	if path != "" {
-		if projectCfg, err := config.Load(path); err == nil {
-			numTasks = len(projectCfg.Tasks)
+		if cfg, err := config.Load(path); err == nil {
+			projectCfg = cfg
+			numTasks = len(cfg.Tasks)
 		}
 	}
 
 	if numHosts == 0 {
+		// With local_fallback on, commands run locally when no host is
+		// available, so zero hosts doesn't block a run.
+		resolved := &config.ResolvedConfig{Global: globalCfg, Project: projectCfg}
+		if config.ResolveLocalFallback(resolved) {
+			return CheckResult{
+				Name:       c.Name(),
+				Status:     StatusWarn,
+				Message:    "No hosts configured; commands run locally (local_fallback)",
+				Suggestion: "Add a host with 'rr host add' to run remotely",
+			}
+		}
 		return CheckResult{
 			Name:       c.Name(),
 			Status:     StatusFail,

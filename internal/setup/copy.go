@@ -31,7 +31,7 @@ func CopyKey(host string, keyPath string) error {
 	// Check ssh-copy-id exists
 	sshCopyIDPath, err := exec.LookPath("ssh-copy-id")
 	if err != nil {
-		return errors.New(errors.ErrSSH,
+		return errors.New(errors.ErrDependency,
 			"Can't find ssh-copy-id",
 			"Install OpenSSH, or copy the key manually.")
 	}

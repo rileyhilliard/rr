@@ -14,7 +14,7 @@ import (
 func FindRsync() (string, error) {
 	path, err := exec.LookPath("rsync")
 	if err != nil {
-		return "", errors.New(errors.ErrSync,
+		return "", errors.New(errors.ErrDependency,
 			"rsync isn't installed locally",
 			"Grab it with: brew install rsync (macOS) or apt install rsync (Linux)")
 	}
@@ -62,7 +62,7 @@ func CheckRemote(conn *host.Connection) error {
 			"Check your SSH connection.")
 	}
 	if exitCode != 0 {
-		return errors.New(errors.ErrSync,
+		return errors.New(errors.ErrDependency,
 			fmt.Sprintf("rsync isn't installed on %s", conn.Name),
 			"Install it on the remote: apt install rsync (Debian/Ubuntu) or yum install rsync (RHEL)")
 	}

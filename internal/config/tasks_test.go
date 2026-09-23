@@ -224,3 +224,70 @@ func TestGetStepOnFail(t *testing.T) {
 
 // Note: formatList was removed - use util.JoinOrNone instead.
 // Tests are in internal/util/strings_test.go
+
+// TestMergedTaskEnv covers the one env merge that single tasks and parallel
+// subtasks share: host env < project defaults env < task env.
+func TestMergedTaskEnv(t *testing.T) {
+	cfg := &Config{Defaults: ProjectDefaults{Env: map[string]string{"A": "defaults", "B": "defaults"}}}
+	host := &Host{Env: map[string]string{"A": "host", "B": "host", "C": "host"}}
+
+	tests := []struct {
+		name    string
+		cfg     *Config
+		host    *Host
+		taskEnv map[string]string
+		want    map[string]string
+	}{
+		{
+			name:    "all three layers",
+			cfg:     cfg,
+			host:    host,
+			taskEnv: map[string]string{"B": "task"},
+			want:    map[string]string{"A": "defaults", "B": "task", "C": "host"},
+		},
+		{
+			name: "no host (local run)",
+			cfg:  cfg,
+			want: map[string]string{"A": "defaults", "B": "defaults"},
+		},
+		{
+			name:    "nil config",
+			host:    host,
+			taskEnv: map[string]string{"D": "task"},
+			want:    map[string]string{"A": "host", "B": "host", "C": "host", "D": "task"},
+		},
+		{
+			name: "nothing set",
+			want: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, MergedTaskEnv(tt.cfg, tt.host, tt.taskEnv))
+		})
+	}
+}
+
+func TestGetMergedSetupCommands(t *testing.T) {
+	cfg := &Config{Defaults: ProjectDefaults{Setup: []string{"source .venv/bin/activate"}}}
+	host := &Host{SetupCommands: []string{"source ~/.profile"}}
+
+	tests := []struct {
+		name string
+		cfg  *Config
+		host *Host
+		want []string
+	}{
+		{name: "host then defaults", cfg: cfg, host: host, want: []string{"source ~/.profile", "source .venv/bin/activate"}},
+		{name: "no host", cfg: cfg, want: []string{"source .venv/bin/activate"}},
+		{name: "nil config", host: host, want: []string{"source ~/.profile"}},
+		{name: "nothing set", want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, GetMergedSetupCommands(tt.cfg, tt.host))
+		})
+	}
+}

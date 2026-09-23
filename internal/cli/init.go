@@ -609,7 +609,7 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	sb.WriteString("  wait_timeout: 1m\n")
 	sb.WriteString("\n")
 	sb.WriteString("  # When to consider a lock stale (holder probably crashed)\n")
-	sb.WriteString("  stale: 3m\n")
+	sb.WriteString("  stale: 90s\n")
 	sb.WriteString("\n")
 	sb.WriteString("  # Where lock files are stored on remote\n")
 	sb.WriteString("  # dir: /tmp/rr-locks\n\n")
@@ -628,14 +628,6 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	sb.WriteString("#         run: pip install -e .\n")
 	sb.WriteString("#       - name: Run build\n")
 	sb.WriteString("#         run: python setup.py build\n\n")
-
-	// Output section (commented out)
-	sb.WriteString("# Output formatting\n")
-	sb.WriteString("# output:\n")
-	sb.WriteString("#   color: auto      # auto, always, or never\n")
-	sb.WriteString("#   format: auto     # auto, generic, pytest, jest, go, cargo\n")
-	sb.WriteString("#   timing: true     # show timing for each phase\n")
-	sb.WriteString("#   verbosity: normal  # quiet, normal, or verbose\n\n")
 
 	// Monitor section (commented out)
 	sb.WriteString("# Resource monitoring dashboard settings (rr monitor)\n")

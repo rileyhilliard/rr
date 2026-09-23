@@ -3,18 +3,24 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
+	rrsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/internal/util"
 )
 
@@ -38,13 +44,9 @@ type ParallelTaskOptions struct {
 // RunParallelTask executes a parallel task group.
 // Returns the aggregate exit code and any error.
 func RunParallelTask(opts ParallelTaskOptions) (int, error) {
-	// Load and validate config
-	resolved, err := config.LoadResolved(Config())
+	// Load and validate config, and decide local vs remote
+	resolved, target, err := loadRunConfig(opts.Local, opts.Host, opts.Tag)
 	if err != nil {
-		return 1, err
-	}
-
-	if err := config.ValidateResolved(resolved); err != nil {
 		return 1, err
 	}
 
@@ -76,20 +78,11 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		return 1, err
 	}
 
-	// Resolve hosts - hostOrder preserves priority from config
-	hostOrder, hosts, err := config.ResolveHosts(resolved, opts.Host)
+	// Resolve hosts - hostOrder preserves priority from config (none for a
+	// local target)
+	hostOrder, hosts, err := resolveTargetHosts(resolved, target, opts.Host)
 	if err != nil {
 		return 1, err
-	}
-
-	// Handle --local flag
-	if opts.Local {
-		// --local and --tag are mutually exclusive
-		if err := ValidateLocalAndTag(opts.Local, opts.Tag); err != nil {
-			return 1, err
-		}
-		hosts = make(map[string]config.Host)
-		hostOrder = nil
 	}
 
 	// Filter by tag if specified
@@ -107,7 +100,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// the run would end with a "no available host" failure after the other
 	// subtasks finished; with --host pointing at a disallowed host the old
 	// scheduler ran it there anyway.
-	if !opts.Local {
+	if !target.local {
 		if err := checkSubtaskHosts(tasks, hostOrder); err != nil {
 			return 1, err
 		}
@@ -125,13 +118,16 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		outputMode = parallel.OutputQuiet
 	}
 
-	// Build parallel config
+	// Build parallel config. Workers sync through the same callbacks as a
+	// single run, so invalidation, provenance and prune notices show up.
+	syncNotices := &parallelSyncNotices{}
 	parallelCfg := parallel.Config{
 		MaxParallel: task.MaxParallel,
 		FailFast:    task.FailFast,
 		OutputMode:  outputMode,
 		SaveLogs:    !opts.NoLogs,
 		Setup:       task.Setup,
+		SyncOptions: syncNotices.optionsFor,
 	}
 
 	// Apply CLI overrides
@@ -194,8 +190,15 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 
 	// Execute
 	result, err := orchestrator.Run(ctx)
+	syncNotices.flush()
 	if err != nil {
 		return 1, err
+	}
+
+	// Pull every subtask's files, pass or fail: a failed shard's junit and
+	// coverage files are what you need to debug it. Skipped on Ctrl+C.
+	if ctx.Err() == nil {
+		pullSubtaskFiles(tasks, result, hosts, rrsync.Pull)
 	}
 
 	return renderParallelResult(result, logWriter, opts.TaskName), nil
@@ -411,9 +414,134 @@ func buildSubtaskInfos(proj *config.Config, forwardTask *config.TaskConfig, flat
 			Command:      cmd,
 			Env:          subtask.Env,
 			AllowedHosts: subtask.Hosts,
+			Pull:         subtask.Pull,
 		})
 	}
 	return tasks, nil
+}
+
+// parallelSyncNotices hands parallel workers the same sync callbacks a single
+// run uses. Workers sync concurrently, so callbacks are serialized. Structured
+// mode emits the sync phase events right away, with the host set since each
+// host syncs once for all its subtasks. Pretty mode holds the lines until
+// flush, because printing under the live progress display garbles it.
+type parallelSyncNotices struct {
+	mu      sync.Mutex
+	pending []func()
+}
+
+// optionsFor returns the sync options for one host's sync.
+func (n *parallelSyncNotices) optionsFor(hostName string) *rrsync.SyncOptions {
+	if !PrettyMode() {
+		base := structuredSyncOptions(hostName)
+		return &rrsync.SyncOptions{
+			Invalidated: func(dir, lockfile string) { n.now(func() { base.Invalidated(dir, lockfile) }) },
+			Warn:        func(w rrsync.SyncWarning) { n.now(func() { base.Warn(w) }) },
+			Pruned:      func(dir string) { n.now(func() { base.Pruned(dir) }) },
+		}
+	}
+	base := prettySyncOptions()
+	return &rrsync.SyncOptions{
+		Invalidated: func(dir, lockfile string) { n.later(func() { base.Invalidated(dir, lockfile) }) },
+		Warn:        func(w rrsync.SyncWarning) { n.later(func() { base.Warn(w) }) },
+		Pruned:      func(dir string) { n.later(func() { base.Pruned(dir) }) },
+	}
+}
+
+func (n *parallelSyncNotices) now(fn func()) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	fn()
+}
+
+func (n *parallelSyncNotices) later(fn func()) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.pending = append(n.pending, fn)
+}
+
+// flush prints any held pretty-mode notices. Call it after the run's live
+// display has closed.
+func (n *parallelSyncNotices) flush() {
+	n.mu.Lock()
+	pending := n.pending
+	n.pending = nil
+	n.mu.Unlock()
+	for _, fn := range pending {
+		fn()
+	}
+}
+
+// pullFunc matches rrsync.Pull; tests swap in a fake.
+type pullFunc func(conn *host.Connection, opts rrsync.PullOptions, progress io.Writer) error
+
+// pullSubtaskFiles runs each subtask's `pull:` after the whole parallel run
+// has finished, whatever the subtask's exit code. Pulls run one at a time in
+// subtask order, from the host the subtask ran on, through the alias that
+// reached it. Each subtask's files land in <dest>/<subtask>/ so shards with
+// the same output paths don't overwrite each other locally. Subtasks that
+// never reached a remote host (local runs, no host available) are skipped.
+// A failed pull is reported but doesn't change the run's exit code, same as
+// single tasks.
+func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, pull pullFunc) {
+	ranOn := make(map[int]*parallel.TaskResult, len(result.TaskResults))
+	for i := range result.TaskResults {
+		ranOn[result.TaskResults[i].TaskIndex] = &result.TaskResults[i]
+	}
+
+	for _, t := range tasks {
+		tr, ok := ranOn[t.Index]
+		if !ok || len(t.Pull) == 0 {
+			continue
+		}
+		hostCfg, remote := hosts[tr.Host]
+		if !remote {
+			continue // "local" or "none": nothing on a remote to pull
+		}
+		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
+		pullOpts := rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, t.Name)}
+		pullOne(t.Name, conn, pullOpts, pull)
+	}
+}
+
+// pullOne pulls one subtask's files and reports it as a pull phase.
+func pullOne(taskName string, conn *host.Connection, opts rrsync.PullOptions, pull pullFunc) {
+	start := time.Now()
+	details := map[string]interface{}{"task": taskName}
+
+	if !PrettyMode() {
+		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "started", Host: conn.Name, Details: details})
+		if err := pull(conn, opts, nil); err != nil {
+			WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "failed", Host: conn.Name, Error: err.Error(), Details: details})
+			return
+		}
+		WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "complete", Host: conn.Name,
+			Duration: time.Since(start).Seconds(), Details: details})
+		return
+	}
+
+	spinner := ui.NewSpinner(fmt.Sprintf("Pulling %s files (%s)", taskName, conn.Name))
+	spinner.Start()
+	if err := pull(conn, opts, nil); err != nil {
+		spinner.Fail()
+		fmt.Printf("%s Pull failed for %s: %s\n", ui.SymbolFail, taskName, err.Error())
+		return
+	}
+	spinner.Success()
+}
+
+// subtaskPullItems rewrites a subtask's pull items so each lands in
+// <dest>/<subtask>/ (./<subtask>/ when dest is unset).
+func subtaskPullItems(items []config.PullItem, subtask string) []config.PullItem {
+	out := make([]config.PullItem, 0, len(items))
+	for _, item := range items {
+		dest := item.Dest
+		if dest == "" {
+			dest = "."
+		}
+		out = append(out, config.PullItem{Src: item.Src, Dest: filepath.Join(dest, subtask)})
+	}
+	return out
 }
 
 // writeTaskLogs writes task outputs to log files, warning on errors.
@@ -454,13 +582,13 @@ func determineOutputMode(opts ParallelTaskOptions, task *config.TaskConfig) para
 	// Task-level output config
 	if task.Output != "" {
 		switch task.Output {
-		case "stream":
+		case config.TaskOutputStream:
 			return parallel.OutputStream
-		case "verbose":
+		case config.TaskOutputVerbose:
 			return parallel.OutputVerbose
-		case "quiet":
+		case config.TaskOutputQuiet:
 			return parallel.OutputQuiet
-		case "progress":
+		case config.TaskOutputProgress:
 			return parallel.OutputProgress
 		}
 	}

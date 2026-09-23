@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/errors"
@@ -170,7 +175,7 @@ func TestWriteJSONFromError_GenericError(t *testing.T) {
 func TestWriteJSONFromError_StructuredError(t *testing.T) {
 	var buf bytes.Buffer
 
-	rrErr := errors.New(errors.ErrConfig, "Config file not found", "Run 'rr init' to create one")
+	rrErr := errors.New(errors.ErrConfigNotFound, "Config file not found", "Run 'rr init' to create one")
 	err := WriteJSONFromError(&buf, rrErr)
 	assertExitOne(t, err)
 
@@ -217,89 +222,106 @@ func TestErrorToJSON_GenericError(t *testing.T) {
 	assert.Empty(t, result.Suggestion)
 }
 
-func TestErrorToJSON_AllInternalErrorCodes(t *testing.T) {
+func TestMapErrorCode_Table(t *testing.T) {
 	tests := []struct {
-		name         string
 		internalCode string
-		message      string
 		wantCode     string
 	}{
-		{
-			name:         "config not found",
-			internalCode: errors.ErrConfig,
-			message:      "Config file not found",
-			wantCode:     ErrCodeConfigNotFound,
-		},
-		{
-			name:         "config couldn't find",
-			internalCode: errors.ErrConfig,
-			message:      "Couldn't find config file",
-			wantCode:     ErrCodeConfigNotFound,
-		},
-		{
-			name:         "config invalid",
-			internalCode: errors.ErrConfig,
-			message:      "Config file has invalid syntax",
-			wantCode:     ErrCodeConfigInvalid,
-		},
-		{
-			name:         "ssh error",
-			internalCode: errors.ErrSSH,
-			message:      "SSH connection failed",
-			wantCode:     ErrCodeSSHConnectionFail,
-		},
-		{
-			name:         "sync error",
-			internalCode: errors.ErrSync,
-			message:      "Rsync failed",
-			wantCode:     ErrCodeRsyncFailed,
-		},
-		{
-			name:         "lock error",
-			internalCode: errors.ErrLock,
-			message:      "Lock is held",
-			wantCode:     ErrCodeLockHeld,
-		},
-		{
-			name:         "exec error",
-			internalCode: errors.ErrExec,
-			message:      "Command failed",
-			wantCode:     ErrCodeCommandFailed,
-		},
+		{errors.ErrConfig, ErrCodeConfigInvalid},
+		{errors.ErrConfigNotFound, ErrCodeConfigNotFound},
+		{errors.ErrHostNotFound, ErrCodeHostNotFound},
+		{errors.ErrDependency, ErrCodeDependencyMissing},
+		{errors.ErrSSH, ErrCodeSSHConnectionFail},
+		{errors.ErrSync, ErrCodeRsyncFailed},
+		{errors.ErrLock, ErrCodeLockHeld},
+		{errors.ErrExec, ErrCodeCommandFailed},
+		{"UNKNOWN_INTERNAL_CODE", ErrCodeUnknown},
+		{"", ErrCodeUnknown},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := errors.New(tt.internalCode, tt.message, "some suggestion")
-			result := ErrorToJSON(err)
-
+		t.Run(tt.internalCode, func(t *testing.T) {
+			result := ErrorToJSON(errors.New(tt.internalCode, "some message", "some suggestion"))
 			require.NotNil(t, result)
 			assert.Equal(t, tt.wantCode, result.Code)
-			assert.Equal(t, tt.message, result.Message)
+			assert.Equal(t, "some message", result.Message)
 		})
 	}
 }
 
-func TestErrorToJSON_ConfigNotFoundVsInvalid(t *testing.T) {
+// TestMapErrorCode_IgnoresMessageText guards against classifying errors by
+// sniffing their text: only the internal code decides the public code.
+func TestMapErrorCode_IgnoresMessageText(t *testing.T) {
 	tests := []struct {
-		message  string
-		wantCode string
+		internalCode string
+		message      string
+		wantCode     string
 	}{
-		{"Config file not found", ErrCodeConfigNotFound},
-		{"couldn't find config", ErrCodeConfigNotFound},
-		{"NOT FOUND anywhere", ErrCodeConfigNotFound},
-		{"Config has invalid syntax", ErrCodeConfigInvalid},
-		{"Failed to parse config", ErrCodeConfigInvalid},
-		{"Schema validation error", ErrCodeConfigInvalid},
+		{errors.ErrConfig, "Config file not found", ErrCodeConfigInvalid},
+		{errors.ErrConfig, "Couldn't find config file", ErrCodeConfigInvalid},
+		{errors.ErrConfig, "Host 'x' not found", ErrCodeConfigInvalid},
+		{errors.ErrExec, "Missing required tools: go", ErrCodeCommandFailed},
+		{errors.ErrConfigNotFound, "Config has invalid syntax", ErrCodeConfigNotFound},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.message, func(t *testing.T) {
-			err := errors.New(errors.ErrConfig, tt.message, "")
-			result := ErrorToJSON(err)
-
+			result := ErrorToJSON(errors.New(tt.internalCode, tt.message, ""))
 			assert.Equal(t, tt.wantCode, result.Code)
 		})
+	}
+}
+
+// publicErrorCodes returns every ErrCode* constant declared in json.go, read
+// from the source so a newly added code can't be missed by the contract test.
+func publicErrorCodes(t *testing.T) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "json.go", nil, 0)
+	require.NoError(t, err)
+
+	codes := make(map[string]string)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, name := range vs.Names {
+				if !strings.HasPrefix(name.Name, "ErrCode") || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				require.True(t, ok, "%s should be a string literal", name.Name)
+				value, err := strconv.Unquote(lit.Value)
+				require.NoError(t, err)
+				codes[name.Name] = value
+			}
+		}
+	}
+	require.NotEmpty(t, codes)
+	return codes
+}
+
+// TestErrorCodes_EveryPublicCodeIsProduced is the D-1 contract: every public
+// error code except UNKNOWN is reachable from at least one internal error
+// code (or, for the SSH-specific codes, from a probe failure reason).
+func TestErrorCodes_EveryPublicCodeIsProduced(t *testing.T) {
+	produced := make(map[string]bool)
+	for _, public := range internalToPublicCode {
+		produced[public] = true
+	}
+	for reason := host.ProbeFailUnknown; reason <= host.ProbeFailConnReset; reason++ {
+		produced[probeErrorToJSON(&host.ProbeError{Reason: reason}).Code] = true
+	}
+
+	for name, code := range publicErrorCodes(t) {
+		if code == ErrCodeUnknown {
+			assert.False(t, produced[code], "UNKNOWN should only be the fallback, never a mapping target")
+			continue
+		}
+		assert.True(t, produced[code], "%s (%s) is not produced by any internal code", name, code)
 	}
 }
 
@@ -415,11 +437,6 @@ func TestProbeErrorToJSON_Suggestions(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestMapErrorCode_UnknownCode(t *testing.T) {
-	result := mapErrorCode("UNKNOWN_INTERNAL_CODE", "Some message")
-	assert.Equal(t, ErrCodeUnknown, result)
 }
 
 func TestJSONEnvelope_Structure(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
+	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -1788,4 +1789,380 @@ func TestRenderHostsCategory_MultipleHosts(t *testing.T) {
 	assert.Contains(t, output, "prod")
 	assert.Contains(t, output, "dev-host")
 	assert.Contains(t, output, "prod-host")
+}
+
+// runDoctorOutput runs reportDoctorResults in the given output mode and
+// returns stdout plus the returned error.
+func runDoctorOutput(t *testing.T, mode string, checks []doctor.Check, results []doctor.CheckResult) (string, error) {
+	t.Helper()
+	origPretty, origJSON := prettyMode, doctorJSON
+	t.Cleanup(func() { prettyMode, doctorJSON = origPretty, origJSON })
+
+	switch mode {
+	case "machine":
+		prettyMode, doctorJSON = false, false
+	case "json":
+		prettyMode, doctorJSON = true, true
+	case "pretty":
+		prettyMode, doctorJSON = true, false
+	default:
+		t.Fatalf("unknown mode %q", mode)
+	}
+
+	var err error
+	out := captureOutput(func() {
+		err = reportDoctorResults(checks, results)
+	})
+	return out, err
+}
+
+// decodeDoctorSummary pulls the summary out of machine (enveloped) or
+// legacy --json output.
+func decodeDoctorSummary(t *testing.T, mode, out string) SummaryOutput {
+	t.Helper()
+	if mode == "machine" {
+		var env struct {
+			Success bool         `json:"success"`
+			Data    DoctorOutput `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &env))
+		assert.True(t, env.Success, "the envelope reports that doctor ran, not the verdict")
+		return env.Data.Summary
+	}
+	var decoded DoctorOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &decoded))
+	return decoded.Summary
+}
+
+func requireDoctorExit(t *testing.T, err error, wantCode int) {
+	t.Helper()
+	if wantCode == 0 {
+		require.NoError(t, err)
+		return
+	}
+	code, ok := errors.GetExitCode(err)
+	require.True(t, ok, "expected an exit-code error, got %v", err)
+	assert.Equal(t, wantCode, code)
+}
+
+func TestReportDoctorResults_ExitCode(t *testing.T) {
+	cases := []struct {
+		name         string
+		statuses     []doctor.CheckStatus
+		wantCode     int
+		wantAllClear bool
+	}{
+		{name: "all pass", statuses: []doctor.CheckStatus{doctor.StatusPass}, wantCode: 0, wantAllClear: true},
+		{name: "warnings only", statuses: []doctor.CheckStatus{doctor.StatusPass, doctor.StatusWarn}, wantCode: 0, wantAllClear: false},
+		{name: "any failure", statuses: []doctor.CheckStatus{doctor.StatusWarn, doctor.StatusFail}, wantCode: 1, wantAllClear: false},
+	}
+
+	for _, mode := range []string{"machine", "json", "pretty"} {
+		for _, tc := range cases {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				var checks []doctor.Check
+				var results []doctor.CheckResult
+				for i, st := range tc.statuses {
+					name := fmt.Sprintf("check%d", i)
+					checks = append(checks, &mockCheck{name: name, category: "CONFIG"})
+					results = append(results, doctor.CheckResult{Name: name, Status: st, Message: name})
+				}
+
+				out, err := runDoctorOutput(t, mode, checks, results)
+				requireDoctorExit(t, err, tc.wantCode)
+
+				if mode != "pretty" {
+					summary := decodeDoctorSummary(t, mode, out)
+					assert.Equal(t, tc.wantAllClear, summary.AllClear)
+				}
+			})
+		}
+	}
+}
+
+// SSH_AUTH_SOCK unset is normal for key-file setups: warn, exit 0.
+func TestDoctor_SSHAgentUnset_ExitsZero(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+
+	checks := []doctor.Check{&doctor.SSHAgentCheck{}}
+	results := doctor.RunAll(checks)
+	require.Equal(t, doctor.StatusWarn, results[0].Status)
+
+	out, err := runDoctorOutput(t, "machine", checks, results)
+	requireDoctorExit(t, err, 0)
+	assert.Equal(t, 1, decodeDoctorSummary(t, "machine", out).Warn)
+}
+
+// An offline global host the project doesn't use must not be probed or
+// dialed, and must not fail doctor.
+func TestDoctor_OfflineHostOutsideProject_NotChecked(t *testing.T) {
+	origPath, origReq := doctorPath, doctorRequirements
+	t.Cleanup(func() { doctorPath, doctorRequirements = origPath, origReq })
+	doctorPath, doctorRequirements = false, true
+
+	globalCfg := &config.GlobalConfig{Hosts: map[string]config.Host{
+		"box":     {SSH: []string{"box-lan"}},
+		"offline": {SSH: []string{"offline-lan"}},
+	}}
+	projectCfg := &config.Config{Hosts: []string{"box"}}
+
+	checks := collectChecks("", projectCfg, globalCfg)
+
+	var probed []string
+	for _, c := range checks {
+		assert.NotContains(t, c.Name(), "offline", "offline host should not get a check")
+		if hc, ok := c.(*doctor.HostConnectivityCheck); ok {
+			hc.Probe = func(aliases []string, _ time.Duration) []host.ProbeResult {
+				probed = append(probed, aliases...)
+				return []host.ProbeResult{{SSHAlias: aliases[0], Success: true}}
+			}
+		}
+	}
+
+	var dialed []string
+	dial := func(alias string, _ time.Duration) (*sshutil.Client, time.Duration, error) {
+		dialed = append(dialed, alias)
+		return &sshutil.Client{Host: alias}, time.Millisecond, nil
+	}
+	names, hosts, err := doctor.ScopeHosts(projectCfg, globalCfg)
+	require.NoError(t, err)
+	conns, dialErrs := connectDoctorHosts(names, hosts, dial)
+	defer closeDoctorConnections(conns)
+
+	assert.Equal(t, []string{"box-lan"}, dialed)
+	assert.Empty(t, dialErrs)
+
+	// Only the host checks are env-independent; run them for the exit code.
+	var hostChecks []doctor.Check
+	for _, c := range checks {
+		if c.Category() == "HOSTS" {
+			hostChecks = append(hostChecks, c)
+		}
+	}
+	_, err = runDoctorOutput(t, "machine", hostChecks, doctor.RunAll(hostChecks))
+	requireDoctorExit(t, err, 0)
+	assert.Equal(t, []string{"box-lan"}, probed)
+}
+
+func TestCollectChecks_ProjectReferencesUnknownHost(t *testing.T) {
+	globalCfg := &config.GlobalConfig{Hosts: map[string]config.Host{"box": {SSH: []string{"box"}}}}
+	projectCfg := &config.Config{Hosts: []string{"typo"}}
+
+	checks := collectChecks("", projectCfg, globalCfg)
+
+	var found bool
+	for _, c := range checks {
+		if hr, ok := c.(*doctor.HostResolutionCheck); ok {
+			found = true
+			assert.Equal(t, doctor.StatusFail, hr.Run().Status)
+		}
+		assert.NotEqual(t, "HOSTS", c.Category(), "no host checks when the project's hosts can't be resolved")
+	}
+	assert.True(t, found, "expected a failing host-resolution check")
+}
+
+// A missing requirement blocks rr run, so doctor --requirements exits 1.
+func TestDoctor_MissingRequirement_ExitsOne(t *testing.T) {
+	client := sshtesting.NewMockClient("box")
+	client.SetCommandResponse("command -v jq", sshtesting.CommandResponse{ExitCode: 1})
+	client.SetCommandResponse("command -v rsync && rsync --version 2>&1 | head -n 2",
+		sshtesting.CommandResponse{Stdout: []byte("/usr/bin/rsync\nrsync  version 3.2.7  protocol version 31\n")})
+
+	hosts := map[string]config.Host{"box": {SSH: []string{"box"}}}
+	conns := map[string]*host.Connection{"box": {Name: "box", Client: client, Host: hosts["box"]}}
+	projectCfg := &config.Config{Require: []string{"jq"}}
+
+	checks := remoteDoctorChecks([]string{"box"}, hosts, conns, projectCfg, false, true)
+	results := doctor.RunAll(checks)
+
+	var sawRsync bool
+	for i, c := range checks {
+		if _, ok := c.(*doctor.RsyncRemoteCheck); ok {
+			sawRsync = true
+			assert.Equal(t, doctor.StatusPass, results[i].Status, results[i].Message)
+		}
+	}
+	assert.True(t, sawRsync, "--requirements should include the remote rsync check")
+
+	out, err := runDoctorOutput(t, "machine", checks, results)
+	requireDoctorExit(t, err, 1)
+	assert.False(t, decodeDoctorSummary(t, "machine", out).AllClear)
+}
+
+// Connections go through alias racing: a host reachable only via its second
+// alias still gets connected, and a fully unreachable host is a failure.
+func TestConnectDoctorHosts_UsesAliasFallback(t *testing.T) {
+	hosts := map[string]config.Host{
+		"box":  {SSH: []string{"box-lan", "box-vpn"}},
+		"down": {SSH: []string{"down-lan"}},
+	}
+	dial := func(alias string, _ time.Duration) (*sshutil.Client, time.Duration, error) {
+		if alias == "box-vpn" {
+			return &sshutil.Client{Host: alias}, time.Millisecond, nil
+		}
+		return nil, 0, &host.ProbeError{SSHAlias: alias, Reason: host.ProbeFailTimeout}
+	}
+
+	conns, dialErrs := connectDoctorHosts([]string{"box", "down"}, hosts, dial)
+	defer closeDoctorConnections(conns)
+
+	require.Contains(t, conns, "box")
+	assert.Equal(t, "box-vpn", conns["box"].Alias)
+	assert.NotContains(t, conns, "down")
+	assert.Error(t, dialErrs["down"])
+	assert.NotContains(t, dialErrs, "box")
+
+	// Remote checks only run for connected hosts; the unreachable host is
+	// reported on its HOSTS result, not by a second "no connection" failure.
+	remote := remoteDoctorChecks([]string{"box", "down"}, hosts, conns, nil, true, true)
+	for _, c := range remote {
+		assert.NotContains(t, c.Name(), "down")
+	}
+}
+
+// fakeHostProbes makes every HostConnectivityCheck report its aliases as
+// reachable or not, per host.
+func fakeHostProbes(checks []doctor.Check, up map[string]bool) {
+	for _, c := range checks {
+		hc, ok := c.(*doctor.HostConnectivityCheck)
+		if !ok {
+			continue
+		}
+		reachable := up[hc.HostName]
+		hc.Probe = func(aliases []string, _ time.Duration) []host.ProbeResult {
+			return []host.ProbeResult{{SSHAlias: aliases[0], Success: reachable}}
+		}
+	}
+}
+
+func hostResults(checks []doctor.Check, results []doctor.CheckResult) map[string]doctor.CheckResult {
+	out := make(map[string]doctor.CheckResult)
+	for i, c := range checks {
+		if hc, ok := c.(*doctor.HostConnectivityCheck); ok {
+			out[hc.HostName] = results[i]
+		}
+	}
+	return out
+}
+
+// A run needs one reachable host, so doctor fails only when none is
+// reachable and local fallback wouldn't take over.
+func TestDoctor_HostGrading_ExitCode(t *testing.T) {
+	globalCfg := &config.GlobalConfig{Hosts: map[string]config.Host{
+		"a": {SSH: []string{"a-lan"}},
+		"b": {SSH: []string{"b-lan"}},
+	}}
+	tests := []struct {
+		name     string
+		project  *config.Config
+		up       map[string]bool
+		fallback config.LocalFallbackMode
+		want     map[string]doctor.CheckStatus
+		wantCode int
+	}{
+		{name: "project, one of two down", project: &config.Config{Hosts: []string{"a", "b"}}, up: map[string]bool{"a": true},
+			want: map[string]doctor.CheckStatus{"a": doctor.StatusPass, "b": doctor.StatusWarn}, wantCode: 0},
+		{name: "project, all down, no fallback", project: &config.Config{Hosts: []string{"a", "b"}}, up: map[string]bool{},
+			want: map[string]doctor.CheckStatus{"a": doctor.StatusFail, "b": doctor.StatusFail}, wantCode: 1},
+		{name: "project, all down, on-unreachable fallback", project: &config.Config{Hosts: []string{"a", "b"}}, up: map[string]bool{},
+			fallback: config.LocalFallbackOnUnreachable,
+			want:     map[string]doctor.CheckStatus{"a": doctor.StatusWarn, "b": doctor.StatusWarn}, wantCode: 0},
+		{name: "single-host project down fails", project: &config.Config{Host: "b"}, up: map[string]bool{"a": true},
+			want: map[string]doctor.CheckStatus{"b": doctor.StatusFail}, wantCode: 1},
+		{name: "outside a project, one down", up: map[string]bool{"a": true},
+			want: map[string]doctor.CheckStatus{"a": doctor.StatusPass, "b": doctor.StatusWarn}, wantCode: 0},
+		{name: "outside a project, all down", up: map[string]bool{},
+			want: map[string]doctor.CheckStatus{"a": doctor.StatusFail, "b": doctor.StatusFail}, wantCode: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var hostChecks []doctor.Check
+			for _, c := range collectChecks("", tt.project, globalCfg) {
+				if c.Category() == "HOSTS" {
+					hostChecks = append(hostChecks, c)
+				}
+			}
+			fakeHostProbes(hostChecks, tt.up)
+
+			results := runDoctorChecks(hostChecks, tt.fallback)
+			got := hostResults(hostChecks, results)
+			require.Len(t, got, len(tt.want))
+			for name, want := range tt.want {
+				assert.Equal(t, want, got[name].Status, "host %s", name)
+			}
+
+			_, err := runDoctorOutput(t, "machine", hostChecks, results)
+			requireDoctorExit(t, err, tt.wantCode)
+		})
+	}
+}
+
+// With --requirements, an unreachable host is reported once: on its HOSTS
+// result, with a note that its remote checks were skipped.
+func TestDoctor_UnreachableHostReportedOnce(t *testing.T) {
+	globalCfg := &config.GlobalConfig{Hosts: map[string]config.Host{
+		"box":  {SSH: []string{"box-lan"}},
+		"down": {SSH: []string{"down-lan"}},
+	}}
+	projectCfg := &config.Config{Hosts: []string{"box", "down"}}
+
+	checks := collectChecks("", projectCfg, globalCfg)
+	var hostChecks []doctor.Check
+	for _, c := range checks {
+		if c.Category() == "HOSTS" {
+			hostChecks = append(hostChecks, c)
+		}
+	}
+	fakeHostProbes(hostChecks, map[string]bool{"box": true})
+
+	dial := func(alias string, _ time.Duration) (*sshutil.Client, time.Duration, error) {
+		return nil, 0, &host.ProbeError{SSHAlias: alias, Reason: host.ProbeFailTimeout}
+	}
+	names, hosts, err := doctor.ScopeHosts(projectCfg, globalCfg)
+	require.NoError(t, err)
+	conns, dialErrs := connectDoctorHosts([]string{"down"}, hosts, dial)
+	defer closeDoctorConnections(conns)
+	attachRemoteErrors(hostChecks, dialErrs)
+	hostChecks = append(hostChecks, remoteDoctorChecks(names, hosts, conns, projectCfg, true, true)...)
+
+	results := runDoctorChecks(hostChecks, config.LocalFallbackNever)
+
+	var mentions []doctor.CheckResult
+	for _, r := range results {
+		assert.NotContains(t, r.Name, "remote_connect", "no separate connection-failure check")
+		if strings.Contains(r.Name, "down") {
+			mentions = append(mentions, r)
+		}
+	}
+	require.Len(t, mentions, 1, "the unreachable host should appear once")
+	assert.Equal(t, doctor.StatusWarn, mentions[0].Status, "box is reachable, so runs still work")
+	assert.Contains(t, mentions[0].Suggestion, "--path/--requirements checks skipped")
+}
+
+// A regraded (warned) unreachable host and a host whose remote checks were
+// skipped must show why in pretty output, not just the host name.
+func TestRenderHostsCategory_ShowsGradingNotes(t *testing.T) {
+	down := &doctor.HostConnectivityCheck{
+		HostName: "down",
+		Results:  []host.ProbeResult{{SSHAlias: "down-lan", Success: false}},
+	}
+	flaky := &doctor.HostConnectivityCheck{
+		HostName:  "flaky",
+		Results:   []host.ProbeResult{{SSHAlias: "flaky-lan", Success: true}},
+		RemoteErr: fmt.Errorf("dial failed"),
+	}
+	checks := []doctor.Check{down, flaky}
+	results := []doctor.CheckResult{
+		{Status: doctor.StatusWarn, Message: "down: all aliases failed", Suggestion: "Other hosts are reachable, so runs use the other reachable hosts."},
+		{Status: doctor.StatusWarn, Message: "flaky: reachable, but connecting for remote checks failed: dial failed", Suggestion: "--path/--requirements checks skipped for flaky."},
+	}
+
+	output := captureOutput(func() {
+		renderHostsCategory(checks, results, []int{0, 1})
+	})
+
+	assert.Contains(t, output, "runs use the other reachable hosts")
+	assert.Contains(t, output, "connecting for remote checks failed: dial failed")
+	assert.Contains(t, output, "--path/--requirements checks skipped for flaky")
 }

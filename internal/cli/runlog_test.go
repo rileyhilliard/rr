@@ -142,3 +142,41 @@ func TestAttachRunOutcomePipedExitCode(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachRunOutcomeFailures checks the JSON renderer of the shared
+// outcome: failures only for failed runs, file:line joined, and messages
+// truncated here (the parser keeps them whole).
+func TestAttachRunOutcomeFailures(t *testing.T) {
+	long := strings.Repeat("x", maxFailureMessageLen+200)
+	log := "collected 1 item\n\n" +
+		"tests/test_math.py::test_div FAILED [100%]\n\n" +
+		"=================================== FAILURES ===================================\n" +
+		"_________________________________ test_div _________________________________\n\n" +
+		"E       ZeroDivisionError: " + long + "\n\n" +
+		"tests/test_math.py:12: ZeroDivisionError\n" +
+		"========================= 1 failed in 0.03s ==========================\n"
+	logPath := filepath.Join(t.TempDir(), "output.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(log), 0o600))
+
+	t.Run("failed run lists failures", func(t *testing.T) {
+		wf := &WorkflowContext{}
+		outcome := attachRunOutcome(wf, "pytest tests/", logPath, 1)
+
+		require.Len(t, outcome.Failures, 1)
+		assert.Contains(t, outcome.Failures[0].Message, long, "the parsed outcome keeps the full message")
+
+		failures, ok := wf.ResultDetails["failures"].([]map[string]string)
+		require.True(t, ok)
+		require.Len(t, failures, 1)
+		assert.Equal(t, "test_div", failures[0]["name"])
+		assert.Equal(t, "tests/test_math.py:12", failures[0]["file"])
+		assert.LessOrEqual(t, len(failures[0]["message"]), maxFailureMessageLen+3)
+		assert.True(t, strings.HasSuffix(failures[0]["message"], "..."))
+	})
+
+	t.Run("passing run lists none", func(t *testing.T) {
+		wf := &WorkflowContext{}
+		attachRunOutcome(wf, "pytest tests/", logPath, 0)
+		assert.NotContains(t, wf.ResultDetails, "failures")
+	})
+}

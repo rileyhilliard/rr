@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsCommandNotFound(t *testing.T) {
@@ -97,20 +98,19 @@ func TestIsCommandNotFound(t *testing.T) {
 	}
 }
 
-func TestHandleExecError_CommandNotFound(t *testing.T) {
+func TestDetectMissingTool_CommandNotFound(t *testing.T) {
 	// Pass nil client to get generic suggestion
-	err := HandleExecError("go test ./...", "bash: go: command not found", 127, nil, "")
+	mt := DetectMissingTool("go test ./...", "bash: go: command not found", 127, nil, "")
 
-	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "'go' not found in PATH on remote")
-	assert.Contains(t, err.Error(), "Install 'go' on the remote")
-	assert.Contains(t, err.Error(), "setup_commands")
+	require.NotNil(t, mt)
+	assert.Equal(t, "go", mt.ToolName)
+	assert.Contains(t, mt.Suggestion, "Install 'go' on the remote")
+	assert.Contains(t, mt.Suggestion, "setup_commands")
 }
 
-func TestHandleExecError_NotCommandNotFound(t *testing.T) {
+func TestDetectMissingTool_NotCommandNotFound(t *testing.T) {
 	// Non-127 exit code with unrelated error should return nil
-	err := HandleExecError("go test ./...", "tests failed", 1, nil, "")
-	assert.Nil(t, err)
+	assert.Nil(t, DetectMissingTool("go test ./...", "tests failed", 1, nil, ""))
 }
 
 func TestIsDependencyNotFound(t *testing.T) {
@@ -187,22 +187,22 @@ func TestIsDependencyNotFound(t *testing.T) {
 	}
 }
 
-func TestHandleExecError_DependencyNotFound(t *testing.T) {
+func TestDetectMissingTool_DependencyNotFound(t *testing.T) {
 	// make failing because go isn't in PATH (exit code 2, not 127)
-	err := HandleExecError("make test", "make: go: No such file or directory\nmake: *** [test] Error 1", 2, nil, "")
+	mt := DetectMissingTool("make test", "make: go: No such file or directory\nmake: *** [test] Error 1", 2, nil, "")
 
-	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "'go' not found in PATH on remote")
-	assert.Contains(t, err.Error(), "Install 'go' on the remote")
-	assert.Contains(t, err.Error(), "setup_commands")
+	require.NotNil(t, mt)
+	assert.Equal(t, "go", mt.ToolName)
+	assert.Contains(t, mt.Suggestion, "Install 'go' on the remote")
+	assert.Contains(t, mt.Suggestion, "setup_commands")
 }
 
-func TestHandleExecError_ExtractsCommandFromInput(t *testing.T) {
+func TestDetectMissingTool_ExtractsCommandFromInput(t *testing.T) {
 	// When stderr doesn't match patterns, extract from command
-	err := HandleExecError("rustup show", "some error", 127, nil, "")
+	mt := DetectMissingTool("rustup show", "some error", 127, nil, "")
 
-	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "'rustup' not found in PATH on remote")
+	require.NotNil(t, mt)
+	assert.Equal(t, "rustup", mt.ToolName)
 }
 
 func TestDetectMissingTool(t *testing.T) {

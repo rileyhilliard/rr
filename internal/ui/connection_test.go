@@ -393,3 +393,14 @@ func TestConnectionDisplayAttemptsCopy(t *testing.T) {
 	// Other copy should be unchanged
 	assert.NotEqual(t, attempts1[0].Alias, attempts2[0].Alias)
 }
+
+func TestConnectionDisplaySuccessLocal(t *testing.T) {
+	var buf bytes.Buffer
+	cd := NewConnectionDisplay(&buf)
+	cd.SetQuiet(true)
+
+	cd.SuccessLocal("all remote hosts locked")
+
+	assert.Contains(t, buf.String(), "Running locally (all remote hosts locked)")
+	assert.NotContains(t, buf.String(), "unreachable")
+}

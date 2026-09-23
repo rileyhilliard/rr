@@ -13,6 +13,14 @@ const (
 	ErrSync   = "SYNC"
 	ErrLock   = "LOCK"
 	ErrExec   = "EXEC"
+
+	// ErrConfigNotFound means no config file exists where one was expected
+	// (as opposed to ErrConfig, which covers a config that exists but is invalid).
+	ErrConfigNotFound = "CONFIG_NOT_FOUND"
+	// ErrHostNotFound means a host name doesn't match any configured host.
+	ErrHostNotFound = "HOST_NOT_FOUND"
+	// ErrDependency means a required tool is missing locally or on the remote.
+	ErrDependency = "DEPENDENCY"
 )
 
 // Error represents a structured error with code, message, suggestion, and optional cause.

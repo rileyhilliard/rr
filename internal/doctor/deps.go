@@ -70,38 +70,51 @@ func (c *RsyncRemoteCheck) Run() CheckResult {
 		}
 	}
 
-	// Check rsync on remote
-	stdout, stderr, exitCode, err := c.Conn.Client.Exec("which rsync && rsync --version 2>/dev/null | head -1")
+	// rsync-over-ssh starts the remote rsync through a plain non-interactive
+	// exec, the same way Exec runs this command, so this sees the same PATH
+	// sync will. `command -v` is POSIX; `which` is missing on minimal images.
+	stdout, _, exitCode, err := c.Conn.Client.Exec(remoteRsyncCheckCmd)
 	if err != nil {
+		alias := c.Conn.Alias
+		if alias == "" {
+			alias = c.HostName
+		}
 		return CheckResult{
 			Name:       c.Name(),
 			Status:     StatusFail,
-			Message:    fmt.Sprintf("rsync (%s): failed to check", c.HostName),
-			Suggestion: "Check SSH connection",
+			Message:    fmt.Sprintf("rsync (%s): failed to check: %v", c.HostName, err),
+			Suggestion: fmt.Sprintf("Check the SSH connection: ssh %s", alias),
 		}
 	}
 
-	if exitCode != 0 {
+	path, versionOutput := splitRsyncCheckOutput(string(stdout))
+	if exitCode != 0 || path == "" {
 		return CheckResult{
 			Name:       c.Name(),
 			Status:     StatusFail,
 			Message:    fmt.Sprintf("rsync not found on %s", c.HostName),
-			Suggestion: fmt.Sprintf("Install rsync on %s: apt install rsync (or equivalent)", c.HostName),
+			Suggestion: fmt.Sprintf("Install rsync on %s (apt install rsync, or equivalent), and make sure it's on the PATH for non-interactive SSH sessions", c.HostName),
 		}
 	}
-
-	// Parse version from output
-	output := string(stdout)
-	if len(stderr) != 0 {
-		output += string(stderr)
-	}
-	version := parseRsyncVersion(output)
 
 	return CheckResult{
 		Name:    c.Name(),
 		Status:  StatusPass,
-		Message: fmt.Sprintf("rsync %s (%s)", version, c.HostName),
+		Message: fmt.Sprintf("rsync %s (%s)", parseRsyncVersion(versionOutput), c.HostName),
 	}
+}
+
+// remoteRsyncCheckCmd prints the rsync path on the first line, then the top of
+// `rsync --version`. Two lines, because macOS openrsync puts its
+// "rsync version 2.6.9 compatible" line second.
+const remoteRsyncCheckCmd = "command -v rsync && rsync --version 2>&1 | head -n 2"
+
+// splitRsyncCheckOutput separates the path line printed by `command -v` from
+// the version output, so digits in the install path aren't read as a version.
+func splitRsyncCheckOutput(output string) (path, version string) {
+	output = strings.TrimSpace(output)
+	path, version, _ = strings.Cut(output, "\n")
+	return strings.TrimSpace(path), strings.TrimSpace(version)
 }
 
 func (c *RsyncRemoteCheck) Fix() error {
@@ -142,20 +155,6 @@ func NewRemoteDepsChecks(hostName string, conn *host.Connection) []Check {
 			Conn:     conn,
 		},
 	}
-}
-
-// NewAllDepsChecks creates dependency checks for local and all connected remotes.
-func NewAllDepsChecks(connections map[string]*host.Connection) []Check {
-	checks := []Check{&RsyncLocalCheck{}}
-
-	for name, conn := range connections {
-		checks = append(checks, &RsyncRemoteCheck{
-			HostName: name,
-			Conn:     conn,
-		})
-	}
-
-	return checks
 }
 
 // DependencyInfo holds information about a dependency for display.

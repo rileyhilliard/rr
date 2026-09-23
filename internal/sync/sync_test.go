@@ -2,15 +2,19 @@ package sync
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	gosync "sync"
 	"testing"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
@@ -1290,4 +1294,196 @@ func TestInvalidateStaleDirectories(t *testing.T) {
 		err := InvalidateStaleDirectories(conn, localDir, emptyDirsInvalidations, nil)
 		assert.NoError(t, err)
 	})
+}
+
+// statFakeClient wraps MockClient so the invalidation stat command reflects
+// the mock filesystem (existing dir -> mtime 0, missing dir -> "absent") and
+// records every executed command.
+type statFakeClient struct {
+	*sshtesting.MockClient
+	mu       gosync.Mutex
+	commands []string
+}
+
+var statCmdPathRe = regexp.MustCompile(`^d='?([^';]+)'?;`)
+
+func (c *statFakeClient) Exec(cmd string) ([]byte, []byte, int, error) {
+	c.mu.Lock()
+	c.commands = append(c.commands, cmd)
+	c.mu.Unlock()
+	if m := statCmdPathRe.FindStringSubmatch(cmd); m != nil {
+		if c.GetFS().Exists(m[1]) {
+			return []byte("0\n"), nil, 0, nil
+		}
+		return []byte("absent\n"), nil, 0, nil
+	}
+	return c.MockClient.Exec(cmd)
+}
+
+func (c *statFakeClient) rmCount(substr string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, cmd := range c.commands {
+		if strings.HasPrefix(cmd, "rm -rf ") && strings.Contains(cmd, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+// invalidationFixture returns a local dir with a bun.lock, a connection whose
+// remote has a stale node_modules, and the fake client behind it.
+func invalidationFixture(t *testing.T) (string, *host.Connection, *statFakeClient) {
+	t.Helper()
+	localDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "bun.lock"), []byte("lock"), 0644))
+
+	client := &statFakeClient{MockClient: sshtesting.NewMockClient("test-host")}
+	require.NoError(t, client.GetFS().MkdirAll("/root/rr/myapp/node_modules"))
+
+	conn := &host.Connection{
+		Name:   "test-host",
+		Alias:  "test-host",
+		Client: client,
+		Host:   config.Host{Dir: "/root/rr/myapp"},
+	}
+	return localDir, conn, client
+}
+
+var testInvalidations = []config.LockfileInvalidation{
+	{Lockfile: "bun.lock", Dirs: []string{"node_modules/"}},
+}
+
+func TestInvalidateStaleDirectories_Idempotent(t *testing.T) {
+	localDir, conn, client := invalidationFixture(t)
+
+	var notified []string
+	notify := func(dir, lockfile string) { notified = append(notified, dir+"|"+lockfile) }
+
+	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified)
+	assert.Equal(t, 1, client.rmCount("node_modules"))
+	assert.False(t, client.GetFS().Exists("/root/rr/myapp/node_modules"))
+
+	// Second pass: the dir is gone, so there is nothing to invalidate or announce.
+	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified, "second call must not re-announce")
+	assert.Equal(t, 1, client.rmCount("node_modules"), "second call must not rm again")
+}
+
+func TestInvalidateStaleDirectories_MissingRemoteDirIsSilent(t *testing.T) {
+	localDir, conn, client := invalidationFixture(t)
+	require.NoError(t, client.GetFS().Remove("/root/rr/myapp/node_modules"))
+
+	called := false
+	err := InvalidateStaleDirectories(conn, localDir, testInvalidations, func(string, string) { called = true })
+	require.NoError(t, err)
+	assert.False(t, called)
+	assert.Zero(t, client.rmCount("node_modules"))
+}
+
+// badRsyncFlagCfg makes rsync exit immediately with a usage error, so tests
+// can drive SyncWithOptions past invalidation without a real remote.
+func badRsyncFlagCfg() config.SyncConfig {
+	return config.SyncConfig{
+		Invalidations: testInvalidations,
+		Flags:         []string{"--rr-test-bogus-flag"},
+	}
+}
+
+func requireRsync(t *testing.T) {
+	t.Helper()
+	if _, err := FindRsync(); err != nil {
+		t.Skip("rsync not installed")
+	}
+}
+
+func TestSyncWithOptions_InvalidatesBeforeRsync(t *testing.T) {
+	requireRsync(t)
+	localDir, conn, client := invalidationFixture(t)
+
+	var notified []string
+	opts := &SyncOptions{Invalidated: func(dir, lockfile string) {
+		notified = append(notified, dir+"|"+lockfile)
+	}}
+
+	err := SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, opts)
+	require.Error(t, err, "rsync should fail on the bogus flag")
+
+	assert.Equal(t, []string{"node_modules/|bun.lock"}, notified)
+	assert.Equal(t, 1, client.rmCount("node_modules"), "invalidation must run before rsync")
+}
+
+func TestSyncWithOptions_InvalidationErrorStopsSync(t *testing.T) {
+	requireRsync(t)
+	localDir, conn, client := invalidationFixture(t)
+	client.SetCommandResponse(`^rm -rf .*node_modules`, sshtesting.CommandResponse{
+		Stderr:   []byte("permission denied"),
+		ExitCode: 1,
+	})
+
+	err := SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{
+		Invalidated: func(string, string) {},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stale remote directory node_modules/")
+}
+
+func TestSync_InvalidatesWithDefaultNotice(t *testing.T) {
+	requireRsync(t)
+	localDir, conn, client := invalidationFixture(t)
+
+	out := captureStdout(t, func() {
+		_ = Sync(conn, localDir, badRsyncFlagCfg(), nil)
+	})
+
+	assert.Equal(t, 1, client.rmCount("node_modules"))
+	assert.Contains(t, out, "Invalidating stale node_modules/ (bun.lock changed)")
+}
+
+func TestSyncWithOptions_DoubleInvalidationIsHarmless(t *testing.T) {
+	// Mirrors workflow.go today: an explicit InvalidateStaleDirectories call
+	// followed by SyncWithOptions, which invalidates again.
+	requireRsync(t)
+	localDir, conn, client := invalidationFixture(t)
+
+	var notified []string
+	notify := func(dir, lockfile string) { notified = append(notified, dir) }
+
+	require.NoError(t, InvalidateStaleDirectories(conn, localDir, testInvalidations, notify))
+	_ = SyncWithOptions(conn, localDir, badRsyncFlagCfg(), nil, &SyncOptions{Invalidated: notify})
+
+	assert.Equal(t, []string{"node_modules/"}, notified)
+	assert.Equal(t, 1, client.rmCount("node_modules"))
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	done := make(chan string)
+	go func() {
+		var buf strings.Builder
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	fn()
+	require.NoError(t, w.Close())
+	return <-done
+}
+
+// TestFindRsync_MissingIsDependency checks a missing local rsync is a
+// dependency error (DEPENDENCY_MISSING), not a sync failure.
+func TestFindRsync_MissingIsDependency(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := FindRsync()
+	require.Error(t, err)
+	assert.True(t, errors.IsCode(err, errors.ErrDependency), "got %v", err)
 }

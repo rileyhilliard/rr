@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/util"
 )
 
 // hostWorker executes tasks on a specific host.
@@ -68,7 +70,9 @@ func (w *hostWorker) executeTaskWithRequeue(ctx context.Context, task TaskInfo) 
 		return result, true
 	}
 
-	// From here, we have a connection. Execute normally.
+	// From here, we have a connection. Execute normally. Record the alias
+	// that connected so a later pull goes through the same one.
+	result.Alias = w.conn.Alias
 	return w.executeTaskInternal(ctx, task, result), false
 }
 
@@ -229,8 +233,19 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 		syncCfg = w.orchestrator.resolved.Project.Sync
 	}
 
-	// Perform sync
-	return rrsync.Sync(w.conn, workDir, syncCfg, nil)
+	// Perform sync. The caller's options carry the invalidation, provenance
+	// and prune callbacks, so a parallel sync reports the same notices as a
+	// single run.
+	return rrsync.SyncWithOptions(w.conn, workDir, syncCfg, nil, w.syncOptions())
+}
+
+// syncOptions returns the caller-supplied sync options for this host, or nil
+// when the caller didn't set Config.SyncOptions.
+func (w *hostWorker) syncOptions() *rrsync.SyncOptions {
+	if w.orchestrator.config.SyncOptions == nil {
+		return nil
+	}
+	return w.orchestrator.config.SyncOptions(w.hostName)
 }
 
 // ensureSetup runs the setup command once per host after sync.
@@ -280,8 +295,7 @@ func (w *hostWorker) execCommand(
 	workDir string,
 	stdout, stderr *bytes.Buffer,
 ) (int, error) {
-	// Build full command with env and workdir
-	fullCmd := buildFullCommand(cmd, env, workDir, w.host.SetupCommands)
+	fullCmd := w.fullCommand(cmd, env, workDir)
 
 	// Check for context cancellation
 	select {
@@ -298,22 +312,39 @@ func (w *hostWorker) execCommand(
 	return w.conn.Client.ExecStreamContext(ctx, fullCmd, stdout, stderr)
 }
 
-// buildFullCommand constructs the command with setup commands, env, and workdir.
+// fullCommand builds the remote command for this host: taskEnv merged with
+// host and project defaults env, and host plus project setup commands, the
+// same merge single tasks use.
+func (w *hostWorker) fullCommand(cmd string, taskEnv map[string]string, workDir string) string {
+	project := w.orchestrator.project()
+	env := config.MergedTaskEnv(project, &w.host, taskEnv)
+	setup := config.GetMergedSetupCommands(project, &w.host)
+	return buildFullCommand(cmd, env, workDir, setup)
+}
+
+// buildFullCommand constructs the command with workdir, setup commands, and
+// env. The cd comes first so relative setup commands resolve in the project
+// dir, matching single tasks.
 func buildFullCommand(cmd string, env map[string]string, workDir string, setupCommands []string) string {
 	var parts []string
+
+	// Add cd to work directory
+	if workDir != "" {
+		parts = append(parts, "cd "+util.ShellQuotePreserveTilde(workDir))
+	}
 
 	// Add setup commands
 	parts = append(parts, setupCommands...)
 
-	// Add cd to work directory
-	if workDir != "" {
-		parts = append(parts, "cd "+workDir)
+	// Build env prefix (sorted, so the command is deterministic)
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
 	}
-
-	// Build env prefix
+	sort.Strings(keys)
 	envPrefix := ""
-	for k, v := range env {
-		envPrefix += "export " + k + "=" + shellQuote(v) + "; "
+	for _, k := range keys {
+		envPrefix += "export " + k + "=" + shellQuote(env[k]) + "; "
 	}
 
 	// Add command with env
@@ -415,19 +446,13 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 	var outputBuf bytes.Buffer
 
 	// Run the command locally
-	cmd := exec.CommandContext(execCtx, "sh", "-c", task.Command)
+	cmd := w.command(execCtx, task.Command, task.Env)
 	cmd.Stdout = &outputBuf
 	cmd.Stderr = &outputBuf
 
 	// Set working directory if specified
 	if task.WorkDir != "" {
 		cmd.Dir = task.WorkDir
-	}
-
-	// Set environment
-	cmd.Env = os.Environ()
-	for k, v := range task.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
 	err := cmd.Run()
@@ -472,7 +497,7 @@ func (w *localWorker) ensureSetup(ctx context.Context) error {
 	}
 
 	// Execute setup command locally
-	cmd := exec.CommandContext(ctx, "sh", "-c", w.orchestrator.config.Setup)
+	cmd := w.command(ctx, w.orchestrator.config.Setup, nil)
 	var outputBuf bytes.Buffer
 	cmd.Stdout = &outputBuf
 	cmd.Stderr = &outputBuf
@@ -491,6 +516,20 @@ func (w *localWorker) ensureSetup(ctx context.Context) error {
 	w.orchestrator.recordHostSetup("local", setupErr)
 
 	return setupErr
+}
+
+// command builds a local shell command with project defaults setup chained
+// in front and taskEnv merged over defaults env, the same merge a local
+// single task gets (there is no host layer locally).
+func (w *localWorker) command(ctx context.Context, script string, taskEnv map[string]string) *exec.Cmd {
+	project := w.orchestrator.project()
+	parts := append(config.GetMergedSetupCommands(project, nil), script)
+	cmd := exec.CommandContext(ctx, "sh", "-c", strings.Join(parts, " && "))
+	cmd.Env = os.Environ()
+	for k, v := range config.MergedTaskEnv(project, nil, taskEnv) {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	return cmd
 }
 
 // resolveWorkDir returns the project root from the resolved config if available,

@@ -19,6 +19,42 @@ type ConnectionEvent struct {
 	Message string
 	Error   error
 	Latency time.Duration
+	// Reason says why execution went local (one of the LocalReason
+	// constants). Set only on EventLocalFallback.
+	Reason string
+}
+
+// Reasons a run executes locally. They appear as details.reason on the
+// connect event and in details.fallback on the result.
+const (
+	// LocalReasonFlag: the user passed --local.
+	LocalReasonFlag = "local_flag"
+	// LocalReasonMode: the config runs locally by design (local_fallback
+	// enabled and no hosts to use).
+	LocalReasonMode = "local_mode"
+	// LocalReasonHostsUnreachable: no remote host could be reached and
+	// local_fallback allowed running here instead.
+	LocalReasonHostsUnreachable = "hosts_unreachable"
+	// LocalReasonAllHostsLocked: every remote host stayed locked and
+	// local_fallback allowed running here instead.
+	LocalReasonAllHostsLocked = "all_hosts_locked"
+)
+
+// DescribeLocalReason returns short human-readable text for a LocalReason,
+// used in pretty output like "Running locally (<text>)".
+func DescribeLocalReason(reason string) string {
+	switch reason {
+	case LocalReasonFlag:
+		return "--local"
+	case LocalReasonMode:
+		return "local mode, no remote hosts configured"
+	case LocalReasonHostsUnreachable:
+		return "all remote hosts unreachable"
+	case LocalReasonAllHostsLocked:
+		return "all remote hosts locked"
+	default:
+		return reason
+	}
 }
 
 // ConnectionEventType categorizes connection events.
@@ -184,7 +220,7 @@ func (s *Selector) resolveHost(preferred string) (string, config.Host, error) {
 	if preferred != "" {
 		host, ok := s.hosts[preferred]
 		if !ok {
-			return "", config.Host{}, errors.New(errors.ErrConfig,
+			return "", config.Host{}, errors.New(errors.ErrHostNotFound,
 				fmt.Sprintf("Host '%s' doesn't exist", preferred),
 				fmt.Sprintf("Did you mean one of these? %s", s.hostNames()))
 		}
@@ -362,6 +398,7 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 			Type:    EventLocalFallback,
 			Alias:   "local",
 			Message: "No remote hosts configured, using local execution",
+			Reason:  LocalReasonMode,
 		})
 		localConn := &Connection{
 			Name:    "local",
@@ -422,6 +459,7 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 			Type:    EventLocalFallback,
 			Alias:   "local",
 			Message: "All remote hosts unreachable, falling back to local execution",
+			Reason:  LocalReasonHostsUnreachable,
 		})
 		localConn := &Connection{
 			Name:    "local",
@@ -533,7 +571,7 @@ func (s *Selector) SelectHost(hostName string) (*Connection, error) {
 
 	host, ok := s.hosts[hostName]
 	if !ok {
-		return nil, errors.New(errors.ErrConfig,
+		return nil, errors.New(errors.ErrHostNotFound,
 			fmt.Sprintf("Host '%s' doesn't exist", hostName),
 			fmt.Sprintf("Available hosts: %s", s.hostNames()))
 	}

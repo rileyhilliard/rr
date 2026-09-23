@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	sshmock "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 )
 
@@ -274,6 +275,9 @@ func TestSelector_Select_HostNotFound(t *testing.T) {
 	_, err := selector.Select("nonexistent")
 	if err == nil {
 		t.Fatal("Select should fail when host not found")
+	}
+	if !errors.IsCode(err, errors.ErrHostNotFound) {
+		t.Errorf("want ErrHostNotFound, got: %v", err)
 	}
 }
 
@@ -667,9 +671,11 @@ func TestSelector_LocalFallback_Enabled(t *testing.T) {
 
 	// Track events
 	var sawLocalFallback bool
+	var fallbackReason string
 	selector.SetEventHandler(func(event ConnectionEvent) {
 		if event.Type == EventLocalFallback {
 			sawLocalFallback = true
+			fallbackReason = event.Reason
 		}
 	})
 
@@ -699,6 +705,47 @@ func TestSelector_LocalFallback_Enabled(t *testing.T) {
 
 	if !sawLocalFallback {
 		t.Error("expected EventLocalFallback event")
+	}
+	if fallbackReason != LocalReasonHostsUnreachable {
+		t.Errorf("fallback reason = %q, want %q", fallbackReason, LocalReasonHostsUnreachable)
+	}
+}
+
+func TestSelector_LocalFallback_NoHostsReason(t *testing.T) {
+	selector := NewSelector(map[string]config.Host{})
+	selector.SetLocalFallback(true)
+	defer selector.Close()
+
+	var reason string
+	selector.SetEventHandler(func(event ConnectionEvent) {
+		if event.Type == EventLocalFallback {
+			reason = event.Reason
+		}
+	})
+
+	conn, err := selector.Select("")
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if !conn.IsLocal {
+		t.Error("expected a local connection")
+	}
+	if reason != LocalReasonMode {
+		t.Errorf("fallback reason = %q, want %q", reason, LocalReasonMode)
+	}
+}
+
+func TestDescribeLocalReason(t *testing.T) {
+	tests := map[string]string{
+		LocalReasonFlag:             "--local",
+		LocalReasonMode:             "local mode, no remote hosts configured",
+		LocalReasonHostsUnreachable: "all remote hosts unreachable",
+		LocalReasonAllHostsLocked:   "all remote hosts locked",
+	}
+	for reason, want := range tests {
+		if got := DescribeLocalReason(reason); got != want {
+			t.Errorf("DescribeLocalReason(%q) = %q, want %q", reason, got, want)
+		}
 	}
 }
 
@@ -1247,6 +1294,9 @@ func TestSelector_SelectHost_NotFound(t *testing.T) {
 
 	if !containsString(err.Error(), "nonexistent") {
 		t.Errorf("error should mention the missing host: %v", err)
+	}
+	if !errors.IsCode(err, errors.ErrHostNotFound) {
+		t.Errorf("want ErrHostNotFound, got: %v", err)
 	}
 }
 

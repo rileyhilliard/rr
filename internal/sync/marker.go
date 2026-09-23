@@ -38,6 +38,10 @@ type SyncWarning struct {
 
 // SyncOptions carries optional sync behavior.
 type SyncOptions struct {
+	// Invalidated is called for each stale remote directory removed by
+	// lockfile invalidation before rsync runs. Nil prints a plain line to
+	// stdout (see InvalidateStaleDirectories).
+	Invalidated InvalidationNotifyFunc
 	// Warn receives non-fatal warnings (nil to ignore).
 	Warn func(SyncWarning)
 	// Pruned receives each stale per-worktree remote directory removed after

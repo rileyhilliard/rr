@@ -17,6 +17,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/output"
+	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
 	"github.com/rileyhilliard/rr/internal/ui"
@@ -164,7 +165,7 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Record test summary/failures from the run log and note broken pipes.
-	attachRunOutcome(wf, opts.Command, logPath, exitCode)
+	outcome := attachRunOutcome(wf, opts.Command, logPath, exitCode)
 	if streamHandler.BrokenPipe() {
 		wf.AddResultDetail("broken_pipe", true)
 	}
@@ -177,7 +178,7 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Pretty mode: check for failures, test summaries, etc.
-	failureExplained, retry := explainRunFailure(wf, opts, streamHandler, exitCode, execDuration)
+	failureExplained, retry := explainRunFailure(wf, opts, streamHandler, outcome, exitCode, execDuration)
 	if retry {
 		wf.Close()
 		return Run(opts)
@@ -200,10 +201,10 @@ func Run(opts RunOptions) (int, error) {
 }
 
 // explainRunFailure renders pretty-mode failure explanations: missing-tool
-// detection (with optional auto-fix) and parsed test summaries. Returns
-// whether the failure was explained and whether the caller should retry the
-// whole run after a successful tool fix.
-func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *output.StreamHandler, exitCode int, execDuration time.Duration) (explained, retry bool) {
+// detection (with optional auto-fix) and the parsed test failure block.
+// Returns whether the failure was explained and whether the caller should
+// retry the whole run after a successful tool fix.
+func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *output.StreamHandler, outcome formatters.Outcome, exitCode int, execDuration time.Duration) (explained, retry bool) {
 	if exitCode == 0 {
 		return false, false
 	}
@@ -233,34 +234,7 @@ func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *outp
 		return true, false
 	}
 
-	if provider, ok := streamHandler.GetFormatter().(output.TestSummaryProvider); ok {
-		failures := provider.GetTestFailures()
-		if len(failures) > 0 {
-			passed, failed, skipped, errors := provider.GetTestCounts()
-			summary := &ui.TestSummary{
-				Passed:   passed,
-				Failed:   failed,
-				Skipped:  skipped,
-				Errors:   errors,
-				Failures: make([]ui.TestFailure, len(failures)),
-			}
-			for i, f := range failures {
-				summary.Failures[i] = ui.TestFailure{
-					TestName: f.TestName,
-					File:     f.File,
-					Line:     f.Line,
-					Message:  f.Message,
-				}
-			}
-			fmt.Println()
-			fmt.Print(ui.FormatDivider(ui.DividerWidth))
-			fmt.Println()
-			fmt.Print(ui.RenderSummary(summary, exitCode))
-			return true, false
-		}
-	}
-
-	return false, false
+	return renderOutcomeFailures(outcome, exitCode), false
 }
 
 // buildRemoteRunCommand prepares a command for remote execution: local path
@@ -616,13 +590,9 @@ func runCommand(args []string, f runCmdFlags) error {
 // runRepeated runs a command N times in parallel across available hosts.
 // Used for flake detection - run the same test multiple times to surface intermittent failures.
 func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFlag bool) (int, error) {
-	// Load and validate config
-	resolved, err := config.LoadResolved(Config())
+	// Load and validate config, and decide local vs remote
+	resolved, target, err := loadRunConfig(localFlag, hostFlag, tagFlag)
 	if err != nil {
-		return 1, err
-	}
-
-	if err := config.ValidateResolved(resolved); err != nil {
 		return 1, err
 	}
 
@@ -636,20 +606,10 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 		}
 	}
 
-	// Resolve hosts
-	hostOrder, hosts, err := config.ResolveHosts(resolved, hostFlag)
+	// Resolve hosts (none for a local target)
+	hostOrder, hosts, err := resolveTargetHosts(resolved, target, hostFlag)
 	if err != nil {
 		return 1, err
-	}
-
-	// Handle --local flag
-	if localFlag {
-		// --local and --tag are mutually exclusive
-		if err := ValidateLocalAndTag(localFlag, tagFlag); err != nil {
-			return 1, err
-		}
-		hosts = make(map[string]config.Host)
-		hostOrder = nil
 	}
 
 	// Filter by tag if specified

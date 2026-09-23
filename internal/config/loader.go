@@ -30,7 +30,7 @@ func Load(path string) (*Config, error) {
 
 	if err := v.ReadInConfig(); err != nil {
 		if os.IsNotExist(err) {
-			return nil, errors.WrapWithCode(err, errors.ErrConfig,
+			return nil, errors.WrapWithCode(err, errors.ErrConfigNotFound,
 				"Can't find the config file",
 				"Looks like you haven't set up shop here yet. Run 'rr init' to get started.")
 		}
@@ -142,17 +142,20 @@ func parseGlobalConfig(v *viper.Viper, path string) (*GlobalConfig, error) {
 	v.SetDefault("defaults.probe_timeout", "2s")
 	v.SetDefault("defaults.local_fallback", "never")
 
+	var md mapstructure.Metadata
 	if err := v.Unmarshal(cfg, viper.DecodeHook(
 		mapstructure.ComposeDecodeHookFunc(
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.StringToSliceHookFunc(","),
 			localFallbackModeDecodeHook(),
 		),
-	)); err != nil {
+	), withMetadata(&md)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Global config has some issues",
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
+
+	cfg.Warnings = unknownKeyWarnings(md.Unused, path)
 
 	// NOTE: host Dir values keep their ${PROJECT}/${HOME} variables here.
 	// Expansion happens at use sites (sync, exec, doctor, display) so that
@@ -174,7 +177,7 @@ func Find(explicit string) (string, error) {
 	if explicit != "" {
 		if _, err := os.Stat(explicit); err != nil {
 			if os.IsNotExist(err) {
-				return "", errors.WrapWithCode(err, errors.ErrConfig,
+				return "", errors.WrapWithCode(err, errors.ErrConfigNotFound,
 					"Can't find config file at "+explicit,
 					"Double-check that path - it doesn't seem to exist.")
 			}
@@ -340,7 +343,6 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	}
 
 	var hostNames []string
-	projectSpecifiesHosts := false
 
 	// 1. Preferred from flag - single host
 	if preferred != "" {
@@ -350,21 +352,18 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	// 2. Project config hosts list (plural)
 	if len(hostNames) == 0 && resolved.Project != nil && len(resolved.Project.Hosts) > 0 {
 		hostNames = resolved.Project.Hosts
-		projectSpecifiesHosts = true
 	}
 
 	// 3. Project config host reference (singular, backwards compat)
 	if len(hostNames) == 0 && resolved.Project != nil && resolved.Project.Host != "" {
 		hostNames = []string{resolved.Project.Host}
-		projectSpecifiesHosts = true
 	}
 
 	// 4. If project explicitly sets local_fallback: true and doesn't specify hosts, run locally
 	// This allows users to set local_fallback: true with no hosts to force local execution
 	// Only triggers when PROJECT config has local_fallback (not just global), so existing
 	// setups that rely on global hosts + global local_fallback continue to work.
-	projectSetsLocalFallback := resolved.Project != nil && resolved.Project.LocalFallback != nil && resolved.Project.LocalFallback.Enabled()
-	if len(hostNames) == 0 && projectSetsLocalFallback && !projectSpecifiesHosts {
+	if len(hostNames) == 0 && ProjectLocalMode(resolved) {
 		return []string{}, make(map[string]Host), nil
 	}
 
@@ -387,7 +386,7 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	for _, name := range hostNames {
 		host, ok := resolved.Global.Hosts[name]
 		if !ok {
-			return nil, nil, errors.New(errors.ErrConfig,
+			return nil, nil, errors.New(errors.ErrHostNotFound,
 				"Host '"+name+"' not found in global config",
 				"Available hosts: "+util.JoinOrNone(available)+". Check ~/.rr/config.yaml.")
 		}
@@ -395,6 +394,19 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 	}
 
 	return hostNames, hosts, nil
+}
+
+// ProjectLocalMode reports whether the project runs locally by design: the
+// project config enables local_fallback and lists no hosts. Only the project
+// setting counts, so setups relying on global hosts plus a global
+// local_fallback keep using their hosts. ResolveHosts returns no hosts in
+// this mode (unless --host names one).
+func ProjectLocalMode(resolved *ResolvedConfig) bool {
+	if resolved == nil || resolved.Project == nil {
+		return false
+	}
+	p := resolved.Project
+	return p.LocalFallback != nil && p.LocalFallback.Enabled() && len(p.Hosts) == 0 && p.Host == ""
 }
 
 // ResolveHost determines which host to use based on resolution order.
@@ -456,6 +468,7 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 	setDurationDefaults(v)
 
 	// Unmarshal with custom decoders for DependencyItem and PullItem
+	var md mapstructure.Metadata
 	if err := v.Unmarshal(cfg, viper.DecodeHook(
 		mapstructure.ComposeDecodeHookFunc(
 			mapstructure.StringToTimeDurationHookFunc(),
@@ -463,11 +476,13 @@ func parseConfig(v *viper.Viper, path string) (*Config, error) {
 			pullItemDecodeHook(),
 			localFallbackModeDecodeHook(),
 		),
-	)); err != nil {
+	), withMetadata(&md)); err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrConfig,
 			"Config file has some issues",
 			"Check the YAML syntax in "+path+" - something's not parsing right.")
 	}
+
+	cfg.Warnings = projectWarnings(v, cfg, md.Unused, path)
 
 	return cfg, nil
 }
@@ -553,8 +568,4 @@ func setDurationDefaults(v *viper.Viper) {
 	v.SetDefault("lock.wait_timeout", "1m")
 	v.SetDefault("lock.stale", "90s")
 	v.SetDefault("lock.dir", "/tmp/rr-locks")
-	v.SetDefault("output.color", "auto")
-	v.SetDefault("output.format", "auto")
-	v.SetDefault("output.timing", true)
-	v.SetDefault("output.verbosity", "normal")
 }

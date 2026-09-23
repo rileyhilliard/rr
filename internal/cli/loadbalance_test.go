@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/stretchr/testify/assert"
 )
@@ -96,7 +97,7 @@ func TestDescribeHolders(t *testing.T) {
 
 func TestLocalFallbackResult(t *testing.T) {
 	attempts := []hostAttempt{{hostName: "m4-mini"}}
-	result := localFallbackResult(attempts)
+	result := localFallbackResult(host.LocalReasonAllHostsLocked, attempts)
 
 	assert.True(t, result.isLocal)
 	assert.True(t, result.fellBack)

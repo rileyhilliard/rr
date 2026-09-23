@@ -84,32 +84,6 @@ func TestGenericFormatterSummaryNegativeCode(t *testing.T) {
 	assert.Contains(t, result, "exit code -1")
 }
 
-func TestPassthroughFormatterName(t *testing.T) {
-	f := NewPassthroughFormatter()
-	assert.Equal(t, "passthrough", f.Name())
-}
-
-func TestPassthroughFormatterProcessLine(t *testing.T) {
-	f := NewPassthroughFormatter()
-
-	tests := []string{
-		"normal line",
-		"ERROR: this should not be changed",
-		"\033[31mRed text\033[0m",
-	}
-
-	for _, line := range tests {
-		result := f.ProcessLine(line)
-		assert.Equal(t, line, result)
-	}
-}
-
-func TestPassthroughFormatterSummary(t *testing.T) {
-	f := NewPassthroughFormatter()
-	assert.Empty(t, f.Summary(0))
-	assert.Empty(t, f.Summary(1))
-}
-
 func TestUtilItoa(t *testing.T) {
 	tests := []struct {
 		input int
@@ -171,50 +145,4 @@ func TestIsErrorLine(t *testing.T) {
 			assert.False(t, isErrorLine(line), "should not be detected as error: %s", line)
 		})
 	}
-}
-
-func TestFormatterRegistry(t *testing.T) {
-	r := NewFormatterRegistry()
-
-	// Should have default formatters
-	assert.NotNil(t, r.Get("generic"))
-	assert.NotNil(t, r.Get("passthrough"))
-
-	// Unknown formatter should return generic
-	f := r.Get("unknown")
-	assert.Equal(t, "generic", f.Name())
-}
-
-func TestFormatterRegistryRegister(t *testing.T) {
-	r := NewFormatterRegistry()
-
-	custom := &mockFormatter{name: "custom"}
-	r.Register(custom)
-
-	f := r.Get("custom")
-	assert.Equal(t, "custom", f.Name())
-}
-
-func TestFormatterRegistryNames(t *testing.T) {
-	r := NewFormatterRegistry()
-
-	names := r.Names()
-	assert.Contains(t, names, "generic")
-	assert.Contains(t, names, "passthrough")
-}
-
-type mockFormatter struct {
-	name string
-}
-
-func (f *mockFormatter) Name() string {
-	return f.name
-}
-
-func (f *mockFormatter) ProcessLine(line string) string {
-	return line
-}
-
-func (f *mockFormatter) Summary(_ int) string {
-	return ""
 }

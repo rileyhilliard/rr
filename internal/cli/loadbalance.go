@@ -35,18 +35,19 @@ type lockHolderDetail struct {
 
 // fallbackDetail explains a local fallback in the result envelope.
 type fallbackDetail struct {
-	Reason  string             `json:"reason"` // all_hosts_locked
+	Reason  string             `json:"reason"` // host.LocalReasonHostsUnreachable or host.LocalReasonAllHostsLocked
 	WaitedS float64            `json:"waited_s,omitempty"`
 	Holders []lockHolderDetail `json:"holders,omitempty"`
 }
 
 // findAvailableHostResult contains the result of finding an available host.
 type findAvailableHostResult struct {
-	conn       *host.Connection
-	lock       *lock.Lock
-	isLocal    bool
-	fellBack   bool          // isLocal because all hosts were locked
-	hostsState []hostAttempt // State of all hosts tried
+	conn           *host.Connection
+	lock           *lock.Lock
+	isLocal        bool
+	fellBack       bool          // isLocal because of a fallback (see fallbackReason)
+	fallbackReason string        // host.LocalReason* explaining the fallback
+	hostsState     []hostAttempt // State of all hosts tried
 }
 
 // allLockedAction is the decision for the "every host is locked" scenario.
@@ -130,11 +131,11 @@ func lockStealWarn(msg string) {
 }
 
 // emitFallbackWarning makes a local fallback unmissable in both output modes.
-func emitFallbackWarning(holders []lockHolderDetail, waited time.Duration) {
+func emitFallbackWarning(fb fallbackDetail) {
 	if PrettyMode() {
-		msg := "Falling back to LOCAL execution - all remote hosts are locked"
-		if len(holders) > 0 {
-			msg += " (" + describeHolders(holders) + ")"
+		msg := "Falling back to LOCAL execution - " + host.DescribeLocalReason(fb.Reason)
+		if len(fb.Holders) > 0 {
+			msg += " (" + describeHolders(fb.Holders) + ")"
 		}
 		ui.PrintWarning(msg)
 		return
@@ -142,11 +143,13 @@ func emitFallbackWarning(holders []lockHolderDetail, waited time.Duration) {
 
 	details := map[string]interface{}{
 		"local_fallback": true,
-		"reason":         "all_hosts_locked",
-		"holders":        holders,
+		"reason":         fb.Reason,
 	}
-	if waited > 0 {
-		details["waited_s"] = waited.Seconds()
+	if len(fb.Holders) > 0 {
+		details["holders"] = fb.Holders
+	}
+	if fb.WaitedS > 0 {
+		details["waited_s"] = fb.WaitedS
 	}
 	WritePhaseEvent(PhaseEvent{
 		Type:    "phase",
@@ -266,12 +269,10 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 					a.conn.Close()
 				}
 			}
-			emitFallbackWarning(holders, 0)
-			ctx.AddResultDetail("fallback", fallbackDetail{
-				Reason:  "all_hosts_locked",
+			return fallBackLocally(ctx, fallbackDetail{
+				Reason:  host.LocalReasonAllHostsLocked,
 				Holders: holders,
-			})
-			return localFallbackResult(attempts), nil
+			}, attempts), nil
 
 		case actionWaitThenFallback:
 			waitStart := time.Now()
@@ -281,13 +282,11 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 			}
 			// Wait exhausted (or connections lost): fall back, loudly
 			waited := time.Since(waitStart)
-			emitFallbackWarning(holders, waited)
-			ctx.AddResultDetail("fallback", fallbackDetail{
-				Reason:  "all_hosts_locked",
+			return fallBackLocally(ctx, fallbackDetail{
+				Reason:  host.LocalReasonAllHostsLocked,
 				WaitedS: waited.Round(time.Second).Seconds(),
 				Holders: holders,
-			})
-			return localFallbackResult(attempts), nil
+			}, attempts), nil
 
 		default:
 			// Fallback disabled for busy hosts: wait, then error
@@ -295,23 +294,32 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 	}
 
-	// No hosts could be connected to at all
+	// No hosts could be connected to at all. Both non-never local_fallback
+	// modes run locally in that case, same as the single-host path.
+	if config.ResolveLocalFallback(ctx.Resolved) {
+		return fallBackLocally(ctx, fallbackDetail{Reason: host.LocalReasonHostsUnreachable}, attempts), nil
+	}
 	return nil, buildConnectionError(attempts)
 }
 
-// localFallbackResult builds the local-execution result used when all hosts
-// are locked and fallback is allowed.
-func localFallbackResult(attempts []hostAttempt) *findAvailableHostResult {
+// fallBackLocally reports a local fallback (warning event plus
+// details.fallback on the result) and returns the local result.
+func fallBackLocally(ctx *WorkflowContext, fb fallbackDetail, attempts []hostAttempt) *findAvailableHostResult {
+	emitFallbackWarning(fb)
+	ctx.AddResultDetail("fallback", fb)
+	return localFallbackResult(fb.Reason, attempts)
+}
+
+// localFallbackResult builds the local-execution result used when rr falls
+// back to running locally for reason.
+func localFallbackResult(reason string, attempts []hostAttempt) *findAvailableHostResult {
 	return &findAvailableHostResult{
-		conn: &host.Connection{
-			Name:    "local",
-			Alias:   "local",
-			IsLocal: true,
-		},
-		lock:       nil,
-		isLocal:    true,
-		fellBack:   true,
-		hostsState: attempts,
+		conn:           localConnection(),
+		lock:           nil,
+		isLocal:        true,
+		fellBack:       true,
+		fallbackReason: reason,
+		hostsState:     attempts,
 	}
 }
 
@@ -498,7 +506,7 @@ func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error
 	ctx.Lock = result.lock
 
 	if result.isLocal {
-		connDisplay.SuccessLocal()
+		connDisplay.SuccessLocal(host.DescribeLocalReason(result.fallbackReason))
 	} else {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}

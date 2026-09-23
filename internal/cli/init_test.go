@@ -624,3 +624,19 @@ func TestInitCommand_MergesOptions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(globalContent), "env@example.com")
 }
+
+// TestGenerateProjectConfig_LockDefaultsMatch checks that the lock settings
+// written by `rr init` match the built-in defaults, so a generated config
+// doesn't quietly change lock behavior.
+func TestGenerateProjectConfig_LockDefaultsMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".rr.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(generateProjectConfigContent(&projectConfigValues{})), 0o644))
+
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+
+	defaults := config.DefaultConfig().Lock
+	assert.Equal(t, defaults.Timeout, cfg.Lock.Timeout, "lock.timeout")
+	assert.Equal(t, defaults.Stale, cfg.Lock.Stale, "lock.stale")
+	assert.Equal(t, defaults.WaitTimeout, cfg.Lock.WaitTimeout, "lock.wait_timeout")
+}
