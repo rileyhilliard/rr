@@ -131,15 +131,3 @@ func toHomeRelative(path string) string {
 
 	return path
 }
-
-// NewPathChecks creates PATH checks for the given SSH clients.
-func NewPathChecks(clients map[string]sshutil.SSHClient) []Check {
-	var checks []Check
-	for name, client := range clients {
-		checks = append(checks, &PathCheck{
-			HostName: name,
-			Client:   client,
-		})
-	}
-	return checks
-}

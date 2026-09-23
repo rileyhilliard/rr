@@ -20,7 +20,7 @@ func (c *SSHKeyCheck) Run() CheckResult {
 	if err != nil {
 		return CheckResult{
 			Name:       c.Name(),
-			Status:     StatusFail,
+			Status:     StatusWarn,
 			Message:    "Cannot determine home directory",
 			Suggestion: "Check HOME environment variable",
 		}
@@ -45,12 +45,13 @@ func (c *SSHKeyCheck) Run() CheckResult {
 		}
 	}
 
+	// Warn, not fail: keys named in ~/.ssh/config (IdentityFile), agent-only
+	// keys, and hardware keys all work without a default key file.
 	return CheckResult{
 		Name:       c.Name(),
-		Status:     StatusFail,
-		Message:    "No SSH key found",
-		Suggestion: "Generate a key with: ssh-keygen -t ed25519",
-		Fixable:    true,
+		Status:     StatusWarn,
+		Message:    "No default SSH key found (~/.ssh/id_ed25519, id_rsa, id_ecdsa)",
+		Suggestion: "Ignore this if your hosts use a key from ~/.ssh/config or the agent. Otherwise generate one: ssh-keygen -t ed25519",
 	}
 }
 
@@ -67,14 +68,15 @@ func (c *SSHAgentCheck) Category() string { return "SSH" }
 
 func (c *SSHAgentCheck) Run() CheckResult {
 	// Check if SSH_AUTH_SOCK is set
+	// Agent problems are warnings: key files and IdentityFile entries in
+	// ~/.ssh/config authenticate without an agent.
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
 		return CheckResult{
 			Name:       c.Name(),
-			Status:     StatusFail,
+			Status:     StatusWarn,
 			Message:    "SSH agent not running",
-			Suggestion: "Fix: eval $(ssh-agent) && ssh-add",
-			Fixable:    true,
+			Suggestion: "Ignore this if your keys load from files. To use an agent: eval $(ssh-agent) && ssh-add",
 		}
 	}
 
@@ -83,10 +85,9 @@ func (c *SSHAgentCheck) Run() CheckResult {
 	if err != nil {
 		return CheckResult{
 			Name:       c.Name(),
-			Status:     StatusFail,
+			Status:     StatusWarn,
 			Message:    "SSH agent socket not accessible",
-			Suggestion: "Fix: eval $(ssh-agent) && ssh-add",
-			Fixable:    true,
+			Suggestion: "Ignore this if your keys load from files. To use an agent: eval $(ssh-agent) && ssh-add",
 		}
 	}
 	conn.Close()
@@ -102,12 +103,11 @@ func (c *SSHAgentCheck) Run() CheckResult {
 				Status:     StatusWarn,
 				Message:    "SSH agent running but no keys loaded",
 				Suggestion: "Add a key with: ssh-add",
-				Fixable:    true,
 			}
 		}
 		return CheckResult{
 			Name:       c.Name(),
-			Status:     StatusFail,
+			Status:     StatusWarn,
 			Message:    "Cannot query SSH agent",
 			Suggestion: "Check SSH agent: ssh-add -l",
 		}

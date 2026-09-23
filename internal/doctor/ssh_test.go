@@ -37,21 +37,41 @@ func TestSSHAgentCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("without SSH_AUTH_SOCK", func(t *testing.T) {
-		// Save and clear SSH_AUTH_SOCK
-		origSock := os.Getenv("SSH_AUTH_SOCK")
-		os.Unsetenv("SSH_AUTH_SOCK")
-		defer func() {
-			if origSock != "" {
-				os.Setenv("SSH_AUTH_SOCK", origSock)
-			}
-		}()
+	t.Run("without SSH_AUTH_SOCK warns, not fails", func(t *testing.T) {
+		t.Setenv("SSH_AUTH_SOCK", "")
 
 		result := check.Run()
-		if result.Status != StatusFail {
-			t.Errorf("expected StatusFail when SSH_AUTH_SOCK not set, got %v", result.Status)
+		if result.Status != StatusWarn {
+			t.Errorf("expected StatusWarn when SSH_AUTH_SOCK not set, got %v", result.Status)
+		}
+		if result.Fixable {
+			t.Error("expected Fixable=false: Fix() is a no-op")
 		}
 	})
+
+	t.Run("unreachable socket warns, not fails", func(t *testing.T) {
+		t.Setenv("SSH_AUTH_SOCK", filepath.Join(t.TempDir(), "missing.sock"))
+
+		result := check.Run()
+		if result.Status != StatusWarn {
+			t.Errorf("expected StatusWarn for a dead agent socket, got %v", result.Status)
+		}
+		if result.Fixable {
+			t.Error("expected Fixable=false: Fix() is a no-op")
+		}
+	})
+}
+
+func TestSSHKeyCheck_NoDefaultKeyWarns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	result := (&SSHKeyCheck{}).Run()
+	if result.Status != StatusWarn {
+		t.Errorf("expected StatusWarn with no default key, got %v", result.Status)
+	}
+	if result.Fixable {
+		t.Error("expected Fixable=false: Fix() is a no-op")
+	}
 }
 
 func TestSSHKeyPermissionsCheck(t *testing.T) {

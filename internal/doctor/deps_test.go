@@ -2,7 +2,12 @@ package doctor
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
+
+	"github.com/rileyhilliard/rr/internal/host"
+	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRsyncLocalCheck(t *testing.T) {
@@ -64,6 +69,71 @@ func TestRsyncRemoteCheck(t *testing.T) {
 			t.Errorf("expected StatusFail with no connection, got %v", result.Status)
 		}
 	})
+}
+
+func TestRsyncRemoteCheck_Run(t *testing.T) {
+	tests := []struct {
+		name        string
+		resp        sshtesting.CommandResponse
+		wantStatus  CheckStatus
+		wantMessage string
+	}{
+		{
+			name: "installed, digits in path are not read as the version",
+			resp: sshtesting.CommandResponse{
+				Stdout: []byte("/opt/tools-9.9/bin/rsync\nopenrsync: protocol version 29\n"),
+			},
+			wantStatus:  StatusPass,
+			wantMessage: "rsync unknown (box)",
+		},
+		{
+			name: "macOS openrsync reports its compatible version",
+			resp: sshtesting.CommandResponse{
+				Stdout: []byte("/usr/bin/rsync\nopenrsync: protocol version 29\nrsync version 2.6.9 compatible\n"),
+			},
+			wantStatus:  StatusPass,
+			wantMessage: "rsync 2.6.9 (box)",
+		},
+		{
+			name: "installed, standard rsync",
+			resp: sshtesting.CommandResponse{
+				Stdout: []byte("/usr/bin/rsync\nrsync  version 3.2.7  protocol version 31\n"),
+			},
+			wantStatus:  StatusPass,
+			wantMessage: "rsync 3.2.7 (box)",
+		},
+		{
+			name:        "not on PATH",
+			resp:        sshtesting.CommandResponse{ExitCode: 1},
+			wantStatus:  StatusFail,
+			wantMessage: "rsync not found on box",
+		},
+		{
+			name:        "empty output treated as missing",
+			resp:        sshtesting.CommandResponse{},
+			wantStatus:  StatusFail,
+			wantMessage: "rsync not found on box",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := sshtesting.NewMockClient("box")
+			client.SetCommandResponse(remoteRsyncCheckCmd, tt.resp)
+
+			check := &RsyncRemoteCheck{HostName: "box", Conn: &host.Connection{Name: "box", Client: client}}
+			result := check.Run()
+
+			assert.Equal(t, tt.wantStatus, result.Status)
+			assert.Equal(t, tt.wantMessage, result.Message)
+		})
+	}
+}
+
+// The remote command must use POSIX `command -v`; `which` is absent on
+// minimal images.
+func TestRemoteRsyncCheckCmd_UsesCommandV(t *testing.T) {
+	assert.True(t, strings.HasPrefix(remoteRsyncCheckCmd, "command -v rsync"))
 }
 
 func TestParseRsyncVersion(t *testing.T) {

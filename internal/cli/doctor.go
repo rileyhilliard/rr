@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/doctor"
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
@@ -52,6 +53,9 @@ type SummaryOutput struct {
 	AllClear bool `json:"all_clear"`
 }
 
+// doctorDial dials a single SSH alias. Tests replace it to avoid real SSH.
+var doctorDial host.DialFunc = host.ProbeAndConnect
+
 // doctorCommand implements the doctor command logic.
 func doctorCommand() error {
 	// Load project config (if it exists)
@@ -68,54 +72,68 @@ func doctorCommand() error {
 	// Collect all checks
 	checks := collectChecks(cfgPath, projectCfg, globalCfg)
 
-	// If --path or --requirements flag, establish connections
-	var pathClients map[string]sshutil.SSHClient
-	needConnections := (doctorPath || doctorRequirements) && globalCfg != nil && len(globalCfg.Hosts) > 0
-	if needConnections {
-		pathClients = establishPathConnections(globalCfg)
-		defer closePathConnections(pathClients)
+	// --path and --requirements need live connections to the hosts in scope
+	if doctorPath || doctorRequirements {
+		// A resolution error is already reported by collectChecks
+		hostNames, hosts, _ := doctor.ScopeHosts(projectCfg, globalCfg)
+		conns, dialErrs := connectDoctorHosts(hostNames, hosts, doctorDial)
+		defer closeDoctorConnections(conns)
 
-		if len(pathClients) > 0 {
-			if doctorPath {
-				checks = append(checks, doctor.NewPathChecks(pathClients)...)
-			}
-			if doctorRequirements {
-				// Create host.Connection wrappers for requirements checks
-				connections := make(map[string]*host.Connection)
-				for name, client := range pathClients {
-					connections[name] = &host.Connection{
-						Name:   name,
-						Client: client,
-						Host:   globalCfg.Hosts[name],
-					}
-				}
-				checks = append(checks, doctor.NewRequirementsChecks(globalCfg.Hosts, connections, projectCfg)...)
-			}
-		}
+		attachRemoteErrors(checks, dialErrs)
+		checks = append(checks, remoteDoctorChecks(hostNames, hosts, conns, projectCfg, doctorPath, doctorRequirements)...)
 	}
 
-	// Machine mode implies JSON output - run checks without progress display
+	fallback := config.ResolveLocalFallbackMode(&config.ResolvedConfig{Global: globalCfg, Project: projectCfg})
+
+	var results []doctor.CheckResult
 	if doctorJSON || MachineMode() {
-		results := doctor.RunAll(checks)
-		if doctorFix {
-			results = attemptFixes(checks, results)
-		}
-		return outputDoctorJSON(checks, results)
+		// Machine mode implies JSON output - run checks without progress display
+		results = runDoctorChecks(checks, fallback)
+	} else {
+		// Run checks with progressive output (shows spinner per category)
+		results = runChecksWithProgress(checks, fallback)
 	}
-
-	// Run checks with progressive output (shows spinner per category)
-	results := runChecksWithProgress(checks)
 
 	// Try to fix issues if requested
 	if doctorFix {
 		results = attemptFixes(checks, results)
+		doctor.GradeHostResults(checks, results, fallback)
 	}
 
-	return outputDoctorTextResults(checks, results)
+	return reportDoctorResults(checks, results)
+}
+
+// runDoctorChecks runs every check, then regrades unreachable hosts by
+// whether a run would actually fail (see doctor.GradeHostResults).
+func runDoctorChecks(checks []doctor.Check, fallback config.LocalFallbackMode) []doctor.CheckResult {
+	results := doctor.RunAll(checks)
+	doctor.GradeHostResults(checks, results, fallback)
+	return results
+}
+
+// reportDoctorResults writes the final output and returns the exit status:
+// an ExitError(1) when any check failed, nil when there are only warnings.
+// In machine mode the envelope still says success:true, because doctor
+// itself ran; the verdict is data.summary.all_clear plus the exit code.
+func reportDoctorResults(checks []doctor.Check, results []doctor.CheckResult) error {
+	if doctorJSON || MachineMode() {
+		if err := outputDoctorJSON(checks, results); err != nil {
+			return err
+		}
+	} else {
+		outputDoctorTextResults(checks, results)
+	}
+
+	if doctor.HasFailures(results) {
+		return rrerrors.NewExitError(1)
+	}
+	return nil
 }
 
 // runChecksWithProgress runs checks with spinner feedback, showing progress by category.
-func runChecksWithProgress(checks []doctor.Check) []doctor.CheckResult {
+// Unreachable hosts are regraded (doctor.GradeHostResults) before the HOSTS
+// category is rendered.
+func runChecksWithProgress(checks []doctor.Check, fallback config.LocalFallbackMode) []doctor.CheckResult {
 	results := make([]doctor.CheckResult, len(checks))
 
 	// Group checks by category while preserving order
@@ -146,6 +164,10 @@ func runChecksWithProgress(checks []doctor.Check) []doctor.CheckResult {
 		// Run all checks in this category
 		for _, idx := range indices {
 			results[idx] = checks[idx].Run()
+		}
+
+		if category == "HOSTS" {
+			doctor.GradeHostResults(checks, results, fallback)
 		}
 
 		spinner.Stop()
@@ -184,56 +206,115 @@ func renderCategoryResults(category string, checks []doctor.Check, results []doc
 	fmt.Println()
 }
 
-// establishPathConnections connects to hosts for PATH checking.
-func establishPathConnections(globalCfg *config.GlobalConfig) map[string]sshutil.SSHClient {
-	clients := make(map[string]sshutil.SSHClient)
+// connectDoctorHosts connects to each host the way rr run does: every SSH
+// alias is raced, with earlier aliases preferred. Hosts are dialed in
+// parallel. Hosts that can't be reached come back in the error map, keyed by
+// host name; attachRemoteErrors reports them on the host's HOSTS result.
+func connectDoctorHosts(hostNames []string, hosts map[string]config.Host, dial host.DialFunc) (map[string]*host.Connection, map[string]error) {
+	conns := make([]*host.Connection, len(hostNames))
+	errs := make([]error, len(hostNames))
 
-	for name := range globalCfg.Hosts {
-		hostCfg := globalCfg.Hosts[name]
-		if len(hostCfg.SSH) == 0 {
+	var wg sync.WaitGroup
+	for i, name := range hostNames {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			hostCfg := hosts[name]
+			result, err := host.DialAliases(name, hostCfg.SSH, host.DialOptions{Dial: dial})
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			conns[i] = &host.Connection{
+				Name:    name,
+				Alias:   result.Alias,
+				Client:  result.Client,
+				Host:    hostCfg,
+				Latency: result.Latency,
+			}
+		}(i, name)
+	}
+	wg.Wait()
+
+	connected := make(map[string]*host.Connection)
+	dialErrs := make(map[string]error)
+	for i, name := range hostNames {
+		if errs[i] != nil {
+			dialErrs[name] = errs[i]
 			continue
 		}
-
-		// Try first SSH alias
-		client, err := sshutil.Dial(hostCfg.SSH[0], 10*time.Second)
-		if err == nil {
-			clients[name] = client
-		}
+		connected[name] = conns[i]
 	}
-
-	return clients
+	return connected, dialErrs
 }
 
-// closePathConnections closes all SSH clients.
-func closePathConnections(clients map[string]sshutil.SSHClient) {
-	for _, client := range clients {
-		client.Close()
+// attachRemoteErrors records each host's connection failure on its HOSTS
+// check, so an unreachable host is reported once, with a note that its
+// remote checks were skipped.
+func attachRemoteErrors(checks []doctor.Check, dialErrs map[string]error) {
+	for _, c := range checks {
+		if hc, ok := c.(*doctor.HostConnectivityCheck); ok {
+			if err, failed := dialErrs[hc.HostName]; failed {
+				hc.RemoteErr = err
+			}
+		}
+	}
+}
+
+// remoteDoctorChecks builds the --path and --requirements checks for each
+// connected host, in host priority order. Unreachable hosts are skipped here;
+// their HOSTS result reports them (attachRemoteErrors).
+func remoteDoctorChecks(hostNames []string, hosts map[string]config.Host, conns map[string]*host.Connection, projectCfg *config.Config, path, requirements bool) []doctor.Check {
+	var checks []doctor.Check
+	for _, name := range hostNames {
+		conn := conns[name]
+		if conn == nil {
+			continue
+		}
+		if path {
+			checks = append(checks, &doctor.PathCheck{HostName: name, Client: conn.Client})
+		}
+		if requirements {
+			checks = append(checks, doctor.NewRequirementsCheck(name, hosts[name], conn, projectCfg))
+			checks = append(checks, doctor.NewRemoteDepsChecks(name, conn)...)
+		}
+	}
+	return checks
+}
+
+// closeDoctorConnections closes all SSH connections.
+func closeDoctorConnections(conns map[string]*host.Connection) {
+	for _, conn := range conns {
+		_ = conn.Close()
 	}
 }
 
 // collectChecks gathers all diagnostic checks based on available config.
-func collectChecks(cfgPath string, _ *config.Config, globalCfg *config.GlobalConfig) []doctor.Check {
+// Host checks cover only the hosts a run would use (see doctor.ScopeHosts).
+func collectChecks(cfgPath string, projectCfg *config.Config, globalCfg *config.GlobalConfig) []doctor.Check {
 	var checks []doctor.Check
 
 	// Config checks (always run)
 	checks = append(checks, doctor.NewConfigChecks(cfgPath)...)
 
+	hostNames, hosts, err := doctor.ScopeHosts(projectCfg, globalCfg)
+	if err != nil {
+		checks = append(checks, &doctor.HostResolutionCheck{Err: err})
+	}
+
 	// SSH checks (always run)
 	checks = append(checks, doctor.NewSSHChecks()...)
 
-	// Host connectivity checks (if global config with hosts exists)
-	if globalCfg != nil && len(globalCfg.Hosts) > 0 {
-		checks = append(checks, doctor.NewHostsChecks(globalCfg.Hosts)...)
+	// Host connectivity checks for the hosts in scope
+	if len(hostNames) > 0 {
+		checks = append(checks, doctor.NewHostsChecks(hosts)...)
 
 		// Which remote dir does this tree sync to? (worktree-aware)
-		checks = append(checks, &doctor.WorktreeMappingCheck{Hosts: globalCfg.Hosts})
+		checks = append(checks, &doctor.WorktreeMappingCheck{Hosts: hosts})
 	}
 
-	// Dependency checks (local always, remote if connected)
+	// Dependency checks (local; remote rsync runs with --requirements)
 	checks = append(checks, doctor.NewDepsChecks()...)
-
-	// Note: Remote checks would require establishing connections
-	// They're run separately after host connectivity is verified
 
 	return checks
 }
@@ -300,7 +381,7 @@ func outputDoctorJSON(checks []doctor.Check, results []doctor.CheckResult) error
 }
 
 // outputDoctorTextResults outputs just the summary after progressive category rendering.
-func outputDoctorTextResults(_ []doctor.Check, results []doctor.CheckResult) error {
+func outputDoctorTextResults(_ []doctor.Check, results []doctor.CheckResult) {
 	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
@@ -330,7 +411,6 @@ func outputDoctorTextResults(_ []doctor.Check, results []doctor.CheckResult) err
 	}
 
 	fmt.Println()
-	return nil
 }
 
 // outputDoctorText outputs results in human-readable format (non-progressive, used by tests).
@@ -441,6 +521,7 @@ func renderCheckResult(result doctor.CheckResult, successStyle, errorStyle, warn
 func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, indices []int) {
 	successStyle := lipgloss.NewStyle().Foreground(ui.ColorSuccess)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
+	warnStyle := lipgloss.NewStyle().Foreground(ui.ColorWarning)
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 
 	for _, idx := range indices {
@@ -450,6 +531,14 @@ func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, in
 		}
 
 		result := results[idx]
+
+		connected := false
+		for _, aliasResult := range check.Results {
+			if aliasResult.Success {
+				connected = true
+				break
+			}
+		}
 
 		// Host header
 		var symbol string
@@ -461,6 +550,9 @@ func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, in
 		case doctor.StatusWarn:
 			symbol = ui.SymbolComplete
 			style = successStyle // Still has some working aliases
+			if !connected || check.RemoteErr != nil {
+				style = warnStyle // Unreachable but regraded, or remote checks skipped
+			}
 		default:
 			symbol = ui.SymbolFail
 			style = errorStyle
@@ -492,9 +584,16 @@ func renderHostsCategory(checks []doctor.Check, results []doctor.CheckResult, in
 			}
 		}
 
-		// General suggestion if all aliases failed (only show if not already shown per-alias)
-		if result.Status == doctor.StatusFail && result.Suggestion != "" && len(check.Results) == 0 {
-			fmt.Printf("\n    %s\n", mutedStyle.Render(result.Suggestion))
+		// Host-level details the alias lines don't cover: why an unreachable
+		// host was graded as it was, and skipped remote checks.
+		if check.RemoteErr != nil && connected {
+			fmt.Printf("    %s\n", mutedStyle.Render(result.Message))
+		}
+		if result.Status != doctor.StatusPass && result.Suggestion != "" && (!connected || check.RemoteErr != nil) {
+			fmt.Println()
+			for _, line := range strings.Split(result.Suggestion, "\n") {
+				fmt.Printf("    %s\n", mutedStyle.Render(line))
+			}
 		}
 	}
 }
