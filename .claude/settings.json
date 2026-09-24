@@ -19,7 +19,6 @@
       "Bash(git:*)",
       "Bash(make:*)",
       "Bash(go:*)",
-      "Bash(golangci-lint:*)",
       "Bash(gofmt:*)",
       "Bash(goimports:*)",
       "Bash(rr:*)",

@@ -79,8 +79,9 @@ commit-msg:
     conventional-commit:
       run: |
         MSG=$(cat {1})
-        # Allow merge commits
-        if echo "$MSG" | grep -qE "^Merge "; then
+        # Allow merge commits, and fixup!/squash! commits that
+        # `git rebase --autosquash` folds into a conventional one
+        if echo "$MSG" | grep -qE "^(Merge |fixup! |squash! |amend! )"; then
           exit 0
         fi
         # Conventional commit format: type(scope)?: description

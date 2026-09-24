@@ -15,4 +15,4 @@ When writing documentation, load the `ce:writer` skill and use **The Engineer** 
 |----------|----------|
 | Project overview | `.claude/CLAUDE.md` |
 | CLI commands | `docs/` or inline in code |
-| Skills/commands | `.claude/commands/` |
+| Skills | `.claude/skills/<name>/SKILL.md` |
