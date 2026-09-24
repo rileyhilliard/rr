@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -52,11 +53,21 @@ func NewSpinner(label string) *Spinner {
 }
 
 // SetOutput sets the output function for the spinner.
-// Useful for testing or redirecting output.
+// Useful for testing. Animation still follows stdout; to write somewhere
+// else, use SetWriter, which follows the writer.
 func (s *Spinner) SetOutput(fn func(string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.output = fn
+}
+
+// SetWriter sends the spinner's output to w. It animates only if w is a
+// terminal.
+func (s *Spinner) SetWriter(w io.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.output = func(str string) { fmt.Fprint(w, str) }
+	s.animated = isTerminalWriter(w)
 }
 
 // Start begins the spinner animation.

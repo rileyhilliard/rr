@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"sync"
@@ -213,6 +214,23 @@ func TestSpinnerConcurrentAccess(t *testing.T) {
 
 // When stdout isn't a terminal (piped, redirected, captured by an agent),
 // the spinner doesn't animate: it prints only the final status line.
+// A spinner writing somewhere other than stdout animates only if that
+// writer is a terminal, whatever stdout is.
+func TestSpinner_SetWriterNotATerminalPrintsFinalLineOnly(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSpinner("Connecting")
+	s.animated = true // as if stdout were a terminal
+	s.SetWriter(&buf)
+
+	s.Start()
+	s.Success()
+
+	out := buf.String()
+	assert.NotContains(t, out, "\r")
+	assert.Equal(t, 1, strings.Count(out, "\n"))
+	assert.Contains(t, out, "Connecting")
+}
+
 func TestSpinner_NotATerminalPrintsFinalLineOnly(t *testing.T) {
 	if IsTerminal(os.Stdout) {
 		t.Skip("stdout is a terminal")

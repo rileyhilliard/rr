@@ -92,6 +92,9 @@ func TestCheckSourceMarker(t *testing.T) {
 	})
 
 	t.Run("same source from this machine under a new hostname means no warning", func(t *testing.T) {
+		if util.MachineID() == "" {
+			t.Skip("no machine ID on this system, so the check falls back to the hostname")
+		}
 		mock := sshtesting.NewMockClient("test-host")
 		conn := markerTestConn(mock)
 		localDir := t.TempDir()

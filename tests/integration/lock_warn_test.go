@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/cli"
 	"github.com/rileyhilliard/rr/internal/host"
@@ -21,10 +22,17 @@ import (
 func TestLockSteal_ReportedAsEvent(t *testing.T) {
 	conn := GetSSHConnection(t)
 	home := setupParallelSSHHome(t)
-	lockDir := fmt.Sprintf("/tmp/rr-lockwarn-%d", os.Getpid())
-	t.Cleanup(func() { CleanupRemoteDir(t, conn, lockDir) })
+	// Unique per run, so two test processes sharing the SSH host don't touch
+	// each other's lock or synced files.
+	suffix := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	lockDir := "/tmp/rr-lockwarn-" + suffix
+	projDir := "/tmp/rr-lockwarn-proj-" + suffix
+	t.Cleanup(func() {
+		CleanupRemoteDir(t, conn, lockDir)
+		CleanupRemoteDir(t, conn, projDir)
+	})
 
-	globalCfg := fmt.Sprintf("version: 1\nhosts:\n  h:\n    ssh: [%s]\n    dir: /tmp/rr-lockwarn-proj\n", parallelTestAlias)
+	globalCfg := fmt.Sprintf("version: 1\nhosts:\n  h:\n    ssh: [%s]\n    dir: %s\n", parallelTestAlias, projDir)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".rr"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".rr", "config.yaml"), []byte(globalCfg), 0o644))
 	projectCfg := fmt.Sprintf("version: 1\nhost: h\nlock:\n  dir: %s\ntasks:\n  x:\n    run: \"true\"\n  both:\n    parallel: [x]\n", lockDir)

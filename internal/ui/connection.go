@@ -101,9 +101,7 @@ func (cd *ConnectionDisplay) Start() {
 
 	cd.started = time.Now()
 	cd.spinner = NewSpinner("Connecting")
-	cd.spinner.SetOutput(func(s string) {
-		fmt.Fprint(cd.w, s)
-	})
+	cd.spinner.SetWriter(cd.w)
 	cd.spinner.Start()
 }
 
