@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestFilterHostsByTag(t *testing.T) {
@@ -340,11 +342,30 @@ func TestExtractTaskFailures_EmptyOutput(t *testing.T) {
 
 	f := failures[0]
 	assert.Equal(t, "timeout-task", f["task"])
-	assert.Equal(t, "task timed out after 5m", f["error"])
+	assert.Equal(t, &JSONError{Code: ErrCodeUnknown, Message: "task timed out after 5m"}, f["error"])
 	_, hasTests := f["tests"]
 	assert.False(t, hasTests)
 	_, hasTail := f["output_tail"]
 	assert.False(t, hasTail)
+}
+
+// A subtask's error is the same {code, message, suggestion} object as
+// details.error elsewhere, not the pretty-printed text.
+func TestExtractTaskFailures_StructuredError(t *testing.T) {
+	cause := errors.WrapWithCode(&ssh.ExitMissingError{}, errors.ErrSSH,
+		"Lost the connection before the command finished", "Run the command again.")
+	result := &parallel.Result{
+		Failed:      1,
+		TaskResults: []parallel.TaskResult{{TaskName: "t1", Host: "m1-linux", ExitCode: -1, Error: cause}},
+	}
+
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
+	require.Len(t, failures, 1)
+	assert.Equal(t, &JSONError{
+		Code:       "SSH_CONNECTION_FAILED",
+		Message:    "Lost the connection before the command finished",
+		Suggestion: "Run the command again.",
+	}, failures[0]["error"])
 }
 
 func TestExtractTaskFailures_SkipsPassingTasks(t *testing.T) {

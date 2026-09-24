@@ -223,3 +223,18 @@ func TestFakeProgressDisabled(t *testing.T) {
 
 	assert.Equal(t, 0.1, effective, "With fake disabled, should only use real progress")
 }
+
+// Writing to anything but a terminal (a pipe, a file, a buffer), the progress
+// bar doesn't animate: it prints only the final line.
+func TestInlineProgress_NotATerminalPrintsFinalLineOnly(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewInlineProgress("Downloading", &buf)
+
+	p.Start()
+	p.Success()
+
+	out := buf.String()
+	assert.NotContains(t, out, "\r")
+	assert.Equal(t, 1, strings.Count(out, "\n"))
+	assert.Contains(t, out, "Downloading")
+}

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -208,4 +209,34 @@ func TestSpinnerConcurrentAccess(t *testing.T) {
 	s.Success()
 
 	require.Equal(t, SpinnerSuccess, s.State())
+}
+
+// When stdout isn't a terminal (piped, redirected, captured by an agent),
+// the spinner doesn't animate: it prints only the final status line.
+func TestSpinner_NotATerminalPrintsFinalLineOnly(t *testing.T) {
+	if IsTerminal(os.Stdout) {
+		t.Skip("stdout is a terminal")
+	}
+	var buf strings.Builder
+	var mu sync.Mutex
+	s := NewSpinner("Checking for updates")
+	s.SetOutput(func(str string) {
+		mu.Lock()
+		buf.WriteString(str)
+		mu.Unlock()
+	})
+
+	s.Start()
+	s.Success()
+
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	assert.NotContains(t, out, "\r")
+	for _, f := range spinnerFrames {
+		assert.NotContains(t, out, f)
+	}
+	assert.Equal(t, 1, strings.Count(out, "\n"))
+	assert.Contains(t, out, SymbolComplete)
+	assert.Contains(t, out, "Checking for updates")
 }

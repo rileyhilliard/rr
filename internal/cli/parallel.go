@@ -133,6 +133,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	if !PrettyMode() {
 		parallelCfg.OnRequeue = requeuedEvent
 	}
+	parallelCfg.OnLockWarn = func(hostName, msg string) { lockWarn(hostName)(msg) }
 
 	// Apply CLI overrides
 	if opts.FailFast {
@@ -320,7 +321,7 @@ func extractTaskFailures(result *parallel.Result, outcomes []formatters.Outcome,
 			"exit_code": tr.ExitCode,
 		}
 		if tr.Error != nil {
-			entry["error"] = tr.Error.Error()
+			entry["error"] = ErrorToJSON(tr.Error)
 		}
 		if logDir != "" {
 			entry["log_file"] = logs.TaskLogPath(logDir, tr.TaskName, tr.TaskIndex)

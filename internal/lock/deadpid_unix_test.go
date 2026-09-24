@@ -7,11 +7,17 @@
 package lock
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"log"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -178,4 +184,68 @@ func TestStealDeadHolderLock_SameDeadHolderStolen(t *testing.T) {
 
 	assert.True(t, stealDeadHolderLock(mock, "/tmp/rr.lock", "/tmp/rr.lock/info.json", info))
 	assert.False(t, mock.GetFS().Exists("/tmp/rr.lock"))
+}
+
+// The steal notice goes to the caller's warn func once and nowhere else: the
+// lock package doesn't print, so structured output stays machine-readable.
+func TestDeadLocalHolderSteal_OnlyReportsThroughWarnFunc(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	for _, tt := range []struct {
+		name    string
+		acquire func(*host.Connection, config.LockConfig, ...AcquireOption) (*Lock, error)
+	}{
+		{"Acquire", func(c *host.Connection, cfg config.LockConfig, o ...AcquireOption) (*Lock, error) {
+			return Acquire(c, cfg, "", o...)
+		}},
+		{"TryAcquire", func(c *host.Connection, cfg config.LockConfig, o ...AcquireOption) (*Lock, error) {
+			return TryAcquire(c, cfg, "", o...)
+		}},
+	} {
+		for _, withWarn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/warnFunc=%v", tt.name, withWarn), func(t *testing.T) {
+				logged.Reset()
+				conn, mock := newMockConnection("testhost")
+				mock.GetFS().Mkdir("/tmp/rr.lock")
+				info, err := NewLockInfo("rr old-run")
+				require.NoError(t, err)
+				info.PID = deadPid(t)
+				infoJSON, _ := info.Marshal()
+				mock.GetFS().WriteFile("/tmp/rr.lock/info.json", infoJSON)
+				cfg := config.LockConfig{Enabled: true, Timeout: 2 * time.Second, Stale: 10 * time.Minute, Dir: "/tmp"}
+
+				var warnings []string
+				var opts []AcquireOption
+				if withWarn {
+					opts = append(opts, WithWarnFunc(func(msg string) { warnings = append(warnings, msg) }))
+				}
+				stderr := captureStderr(t, func() {
+					_, err = tt.acquire(conn, cfg, opts...)
+				})
+
+				require.NoError(t, err)
+				assert.Empty(t, stderr)
+				assert.Empty(t, logged.String())
+				if withWarn {
+					require.Len(t, warnings, 1)
+					assert.Contains(t, warnings[0], "dead local process")
+				}
+			})
+		}
+	}
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	orig := os.Stderr
+	os.Stderr = w
+	fn()
+	os.Stderr = orig
+	require.NoError(t, w.Close())
+	out, _ := io.ReadAll(r)
+	return string(out)
 }

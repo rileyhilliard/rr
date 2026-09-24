@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,15 +28,17 @@ type InlineProgress struct {
 	lastRendered string
 	width        int
 	useFake      bool // Whether to use fake progress animation
+	animated     bool // false unless output is a terminal: print only the final line
 }
 
 // NewInlineProgress creates a new inline progress display.
 func NewInlineProgress(label string, output io.Writer) *InlineProgress {
 	return &InlineProgress{
-		label:   label,
-		output:  output,
-		width:   30, // Default progress bar width
-		useFake: true,
+		label:    label,
+		output:   output,
+		width:    30, // Default progress bar width
+		useFake:  true,
+		animated: isTerminalWriter(output),
 	}
 }
 
@@ -86,11 +89,25 @@ func (p *InlineProgress) Start() {
 	p.startTime = time.Now()
 	p.stopChan = make(chan struct{})
 	p.doneChan = make(chan struct{})
+	animated := p.animated
 	p.mu.Unlock()
+
+	// Frames redrawn with \r are noise in a pipe or log file, so with no
+	// terminal to draw on it prints only its final line.
+	if !animated {
+		close(p.doneChan)
+		return
+	}
 
 	p.render()
 
 	go p.animate()
+}
+
+// isTerminalWriter reports whether w is a terminal.
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && IsTerminal(f)
 }
 
 // Update updates the progress with new values.

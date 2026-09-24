@@ -519,3 +519,21 @@ hosts:
 		})
 	}
 }
+
+// A structured run of a task with depends leaves stdout to the tasks' own
+// output; the stage display is for --pretty.
+func TestRunTask_DependsStructuredStdout(t *testing.T) {
+	withStructuredOutput(t)
+	inProject(t, "version: 1\ntasks:\n  a:\n    run: echo a\n  b:\n    run: echo b\n    depends: [a]\n")
+
+	var exitCode int
+	var runErr error
+	stdout, stderr := runCaptured(t, func() {
+		exitCode, runErr = RunTask(TaskOptions{TaskName: "b", Local: true})
+	})
+
+	require.NoError(t, runErr)
+	assert.Equal(t, 0, exitCode)
+	assert.Equal(t, "a\nb\n", stdout)
+	resultEvent(t, parseEvents(t, stderr))
+}

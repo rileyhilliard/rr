@@ -46,6 +46,11 @@ type Config struct {
 	// (sshutil.IsConnectionLost when the host's connection died after the
 	// worker connected), so the CLI can report it as a structured event.
 	OnRequeue func(taskName, hostName string, cause error)
+
+	// OnLockWarn, if set, receives a host's lock warnings (a stale or
+	// dead-holder lock was stolen) so the CLI can report them. The lock
+	// package doesn't print them itself.
+	OnLockWarn func(hostName, msg string)
 }
 
 // DefaultConfig returns a Config with sensible defaults.

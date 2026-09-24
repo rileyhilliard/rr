@@ -595,7 +595,7 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		lockSpinner.Start()
 
 		var err error
-		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command)
+		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(ctx.Conn.Name)))
 		if err != nil {
 			lockSpinner.Fail()
 			return err
@@ -610,17 +610,8 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter := ctx.GetReporter()
 	reporter.PhaseStart("lock")
 
-	stealWarn := func(msg string) {
-		WritePhaseEvent(PhaseEvent{
-			Type:    "phase",
-			Phase:   "lock",
-			Status:  "warn",
-			Details: map[string]interface{}{"message": msg},
-		})
-	}
-
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(stealWarn))
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(ctx.Conn.Name)))
 	if err != nil {
 		reporter.PhaseFailed("lock", err)
 		return err
@@ -827,4 +818,23 @@ func missingRequirementsError(missing, taskName string) error {
 		suggestion = "Run 'rr provision' to install missing tools, or remove them from 'require:' in your config."
 	}
 	return errors.New(errors.ErrDependency, "Missing required tools: "+missing, suggestion)
+}
+
+// lockWarn reports a lock warning for hostName (a stale or dead-holder lock
+// was stolen): a lock warn event in structured mode, a warning line with
+// --pretty. The lock package reports these only through this callback.
+func lockWarn(hostName string) func(msg string) {
+	return func(msg string) {
+		if PrettyMode() {
+			ui.PrintWarning(msg)
+			return
+		}
+		WritePhaseEvent(PhaseEvent{
+			Type:    "phase",
+			Phase:   "lock",
+			Status:  "warn",
+			Host:    hostName,
+			Details: map[string]interface{}{"message": msg},
+		})
+	}
 }

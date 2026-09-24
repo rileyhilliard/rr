@@ -8,6 +8,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/util"
 	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +54,7 @@ func TestWriteSourceMarker(t *testing.T) {
 	assert.Equal(t, filepath.Clean(localDir), marker.SourcePath)
 	hostname, _ := os.Hostname()
 	assert.Equal(t, hostname, marker.Hostname)
+	assert.Equal(t, util.MachineID(), marker.MachineID)
 	assert.False(t, marker.SyncedAt.IsZero())
 }
 
@@ -83,6 +85,25 @@ func TestCheckSourceMarker(t *testing.T) {
 		localDir := t.TempDir()
 
 		writeSourceMarker(conn, localDir)
+
+		opts, warnings := collect()
+		checkSourceMarker(conn, localDir, opts)
+		assert.Empty(t, *warnings)
+	})
+
+	t.Run("same source from this machine under a new hostname means no warning", func(t *testing.T) {
+		mock := sshtesting.NewMockClient("test-host")
+		conn := markerTestConn(mock)
+		localDir := t.TempDir()
+
+		prev := SourceMarker{
+			SourcePath: filepath.Clean(localDir),
+			Hostname:   "MacBookAir-5625.lan",
+			MachineID:  util.MachineID(),
+		}
+		data, err := json.Marshal(prev)
+		require.NoError(t, err)
+		require.NoError(t, mock.GetFS().WriteFile("/root/rr/myapp/.rr-source", data))
 
 		opts, warnings := collect()
 		checkSourceMarker(conn, localDir, opts)

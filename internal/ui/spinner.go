@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -35,15 +36,18 @@ type Spinner struct {
 	output       func(string)
 	running      bool
 	lastRendered string
+	animated     bool // false when stdout isn't a terminal: print only the final line
 }
 
 // NewSpinner creates a new spinner with the given label.
-// Output defaults to fmt.Print; use SetOutput to customize.
+// Output defaults to fmt.Print; use SetOutput to customize. It animates only
+// when stdout is a terminal.
 func NewSpinner(label string) *Spinner {
 	return &Spinner{
-		label:  label,
-		state:  SpinnerPending,
-		output: func(s string) { fmt.Print(s) },
+		label:    label,
+		state:    SpinnerPending,
+		output:   func(s string) { fmt.Print(s) },
+		animated: IsTerminal(os.Stdout),
 	}
 }
 
@@ -67,7 +71,15 @@ func (s *Spinner) Start() {
 	s.startTime = time.Now()
 	s.stopChan = make(chan struct{})
 	s.doneChan = make(chan struct{})
+	animated := s.animated
 	s.mu.Unlock()
+
+	// Frames redrawn with \r are noise in a pipe or log file, so a spinner
+	// with no terminal to draw on waits and prints only its final line.
+	if !animated {
+		close(s.doneChan)
+		return
+	}
 
 	s.render()
 
