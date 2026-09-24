@@ -101,6 +101,18 @@ func TestStaleWorktreeDirs(t *testing.T) {
 		assert.Empty(t, stale)
 	})
 
+	// A container with no /etc/machine-id has no ID to compare, so the
+	// hostname decides.
+	t.Run("with no local machine ID, the hostname decides", func(t *testing.T) {
+		noID := machine{Hostname: "my-laptop"}
+		conn, mock := pruneTestConn(t, "myapp@mine\nmyapp@theirs\n")
+		writeMarkerFrom(t, mock, "/root/rr/myapp@mine", SourceMarker{Hostname: "my-laptop", MachineID: "id-mine"})
+		writeMarkerFrom(t, mock, "/root/rr/myapp@theirs", SourceMarker{Hostname: "their-laptop", MachineID: "id-mine"})
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, noID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/root/rr/myapp@mine"}, stale)
+	})
+
 	t.Run("nothing listed means nothing stale", func(t *testing.T) {
 		conn, _ := pruneTestConn(t, "")
 		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, myLaptop)
