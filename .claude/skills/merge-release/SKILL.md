@@ -1,170 +1,137 @@
+---
+name: merge-release
+description: Merge the current change to main and tag a release. Puts the changelog entry in the feature PR, squash-merges it, tags main, and watches GoReleaser publish the release.
+argument-hint: "[patch|minor|major]"
+disable-model-invocation: true
+---
+
 # Merge and Release
 
-Automates the full release workflow: PR creation, merge, changelog update, and tagging. GoReleaser creates the GitHub release from the tag.
+Ships the current change as a release: the changelog entry goes into the feature PR, the PR is squash-merged, and main is tagged. GoReleaser creates the GitHub release from the tag.
 
 ## Arguments
-- `$ARGUMENTS`: Optional version bump type (patch|minor|major). Defaults to "patch".
+
+- `$ARGUMENTS`: version bump type (`patch`, `minor`, or `major`). Defaults to `patch`.
 
 ## Pre-flight Checks
 
-Before starting, verify:
-
-1. **Working directory state**: Check for uncommitted changes
+1. **Working directory state**
    ```bash
    git status --porcelain
    ```
-   - If changes exist and no recent commit in this conversation, STOP and ask user to commit first
-   - If we just made a commit in this conversation, proceed
+   If there are uncommitted changes that weren't just committed in this conversation, stop and ask the user to commit first.
 
-2. **Branch state**: Determine current branch and unpushed commits
+2. **Branch state**
    ```bash
+   git fetch origin
    git branch --show-current
-   git log origin/main..HEAD --oneline 2>/dev/null || git log origin/$(git branch --show-current)..HEAD --oneline
+   git log origin/main..HEAD --oneline
    ```
-   - If no unpushed commits, STOP and inform user there's nothing to release
+   If there's nothing ahead of `origin/main` and no open PR for this branch, check whether the change is already merged. If it is, use the fallback flow at the end. Otherwise stop: there's nothing to release.
 
-3. **Get latest tags for version calculation**
+3. **Latest tags**, for the version calculation
    ```bash
    git tag --sort=-v:refname | head -5
    ```
 
-4. **Verify tests pass** (skip if user explicitly says to skip)
+4. **Tests pass** (skip only if the user says so)
    ```bash
    make test
    ```
-   - If tests fail, STOP and report failures
+   If they fail, stop and report the failures.
 
-## Execution Flow
+## Flow
 
-### Step 1: Create and Push PR
+### Step 1: Get onto a feature branch
 
-If on main with unpushed commits:
+If you're on main with unpushed commits, move them to a branch and point local main back at `origin/main`. `git branch -f` is safe here because main isn't checked out after the switch:
+
 ```bash
-# Create feature branch from commit message
 BRANCH_NAME=$(git log -1 --format=%s | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
-git checkout -b "release/${BRANCH_NAME}"
-git push -u origin "release/${BRANCH_NAME}"
+git switch -c "release/${BRANCH_NAME}"
+git branch -f main origin/main
 ```
 
-Create PR:
-```bash
-# Get commit message for PR title
-TITLE=$(git log -1 --format=%s)
-gh pr create --title "$TITLE" --body "$(cat <<'EOF'
-## Summary
-Auto-generated release PR.
+Don't use `git reset --hard`; `.claude/settings.json` denies it.
 
-## Changes
-See commit history for details.
-EOF
-)"
-```
+### Step 2: Calculate the next version
 
-### Step 2: Merge PR
-
-```bash
-# Get PR number from current branch
-PR_NUMBER=$(gh pr view --json number -q .number)
-gh pr merge $PR_NUMBER --squash --delete-branch
-```
-
-If merge fails, try rebase:
-```bash
-gh pr merge $PR_NUMBER --rebase --delete-branch
-```
-
-### Step 3: Sync Local Main
-
-```bash
-git checkout main
-git fetch origin
-git reset --hard origin/main
-```
-
-### Step 4: Calculate Next Version
-
-Parse current version and bump accordingly:
 - `patch` (default): v0.4.6 -> v0.4.7
 - `minor`: v0.4.6 -> v0.5.0
 - `major`: v0.4.6 -> v1.0.0
 
 ```bash
 LATEST_TAG=$(git tag --sort=-v:refname | head -1)
-# Parse and increment based on $ARGUMENTS or default to patch
+# Bump per $ARGUMENTS (default patch) to get NEW_TAG, e.g. v0.27.2
 ```
 
-### Step 5: Update CHANGELOG.md
+### Step 3: Write the changelog entry in the feature branch
 
-Write the changelog before tagging, so the tagged commit includes its own entry.
+The tagged commit should include its own changelog entry, so the entry ships in the same PR as the change.
 
-Read existing changelog and insert new version entry at the top (after header). If an `## [Unreleased]` section exists, rename it to the new version instead of writing the entry from scratch.
-
-Get changes for this version:
-```bash
-git log $PREVIOUS_TAG..HEAD --format="%s" --reverse
-```
-
-Categorize commits by conventional commit type:
-- `feat:` -> Added
-- `fix:` -> Fixed
-- `docs:` -> Documentation (skip unless significant)
-- `perf:` -> Performance
-- `refactor:` -> Changed
-- `BREAKING CHANGE` -> include breaking change notice
-
-Insert new section following Keep a Changelog format:
-```markdown
-## [$VERSION] - $DATE
-
-### Added
-- New features...
-
-### Fixed
-- Bug fixes...
-
-### Changed
-- Other changes...
-```
+- If `CHANGELOG.md` has an `## [Unreleased]` section, rename it to `## [X.Y.Z] - YYYY-MM-DD` (no `v` in the heading).
+- Otherwise, write a new section at the top, under the header, from the commits since the last tag:
+  ```bash
+  git log $LATEST_TAG..HEAD --format="%s" --reverse
+  ```
+  Group by conventional commit type, in Keep a Changelog format:
+  - `feat:` -> Added
+  - `fix:` -> Fixed
+  - `perf:` -> Performance
+  - `refactor:` -> Changed
+  - `docs:` -> skip unless significant
+  - `BREAKING CHANGE` -> Breaking Changes section
 
 Breaking changes also need an entry in `docs/MIGRATION.md`.
 
-### Step 6: Commit and Merge Changelog
+```bash
+git add CHANGELOG.md docs/MIGRATION.md
+git commit -m "docs: changelog for $NEW_TAG"
+```
 
-**Important**: Most repos have branch protection rules. Always create a PR for the changelog instead of pushing directly to main.
+### Step 4: Push and open the PR
 
 ```bash
-# Create changelog branch
-git checkout -b "docs/changelog-$NEW_TAG"
-git add CHANGELOG.md
-git commit -m "docs: update changelog for $NEW_TAG"
-git push -u origin "docs/changelog-$NEW_TAG"
+git push -u origin HEAD
+gh pr create --title "$(git log --reverse --format=%s origin/main..HEAD | head -1)" --body "..."
+```
 
-# Create and merge PR
-gh pr create --title "docs: update changelog for $NEW_TAG" --body "Update CHANGELOG.md for $NEW_TAG release."
+If a PR is already open for the branch, just push. Write a real PR body: what changed and why, not "auto-generated".
+
+### Step 5: Wait for CI and review
+
+```bash
 PR_NUMBER=$(gh pr view --json number -q .number)
-gh pr merge $PR_NUMBER --squash --delete-branch
-
-# Sync local main
-git checkout main
-git fetch origin
-git reset --hard origin/main
+./scripts/pr-wait.sh "$PR_NUMBER"
 ```
 
-### Step 7: Create and Push Tag
+It waits for every check, then prints unresolved CodeRabbit threads and any "review skipped" notice. If a check failed, stop and report it. If there are unresolved threads, show them to the user and ask before merging. It fails right away if the PR's base isn't `main`, because CI doesn't run there.
 
-Tag main after the changelog PR has merged:
+### Step 6: Squash-merge and sync main
 
 ```bash
-COMMIT_MSG=$(git log -1 --format=%s)
-git tag -a $NEW_TAG -m "$COMMIT_MSG"
-git push origin $NEW_TAG
+gh pr merge "$PR_NUMBER" --squash --delete-branch
+git switch main
+git pull --ff-only
 ```
 
-### Step 8: Confirm the GitHub Release
+If `git pull --ff-only` refuses, local main has commits that aren't on `origin/main`. Stop and ask the user; don't force it.
 
-Don't run `gh release create`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, and GoReleaser creates the GitHub release, uploads the binaries, and publishes the Homebrew cask. A manual `gh release create` for the same tag collides with it.
+### Step 7: Tag main and push the tag
 
-Watch the workflow and get the release URL once it finishes. GitHub can take a few seconds to register the run, and until then the newest run is the previous release, so wait for the run whose `headBranch` is the new tag:
+Check that `CHANGELOG.md` on main has the `$NEW_TAG` heading, then:
+
+```bash
+git tag -a "$NEW_TAG" -m "$(git log -1 --format=%s)"
+git push origin "$NEW_TAG"
+```
+
+### Step 8: Confirm the GitHub release
+
+Don't run `gh release create`. Pushing a `v*` tag triggers `.github/workflows/release.yml`, and GoReleaser creates the release, uploads the binaries, and publishes the Homebrew cask. A manual `gh release create` for the same tag collides with it.
+
+GitHub can take a few seconds to register the run, and until then the newest run is the previous release, so wait for the run whose `headBranch` is the new tag:
+
 ```bash
 RUN_ID=""
 for _ in $(seq 1 30); do
@@ -174,30 +141,51 @@ for _ in $(seq 1 30); do
   sleep 5
 done
 gh run watch "$RUN_ID" --exit-status
-gh release view $NEW_TAG --json url -q .url
+gh release view "$NEW_TAG" --json url -q .url
 ```
+
+## Fallback: the change is already merged
+
+Use this only when the change reached main without a changelog entry. Branch protection blocks pushing to main, so the entry goes through its own PR:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c "docs/changelog-$NEW_TAG"
+# Write the entry as in Step 3
+git add CHANGELOG.md
+git commit -m "docs: update changelog for $NEW_TAG"
+git push -u origin HEAD
+gh pr create --title "docs: update changelog for $NEW_TAG" --body "Changelog for $NEW_TAG."
+./scripts/pr-wait.sh "$(gh pr view --json number -q .number)"
+gh pr merge --squash --delete-branch
+git switch main
+git pull --ff-only
+```
+
+Then continue from Step 7.
 
 ## Error Handling
 
-- **PR merge fails**: Report error, don't proceed with tagging
-- **Tag push fails**: Report error, suggest manual intervention
-- **Changelog update fails**: Nothing is tagged yet; report the error and don't tag
-- **Release workflow fails**: The tag is pushed; report the failed run and suggest re-running it with `gh run rerun`
-- **Any step fails**: Report which step failed and current state
+- **A check fails or review finds a real problem**: stop before merging and report it.
+- **PR merge fails**: report the error and don't tag.
+- **Changelog update fails**: nothing is tagged yet; report the error and don't tag.
+- **Tag push fails**: report the error and suggest manual intervention.
+- **Release workflow fails**: the tag is pushed; report the failed run and suggest re-running it with `gh run rerun`.
+- **Any other step fails**: report which step failed and the current state of the branch, PR, and tags.
 
 ## Output
 
 On success, report:
 - PR URL
-- New tag version
+- New tag
 - Release URL
-- Changelog commit SHA
+- The merge commit SHA on main
 
 ## Example Usage
 
 ```
 /merge-release           # patch bump (default)
-/merge-release patch     # explicit patch bump
-/merge-release minor     # minor version bump
-/merge-release major     # major version bump
+/merge-release minor
+/merge-release major
 ```
