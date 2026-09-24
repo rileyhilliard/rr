@@ -2,7 +2,6 @@ package lock
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,8 +31,9 @@ func WithLogger(l logger.Logger) AcquireOption {
 }
 
 // WithWarnFunc sets a callback for user-visible warnings during lock acquisition
-// (e.g. stale lock stolen). Callers in structured-output mode should emit a
-// phase event; callers in pretty mode can write to stderr directly.
+// (e.g. stale lock stolen). It's the only way those warnings surface: the lock
+// package doesn't print, so the caller decides how to show them (a phase event
+// in structured mode, a warning line in pretty mode).
 func WithWarnFunc(fn func(msg string)) AcquireOption {
 	return func(o *acquireOptions) {
 		o.warnFunc = fn
@@ -152,11 +152,9 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 			log.Debug("detected dead local holder (pid %d), attempting removal", holderInfo.PID)
 			if stealDeadHolderLock(conn.Client, lockDir, infoFile, holderInfo) {
 				msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
-				log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
+				log.Debug("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
 				if options.warnFunc != nil {
 					options.warnFunc(msg)
-				} else {
-					fmt.Fprintln(os.Stderr, msg)
 				}
 				continue
 			}
@@ -168,12 +166,10 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 			holder := readLockHolder(conn.Client, infoFile)
 			// Remove stale lock
 			if err := forceRemove(conn.Client, lockDir); err == nil {
-				log.Warn("stale lock on %s stolen (holder: %s)", conn.Name, holder)
+				log.Debug("stale lock on %s stolen (holder: %s)", conn.Name, holder)
 				msg := fmt.Sprintf("Warning: stealing stale lock on %s (holder: %s)", conn.Name, holder)
 				if options.warnFunc != nil {
 					options.warnFunc(msg)
-				} else {
-					fmt.Fprintln(os.Stderr, msg)
 				}
 				// Stale lock removed, try again immediately
 				continue
@@ -299,11 +295,9 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 		log.Debug("TryAcquire: detected dead local holder (pid %d), attempting removal", holderInfo.PID)
 		if stealDeadHolderLock(conn.Client, lockDir, infoFile, holderInfo) {
 			msg := fmt.Sprintf("Warning: removing lock on %s held by dead local process (%s)", conn.Name, holderInfo.Describe())
-			log.Warn("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
+			log.Debug("lock on %s stolen from dead local process (holder: %s)", conn.Name, holderInfo.Describe())
 			if options.warnFunc != nil {
 				options.warnFunc(msg)
-			} else {
-				fmt.Fprintln(os.Stderr, msg)
 			}
 		} else {
 			log.Debug("TryAcquire: dead-holder lock not removed (holder changed or removal failed)")

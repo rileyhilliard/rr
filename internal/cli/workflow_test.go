@@ -1906,3 +1906,24 @@ func TestLostConnectionAsResult(t *testing.T) {
 		assert.Empty(t, wf.ResultDetails)
 	})
 }
+
+// TestLockWarn - a stolen-lock notice is a lock warn event naming the host in
+// structured mode and a warning line on stderr with --pretty; never stdout.
+func TestLockWarn(t *testing.T) {
+	t.Run("structured", func(t *testing.T) {
+		withStructuredOutput(t)
+		stdout, stderr := runCaptured(t, func() { lockWarn("m1")("removing lock held by dead local process") })
+		assert.Empty(t, stdout)
+		warns := eventsWith(parseEvents(t, stderr), "lock", "warn")
+		require.Len(t, warns, 1)
+		assert.Equal(t, "m1", warns[0].Host)
+		assert.Equal(t, "removing lock held by dead local process", warns[0].Details["message"])
+	})
+
+	t.Run("pretty", func(t *testing.T) {
+		withPrettyOutput(t)
+		stdout, stderr := runCaptured(t, func() { lockWarn("m1")("removing lock held by dead local process") })
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, "removing lock held by dead local process")
+	})
+}

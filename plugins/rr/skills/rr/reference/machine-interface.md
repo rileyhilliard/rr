@@ -86,7 +86,7 @@ The `details` object on the result event can include:
 | `remote_cwd` | Subdirectory (relative to the project root) the command ran in |
 | `broken_pipe` | `true` when the stdout consumer closed early (e.g. `\| head`) |
 
-Parallel tasks emit a single result event with no `host`. Its details hold `total`, `passed`, `failed`, `log_dir`, `failures` (per subtask: `task`, `host`, `exit_code`, `log_file`, and parsed test failures or an `output_tail`), and `no_tests: true` plus `no_tests_tasks` (the subtask names) when some subtasks collected nothing.
+Parallel tasks emit a single result event with no `host`. Its details hold `total`, `passed`, `failed`, `log_dir`, `failures` (per subtask: `task`, `host`, `exit_code`, `log_file`, `error` as `{code, message, suggestion}` when rr hit an error running it, and parsed test failures or an `output_tail`), and `no_tests: true` plus `no_tests_tasks` (the subtask names) when some subtasks collected nothing.
 
 During a parallel run, sync notices (`invalidated`, `warn`, `pruned`) carry the top-level `host` that synced, since each host syncs once for all its subtasks. Subtask `pull:` runs after every subtask finishes, pass or fail, and emits `pull` phase events with `host` and `details.task`. A failed pull is a `pull` `failed` event and doesn't change the exit code.
 

@@ -171,14 +171,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Create exec options with setup commands and step handler for multi-step tasks
 	execOpts := &exec.TaskExecOptions{
 		SetupCommands: setupCommands,
-	}
-
-	// Add step handler for multi-step tasks to show progress
-	if len(task.Steps) > 0 {
-		execOpts.StepHandler = &taskStepHandler{
-			phaseDisplay: wf.PhaseDisplay,
-			quiet:        opts.Quiet,
-		}
+		StepHandler:   stepHandlerFor(task, wf.PhaseDisplay, opts.Quiet),
 	}
 
 	// Execute the task
@@ -292,9 +285,11 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 		renderExecutionPlan(plan, task, opts.Quiet)
 	}
 
-	// Set up output streaming
+	// Set up output streaming - in structured mode, pass raw output
 	streamHandler := output.NewStreamHandler(os.Stdout, os.Stderr)
-	streamHandler.SetFormatter(output.NewGenericFormatter())
+	if PrettyMode() {
+		streamHandler.SetFormatter(output.NewGenericFormatter())
+	}
 
 	execStart := time.Now()
 
@@ -319,7 +314,9 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 		Stderr:        streamHandler.Stderr(),
 		SetupCommands: setupCommands,
 		WorkDir:       remoteDir,
-		StageHandler:  &depStageHandler{quiet: opts.Quiet},
+		// The stage display is human output; structured stdout carries only
+		// the tasks' own output.
+		StageHandler: &depStageHandler{quiet: opts.Quiet || !PrettyMode()},
 	})
 
 	result, err := executor.Execute(ctx, plan)
@@ -1145,6 +1142,16 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 	}
 
 	return renderParallelResult(result, logWriter, taskName+"-repeat", target.reason), nil
+}
+
+// stepHandlerFor returns the step progress display for a multi-step task, or
+// nil for a single-command task. The display is for --pretty; in structured
+// mode stdout carries only the steps' own output.
+func stepHandlerFor(task *config.TaskConfig, phaseDisplay *ui.PhaseDisplay, quiet bool) exec.StepHandler {
+	if len(task.Steps) == 0 {
+		return nil
+	}
+	return &taskStepHandler{phaseDisplay: phaseDisplay, quiet: quiet || !PrettyMode()}
 }
 
 // taskStepHandler implements exec.StepHandler to show step progress during multi-step tasks.

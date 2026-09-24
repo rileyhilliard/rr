@@ -31,10 +31,18 @@ func pruneTestConn(t *testing.T, siblings string) (*host.Connection, *sshtesting
 
 func writeMarker(t *testing.T, mock *sshtesting.MockClient, dir, hostname string) {
 	t.Helper()
-	data, err := json.Marshal(SourceMarker{SourcePath: "/x", Hostname: hostname})
+	writeMarkerFrom(t, mock, dir, SourceMarker{SourcePath: "/x", Hostname: hostname})
+}
+
+func writeMarkerFrom(t *testing.T, mock *sshtesting.MockClient, dir string, m SourceMarker) {
+	t.Helper()
+	data, err := json.Marshal(m)
 	require.NoError(t, err)
 	require.NoError(t, mock.GetFS().WriteFile(dir+"/"+sourceMarkerFile, data))
 }
+
+// myLaptop is the machine running rr in these tests.
+var myLaptop = machine{Hostname: "my-laptop", ID: "id-mine"}
 
 func TestStaleWorktreeDirs(t *testing.T) {
 	siblings := "myapp@current\nmyapp@gone\nmyapp@live\nmyapp@other-machine\nmyapp@weird$name\n"
@@ -44,7 +52,7 @@ func TestStaleWorktreeDirs(t *testing.T) {
 		writeMarker(t, mock, "/root/rr/myapp@other-machine", "someone-elses-laptop")
 		live := map[string]bool{"live": true, "current": true}
 
-		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", live, "my-laptop")
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", live, myLaptop)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"/root/rr/myapp@gone"}, stale)
 	})
@@ -55,14 +63,14 @@ func TestStaleWorktreeDirs(t *testing.T) {
 		writeMarker(t, mock, "/root/rr/myapp@other-machine", "someone-elses-laptop")
 		live := map[string]bool{"myapp": true, "live": true}
 
-		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp", "myapp", live, "my-laptop")
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp", "myapp", live, myLaptop)
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{"/root/rr/myapp@current", "/root/rr/myapp@gone"}, stale)
 	})
 
 	t.Run("dirs with no marker count as ours", func(t *testing.T) {
 		conn, _ := pruneTestConn(t, "myapp@gone\n")
-		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, "my-laptop")
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, myLaptop)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"/root/rr/myapp@gone"}, stale)
 	})
@@ -70,21 +78,51 @@ func TestStaleWorktreeDirs(t *testing.T) {
 	t.Run("a marker from this machine does not protect a dir", func(t *testing.T) {
 		conn, mock := pruneTestConn(t, "myapp@gone\n")
 		writeMarker(t, mock, "/root/rr/myapp@gone", "my-laptop")
-		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, "my-laptop")
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, myLaptop)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"/root/rr/myapp@gone"}, stale)
 	})
 
+	// macOS renames the machine by network (MacBookAir-5625.lan, then
+	// macbookair.lan); the machine ID doesn't change.
+	t.Run("a marker from this machine under an old hostname does not protect a dir", func(t *testing.T) {
+		conn, mock := pruneTestConn(t, "myapp@gone\n")
+		writeMarkerFrom(t, mock, "/root/rr/myapp@gone", SourceMarker{Hostname: "MacBookAir-5625.lan", MachineID: "id-mine"})
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, myLaptop)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/root/rr/myapp@gone"}, stale)
+	})
+
+	t.Run("another machine with the same hostname keeps its dir", func(t *testing.T) {
+		conn, mock := pruneTestConn(t, "myapp@gone\n")
+		writeMarkerFrom(t, mock, "/root/rr/myapp@gone", SourceMarker{Hostname: "my-laptop", MachineID: "id-theirs"})
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, myLaptop)
+		require.NoError(t, err)
+		assert.Empty(t, stale)
+	})
+
+	// A container with no /etc/machine-id has no ID to compare, so the
+	// hostname decides.
+	t.Run("with no local machine ID, the hostname decides", func(t *testing.T) {
+		noID := machine{Hostname: "my-laptop"}
+		conn, mock := pruneTestConn(t, "myapp@mine\nmyapp@theirs\n")
+		writeMarkerFrom(t, mock, "/root/rr/myapp@mine", SourceMarker{Hostname: "my-laptop", MachineID: "id-mine"})
+		writeMarkerFrom(t, mock, "/root/rr/myapp@theirs", SourceMarker{Hostname: "their-laptop", MachineID: "id-mine"})
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, noID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/root/rr/myapp@mine"}, stale)
+	})
+
 	t.Run("nothing listed means nothing stale", func(t *testing.T) {
 		conn, _ := pruneTestConn(t, "")
-		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, "my-laptop")
+		stale, err := staleWorktreeDirs(conn, "/root/rr/myapp@current", "myapp", map[string]bool{}, myLaptop)
 		require.NoError(t, err)
 		assert.Empty(t, stale)
 	})
 
 	t.Run("refuses to work at the filesystem root", func(t *testing.T) {
 		conn, _ := pruneTestConn(t, "myapp@gone\n")
-		stale, err := staleWorktreeDirs(conn, "/myapp@current", "myapp", map[string]bool{}, "my-laptop")
+		stale, err := staleWorktreeDirs(conn, "/myapp@current", "myapp", map[string]bool{}, myLaptop)
 		require.NoError(t, err)
 		assert.Empty(t, stale)
 	})

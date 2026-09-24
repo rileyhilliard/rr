@@ -23,6 +23,7 @@ const sourceMarkerFile = ".rr-source"
 type SourceMarker struct {
 	SourcePath string    `json:"source_path"`
 	Hostname   string    `json:"hostname"`
+	MachineID  string    `json:"machine_id,omitempty"`
 	Branch     string    `json:"branch,omitempty"`
 	Head       string    `json:"head,omitempty"`
 	Worktree   string    `json:"worktree,omitempty"`
@@ -54,6 +55,29 @@ type SyncOptions struct {
 	Pruned func(remoteDir string)
 }
 
+// machine identifies the machine running rr, for comparing against markers.
+type machine struct {
+	Hostname string
+	ID       string // util.MachineID(); "" when the platform has none
+}
+
+// localMachine describes the machine running rr.
+func localMachine() machine {
+	hostname, _ := os.Hostname()
+	return machine{Hostname: hostname, ID: util.MachineID()}
+}
+
+// syncedBy reports whether the marker was written from machine m. The
+// machine ID decides when both sides have one, since macOS renames the
+// hostname per network. Markers from rr versions before machine_id fall back
+// to the hostname.
+func (s SourceMarker) syncedBy(m machine) bool {
+	if s.MachineID != "" && m.ID != "" {
+		return s.MachineID == m.ID
+	}
+	return s.Hostname == m.Hostname
+}
+
 // markerRemotePath returns the remote path of the provenance marker.
 func markerRemotePath(conn *host.Connection) string {
 	remoteDir := strings.TrimSuffix(config.ExpandRemote(conn.Host.Dir), "/")
@@ -79,9 +103,8 @@ func checkSourceMarker(conn *host.Connection, localDir string, opts *SyncOptions
 		return
 	}
 
-	hostname, _ := os.Hostname()
 	current := filepath.Clean(localDir)
-	if filepath.Clean(prev.SourcePath) == current && prev.Hostname == hostname {
+	if filepath.Clean(prev.SourcePath) == current && prev.syncedBy(localMachine()) {
 		return
 	}
 
@@ -128,12 +151,13 @@ func writeSourceMarker(conn *host.Connection, localDir string) {
 	_, _, _, _ = conn.Client.Exec(writeCmd)
 }
 
-// buildSourceMarker gathers local provenance (path, hostname, git state).
+// buildSourceMarker gathers local provenance (path, machine, git state).
 func buildSourceMarker(localDir string) SourceMarker {
-	hostname, _ := os.Hostname()
+	self := localMachine()
 	marker := SourceMarker{
 		SourcePath: filepath.Clean(localDir),
-		Hostname:   hostname,
+		Hostname:   self.Hostname,
+		MachineID:  self.ID,
 		SyncedAt:   time.Now(),
 	}
 

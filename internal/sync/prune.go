@@ -3,7 +3,6 @@ package sync
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -54,9 +53,8 @@ func PruneStaleWorktrees(conn *host.Connection, localDir string, opts PruneOptio
 	if !ok {
 		return nil, nil
 	}
-	hostname, _ := os.Hostname()
 
-	stale, err := staleWorktreeDirs(conn, remoteDir, config.ProjectBaseName(), live, hostname)
+	stale, err := staleWorktreeDirs(conn, remoteDir, config.ProjectBaseName(), live, localMachine())
 	if err != nil || len(stale) == 0 {
 		return nil, err
 	}
@@ -90,7 +88,7 @@ func pruneDirs(conn *host.Connection, stale []string, opts PruneOptions) ([]stri
 // machine's worktrees are not in our live set, so we cannot judge them.
 // Directories without a marker (synced by an rr that predates markers) are
 // treated as ours.
-func staleWorktreeDirs(conn *host.Connection, remoteDir, base string, live map[string]bool, hostname string) ([]string, error) {
+func staleWorktreeDirs(conn *host.Connection, remoteDir, base string, live map[string]bool, self machine) ([]string, error) {
 	parent := path.Dir(remoteDir)
 	if base == "" || parent == "." || parent == "/" {
 		return nil, nil
@@ -118,7 +116,7 @@ func staleWorktreeDirs(conn *host.Connection, remoteDir, base string, live map[s
 			continue
 		}
 		dir := parent + "/" + name
-		if owner := markerHostname(conn, dir); owner != "" && owner != hostname {
+		if marker, ok := readMarker(conn, dir); ok && !marker.syncedBy(self) {
 			continue
 		}
 		stale = append(stale, dir)
@@ -126,19 +124,19 @@ func staleWorktreeDirs(conn *host.Connection, remoteDir, base string, live map[s
 	return stale, nil
 }
 
-// markerHostname reads the provenance marker in a remote dir and returns the
-// hostname that last synced it, or "" when there is no readable marker.
-func markerHostname(conn *host.Connection, remoteDir string) string {
+// readMarker reads the provenance marker in a remote dir; ok is false when
+// there is no readable marker.
+func readMarker(conn *host.Connection, remoteDir string) (marker SourceMarker, ok bool) {
 	catCmd := fmt.Sprintf("cat %s 2>/dev/null", util.ShellQuotePreserveTilde(remoteDir+"/"+sourceMarkerFile))
 	stdout, _, exitCode, err := conn.Client.Exec(catCmd)
 	if err != nil || exitCode != 0 {
-		return ""
+		return SourceMarker{}, false
 	}
 	var m SourceMarker
 	if err := json.Unmarshal([]byte(strings.TrimSpace(string(stdout))), &m); err != nil {
-		return ""
+		return SourceMarker{}, false
 	}
-	return m.Hostname
+	return m, true
 }
 
 // removeRemoteDir deletes one remote directory. The path must be a

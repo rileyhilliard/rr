@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -208,4 +210,51 @@ func TestSpinnerConcurrentAccess(t *testing.T) {
 	s.Success()
 
 	require.Equal(t, SpinnerSuccess, s.State())
+}
+
+// When stdout isn't a terminal (piped, redirected, captured by an agent),
+// the spinner doesn't animate: it prints only the final status line.
+// A spinner writing somewhere other than stdout animates only if that
+// writer is a terminal, whatever stdout is.
+func TestSpinner_SetWriterNotATerminalPrintsFinalLineOnly(t *testing.T) {
+	var buf bytes.Buffer
+	s := NewSpinner("Connecting")
+	s.animated = true // as if stdout were a terminal
+	s.SetWriter(&buf)
+
+	s.Start()
+	s.Success()
+
+	out := buf.String()
+	assert.NotContains(t, out, "\r")
+	assert.Equal(t, 1, strings.Count(out, "\n"))
+	assert.Contains(t, out, "Connecting")
+}
+
+func TestSpinner_NotATerminalPrintsFinalLineOnly(t *testing.T) {
+	if IsTerminal(os.Stdout) {
+		t.Skip("stdout is a terminal")
+	}
+	var buf strings.Builder
+	var mu sync.Mutex
+	s := NewSpinner("Checking for updates")
+	s.SetOutput(func(str string) {
+		mu.Lock()
+		buf.WriteString(str)
+		mu.Unlock()
+	})
+
+	s.Start()
+	s.Success()
+
+	mu.Lock()
+	out := buf.String()
+	mu.Unlock()
+	assert.NotContains(t, out, "\r")
+	for _, f := range spinnerFrames {
+		assert.NotContains(t, out, f)
+	}
+	assert.Equal(t, 1, strings.Count(out, "\n"))
+	assert.Contains(t, out, SymbolComplete)
+	assert.Contains(t, out, "Checking for updates")
 }
