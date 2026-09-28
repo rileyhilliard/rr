@@ -315,17 +315,56 @@ func getGitRepoName() string {
 	cmd := exec.Command("git", "remote", "get-url", "origin")
 	out, err := cmd.Output()
 	if err != nil {
-		// No git remote, try to get repo root directory name
-		cmd = exec.Command("git", "rev-parse", "--show-toplevel")
-		out, err = cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return filepath.Base(strings.TrimSpace(string(out)))
+		// No git remote: name it after the main checkout's directory.
+		return mainCheckoutName()
 	}
 
 	url := strings.TrimSpace(string(out))
 	return extractRepoName(url)
+}
+
+// mainCheckoutName returns the directory name of the repository's main
+// checkout, the same from every linked worktree (--show-toplevel would give
+// the worktree's own directory). Empty outside a git repository.
+func mainCheckoutName() string {
+	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	commonDir := filepath.Clean(strings.TrimSpace(string(out)))
+	if err != nil || !filepath.IsAbs(commonDir) {
+		// git older than 2.31 has no --path-format. rev-parse echoes an
+		// unknown flag and exits 0, so the output (not the exit code) tells:
+		// fall back to the current checkout's directory.
+		return checkoutName()
+	}
+	base := filepath.Base(commonDir)
+	if base == ".git" {
+		// <main checkout>/.git
+		return filepath.Base(filepath.Dir(commonDir))
+	}
+	if strings.HasSuffix(base, ".git") && isBareRepository() {
+		// A bare repository ("repo.git"). A separate git dir can be named
+		// "x.git" too, so the suffix alone doesn't say.
+		return strings.TrimSuffix(base, ".git")
+	}
+	// A git dir stored elsewhere (--separate-git-dir, a submodule's
+	// .git/modules/<name>) is named for the store, not the project: use the
+	// current checkout's directory, as before.
+	return checkoutName()
+}
+
+// isBareRepository reports whether the current repository is bare.
+func isBareRepository() bool {
+	out, err := exec.Command("git", "rev-parse", "--is-bare-repository").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// checkoutName returns the current checkout's directory name (a linked
+// worktree's own directory). Empty outside a git repository.
+func checkoutName() string {
+	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(strings.TrimSpace(string(top)))
 }
 
 // extractRepoName parses repo name from various git URL formats.

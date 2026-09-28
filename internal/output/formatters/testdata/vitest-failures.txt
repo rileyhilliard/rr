@@ -1,0 +1,140 @@
+bun install v1.4.2 (744846f84)
+
+$ bun scripts/prepare.ts
+lefthook not found: git hooks not installed (brew install lefthook, then bun install)
+
+Checked 550 installs across 641 packages (no changes) [463.00ms]
+$ vitest run
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.2 [39m[90m/home/dev/project[39m
+
+ [31m❯[39m tests/zz-rr-probe.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 8[2mms[22m[39m
+   [31m❯[39m rr probe [2m(2)[22m
+     [32m✓[39m passes[32m 2[2mms[22m[39m
+[31m     [31m×[31m fails on purpose[39m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/hooks/format-changed.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 973[2mms[22m[39m
+   [32m✓[39m format-changed [2m(3)[22m
+     [33m[2m✓[22m[39m formats the files lint-on-write recorded for the session, then clears the list[33m 445[2mms[22m[39m
+     [33m[2m✓[22m[39m does nothing without a session id[33m 493[2mms[22m[39m
+ [32m✓[39m tests/hooks/detect-secrets.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 558[2mms[22m[39m
+ [32m✓[39m tests/hooks/typecheck-on-write.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1455[2mms[22m[39m
+   [32m✓[39m typecheck-on-write [2m(5)[22m
+     [33m[2m✓[22m[39m reports errors in the written file first[33m 303[2mms[22m[39m
+     [33m[2m✓[22m[39m says when every error is in another file[33m 312[2mms[22m[39m
+     [33m[2m✓[22m[39m says nothing when the project type-checks[33m 487[2mms[22m[39m
+     [33m[2m✓[22m[39m truncates a long error list[33m 319[2mms[22m[39m
+ [32m✓[39m tests/hooks/lint-on-write.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 1535[2mms[22m[39m
+   [32m✓[39m lint-on-write [2m(8)[22m
+     [33m[2m✓[22m[39m lints a file outside the project that is under the payload's cwd (a worktree)[33m 442[2mms[22m[39m
+     [33m[2m✓[22m[39m records the written path in the session's list, under a sanitized session id[33m 303[2mms[22m[39m
+ [32m✓[39m tests/hooks/guard-commands.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 210[2mms[22m[39m
+ [32m✓[39m tests/hooks/session-start.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 1985[2mms[22m[39m
+   [32m✓[39m session-start [2m(7)[22m
+     [33m[2m✓[22m[39m nudges off main once there is a commit, unless the repo opts out[33m 584[2mms[22m[39m
+     [33m[2m✓[22m[39m prints only the repo line for a set-up checkout on a feature branch[33m 335[2mms[22m[39m
+ [32m✓[39m tests/rate-limiter.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 263[2mms[22m[39m
+Error: socket hang up
+    at _destroy (node:_http_client:987:15)
+    at onSocketNT (node:_http_client:1013:5)
+    at processTicksAndRejections (node:internal/process/task_queues:91:21) {
+  code: 'ECONNRESET'
+}
+ [32m✓[39m tests/extract-form.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 356[2mms[22m[39m
+POST http://127.0.0.1:58259/api/v1/chat/completions 401 (Unauthorized)
+POST http://127.0.0.1:58259/api/v1/chat/completions 429 (Too Many Requests)
+POST http://127.0.0.1:58259/api/v1/chat/completions 429 (Too Many Requests)
+POST http://127.0.0.1:58259/api/v1/chat/completions 429 (Too Many Requests)
+ [32m✓[39m tests/openrouter-replay.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 671[2mms[22m[39m
+POST http://127.0.0.1:58259/api/v1/chat/completions 404 (Not Found)
+ [32m✓[39m tests/chat-routes.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 342[2mms[22m[39m
+ [32m✓[39m tests/chat-closed-loop.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 1099[2mms[22m[39m
+   [32m✓[39m chat closed loop [2m(9)[22m
+     [33m[2m✓[22m[39m streams the reply and the tool result into the DOM[33m 434[2mms[22m[39m
+ [32m✓[39m tests/hooks/guard-generated.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 212[2mms[22m[39m
+ [32m✓[39m tests/export-actions.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 265[2mms[22m[39m
+ [32m✓[39m tests/hooks/guard-server-imports.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 147[2mms[22m[39m
+ [32m✓[39m tests/openrouter-models.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 360[2mms[22m[39m
+ [32m✓[39m tests/model-picker.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+ [32m✓[39m tests/extract.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 116[2mms[22m[39m
+[90mstdout[2m | tests/script-layer.test.ts[2m > [22m[2mscript layer[2m > [22m[2mruns a chat turn through the custom fetch with the app's model options
+[22m[39m09:03:10.928 INFO  script turn
+
+ [32m✓[39m tests/test-layer-isolation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+[90mstdout[2m | tests/script-layer.test.ts[2m > [22m[2mscript layer[2m > [22m[2mlogs to the terminal only, even under NODE_ENV=development
+[22m[39m09:03:10.993 INFO  script turn
+
+[90mstdout[2m | tests/script-layer.test.ts[2m > [22m[2mscript layer[2m > [22m[2mlogs to the terminal only, even under NODE_ENV=development
+[22m[39m09:03:11.002 INFO  script turn
+
+ [32m✓[39m tests/script-layer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+ [32m✓[39m tests/openrouter-env.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m tests/logging.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m tests/message-list.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m tests/tools.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m tests/stream-slots.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/hooks/block-destructive.test.ts [2m([22m[2m170 tests[22m[2m)[22m[33m 5827[2mms[22m[39m
+   [32m✓[39m block-destructive checks the working tree before discarding [2m(10)[22m
+     [33m[2m✓[22m[39m allows every discard on a clean tree[33m 480[2mms[22m[39m
+     [33m[2m✓[22m[39m denies discarding unstaged or staged changes[33m 390[2mms[22m[39m
+     [33m[2m✓[22m[39m counts untracked files for a reset to another commit, which can overwrite them[33m 311[2mms[22m[39m
+     [32m✓[39m with changes here and a clean repo elsewhere [2m(2)[22m
+       [33m[2m✓[22m[39m follows cd, pushd, and -C to the tree the command acts on[33m 579[2mms[22m[39m
+       [33m[2m✓[22m[39m keeps a cd inside a subshell or substitution out of the commands after it[33m 456[2mms[22m[39m
+     [33m[2m✓[22m[39m denies when it can't tell which tree or what it will hold[33m 592[2mms[22m[39m
+ [32m✓[39m tests/evals.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/hooks/wiring.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [31m❯[39m tests/zz-rr-probe-suite.test.ts [2m([22m[2m0 test[22m[2m)[22m
+ [32m✓[39m tests/recording.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m tests/schemas.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m tests/chat-export.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m tests/errors.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m31 passed[39m[22m[90m (33)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m468 passed[39m[22m[90m (469)[39m
+[2m   Start at [22m 09:03:05
+[2m   Duration [22m 6.76s[2m (tests 43%, import 33%, setup 11%, transform 8%, environment 3%)[22m
+
+[2m     Import [22m [33m115 modules were evaluated 530 times[39m[2m · 12.91s total, 33% of tracked time[22m
+[2m            [22m [2m~494ms faster with [22m[33misolate: false[39m[2m — shared modules are evaluated once per worker instead of once per file[22m
+[2m            [22m [2mlearn more: https://vitest.dev/guide/improving-performance#test-isolation[22m
+
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Suites 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/zz-rr-probe-suite.test.ts[2m [ tests/zz-rr-probe-suite.test.ts ][22m
+[31m[1mError[22m: probe: suite failed to load[39m
+[36m [2m❯[22m tests/zz-rr-probe-suite.test.ts:[2m3:7[22m[39m
+    [90m  1|[39m import { it } from "vitest";
+    [90m  2|[39m
+    [90m  3|[39m throw new Error("probe: suite failed to load");
+    [90m   |[39m       [31m^[39m
+    [90m  4|[39m
+    [90m  5|[39m it("never runs", () => {});
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/zz-rr-probe.test.ts[2m > [22mrr probe[2m > [22mfails on purpose
+[31m[1mAssertionError[22m: expected { status: 200 } to deeply equal { status: 500 }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[32m-   "status": 500,[39m
+[31m+   "status": 200,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/zz-rr-probe.test.ts:[2m8:29[22m[39m
+    [90m  6|[39m   });
+    [90m  7|[39m   it("fails on purpose", () => {
+    [90m  8|[39m     expect({ status: 200 }).toEqual({ status: 500 });
+    [90m   |[39m                             [31m^[39m
+    [90m  9|[39m   });
+    [90m 10|[39m });
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+error: script "test" exited with code 1

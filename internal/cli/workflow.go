@@ -792,7 +792,7 @@ func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	}
 
 	// Check requirements with caching
-	results, err := require.CheckAll(ctx.Conn.Client, reqs, require.GlobalCache(), ctx.Conn.Name)
+	results, err := require.CheckAll(ctx.Conn.Client, &ctx.Conn.Host, reqs, require.GlobalCache(), ctx.Conn.Name)
 	if err != nil {
 		return err
 	}

@@ -294,6 +294,91 @@ func TestGetProject_WorktreeIsolation(t *testing.T) {
 	})
 }
 
+// Without an origin remote the name comes from the checkout directory. In a
+// linked worktree that must still be the main checkout's directory: the
+// worktree's own directory name would give every worktree a different
+// unsuffixed name (isolation off no longer shares one remote dir), and two
+// repos with same-named worktrees one shared name.
+func TestGetProject_NoRemoteWorktreeUsesMainCheckoutName(t *testing.T) {
+	mainDir, wtDir := setupWorktreeRepo(t)
+	cmd := exec.Command("git", "remote", "remove", "origin")
+	cmd.Dir = mainDir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Run("main checkout", func(t *testing.T) {
+		t.Chdir(mainDir)
+		resetProjectCache()
+		t.Cleanup(resetProjectCache)
+		assert.Equal(t, "myrepo", getProject())
+	})
+
+	t.Run("linked worktree, isolation on", func(t *testing.T) {
+		t.Chdir(wtDir)
+		resetProjectCache()
+		t.Cleanup(resetProjectCache)
+		assert.Equal(t, "myrepo@myrepo-feature.x", getProject())
+	})
+
+	t.Run("linked worktree, isolation off", func(t *testing.T) {
+		t.Chdir(wtDir)
+		resetProjectCache()
+		t.Cleanup(resetProjectCache)
+		SetWorktreeIsolation(false)
+		assert.Equal(t, "myrepo", getProject())
+	})
+
+	// git before 2.31 doesn't know --path-format: rev-parse echoes the flag
+	// and exits 0, so the name must fall back instead of using that output.
+	t.Run("git without --path-format", func(t *testing.T) {
+		realGit, err := exec.LookPath("git")
+		require.NoError(t, err)
+		shimDir := t.TempDir()
+		shim := "#!/bin/sh\n" +
+			"if [ \"$1\" = rev-parse ] && [ \"$2\" = --path-format=absolute ]; then\n" +
+			"  shift 2; echo --path-format=absolute; exec " + realGit + " rev-parse \"$@\"\n" +
+			"fi\n" +
+			"exec " + realGit + " \"$@\"\n"
+		require.NoError(t, os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755))
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		t.Chdir(mainDir)
+		resetProjectCache()
+		t.Cleanup(resetProjectCache)
+		assert.Equal(t, "myrepo", getProject())
+	})
+}
+
+// A git dir stored elsewhere (--separate-git-dir) is named for the store, so a
+// remote-less repo keeps its checkout directory's name.
+func TestGetProject_NoRemoteSeparateGitDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	clearGitEnv(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "myproj")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "store"), 0o755))
+	cmd := exec.Command("git", "init", "--separate-git-dir="+filepath.Join(root, "store", "abc"), checkout)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Chdir(checkout)
+	resetProjectCache()
+	t.Cleanup(resetProjectCache)
+	assert.Equal(t, "myproj", getProject())
+
+	// A separate git dir named like a bare repo ("store.git") isn't one.
+	other := filepath.Join(root, "otherproj")
+	cmd = exec.Command("git", "init", "--separate-git-dir="+filepath.Join(root, "store", "other.git"), other)
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Chdir(other)
+	resetProjectCache()
+	assert.Equal(t, "otherproj", getProject())
+}
+
 // TestLoad_WorktreeIsolationEscapeHatch is the end-to-end regression test:
 // a project config with worktree_isolation: false must yield the unsuffixed
 // remote dir even though expansion could have happened earlier with the

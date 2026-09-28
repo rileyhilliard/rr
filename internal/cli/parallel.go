@@ -330,7 +330,7 @@ func extractTaskFailures(result *parallel.Result, outcomes []formatters.Outcome,
 		if parsed := outcomes[i].Failures; len(parsed) > 0 {
 			entry["tests"] = failureEntries(parsed)
 		} else if len(tr.Output) > 0 {
-			lines := strings.Split(strings.TrimSpace(string(tr.Output)), "\n")
+			lines := strings.Split(strings.TrimSpace(string(formatters.StripANSI(tr.Output))), "\n")
 			start := 0
 			if len(lines) > maxOutputTailLines {
 				start = len(lines) - maxOutputTailLines

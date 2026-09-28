@@ -1045,8 +1045,9 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 		return 1, err
 	}
 
-	// Build the command from task config
-	cmd := task.Run
+	// Build the command from task config. --repeat takes no args, so {args}
+	// placeholders expand as for a plain run with none ({args:-x} gives x).
+	cmd, _ := config.ExpandArgs(task.Run, nil)
 	if cmd == "" && len(task.Steps) > 0 {
 		// For multi-step tasks, build a command that runs all steps
 		cmd = buildStepsCommand(task.Steps)

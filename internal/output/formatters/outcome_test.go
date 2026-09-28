@@ -1,6 +1,7 @@
 package formatters
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -293,4 +294,232 @@ func TestParseRunOutcome_NoTests(t *testing.T) {
 			assert.Equal(t, tt.want, ParseRunOutcome(tt.command, []byte(tt.output)).NoTests)
 		})
 	}
+}
+
+// testdata/vitest-failures.txt is a real `bun run test` log as rr records it:
+// vitest 5's default reporter, colors on, one test failing an assertion and one
+// file failing to load. The command names only the package script, so vitest
+// has to be recognized from the output.
+func TestParseRunOutcome_VitestDefaultReporter(t *testing.T) {
+	log, err := os.ReadFile("testdata/vitest-failures.txt")
+	require.NoError(t, err)
+
+	o := ParseRunOutcome("bun install --frozen-lockfile && bun run test", log)
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 468, Failed: 1, Errors: 1}, *o.Summary)
+
+	require.Len(t, o.Failures, 2)
+
+	suite := o.Failures[0]
+	assert.Equal(t, "tests/zz-rr-probe-suite.test.ts", suite.TestName)
+	assert.Equal(t, "tests/zz-rr-probe-suite.test.ts", suite.File)
+	assert.Equal(t, 3, suite.Line)
+	assert.Equal(t, "Error: probe: suite failed to load", suite.Message)
+
+	test := o.Failures[1]
+	assert.Equal(t, "rr probe > fails on purpose", test.TestName)
+	assert.Equal(t, "tests/zz-rr-probe.test.ts", test.File)
+	assert.Equal(t, 8, test.Line)
+	assert.True(t, strings.HasPrefix(test.Message,
+		"AssertionError: expected { status: 200 } to deeply equal { status: 500 }"), test.Message)
+	assert.Contains(t, test.Message, `+   "status": 200,`)
+	assert.NotContains(t, test.Message, "\x1b[", "ANSI codes are stripped")
+	assert.NotContains(t, test.Message, "expect({ status: 200 })", "the code frame is left out")
+}
+
+func TestParseRunOutcome_VitestPassing(t *testing.T) {
+	log := "\x1b[32m✓\x1b[39m tests/a.test.ts (3 tests) 5ms\n" +
+		"\n" +
+		"\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (1)\x1b[39m\n" +
+		"\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[33m1 skipped\x1b[39m\x1b[90m (3)\x1b[39m\n"
+
+	o := ParseRunOutcome("npm test", []byte(log))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 2, Skipped: 1}, *o.Summary)
+	assert.Empty(t, o.Failures)
+}
+
+// testdata/vitest-interleaved.txt: vitest writes its summary to stdout and the
+// failure listing to stderr, and the log interleaves them, so the summary can
+// land between two failure blocks. Every block after it must still be read.
+func TestParseRunOutcome_VitestSummaryInsideFailures(t *testing.T) {
+	log, err := os.ReadFile("testdata/vitest-interleaved.txt")
+	require.NoError(t, err)
+
+	o := ParseRunOutcome("bun run test", log)
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 461, Failed: 6}, *o.Summary)
+	require.Len(t, o.Failures, 6)
+	last := o.Failures[5]
+	assert.Equal(t, "errorResponse > leaves an upstream failure's detail out of the body", last.TestName)
+	assert.Equal(t, "tests/errors.test.ts", last.File)
+}
+
+// A vitest -t filter that matches nothing skips every test and exits 0. That
+// ran nothing, like pytest's "-k typo", so no_tests says so; the skip count
+// stays in the summary.
+func TestParseRunOutcome_VitestFilterMatchedNothing(t *testing.T) {
+	log := " ↓ tests/a.test.ts (3 tests | 3 skipped)\n" +
+		"\n" +
+		" Test Files  1 skipped (1)\n" +
+		"      Tests  3 skipped (3)\n"
+
+	o := ParseRunOutcome(`bun run test -t "no such test"`, []byte(log))
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Skipped: 3, NoTests: true}, *o.Summary)
+	assert.True(t, o.NoTests)
+
+	// No name filter: a suite that skips everything on purpose
+	// (describe.skip, skipIf(!process.env.DB_URL), todo-only) ran what was asked.
+	log = " Test Files  1 skipped (1)\n      Tests  2 skipped | 1 todo (3)\n"
+	o = ParseRunOutcome("bun run test", []byte(log))
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Skipped: 3}, *o.Summary)
+	assert.False(t, o.NoTests)
+
+	// Some tests ran: skips alongside passes are ordinary.
+	log = " Test Files  1 passed (1)\n      Tests  1 passed | 2 skipped (3)\n"
+	o = ParseRunOutcome("bun run test", []byte(log))
+	assert.False(t, o.NoTests)
+}
+
+// In a vitest workspace each FAIL line starts with the project's label.
+func TestParseRunOutcome_VitestWorkspaceProjectLabel(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  |unit| tests/a.test.ts > suite > fails\n" +
+		"AssertionError: expected 1 to be 2\n" +
+		" ❯ tests/a.test.ts:4:13\n" +
+		"⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  1 failed | 2 passed (3)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "suite > fails", o.Failures[0].TestName)
+	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
+	assert.Equal(t, 4, o.Failures[0].Line)
+	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
+}
+
+// A log with two runs (watch mode, a rerun) reports the last one: its counts
+// and its failures, not the earlier run's.
+func TestParseRunOutcome_VitestRepeatedRun(t *testing.T) {
+	first := " RUN  v5.0.0 /repo\n" +
+		"⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		" FAIL  tests/a.test.ts [ tests/a.test.ts ]\n" +
+		"Error: bad import\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		" Test Files  1 failed (1)\n      Tests  1 failed | 1 passed | 2 skipped (4)\n"
+	second := " RERUN  tests/a.test.ts x1\n" +
+		" Test Files  1 passed (1)\n      Tests  2 passed | 2 skipped (4)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(first+second))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 2, Skipped: 2}, *o.Summary)
+	assert.Empty(t, o.Failures)
+}
+
+// A file that fails to load can leave vitest with "Tests  no tests". That's a
+// suite error, not a run that collected nothing.
+func TestParseRunOutcome_VitestFailedSuiteNoTests(t *testing.T) {
+	log := "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		" FAIL  tests/a.test.ts [ tests/a.test.ts ]\n" +
+		"Error: Cannot find module './missing'\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  no tests\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Errors: 1}, *o.Summary)
+	assert.False(t, o.NoTests)
+	require.Len(t, o.Failures, 1)
+}
+
+// Colors written with colons (ESC[38:2::255:0:0m) are stripped too.
+func TestStripANSI_ColonParameters(t *testing.T) {
+	in := "\x1b[38:2::255:0:0m Test Files \x1b[39m 1 passed (1)"
+	assert.Equal(t, " Test Files  1 passed (1)", string(StripANSI([]byte(in))))
+}
+
+// The stdout summary can land inside a failure block before its location
+// line. It isn't part of the failure's message.
+func TestParseRunOutcome_VitestSummaryBeforeLocation(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > s > fails\n" +
+		"AssertionError: expected 1 to be 2\n" +
+		"\n" +
+		" Test Files  1 failed | 3 passed (4)\n" +
+		"      Tests  1 failed | 9 passed (10)\n" +
+		"   Start at  09:03:05\n" +
+		"   Duration  6.76s (tests 43%)\n" +
+		"\n" +
+		"     Import  115 modules were evaluated 530 times\n" +
+		"             ~494ms faster with isolate: false\n" +
+		"\n" +
+		" \u276f tests/a.test.ts:4:13\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
+	assert.Equal(t, 4, o.Failures[0].Line)
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 9, Failed: 1}, *o.Summary)
+}
+
+// Vitest prints one error under consecutive FAIL headers when the tests
+// failed the same way. Each of them gets that error.
+func TestParseRunOutcome_VitestGroupedErrors(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 2 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > s > one\n" +
+		" FAIL  tests/a.test.ts > s > two\n" +
+		"Error: boom\n" +
+		" \u276f tests/a.test.ts:4:9\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  2 failed (2)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 2)
+	for i, name := range []string{"s > one", "s > two"} {
+		assert.Equal(t, name, o.Failures[i].TestName)
+		assert.Equal(t, "Error: boom", o.Failures[i].Message)
+		assert.Equal(t, 4, o.Failures[i].Line)
+	}
+}
+
+// A suite that fails in a describe's beforeAll is listed under Failed Suites
+// with the describe name, which is what the failure is called.
+func TestParseRunOutcome_VitestFailedDescribe(t *testing.T) {
+	log := "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > db suite\n" +
+		"Error: connect ECONNREFUSED\n" +
+		" \u276f tests/a.test.ts:3:5\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  2 passed (2)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "db suite", o.Failures[0].TestName)
+	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, 1, o.Summary.Errors)
 }

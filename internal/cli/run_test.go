@@ -824,12 +824,12 @@ func TestBuildRemoteRunCommand_AutoCWD(t *testing.T) {
 		{
 			name:        "offset applied when no explicit cwd",
 			offset:      "backend",
-			wantContain: "cd '/home/u/rr/app/backend' 2>/dev/null || true;",
+			wantContain: "cd '/home/u/rr/app/backend' 2>/dev/null ||",
 		},
 		{
 			name:        "nested offset",
 			offset:      "backend/api",
-			wantContain: "cd '/home/u/rr/app/backend/api' 2>/dev/null || true;",
+			wantContain: "cd '/home/u/rr/app/backend/api' 2>/dev/null ||",
 		},
 		{
 			name:       "no offset at project root",
@@ -872,8 +872,9 @@ func TestBuildRemoteRunCommand_AutoCWDIsSoft(t *testing.T) {
 	got, err := buildRemoteRunCommand(wf, RunOptions{Command: "make build"}, "/home/u/rr/app")
 	require.NoError(t, err)
 
-	assert.Contains(t, got, "|| true; } &&",
-		"implicit cd must tolerate a missing directory, grouped so || binds only to it")
+	assert.Contains(t, got, "{ cd '/home/u/rr/app/node_modules/.bin' 2>/dev/null ||",
+		"implicit cd must tolerate a missing directory")
+	assert.Contains(t, got, "; } &&", "grouped so || binds only to the cd")
 	assert.Contains(t, got, "make build")
 }
 
@@ -965,6 +966,40 @@ func TestBuildRemoteRunCommand_SemicolonStaysInChain(t *testing.T) {
 			assert.Equal(t, tt.want, strings.TrimSpace(string(out)))
 		})
 	}
+}
+
+// TestBuildRemoteRunCommand_MissingOffsetWarns - falling back to the project
+// root is deliberate, but silent it reads as "ran where I was": the output of
+// `ls` or `pytest` at the root looks like a normal run. The fallback says so on
+// stderr, naming the directory, and leaves stdout and the exit code alone.
+func TestBuildRemoteRunCommand_MissingOffsetWarns(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	t.Setenv("HOME", t.TempDir()) // no rc files to source
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "present"), 0o755))
+
+	run := func(offset string) (stdout, stderr string) {
+		wf := newTestWorkflowContext("/Users/r/app", offset)
+		wf.Conn.Host = config.Host{Dir: root, Shell: "bash -c"}
+		cmd, err := buildRemoteRunCommand(wf, RunOptions{Command: "echo A"}, root)
+		require.NoError(t, err)
+		var outBuf, errBuf strings.Builder
+		c := osexec.Command("bash", "-c", cmd)
+		c.Stdout, c.Stderr = &outBuf, &errBuf
+		require.NoError(t, c.Run())
+		return outBuf.String(), errBuf.String()
+	}
+
+	stdout, stderr := run("docs/it's missing")
+	assert.Equal(t, "A\n", stdout)
+	assert.Contains(t, stderr, "rr: warning: docs/it's missing/ isn't on the remote")
+	assert.Contains(t, stderr, "ran at the project root")
+
+	stdout, stderr = run("present")
+	assert.Equal(t, "A\n", stdout)
+	assert.NotContains(t, stderr, "rr: warning")
 }
 
 // TestBuildRemoteRunCommand_ExplicitCWDStillHardFails - an explicit --cwd is a

@@ -1937,7 +1937,7 @@ func TestCollectChecks_ProjectReferencesUnknownHost(t *testing.T) {
 // A missing requirement blocks rr run, so doctor --requirements exits 1.
 func TestDoctor_MissingRequirement_ExitsOne(t *testing.T) {
 	client := sshtesting.NewMockClient("box")
-	client.SetCommandResponse("command -v jq", sshtesting.CommandResponse{ExitCode: 1})
+	client.SetCommandResponse("command -v jq", sshtesting.CommandResponse{Stdout: []byte("rr-require: not found\n")})
 	client.SetCommandResponse("command -v rsync && rsync --version 2>&1 | head -n 2",
 		sshtesting.CommandResponse{Stdout: []byte("/usr/bin/rsync\nrsync  version 3.2.7  protocol version 31\n")})
 

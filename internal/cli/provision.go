@@ -195,7 +195,7 @@ func checkHosts(hostNames []string, hosts map[string]config.Host, projectReqs []
 
 		// Check requirements
 		cache := require.NewCache()
-		checkResults, checkErr := require.CheckAll(client, result.reqs, cache, name)
+		checkResults, checkErr := require.CheckAll(client, &hostCfg, result.reqs, cache, name)
 		result.results = checkResults
 		result.checkErr = checkErr
 
