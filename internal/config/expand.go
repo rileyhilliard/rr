@@ -315,17 +315,35 @@ func getGitRepoName() string {
 	cmd := exec.Command("git", "remote", "get-url", "origin")
 	out, err := cmd.Output()
 	if err != nil {
-		// No git remote, try to get repo root directory name
-		cmd = exec.Command("git", "rev-parse", "--show-toplevel")
-		out, err = cmd.Output()
-		if err != nil {
-			return ""
-		}
-		return filepath.Base(strings.TrimSpace(string(out)))
+		// No git remote: name it after the main checkout's directory.
+		return mainCheckoutName()
 	}
 
 	url := strings.TrimSpace(string(out))
 	return extractRepoName(url)
+}
+
+// mainCheckoutName returns the directory name of the repository's main
+// checkout, the same from every linked worktree (--show-toplevel would give
+// the worktree's own directory). Empty outside a git repository.
+func mainCheckoutName() string {
+	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		// git older than 2.31 has no --path-format: fall back to the
+		// current checkout's directory.
+		top, topErr := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+		if topErr != nil {
+			return ""
+		}
+		return filepath.Base(strings.TrimSpace(string(top)))
+	}
+	commonDir := filepath.Clean(strings.TrimSpace(string(out)))
+	if filepath.Base(commonDir) == ".git" {
+		// <main checkout>/.git
+		return filepath.Base(filepath.Dir(commonDir))
+	}
+	// A bare repository ("repo.git") or a relocated git dir.
+	return strings.TrimSuffix(filepath.Base(commonDir), ".git")
 }
 
 // extractRepoName parses repo name from various git URL formats.
