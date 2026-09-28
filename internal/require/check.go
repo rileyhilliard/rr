@@ -6,9 +6,16 @@ import (
 	"sync"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
+
+// notFoundMarker is what the lookup prints when the tool isn't there, so a
+// missing tool (exit 0, marker) is told apart from a failed setup command
+// (non-zero exit before the lookup runs).
+const notFoundMarker = "rr-require: not found"
 
 // CheckRequirement verifies a single tool exists on the remote host.
 // Uses "command -v <tool>" which is POSIX-compliant and works across shells.
@@ -17,7 +24,10 @@ import (
 // files, the host's setup_commands, its shell), so a tool those put on PATH
 // counts as present. It skips the cd into the project dir, which doesn't exist
 // before the first sync. A nil host runs the bare lookup.
-func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) CheckResult {
+//
+// The error is non-nil only when the host's setup_commands fail, which would
+// otherwise read as every tool missing.
+func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) (CheckResult, error) {
 	result := CheckResult{
 		Name:       tool,
 		CanInstall: exec.CanInstallTool(tool),
@@ -26,36 +36,58 @@ func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) 
 	// Validate tool name to prevent command injection
 	if !ValidateToolName(tool) {
 		result.Satisfied = false
-		return result
+		return result, nil
 	}
 
 	// Use "command -v" for POSIX-compliant tool detection
-	cmd := fmt.Sprintf("command -v %s", tool)
+	cmd := fmt.Sprintf("command -v %s || echo %s", tool, util.ShellQuote(notFoundMarker))
 	if host != nil {
 		env := *host
 		env.Dir = ""
 		cmd = exec.BuildRemoteCommand(cmd, &env)
 	}
-	stdout, _, exitCode, err := client.Exec(cmd)
+	stdout, stderr, exitCode, err := client.Exec(cmd)
 
-	if err != nil || exitCode != 0 {
+	if err != nil {
 		result.Satisfied = false
-		return result
+		return result, nil
+	}
+	if exitCode != 0 {
+		if host == nil || len(host.SetupCommands) == 0 {
+			result.Satisfied = false
+			return result, nil
+		}
+		detail := strings.TrimSpace(string(stderr))
+		if detail == "" {
+			detail = fmt.Sprintf("exit code %d", exitCode)
+		}
+		return result, errors.New(errors.ErrExec,
+			fmt.Sprintf("The host's setup_commands failed while checking requirements: %s", detail),
+			"Fix the host's setup_commands in ~/.rr/config.yaml, or run them on the host to see what fails.")
 	}
 
-	result.Satisfied = true
 	// rc files and setup_commands can print before the lookup runs (e.g. "nvm
 	// use" announcing a version); command -v's answer is the last line.
 	out := strings.TrimSpace(string(stdout))
-	result.Path = out[strings.LastIndex(out, "\n")+1:]
-	return result
+	answer := out[strings.LastIndex(out, "\n")+1:]
+	// An alias from an rc file isn't expanded when rr runs a command
+	// (non-interactive shell), so it doesn't count.
+	if answer == notFoundMarker || strings.HasPrefix(answer, "alias ") {
+		result.Satisfied = false
+		return result, nil
+	}
+
+	result.Satisfied = true
+	result.Path = answer
+	return result, nil
 }
 
 // CheckAll checks all requirements, using cache and parallel execution.
 // host is the host's config (see CheckRequirement); nil for a bare lookup.
 // Returns results for all requirements, including cached ones.
 // Note: Individual check failures are recorded in CheckResult.Satisfied=false,
-// not returned as errors. Errors are only returned for systemic failures.
+// not returned as errors. Errors are only returned for systemic failures (the
+// host's setup_commands failing).
 func CheckAll(client sshutil.SSHClient, host *config.Host, reqs []string, cache *Cache, hostName string) ([]CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
@@ -84,6 +116,7 @@ func CheckAll(client sshutil.SSHClient, host *config.Host, reqs []string, cache 
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	var setupErr error
 
 	for _, idx := range toCheck {
 		wg.Add(1)
@@ -92,17 +125,26 @@ func CheckAll(client sshutil.SSHClient, host *config.Host, reqs []string, cache 
 			sem <- struct{}{}        // Acquire semaphore
 			defer func() { <-sem }() // Release semaphore
 
-			result := CheckRequirement(client, host, reqs[i])
+			result, err := CheckRequirement(client, host, reqs[i])
 
 			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if setupErr == nil {
+					setupErr = err
+				}
+				return
+			}
 			results[i] = result
 			cache.Set(hostName, reqs[i], result)
-			mu.Unlock()
 		}(idx)
 	}
 
 	wg.Wait()
 
+	if setupErr != nil {
+		return nil, setupErr
+	}
 	return results, nil
 }
 

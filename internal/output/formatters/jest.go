@@ -63,9 +63,17 @@ type JestFormatter struct {
 	vitestFailure *JestTestFailure
 	vitestInFrame bool
 	vitestMessage []string
-	suitesErrored int
-	testsSkipped  int
-	vitestSummary bool
+	// vitestGrouped holds FAIL headers that share the next block's error:
+	// vitest prints one error under consecutive headers when they match.
+	vitestGrouped []JestTestFailure
+	vitestLocFile string
+	vitestLocLine int
+	// vitestInImport is set inside the summary's "Import" note, whose
+	// continuation lines are indented rather than labeled.
+	vitestInImport bool
+	suitesErrored  int
+	testsSkipped   int
+	vitestSummary  bool
 
 	// noTestsRan is set by an explicit zero-collection message: vitest's
 	// "Tests  no tests" summary, or jest's / vitest's "No tests found".
@@ -128,6 +136,9 @@ var (
 	vitestLocationPattern = regexp.MustCompile(`^\s*❯\s+(\S+?):(\d+):\d+\s*$`)
 	// "⎯⎯⎯⎯⎯[1/2]⎯" closes a failure block.
 	vitestSeparatorPattern = regexp.MustCompile(`^⎯{3,}(?:\[\d+/\d+\]⎯*)?\s*$`)
+	// The rest of the summary block: " Test Files  ...", "   Start at  ...",
+	// "   Duration  ...", "     Import  ..." (Tests is matched on its own).
+	vitestSummaryLinePattern = regexp.MustCompile(`^\s*(Test Files|Start at|Duration|Import|Type Errors|Errors)\s{2,}\S`)
 
 	// Stack trace indicator (line starting with "at ")
 	jestStackTracePattern = regexp.MustCompile(`^\s+at\s+`)
@@ -269,11 +280,35 @@ func (f *JestFormatter) processVitestLine(line string) bool {
 		return false
 	}
 
+	// The rest of the summary block, which can land inside a failure block
+	// too: keep it out of the failure's message.
+	if matches := vitestSummaryLinePattern.FindStringSubmatch(line); matches != nil {
+		f.vitestInImport = matches[1] == "Import"
+		return true
+	}
+	if f.vitestInImport {
+		if strings.HasPrefix(line, "     ") {
+			return true
+		}
+		f.vitestInImport = false
+	}
+
 	if matches := vitestFailPattern.FindStringSubmatch(line); matches != nil {
-		f.finishVitestFailure()
+		if f.vitestFailure != nil && !f.vitestInFrame && strings.TrimSpace(strings.Join(f.vitestMessage, "")) == "" {
+			// A header with no error of its own yet shares the next one's.
+			f.vitestGrouped = append(f.vitestGrouped, *f.vitestFailure)
+			f.vitestFailure = nil
+			f.vitestMessage = nil
+		} else {
+			f.finishVitestFailure()
+		}
+		// A suite failure names the describe block when it has one
+		// (" FAIL  file > db suite", a failed beforeAll), else the file.
 		name := matches[2]
 		if f.vitestSection == "suites" {
-			name = matches[1]
+			if name == "" {
+				name = matches[1]
+			}
 			f.suitesErrored++
 		}
 		f.vitestFailure = &JestTestFailure{TestName: name, File: matches[1]}
@@ -291,10 +326,10 @@ func (f *JestFormatter) processVitestLine(line string) bool {
 	if matches := vitestLocationPattern.FindStringSubmatch(line); matches != nil && !f.vitestInFrame {
 		f.vitestInFrame = true
 		// The first location is the failing line in the test file itself; a
-		// helper frame points elsewhere, so only take a matching file's line.
-		if matches[1] == f.vitestFailure.File {
-			f.vitestFailure.Line = jestParseIntOrZero(matches[2])
-		}
+		// helper frame points elsewhere, so finishVitestFailure only gives it
+		// to failures in that file.
+		f.vitestLocFile = matches[1]
+		f.vitestLocLine = jestParseIntOrZero(matches[2])
 		return true
 	}
 	if !f.vitestInFrame {
@@ -308,11 +343,20 @@ func (f *JestFormatter) finishVitestFailure() {
 	if f.vitestFailure == nil {
 		return
 	}
-	f.vitestFailure.ErrorMessage = strings.TrimSpace(strings.Join(f.vitestMessage, "\n"))
-	f.failures = append(f.failures, *f.vitestFailure)
+	message := strings.TrimSpace(strings.Join(f.vitestMessage, "\n"))
+	for _, fail := range append(f.vitestGrouped, *f.vitestFailure) {
+		fail.ErrorMessage = message
+		if fail.File == f.vitestLocFile {
+			fail.Line = f.vitestLocLine
+		}
+		f.failures = append(f.failures, fail)
+	}
 	f.vitestFailure = nil
+	f.vitestGrouped = nil
 	f.vitestInFrame = false
 	f.vitestMessage = nil
+	f.vitestLocFile = ""
+	f.vitestLocLine = 0
 }
 
 // finishFailure processes accumulated failure data.
@@ -512,6 +556,10 @@ func (f *JestFormatter) Reset() {
 	f.vitestFailure = nil
 	f.vitestInFrame = false
 	f.vitestMessage = nil
+	f.vitestGrouped = nil
+	f.vitestLocFile = ""
+	f.vitestLocLine = 0
+	f.vitestInImport = false
 	f.suitesErrored = 0
 	f.testsSkipped = 0
 	f.vitestSummary = false

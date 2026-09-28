@@ -372,6 +372,14 @@ func TestParseRunOutcome_VitestFilterMatchedNothing(t *testing.T) {
 	assert.Equal(t, TestSummary{Skipped: 3, NoTests: true}, *o.Summary)
 	assert.True(t, o.NoTests)
 
+	// No name filter: a suite that skips everything on purpose
+	// (describe.skip, skipIf(!process.env.DB_URL), todo-only) ran what was asked.
+	log = " Test Files  1 skipped (1)\n      Tests  2 skipped | 1 todo (3)\n"
+	o = ParseRunOutcome("bun run test", []byte(log))
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Skipped: 3}, *o.Summary)
+	assert.False(t, o.NoTests)
+
 	// Some tests ran: skips alongside passes are ordinary.
 	log = " Test Files  1 passed (1)\n      Tests  1 passed | 2 skipped (3)\n"
 	o = ParseRunOutcome("bun run test", []byte(log))
@@ -409,4 +417,78 @@ func TestParseRunOutcome_VitestRepeatedSummary(t *testing.T) {
 
 	require.NotNil(t, o.Summary)
 	assert.Equal(t, TestSummary{Passed: 2, Skipped: 2}, *o.Summary)
+}
+
+// The stdout summary can land inside a failure block before its location
+// line. It isn't part of the failure's message.
+func TestParseRunOutcome_VitestSummaryBeforeLocation(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > s > fails\n" +
+		"AssertionError: expected 1 to be 2\n" +
+		"\n" +
+		" Test Files  1 failed | 3 passed (4)\n" +
+		"      Tests  1 failed | 9 passed (10)\n" +
+		"   Start at  09:03:05\n" +
+		"   Duration  6.76s (tests 43%)\n" +
+		"\n" +
+		"     Import  115 modules were evaluated 530 times\n" +
+		"             ~494ms faster with isolate: false\n" +
+		"\n" +
+		" \u276f tests/a.test.ts:4:13\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
+	assert.Equal(t, 4, o.Failures[0].Line)
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 9, Failed: 1}, *o.Summary)
+}
+
+// Vitest prints one error under consecutive FAIL headers when the tests
+// failed the same way. Each of them gets that error.
+func TestParseRunOutcome_VitestGroupedErrors(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 2 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > s > one\n" +
+		" FAIL  tests/a.test.ts > s > two\n" +
+		"Error: boom\n" +
+		" \u276f tests/a.test.ts:4:9\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  2 failed (2)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 2)
+	for i, name := range []string{"s > one", "s > two"} {
+		assert.Equal(t, name, o.Failures[i].TestName)
+		assert.Equal(t, "Error: boom", o.Failures[i].Message)
+		assert.Equal(t, 4, o.Failures[i].Line)
+	}
+}
+
+// A suite that fails in a describe's beforeAll is listed under Failed Suites
+// with the describe name, which is what the failure is called.
+func TestParseRunOutcome_VitestFailedDescribe(t *testing.T) {
+	log := "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > db suite\n" +
+		"Error: connect ECONNREFUSED\n" +
+		" \u276f tests/a.test.ts:3:5\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  2 passed (2)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "db suite", o.Failures[0].TestName)
+	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, 1, o.Summary.Errors)
 }

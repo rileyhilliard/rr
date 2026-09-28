@@ -349,6 +349,26 @@ func TestGetProject_NoRemoteWorktreeUsesMainCheckoutName(t *testing.T) {
 	})
 }
 
+// A git dir stored elsewhere (--separate-git-dir) is named for the store, so a
+// remote-less repo keeps its checkout directory's name.
+func TestGetProject_NoRemoteSeparateGitDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	clearGitEnv(t)
+	root := t.TempDir()
+	checkout := filepath.Join(root, "myproj")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "store"), 0o755))
+	cmd := exec.Command("git", "init", "--separate-git-dir="+filepath.Join(root, "store", "abc"), checkout)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Chdir(checkout)
+	resetProjectCache()
+	t.Cleanup(resetProjectCache)
+	assert.Equal(t, "myproj", getProject())
+}
+
 // TestLoad_WorktreeIsolationEscapeHatch is the end-to-end regression test:
 // a project config with worktree_isolation: false must yield the unsuffixed
 // remote dir even though expansion could have happened earlier with the

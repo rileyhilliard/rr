@@ -333,18 +333,31 @@ func mainCheckoutName() string {
 		// git older than 2.31 has no --path-format. rev-parse echoes an
 		// unknown flag and exits 0, so the output (not the exit code) tells:
 		// fall back to the current checkout's directory.
-		top, topErr := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-		if topErr != nil {
-			return ""
-		}
-		return filepath.Base(strings.TrimSpace(string(top)))
+		return checkoutName()
 	}
-	if filepath.Base(commonDir) == ".git" {
+	base := filepath.Base(commonDir)
+	if base == ".git" {
 		// <main checkout>/.git
 		return filepath.Base(filepath.Dir(commonDir))
 	}
-	// A bare repository ("repo.git") or a relocated git dir.
-	return strings.TrimSuffix(filepath.Base(commonDir), ".git")
+	if strings.HasSuffix(base, ".git") {
+		// A bare repository ("repo.git").
+		return strings.TrimSuffix(base, ".git")
+	}
+	// A git dir stored elsewhere (--separate-git-dir, a submodule's
+	// .git/modules/<name>) is named for the store, not the project: use the
+	// current checkout's directory, as before.
+	return checkoutName()
+}
+
+// checkoutName returns the current checkout's directory name (a linked
+// worktree's own directory). Empty outside a git repository.
+func checkoutName() string {
+	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(strings.TrimSpace(string(top)))
 }
 
 // extractRepoName parses repo name from various git URL formats.

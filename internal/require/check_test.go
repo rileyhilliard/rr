@@ -52,19 +52,61 @@ func TestCheckRequirement_UsesHostSetupCommands(t *testing.T) {
 		SetupCommands: []string{`export PATH="` + binDir + `:$PATH"`},
 	}
 
-	got := CheckRequirement(shellClient{}, host, "rrprobetool")
+	got, err := CheckRequirement(shellClient{}, host, "rrprobetool")
+	require.NoError(t, err)
 	assert.True(t, got.Satisfied, "setup_commands put the tool on PATH")
 	assert.Equal(t, tool, got.Path)
 
 	// Setup commands that print (nvm announcing a version) don't end up in the path.
 	host.SetupCommands = append([]string{"echo Now using node v20"}, host.SetupCommands...)
-	got = CheckRequirement(shellClient{}, host, "rrprobetool")
+	got, err = CheckRequirement(shellClient{}, host, "rrprobetool")
+	require.NoError(t, err)
 	assert.True(t, got.Satisfied)
 	assert.Equal(t, tool, got.Path)
 
-	got = CheckRequirement(shellClient{}, &config.Host{Shell: "bash -c"}, "rrprobetool")
+	got, err = CheckRequirement(shellClient{}, &config.Host{Shell: "bash -c"}, "rrprobetool")
+	require.NoError(t, err, "a missing tool isn't an error")
 	assert.False(t, got.Satisfied, "without the setup command the tool isn't on PATH")
 
-	got = CheckRequirement(shellClient{}, nil, "sh")
+	got, err = CheckRequirement(shellClient{}, nil, "sh")
+	require.NoError(t, err)
 	assert.True(t, got.Satisfied, "no host config: plain lookup")
+}
+
+// A failing setup command stops the lookup before it runs. That's reported as
+// the setup failing, not as the tool missing (which would point at
+// `rr provision` for a tool that may well be installed).
+func TestCheckRequirement_SetupCommandFails(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	t.Setenv("HOME", t.TempDir())
+
+	host := &config.Host{
+		Shell:         "bash -c",
+		SetupCommands: []string{"echo 'no such venv' >&2; false"},
+	}
+	_, err := CheckRequirement(shellClient{}, host, "sh")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no such venv")
+
+	results, err := CheckAll(shellClient{}, host, []string{"sh", "bash"}, NewCache(), "box")
+	require.Error(t, err)
+	assert.Nil(t, results)
+}
+
+// An alias from an rc file isn't expanded in the non-interactive shell a run
+// uses, so it doesn't satisfy a requirement.
+func TestCheckRequirement_AliasDoesNotCount(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rc := "alias rrprobealias=true\n"
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".bashrc"), []byte(rc), 0o644))
+
+	got, err := CheckRequirement(shellClient{}, &config.Host{Shell: "bash -c"}, "rrprobealias")
+	require.NoError(t, err)
+	assert.False(t, got.Satisfied, "path: %q", got.Path)
 }
