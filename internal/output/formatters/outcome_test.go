@@ -407,16 +407,47 @@ func TestParseRunOutcome_VitestWorkspaceProjectLabel(t *testing.T) {
 	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
 }
 
-// A log with two summaries (a rerun, watch mode) reports the last one's
-// counts, not a sum.
-func TestParseRunOutcome_VitestRepeatedSummary(t *testing.T) {
-	summary := " Test Files  1 failed (1)\n      Tests  1 failed | 1 passed | 2 skipped (4)\n"
-	final := " Test Files  1 passed (1)\n      Tests  2 passed | 2 skipped (4)\n"
+// A log with two runs (watch mode, a rerun) reports the last one: its counts
+// and its failures, not the earlier run's.
+func TestParseRunOutcome_VitestRepeatedRun(t *testing.T) {
+	first := " RUN  v5.0.0 /repo\n" +
+		"⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		" FAIL  tests/a.test.ts [ tests/a.test.ts ]\n" +
+		"Error: bad import\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		" Test Files  1 failed (1)\n      Tests  1 failed | 1 passed | 2 skipped (4)\n"
+	second := " RERUN  tests/a.test.ts x1\n" +
+		" Test Files  1 passed (1)\n      Tests  2 passed | 2 skipped (4)\n"
 
-	o := ParseRunOutcome("bun run test", []byte(summary+final))
+	o := ParseRunOutcome("bun run test", []byte(first+second))
 
 	require.NotNil(t, o.Summary)
 	assert.Equal(t, TestSummary{Passed: 2, Skipped: 2}, *o.Summary)
+	assert.Empty(t, o.Failures)
+}
+
+// A file that fails to load can leave vitest with "Tests  no tests". That's a
+// suite error, not a run that collected nothing.
+func TestParseRunOutcome_VitestFailedSuiteNoTests(t *testing.T) {
+	log := "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		" FAIL  tests/a.test.ts [ tests/a.test.ts ]\n" +
+		"Error: Cannot find module './missing'\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  no tests\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Errors: 1}, *o.Summary)
+	assert.False(t, o.NoTests)
+	require.Len(t, o.Failures, 1)
+}
+
+// Colors written with colons (ESC[38:2::255:0:0m) are stripped too.
+func TestStripANSI_ColonParameters(t *testing.T) {
+	in := "\x1b[38:2::255:0:0m Test Files \x1b[39m 1 passed (1)"
+	assert.Equal(t, " Test Files  1 passed (1)", string(StripANSI([]byte(in))))
 }
 
 // The stdout summary can land inside a failure block before its location

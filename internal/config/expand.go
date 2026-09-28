@@ -340,14 +340,21 @@ func mainCheckoutName() string {
 		// <main checkout>/.git
 		return filepath.Base(filepath.Dir(commonDir))
 	}
-	if strings.HasSuffix(base, ".git") {
-		// A bare repository ("repo.git").
+	if strings.HasSuffix(base, ".git") && isBareRepository() {
+		// A bare repository ("repo.git"). A separate git dir can be named
+		// "x.git" too, so the suffix alone doesn't say.
 		return strings.TrimSuffix(base, ".git")
 	}
 	// A git dir stored elsewhere (--separate-git-dir, a submodule's
 	// .git/modules/<name>) is named for the store, not the project: use the
 	// current checkout's directory, as before.
 	return checkoutName()
+}
+
+// isBareRepository reports whether the current repository is bare.
+func isBareRepository() bool {
+	out, err := exec.Command("git", "rev-parse", "--is-bare-repository").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 // checkoutName returns the current checkout's directory name (a linked

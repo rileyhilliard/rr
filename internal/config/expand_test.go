@@ -367,6 +367,16 @@ func TestGetProject_NoRemoteSeparateGitDir(t *testing.T) {
 	resetProjectCache()
 	t.Cleanup(resetProjectCache)
 	assert.Equal(t, "myproj", getProject())
+
+	// A separate git dir named like a bare repo ("store.git") isn't one.
+	other := filepath.Join(root, "otherproj")
+	cmd = exec.Command("git", "init", "--separate-git-dir="+filepath.Join(root, "store", "other.git"), other)
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	t.Chdir(other)
+	resetProjectCache()
+	assert.Equal(t, "otherproj", getProject())
 }
 
 // TestLoad_WorktreeIsolationEscapeHatch is the end-to-end regression test:

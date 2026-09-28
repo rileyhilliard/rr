@@ -110,3 +110,38 @@ func TestCheckRequirement_AliasDoesNotCount(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got.Satisfied, "path: %q", got.Path)
 }
+
+// A host shell that can't start is a check that couldn't run, not every tool
+// missing (which would send rr provision off to install them).
+func TestCheckRequirement_HostShellFails(t *testing.T) {
+	_, err := CheckRequirement(shellClient{}, &config.Host{Shell: "/nonexistent/shell -c"}, "sh")
+	require.Error(t, err)
+}
+
+// A relative PATH entry (./node_modules/.bin) resolves from the project dir,
+// as in a run. Before the first sync the dir is missing and the lookup still
+// runs.
+func TestCheckRequirement_RelativePathFromProjectDir(t *testing.T) {
+	if _, err := osexec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	t.Setenv("HOME", t.TempDir())
+
+	projectDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, "bin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "bin", "rrprobetool"), []byte("#!/bin/sh\n"), 0o755))
+
+	host := &config.Host{
+		Shell:         "bash -c",
+		Dir:           projectDir,
+		SetupCommands: []string{`export PATH="./bin:$PATH"`},
+	}
+	got, err := CheckRequirement(shellClient{}, host, "rrprobetool")
+	require.NoError(t, err)
+	assert.True(t, got.Satisfied)
+
+	host.Dir = filepath.Join(projectDir, "not-synced-yet")
+	got, err = CheckRequirement(shellClient{}, host, "sh")
+	require.NoError(t, err)
+	assert.True(t, got.Satisfied)
+}

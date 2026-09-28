@@ -48,7 +48,8 @@ func TestRequirementsCheck_Run(t *testing.T) {
 				client.SetCommandResponse("command -v "+tool, sshtesting.CommandResponse{Stdout: []byte("/usr/bin/" + tool + "\n")})
 			}
 			for _, tool := range tt.missing {
-				client.SetCommandResponse("command -v "+tool, sshtesting.CommandResponse{ExitCode: 1})
+				// A missing tool prints check.go's not-found marker and exits 0.
+				client.SetCommandResponse("command -v "+tool, sshtesting.CommandResponse{Stdout: []byte("rr-require: not found\n")})
 			}
 
 			check := &RequirementsCheck{

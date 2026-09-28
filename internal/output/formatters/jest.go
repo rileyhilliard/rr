@@ -138,7 +138,9 @@ var (
 	vitestSeparatorPattern = regexp.MustCompile(`^⎯{3,}(?:\[\d+/\d+\]⎯*)?\s*$`)
 	// The rest of the summary block: " Test Files  ...", "   Start at  ...",
 	// "   Duration  ...", "     Import  ..." (Tests is matched on its own).
-	vitestSummaryLinePattern = regexp.MustCompile(`^\s*(Test Files|Start at|Duration|Import|Type Errors|Errors)\s{2,}\S`)
+	vitestSummaryLinePattern = regexp.MustCompile(`^\s*(Test Files|Tests|Start at|Duration|Import|Type Errors|Errors)\s{2,}\S`)
+	// " RUN  v3.2.4 /path" or " RERUN  tests/a.test.ts x2" starts a run.
+	vitestRunHeaderPattern = regexp.MustCompile(`^\s*RE?RUN\s{2,}\S`)
 
 	// Stack trace indicator (line starting with "at ")
 	jestStackTracePattern = regexp.MustCompile(`^\s+at\s+`)
@@ -248,15 +250,20 @@ func (f *JestFormatter) ProcessLine(line string) string {
 // It returns true when the line belongs to vitest's failure listing, so the
 // jest patterns (which read " FAIL  file" as a suite line) skip it.
 func (f *JestFormatter) processVitestLine(line string) bool {
+	if f.vitestSummary && vitestRunHeaderPattern.MatchString(line) {
+		// A new run after a finished one (watch mode, a rerun) in the same
+		// log: counts and failures describe the last run only.
+		f.Reset()
+		return true
+	}
+
 	// The summary goes to stdout and the failure listing to stderr, so in a
 	// combined log it can land between (or inside) failure blocks: it doesn't
 	// end the section.
 	if matches := vitestTestSummaryPattern.FindStringSubmatch(line); matches != nil {
 		f.vitestSummary = true
 		f.testsTotal = jestParseIntOrZero(matches[2])
-		// A later summary (watch mode, a rerun in the same log) replaces the
-		// earlier one's counts rather than adding to them.
-		f.testsPassed, f.testsFailed, f.testsSkipped = 0, 0, 0
+		skipped := 0
 		for _, count := range vitestCountPattern.FindAllStringSubmatch(matches[1], -1) {
 			n := jestParseIntOrZero(count[1])
 			switch count[2] {
@@ -265,9 +272,10 @@ func (f *JestFormatter) processVitestLine(line string) bool {
 			case "passed":
 				f.testsPassed = n
 			case "skipped", "todo":
-				f.testsSkipped += n
+				skipped += n
 			}
 		}
+		f.testsSkipped = skipped
 		return true
 	}
 
@@ -524,7 +532,7 @@ func (f *JestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
 		if skipped < 0 {
 			skipped = 0
 		}
-		return f.testsPassed, f.testsFailed, skipped, 0
+		return f.testsPassed, f.testsFailed, skipped, f.suitesErrored
 	}
 
 	for _, t := range f.tests {
@@ -534,7 +542,9 @@ func (f *JestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
 			failed++
 		}
 	}
-	return passed, failed, 0, 0
+	// A suite that failed to load can come with vitest's "Tests  no tests",
+	// which sets no counts: the failed suite is still an error.
+	return passed, failed, 0, f.suitesErrored
 }
 
 // Reset clears all accumulated state.
@@ -573,6 +583,10 @@ func (f *JestFormatter) Reset() {
 // summary is not evidence on its own: plenty of non-test output scores as jest,
 // and jest prints no summary at all when it finds nothing.
 func (f *JestFormatter) RanNothing() bool {
+	if f.suitesErrored > 0 {
+		// A file that failed to load is an error, not an empty run.
+		return false
+	}
 	if f.vitestSummary {
 		// Vitest reports a filter that matched nothing as every test skipped.
 		return f.testsPassed+f.testsFailed+f.suitesErrored == 0

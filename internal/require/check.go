@@ -13,8 +13,8 @@ import (
 )
 
 // notFoundMarker is what the lookup prints when the tool isn't there, so a
-// missing tool (exit 0, marker) is told apart from a failed setup command
-// (non-zero exit before the lookup runs).
+// missing tool (exit 0, marker) is told apart from a check that couldn't run
+// (a failed setup command or host shell: non-zero exit).
 const notFoundMarker = "rr-require: not found"
 
 // CheckRequirement verifies a single tool exists on the remote host.
@@ -22,11 +22,11 @@ const notFoundMarker = "rr-require: not found"
 //
 // With a host config, the lookup runs the way rr runs commands there (rc
 // files, the host's setup_commands, its shell), so a tool those put on PATH
-// counts as present. It skips the cd into the project dir, which doesn't exist
-// before the first sync. A nil host runs the bare lookup.
+// counts as present. The cd into the project dir is soft: the dir doesn't
+// exist before the first sync. A nil host runs the bare lookup.
 //
-// The error is non-nil only when the host's setup_commands fail, which would
-// otherwise read as every tool missing.
+// The error is non-nil when the lookup couldn't run (the host's shell or
+// setup_commands failed), which would otherwise read as every tool missing.
 func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) (CheckResult, error) {
 	result := CheckResult{
 		Name:       tool,
@@ -44,6 +44,12 @@ func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) 
 	if host != nil {
 		env := *host
 		env.Dir = ""
+		if host.Dir != "" {
+			// Relative PATH entries (./node_modules/.bin) resolve from the
+			// project dir, as in a run, once a sync has created it.
+			dir := util.ShellQuotePreserveTilde(config.ExpandRemote(host.Dir))
+			cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", dir, cmd)
+		}
 		cmd = exec.BuildRemoteCommand(cmd, &env)
 	}
 	stdout, stderr, exitCode, err := client.Exec(cmd)
@@ -53,17 +59,13 @@ func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) 
 		return result, nil
 	}
 	if exitCode != 0 {
-		if host == nil || len(host.SetupCommands) == 0 {
-			result.Satisfied = false
-			return result, nil
-		}
 		detail := strings.TrimSpace(string(stderr))
 		if detail == "" {
 			detail = fmt.Sprintf("exit code %d", exitCode)
 		}
 		return result, errors.New(errors.ErrExec,
-			fmt.Sprintf("The host's setup_commands failed while checking requirements: %s", detail),
-			"Fix the host's setup_commands in ~/.rr/config.yaml, or run them on the host to see what fails.")
+			fmt.Sprintf("Couldn't check requirements on the host: %s", detail),
+			"Check the host's shell and setup_commands in ~/.rr/config.yaml, or run them on the host to see what fails.")
 	}
 
 	// rc files and setup_commands can print before the lookup runs (e.g. "nvm
@@ -87,7 +89,7 @@ func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) 
 // Returns results for all requirements, including cached ones.
 // Note: Individual check failures are recorded in CheckResult.Satisfied=false,
 // not returned as errors. Errors are only returned for systemic failures (the
-// host's setup_commands failing).
+// host's shell or setup_commands failing).
 func CheckAll(client sshutil.SSHClient, host *config.Host, reqs []string, cache *Cache, hostName string) ([]CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil

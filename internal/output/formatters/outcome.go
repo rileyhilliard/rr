@@ -27,8 +27,9 @@ type Outcome struct {
 }
 
 // ansiEscapePattern matches ANSI CSI escape sequences (colors, cursor moves):
-// ESC [, parameter bytes, intermediate bytes (0x20-0x2F), a final byte (0x40-0x7E).
-var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[\x20-\x2f]*[\x40-\x7e]`)
+// ESC [, parameter bytes (0x30-0x3F, which includes the ":" in
+// "38:2::255:0:0"), intermediate bytes (0x20-0x2F), a final byte (0x40-0x7E).
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
 
 // StripANSI removes ANSI escape sequences (colors, cursor moves) from output.
 func StripANSI(b []byte) []byte {
