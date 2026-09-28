@@ -1,6 +1,7 @@
 package formatters
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -293,4 +294,86 @@ func TestParseRunOutcome_NoTests(t *testing.T) {
 			assert.Equal(t, tt.want, ParseRunOutcome(tt.command, []byte(tt.output)).NoTests)
 		})
 	}
+}
+
+// testdata/vitest-failures.txt is a real `bun run test` log as rr records it:
+// vitest 5's default reporter, colors on, one test failing an assertion and one
+// file failing to load. The command names only the package script, so vitest
+// has to be recognized from the output.
+func TestParseRunOutcome_VitestDefaultReporter(t *testing.T) {
+	log, err := os.ReadFile("testdata/vitest-failures.txt")
+	require.NoError(t, err)
+
+	o := ParseRunOutcome("bun install --frozen-lockfile && bun run test", log)
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 468, Failed: 1, Errors: 1}, *o.Summary)
+
+	require.Len(t, o.Failures, 2)
+
+	suite := o.Failures[0]
+	assert.Equal(t, "tests/zz-rr-probe-suite.test.ts", suite.TestName)
+	assert.Equal(t, "tests/zz-rr-probe-suite.test.ts", suite.File)
+	assert.Equal(t, 3, suite.Line)
+	assert.Equal(t, "Error: probe: suite failed to load", suite.Message)
+
+	test := o.Failures[1]
+	assert.Equal(t, "rr probe > fails on purpose", test.TestName)
+	assert.Equal(t, "tests/zz-rr-probe.test.ts", test.File)
+	assert.Equal(t, 8, test.Line)
+	assert.True(t, strings.HasPrefix(test.Message,
+		"AssertionError: expected { status: 200 } to deeply equal { status: 500 }"), test.Message)
+	assert.Contains(t, test.Message, `+   "status": 200,`)
+	assert.NotContains(t, test.Message, "\x1b[", "ANSI codes are stripped")
+	assert.NotContains(t, test.Message, "expect({ status: 200 })", "the code frame is left out")
+}
+
+func TestParseRunOutcome_VitestPassing(t *testing.T) {
+	log := "\x1b[32m✓\x1b[39m tests/a.test.ts (3 tests) 5ms\n" +
+		"\n" +
+		"\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (1)\x1b[39m\n" +
+		"\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[33m1 skipped\x1b[39m\x1b[90m (3)\x1b[39m\n"
+
+	o := ParseRunOutcome("npm test", []byte(log))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 2, Skipped: 1}, *o.Summary)
+	assert.Empty(t, o.Failures)
+}
+
+// testdata/vitest-interleaved.txt: vitest writes its summary to stdout and the
+// failure listing to stderr, and the log interleaves them, so the summary can
+// land between two failure blocks. Every block after it must still be read.
+func TestParseRunOutcome_VitestSummaryInsideFailures(t *testing.T) {
+	log, err := os.ReadFile("testdata/vitest-interleaved.txt")
+	require.NoError(t, err)
+
+	o := ParseRunOutcome("bun run test", log)
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 461, Failed: 6}, *o.Summary)
+	require.Len(t, o.Failures, 6)
+	last := o.Failures[5]
+	assert.Equal(t, "errorResponse > leaves an upstream failure's detail out of the body", last.TestName)
+	assert.Equal(t, "tests/errors.test.ts", last.File)
+}
+
+// A vitest -t filter that matches nothing skips every test and exits 0. That
+// ran nothing, like pytest's "-k typo", so no_tests says so; the skip count
+// stays in the summary.
+func TestParseRunOutcome_VitestFilterMatchedNothing(t *testing.T) {
+	log := " ↓ tests/a.test.ts (3 tests | 3 skipped)\n" +
+		"\n" +
+		" Test Files  1 skipped (1)\n" +
+		"      Tests  3 skipped (3)\n"
+
+	o := ParseRunOutcome(`bun run test -t "no such test"`, []byte(log))
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Skipped: 3, NoTests: true}, *o.Summary)
+	assert.True(t, o.NoTests)
+
+	// Some tests ran: skips alongside passes are ordinary.
+	log = " Test Files  1 passed (1)\n      Tests  1 passed | 2 skipped (3)\n"
+	o = ParseRunOutcome("bun run test", []byte(log))
+	assert.False(t, o.NoTests)
 }

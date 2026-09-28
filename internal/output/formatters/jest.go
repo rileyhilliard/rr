@@ -23,6 +23,9 @@ type JestTestFailure struct {
 	SuiteName    string
 	ErrorMessage string
 	StackTrace   string
+	// File and Line locate a vitest failure (from its "❯ file:line:col" line).
+	File string
+	Line int
 }
 
 // JestFormatter parses Jest/Vitest test output.
@@ -50,6 +53,19 @@ type JestFormatter struct {
 	testsFailed  int
 	testsTotal   int
 	duration     string
+
+	// Vitest's default reporter lists failures after a "⎯⎯ Failed Tests N ⎯⎯"
+	// or "⎯⎯ Failed Suites N ⎯⎯" header, one " FAIL  file > test" block each.
+	// vitestSection is "tests" or "suites" inside those sections; vitestFailure
+	// is the block being read, and vitestInFrame is set once its location line
+	// has passed (what follows is the code frame, not the message).
+	vitestSection string
+	vitestFailure *JestTestFailure
+	vitestInFrame bool
+	vitestMessage []string
+	suitesErrored int
+	testsSkipped  int
+	vitestSummary bool
 
 	// noTestsRan is set by an explicit zero-collection message: vitest's
 	// "Tests  no tests" summary, or jest's / vitest's "No tests found".
@@ -99,12 +115,29 @@ var (
 	jestNoTestsFoundPattern = regexp.MustCompile(`(?i)^\s*No test(?:s| files) found`)
 	jestTimeSummaryPattern  = regexp.MustCompile(`Time:\s+(.+)`)
 
+	// Vitest's default reporter. Summary: "Tests  1 failed | 468 passed (469)".
+	vitestTestSummaryPattern = regexp.MustCompile(`^\s*Tests\s{2,}(.*\d+\s+\w+.*?)\s+\((\d+)\)\s*$`)
+	vitestCountPattern       = regexp.MustCompile(`(\d+)\s+(failed|passed|skipped|todo)`)
+	vitestFileSummaryPattern = regexp.MustCompile(`(?m)^\s*Test Files\s{2,}.*\(\d+\)\s*$`)
+	// "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯" and "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯"
+	vitestSectionPattern = regexp.MustCompile(`^⎯+\s+Failed (Tests|Suites) \d+\s+⎯+\s*$`)
+	// " FAIL  tests/a.test.ts > suite > test" or " FAIL  tests/a.test.ts [ tests/a.test.ts ]"
+	vitestFailPattern = regexp.MustCompile(`^\s*FAIL\s+(\S+)(?:\s+>\s+(.+?)|\s+\[.*\])?\s*$`)
+	// " ❯ tests/a.test.ts:8:29"
+	vitestLocationPattern = regexp.MustCompile(`^\s*❯\s+(\S+?):(\d+):\d+\s*$`)
+	// "⎯⎯⎯⎯⎯[1/2]⎯" closes a failure block.
+	vitestSeparatorPattern = regexp.MustCompile(`^⎯{3,}(?:\[\d+/\d+\]⎯*)?\s*$`)
+
 	// Stack trace indicator (line starting with "at ")
 	jestStackTracePattern = regexp.MustCompile(`^\s+at\s+`)
 )
 
 // ProcessLine transforms a single line of Jest output.
 func (f *JestFormatter) ProcessLine(line string) string {
+	if f.processVitestLine(line) {
+		return line
+	}
+
 	// Check for failure section end (new section, new failure header, or summary)
 	// Jest failure blocks contain blank lines, so we only end on structural changes
 	if f.inFailure {
@@ -199,6 +232,85 @@ func (f *JestFormatter) ProcessLine(line string) string {
 	return line
 }
 
+// processVitestLine handles vitest's summary and its failure sections.
+// It returns true when the line belongs to vitest's failure listing, so the
+// jest patterns (which read " FAIL  file" as a suite line) skip it.
+func (f *JestFormatter) processVitestLine(line string) bool {
+	// The summary goes to stdout and the failure listing to stderr, so in a
+	// combined log it can land between (or inside) failure blocks: it doesn't
+	// end the section.
+	if matches := vitestTestSummaryPattern.FindStringSubmatch(line); matches != nil {
+		f.vitestSummary = true
+		f.testsTotal = jestParseIntOrZero(matches[2])
+		for _, count := range vitestCountPattern.FindAllStringSubmatch(matches[1], -1) {
+			n := jestParseIntOrZero(count[1])
+			switch count[2] {
+			case "failed":
+				f.testsFailed = n
+			case "passed":
+				f.testsPassed = n
+			case "skipped", "todo":
+				f.testsSkipped += n
+			}
+		}
+		return true
+	}
+
+	if matches := vitestSectionPattern.FindStringSubmatch(line); matches != nil {
+		f.finishVitestFailure()
+		f.vitestSection = strings.ToLower(matches[1])
+		return true
+	}
+	if f.vitestSection == "" {
+		return false
+	}
+
+	if matches := vitestFailPattern.FindStringSubmatch(line); matches != nil {
+		f.finishVitestFailure()
+		name := matches[2]
+		if f.vitestSection == "suites" {
+			name = matches[1]
+			f.suitesErrored++
+		}
+		f.vitestFailure = &JestTestFailure{TestName: name, File: matches[1]}
+		return true
+	}
+	if vitestSeparatorPattern.MatchString(line) {
+		f.finishVitestFailure()
+		return true
+	}
+	if f.vitestFailure == nil {
+		// Blank lines and anything else between blocks.
+		return strings.TrimSpace(line) == ""
+	}
+
+	if matches := vitestLocationPattern.FindStringSubmatch(line); matches != nil && !f.vitestInFrame {
+		f.vitestInFrame = true
+		// The first location is the failing line in the test file itself; a
+		// helper frame points elsewhere, so only take a matching file's line.
+		if matches[1] == f.vitestFailure.File {
+			f.vitestFailure.Line = jestParseIntOrZero(matches[2])
+		}
+		return true
+	}
+	if !f.vitestInFrame {
+		f.vitestMessage = append(f.vitestMessage, line)
+	}
+	return true
+}
+
+// finishVitestFailure records the vitest failure block being read, if any.
+func (f *JestFormatter) finishVitestFailure() {
+	if f.vitestFailure == nil {
+		return
+	}
+	f.vitestFailure.ErrorMessage = strings.TrimSpace(strings.Join(f.vitestMessage, "\n"))
+	f.failures = append(f.failures, *f.vitestFailure)
+	f.vitestFailure = nil
+	f.vitestInFrame = false
+	f.vitestMessage = nil
+}
+
 // finishFailure processes accumulated failure data.
 func (f *JestFormatter) finishFailure() {
 	if len(f.failureAcc) == 0 {
@@ -235,6 +347,7 @@ func (f *JestFormatter) Summary(exitCode int) string {
 	if f.inFailure {
 		f.finishFailure()
 	}
+	f.finishVitestFailure()
 
 	var parts []string
 
@@ -282,6 +395,12 @@ func (f *JestFormatter) Detect(command string, output []byte) int {
 		return 80
 	}
 
+	// Vitest's "Test Files  1 failed | 31 passed (32)" summary, for commands
+	// like "npm test" that don't name the runner.
+	if vitestFileSummaryPattern.MatchString(outStr) {
+		return 80
+	}
+
 	// Check for Jest summary line patterns
 	if jestSuiteSummaryPattern.MatchString(outStr) || jestTestSummaryPattern.MatchString(outStr) {
 		return 70
@@ -296,6 +415,7 @@ func (f *JestFormatter) GetFailures() []JestTestFailure {
 	if f.inFailure {
 		f.finishFailure()
 	}
+	f.finishVitestFailure()
 	return f.failures
 }
 
@@ -310,6 +430,7 @@ func (f *JestFormatter) GetTestFailures() []output.TestFailure {
 	if f.inFailure {
 		f.finishFailure()
 	}
+	f.finishVitestFailure()
 
 	failures := make([]output.TestFailure, 0, len(f.failures))
 	for _, fail := range f.failures {
@@ -325,9 +446,15 @@ func (f *JestFormatter) GetTestFailures() []output.TestFailure {
 			message = fail.StackTrace
 		}
 
+		file := fail.SuiteName
+		if fail.File != "" {
+			file = fail.File
+		}
+
 		failures = append(failures, output.TestFailure{
 			TestName: name,
-			File:     fail.SuiteName,
+			File:     file,
+			Line:     fail.Line,
 			Message:  message,
 		})
 	}
@@ -339,6 +466,11 @@ func (f *JestFormatter) GetTestFailures() []output.TestFailure {
 // from the individual test results seen in the stream (vitest's compact
 // reporter prints per-test lines but a summary rr can't parse).
 func (f *JestFormatter) GetTestCounts() (passed, failed, skipped, errors int) {
+	if f.vitestSummary {
+		// Vitest names every count; a file that failed to load ran no tests
+		// and shows up only in the "Failed Suites" section.
+		return f.testsPassed, f.testsFailed, f.testsSkipped, f.suitesErrored
+	}
 	if f.testsTotal > 0 || f.testsPassed > 0 || f.testsFailed > 0 {
 		skipped = f.testsTotal - f.testsPassed - f.testsFailed
 		if skipped < 0 {
@@ -372,15 +504,27 @@ func (f *JestFormatter) Reset() {
 	f.testsTotal = 0
 	f.duration = ""
 	f.noTestsRan = false
+	f.vitestSection = ""
+	f.vitestFailure = nil
+	f.vitestInFrame = false
+	f.vitestMessage = nil
+	f.suitesErrored = 0
+	f.testsSkipped = 0
+	f.vitestSummary = false
 }
 
 // RanNothing implements output.NoTestsReporter.
 //
 // True only when the reporter explicitly said no tests ran - vitest's
-// "Tests  no tests", or jest's / vitest's "No tests found". A zero or absent
+// "Tests  no tests", or jest's / vitest's "No tests found" - or when vitest's
+// summary shows nothing passed, failed, or errored (every test skipped). A zero or absent
 // summary is not evidence on its own: plenty of non-test output scores as jest,
 // and jest prints no summary at all when it finds nothing.
 func (f *JestFormatter) RanNothing() bool {
+	if f.vitestSummary {
+		// Vitest reports a filter that matched nothing as every test skipped.
+		return f.testsPassed+f.testsFailed+f.suitesErrored == 0
+	}
 	if len(f.tests) > 0 {
 		return false
 	}

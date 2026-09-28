@@ -63,6 +63,13 @@ func summarize(formatter output.Formatter, command string) (TestSummary, bool) {
 		return TestSummary{}, false
 	}
 	passed, failed, skipped, errs := provider.GetTestCounts()
+	if passed+failed+errs == 0 && skipped > 0 {
+		// Everything skipped: a filter that matched nothing (vitest -t) looks
+		// like this. The formatter decides whether that counts as ran-nothing.
+		reporter, ok := formatter.(output.NoTestsReporter)
+		noTests := ok && reporter.RanNothing() && !hasIntentionalZeroFlag(command)
+		return TestSummary{Skipped: skipped, NoTests: noTests}, true
+	}
 	if passed+failed+skipped+errs == 0 {
 		// All-zero counts are only meaningful when the runner explicitly said
 		// it ran nothing. Otherwise this is unparseable output (or a non-test
