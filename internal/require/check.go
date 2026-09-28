@@ -5,13 +5,19 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
 // CheckRequirement verifies a single tool exists on the remote host.
 // Uses "command -v <tool>" which is POSIX-compliant and works across shells.
-func CheckRequirement(client sshutil.SSHClient, tool string) CheckResult {
+//
+// With a host config, the lookup runs the way rr runs commands there (rc
+// files, the host's setup_commands, its shell), so a tool those put on PATH
+// counts as present. It skips the cd into the project dir, which doesn't exist
+// before the first sync. A nil host runs the bare lookup.
+func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) CheckResult {
 	result := CheckResult{
 		Name:       tool,
 		CanInstall: exec.CanInstallTool(tool),
@@ -25,6 +31,11 @@ func CheckRequirement(client sshutil.SSHClient, tool string) CheckResult {
 
 	// Use "command -v" for POSIX-compliant tool detection
 	cmd := fmt.Sprintf("command -v %s", tool)
+	if host != nil {
+		env := *host
+		env.Dir = ""
+		cmd = exec.BuildRemoteCommand(cmd, &env)
+	}
 	stdout, _, exitCode, err := client.Exec(cmd)
 
 	if err != nil || exitCode != 0 {
@@ -38,10 +49,11 @@ func CheckRequirement(client sshutil.SSHClient, tool string) CheckResult {
 }
 
 // CheckAll checks all requirements, using cache and parallel execution.
+// host is the host's config (see CheckRequirement); nil for a bare lookup.
 // Returns results for all requirements, including cached ones.
 // Note: Individual check failures are recorded in CheckResult.Satisfied=false,
 // not returned as errors. Errors are only returned for systemic failures.
-func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName string) ([]CheckResult, error) {
+func CheckAll(client sshutil.SSHClient, host *config.Host, reqs []string, cache *Cache, hostName string) ([]CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
@@ -77,7 +89,7 @@ func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName st
 			sem <- struct{}{}        // Acquire semaphore
 			defer func() { <-sem }() // Release semaphore
 
-			result := CheckRequirement(client, reqs[i])
+			result := CheckRequirement(client, host, reqs[i])
 
 			mu.Lock()
 			results[i] = result
