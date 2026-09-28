@@ -44,7 +44,10 @@ func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) 
 	}
 
 	result.Satisfied = true
-	result.Path = strings.TrimSpace(string(stdout))
+	// rc files and setup_commands can print before the lookup runs (e.g. "nvm
+	// use" announcing a version); command -v's answer is the last line.
+	out := strings.TrimSpace(string(stdout))
+	result.Path = out[strings.LastIndex(out, "\n")+1:]
 	return result
 }
 

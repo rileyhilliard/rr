@@ -327,6 +327,26 @@ func TestGetProject_NoRemoteWorktreeUsesMainCheckoutName(t *testing.T) {
 		SetWorktreeIsolation(false)
 		assert.Equal(t, "myrepo", getProject())
 	})
+
+	// git before 2.31 doesn't know --path-format: rev-parse echoes the flag
+	// and exits 0, so the name must fall back instead of using that output.
+	t.Run("git without --path-format", func(t *testing.T) {
+		realGit, err := exec.LookPath("git")
+		require.NoError(t, err)
+		shimDir := t.TempDir()
+		shim := "#!/bin/sh\n" +
+			"if [ \"$1\" = rev-parse ] && [ \"$2\" = --path-format=absolute ]; then\n" +
+			"  shift 2; echo --path-format=absolute; exec " + realGit + " rev-parse \"$@\"\n" +
+			"fi\n" +
+			"exec " + realGit + " \"$@\"\n"
+		require.NoError(t, os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755))
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		t.Chdir(mainDir)
+		resetProjectCache()
+		t.Cleanup(resetProjectCache)
+		assert.Equal(t, "myrepo", getProject())
+	})
 }
 
 // TestLoad_WorktreeIsolationEscapeHatch is the end-to-end regression test:

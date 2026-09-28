@@ -56,6 +56,12 @@ func TestCheckRequirement_UsesHostSetupCommands(t *testing.T) {
 	assert.True(t, got.Satisfied, "setup_commands put the tool on PATH")
 	assert.Equal(t, tool, got.Path)
 
+	// Setup commands that print (nvm announcing a version) don't end up in the path.
+	host.SetupCommands = append([]string{"echo Now using node v20"}, host.SetupCommands...)
+	got = CheckRequirement(shellClient{}, host, "rrprobetool")
+	assert.True(t, got.Satisfied)
+	assert.Equal(t, tool, got.Path)
+
 	got = CheckRequirement(shellClient{}, &config.Host{Shell: "bash -c"}, "rrprobetool")
 	assert.False(t, got.Satisfied, "without the setup command the tool isn't on PATH")
 

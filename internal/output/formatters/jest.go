@@ -121,8 +121,9 @@ var (
 	vitestFileSummaryPattern = regexp.MustCompile(`(?m)^\s*Test Files\s{2,}.*\(\d+\)\s*$`)
 	// "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯" and "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯"
 	vitestSectionPattern = regexp.MustCompile(`^⎯+\s+Failed (Tests|Suites) \d+\s+⎯+\s*$`)
-	// " FAIL  tests/a.test.ts > suite > test" or " FAIL  tests/a.test.ts [ tests/a.test.ts ]"
-	vitestFailPattern = regexp.MustCompile(`^\s*FAIL\s+(\S+)(?:\s+>\s+(.+?)|\s+\[.*\])?\s*$`)
+	// " FAIL  tests/a.test.ts > suite > test" or " FAIL  tests/a.test.ts [ tests/a.test.ts ]".
+	// In a workspace a project label comes first (" FAIL  |unit| tests/a.test.ts > ...").
+	vitestFailPattern = regexp.MustCompile(`^\s*FAIL\s+(?:\S+\s+)??(\S+)(?:\s+>\s+(.+?)|\s+\[.*\])?\s*$`)
 	// " ❯ tests/a.test.ts:8:29"
 	vitestLocationPattern = regexp.MustCompile(`^\s*❯\s+(\S+?):(\d+):\d+\s*$`)
 	// "⎯⎯⎯⎯⎯[1/2]⎯" closes a failure block.
@@ -242,6 +243,9 @@ func (f *JestFormatter) processVitestLine(line string) bool {
 	if matches := vitestTestSummaryPattern.FindStringSubmatch(line); matches != nil {
 		f.vitestSummary = true
 		f.testsTotal = jestParseIntOrZero(matches[2])
+		// A later summary (watch mode, a rerun in the same log) replaces the
+		// earlier one's counts rather than adding to them.
+		f.testsPassed, f.testsFailed, f.testsSkipped = 0, 0, 0
 		for _, count := range vitestCountPattern.FindAllStringSubmatch(matches[1], -1) {
 			n := jestParseIntOrZero(count[1])
 			switch count[2] {

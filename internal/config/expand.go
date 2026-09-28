@@ -328,16 +328,17 @@ func getGitRepoName() string {
 // the worktree's own directory). Empty outside a git repository.
 func mainCheckoutName() string {
 	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
-	if err != nil {
-		// git older than 2.31 has no --path-format: fall back to the
-		// current checkout's directory.
+	commonDir := filepath.Clean(strings.TrimSpace(string(out)))
+	if err != nil || !filepath.IsAbs(commonDir) {
+		// git older than 2.31 has no --path-format. rev-parse echoes an
+		// unknown flag and exits 0, so the output (not the exit code) tells:
+		// fall back to the current checkout's directory.
 		top, topErr := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 		if topErr != nil {
 			return ""
 		}
 		return filepath.Base(strings.TrimSpace(string(top)))
 	}
-	commonDir := filepath.Clean(strings.TrimSpace(string(out)))
 	if filepath.Base(commonDir) == ".git" {
 		// <main checkout>/.git
 		return filepath.Base(filepath.Dir(commonDir))

@@ -377,3 +377,36 @@ func TestParseRunOutcome_VitestFilterMatchedNothing(t *testing.T) {
 	o = ParseRunOutcome("bun run test", []byte(log))
 	assert.False(t, o.NoTests)
 }
+
+// In a vitest workspace each FAIL line starts with the project's label.
+func TestParseRunOutcome_VitestWorkspaceProjectLabel(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  |unit| tests/a.test.ts > suite > fails\n" +
+		"AssertionError: expected 1 to be 2\n" +
+		" ❯ tests/a.test.ts:4:13\n" +
+		"⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  1 failed | 2 passed (3)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "suite > fails", o.Failures[0].TestName)
+	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
+	assert.Equal(t, 4, o.Failures[0].Line)
+	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
+}
+
+// A log with two summaries (a rerun, watch mode) reports the last one's
+// counts, not a sum.
+func TestParseRunOutcome_VitestRepeatedSummary(t *testing.T) {
+	summary := " Test Files  1 failed (1)\n      Tests  1 failed | 1 passed | 2 skipped (4)\n"
+	final := " Test Files  1 passed (1)\n      Tests  2 passed | 2 skipped (4)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(summary+final))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 2, Skipped: 2}, *o.Summary)
+}
