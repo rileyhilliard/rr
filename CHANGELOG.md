@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-09-28
+
+### Changed
+
+- **`${PROJECT}` for a repo with no remote, used from a linked worktree** - Without an `origin` remote the name came from `--show-toplevel`, which in a linked worktree is the worktree's own directory. With worktree isolation off every worktree got its own name, and two repos with same-named worktrees shared one. The name now comes from the main checkout. If this is your setup, the first run after upgrading syncs into a new remote dir, and the old one is left behind.
+
+### Fixed
+
+- **Vitest runs reported no failures and wrong counts** - The jest formatter only understood jest's output. A vitest run's summary (`Tests  1 failed | 468 passed (469)`) and failure blocks (`FAIL  file > suite > test`) matched nothing, and `✓` file lines were counted as tests. Vitest is now recognized from its `Test Files` summary, even when the command doesn't name it (`npm test`, `bun run test`). Counts come from the `Tests` line, and each entry under Failed Tests and Failed Suites becomes a failure with its `file:line` and message. A file that fails to load counts as an error. This also covers vitest workspaces, tests vitest groups under one shared error, and a log holding several runs (only the last run counts).
+- **Colored test output wasn't parsed** - Runners color their output when the remote gives them a TTY, and the escape codes broke every pattern. The run log is now stripped of ANSI codes before parsing, and a parallel subtask's `output_tail` is plain text.
+- **A vitest `-t` filter that matched nothing looked like a pass** - Vitest skips every test and exits 0. With a test-name filter (`-t`, `--testNamePattern`) and every test skipped, the result now carries `no_tests` and the warning, like `pytest -k typo`. A suite that skips everything on purpose, without a filter, is left alone.
+- **Long failure messages lost the part that differs** - Messages were cut at 500 bytes from the front. Matchers that dump a value (a DOM node, a large object) put the difference at the end. Long messages now keep the start and the end, with the middle elided.
+- **Requirement checks missed tools on the host's PATH** - The check ran a bare `command -v` over SSH, without the rc files, host `setup_commands`, or shell that every rr command gets. Tools those put on PATH (bun, node, uv under `$HOME`) were reported missing on hosts that have them. The check now runs the way a run does. A failing setup command or host shell is reported as that, with its stderr, instead of every tool showing as missing, and an rc-file alias no longer counts as the tool.
+- **`rr <task> --repeat N` passed `{args}` through literally** - A task like `vitest run {args}` got the literal `{args}`, so every repeat failed. Placeholders now expand as for a run with no args (`{args:-x}` gives `x`).
+- **`rr run` from an unsynced subdirectory ran at the root without saying so** - When the subdirectory isn't on the remote (excluded from sync), the run still falls back to the project root, but now prints a warning on stderr naming the directory. Stdout and the exit code are unchanged.
+
 ## [0.27.2] - 2026-09-23
 
 ### Changed
