@@ -92,7 +92,7 @@ func warnNoTests(details map[string]interface{}) {
 	// Deliberately says nothing about where relative paths resolve: that
 	// depends on the offset and on --cwd, and details.remote_cwd already
 	// reports the answer. Stale directory advice is worse than none.
-	msg := "No tests ran - the runner collected zero tests. " +
+	msg := "No tests ran - the runner collected none, or skipped every one. " +
 		"Check the path or filter you passed."
 	if tasks, ok := details["no_tests_tasks"].([]string); ok && len(tasks) > 0 {
 		msg = fmt.Sprintf("No tests ran in: %s. Check the path or filter passed to those subtasks.",
