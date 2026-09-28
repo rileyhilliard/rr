@@ -297,8 +297,12 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 		// Soft cd: the offset may not exist remotely (excluded from sync), and
 		// this is implicit, so it must never turn a working command into a
 		// failure. An explicit --cwd above still hard-fails. Braces keep
-		// `|| true` confined to this cd.
-		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", subdir, cmd)
+		// the fallback confined to this cd. The fallback warns on stderr: the
+		// output of a command run at the root otherwise looks like a normal run
+		// in the subdirectory.
+		warning := util.ShellQuote(fmt.Sprintf(
+			"rr: warning: %s/ isn't on the remote (excluded from sync?), so this ran at the project root", offset))
+		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || echo %s >&2; } && %s", subdir, warning, cmd)
 		reportAutoCWD(wf, offset)
 	}
 
