@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	stderrors "errors"
 	"io"
 	"os"
 	"os/exec"
@@ -46,19 +47,47 @@ func ExecuteLocalContext(ctx context.Context, cmd string, workDir string, stdout
 	return RunLocalCommand(ctx, command)
 }
 
+// SignalCause is the cancel cause rr's signal handler gives the run's
+// context (context.WithCancelCause), naming the signal rr got.
+// RunLocalCommand reads it with context.Cause to tell a Ctrl+C, which the
+// command already got from the terminal, from a stop only rr was asked for.
+type SignalCause struct {
+	Signal os.Signal
+}
+
+func (c SignalCause) Error() string {
+	return "rr got " + c.Signal.String()
+}
+
+// interruptedByTerminal reports whether ctx was cancelled for a SIGINT,
+// which the terminal sends to the whole foreground process group: a command
+// that shares rr's group got it too.
+func interruptedByTerminal(ctx context.Context) bool {
+	var cause SignalCause
+	return stderrors.As(context.Cause(ctx), &cause) && cause.Signal == os.Interrupt
+}
+
 // RunLocalCommand runs command, which must not be started yet, and returns
 // its exit code; a non-zero exit is not an error. If ctx is done first, the
-// command gets SIGINT, then SIGKILL if it's still running
-// localInterruptGrace later, and the result is its exit code (130 when
-// killed) with ctx.Err().
+// result is the command's exit code with ctx.Err(), and how the command is
+// stopped depends on why ctx was cancelled:
 //
-// The command keeps rr's process group and session, so it shares the
-// terminal: a Ctrl+C there reaches it directly, as it does any foreground
-// job. The cancel covers what the terminal doesn't, such as SIGTERM sent to
-// rr alone. Only the process itself is signalled; a child a shell started
-// stops when the shell passes the signal on or exits. If something it
-// started still holds the output open after the kill, this returns without
-// waiting for it.
+//   - For a SIGINT (a SignalCause naming os.Interrupt), nothing is sent and
+//     this waits for the command to exit. The command keeps rr's process
+//     group and session, so it shares the terminal, and Ctrl+C there has
+//     already reached it, as it does any foreground job. Sending another
+//     would be a second Ctrl+C: pytest's teardown gets a second
+//     KeyboardInterrupt and docker compose force-kills. A command that
+//     doesn't stop is left to the user's second Ctrl+C, which force-quits
+//     rr and reaches the command from the terminal too. A SIGINT sent to rr
+//     alone (kill -INT) therefore doesn't reach the command.
+//   - For anything else (SIGTERM or SIGHUP sent to rr, a parallel run's
+//     fail-fast or timeout), the command gets SIGINT, then SIGKILL if it's
+//     still running localInterruptGrace later (exit code 130).
+//
+// Only the process itself is signalled; a child a shell started stops when
+// the shell passes the signal on or exits. If something it started still
+// holds the output open after the kill, this returns without waiting for it.
 func RunLocalCommand(ctx context.Context, command *exec.Cmd) (exitCode int, err error) {
 	if err := command.Start(); err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrExec,
@@ -72,6 +101,9 @@ func RunLocalCommand(ctx context.Context, command *exec.Cmd) (exitCode int, err 
 	select {
 	case runErr = <-done:
 	case <-ctx.Done():
+		if interruptedByTerminal(ctx) {
+			return host.LocalExitCode(<-done), ctx.Err()
+		}
 		_ = command.Process.Signal(os.Interrupt) // fails only if it already exited
 		select {
 		case runErr = <-done:

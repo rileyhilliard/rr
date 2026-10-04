@@ -22,12 +22,20 @@ import (
 // command's pid, and a channel that delivers the result.
 func startCancellable(t *testing.T, script string) (context.CancelFunc, int, <-chan [2]interface{}) {
 	t.Helper()
+	cancel, pid, done := startCancellableCause(t, script)
+	return func() { cancel(nil) }, pid, done
+}
+
+// startCancellableCause is startCancellable whose cancel takes a cause, as
+// rr's signal handler cancels with.
+func startCancellableCause(t *testing.T, script string) (context.CancelCauseFunc, int, <-chan [2]interface{}) {
+	t.Helper()
 	t.Setenv("SHELL", "/bin/sh")
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	t.Cleanup(func() { cancel(nil) })
 	done := make(chan [2]interface{}, 1)
 	go func() {
 		code, err := ExecuteLocalContext(ctx, "echo $$ > '"+pidFile+"'; "+script, "", io.Discard, io.Discard)
@@ -87,6 +95,54 @@ func TestExecuteLocalContext_CancelKillsAfterGrace(t *testing.T) {
 		t.Fatal("the command wasn't killed after the grace")
 	}
 	assert.Eventually(t, processGone(pid), 5*time.Second, 10*time.Millisecond, "the shell is gone")
+}
+
+// When rr is cancelled for a SIGINT, the command already got that Ctrl+C
+// from the terminal, since it shares rr's process group. rr sends it
+// nothing more and doesn't kill it after the grace: it waits for the
+// command to finish on its own.
+func TestExecuteLocalContext_SIGINTCauseSendsNothing(t *testing.T) {
+	defer SetLocalInterruptGrace(100 * time.Millisecond)()
+	ints := filepath.Join(t.TempDir(), "ints")
+	cancel, _, done := startCancellableCause(t,
+		"trap 'echo int >> \""+ints+"\"' INT; i=0; while [ $i -lt 10 ]; do sleep 0.05; i=$((i+1)); done; exit 4")
+
+	cancel(SignalCause{Signal: os.Interrupt})
+	select {
+	case res := <-done:
+		assert.Equal(t, 4, res[0], "the command ran to its own end, past the grace")
+		assert.ErrorIs(t, res[1].(error), context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the command didn't finish")
+	}
+	assert.NoFileExists(t, ints, "rr sent no SIGINT")
+}
+
+// A signal the terminal didn't send the command, such as SIGTERM or SIGHUP
+// to rr alone, still stops it: SIGINT, then a kill once the grace is up.
+func TestExecuteLocalContext_OtherSignalCauseStops(t *testing.T) {
+	for _, sig := range []os.Signal{syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			defer SetLocalInterruptGrace(200 * time.Millisecond)()
+			ints := filepath.Join(t.TempDir(), "ints")
+			// Records the SIGINT, then keeps running until it's killed.
+			cancel, pid, done := startCancellableCause(t,
+				"trap 'echo int >> \""+ints+"\"' INT; while :; do sleep 0.05; done")
+
+			cancel(SignalCause{Signal: sig})
+			select {
+			case res := <-done:
+				assert.Equal(t, 130, res[0], "killed after the grace")
+				assert.ErrorIs(t, res[1].(error), context.Canceled)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the command wasn't stopped")
+			}
+			assert.Eventually(t, processGone(pid), 5*time.Second, 10*time.Millisecond, "the shell is gone")
+			data, err := os.ReadFile(ints)
+			require.NoError(t, err, "the command got SIGINT first")
+			assert.Equal(t, "int\n", string(data))
+		})
+	}
 }
 
 // Without a cancel, the context changes nothing: the command runs to its
