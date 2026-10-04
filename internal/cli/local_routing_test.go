@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -227,66 +228,94 @@ func TestRun_LocalFlagRecordsJobInLock(t *testing.T) {
 // agent for lock.timeout just to be told no), and the suggestion says what
 // to do instead.
 func TestRunTask_PinnedTaskRefusedBeforeLock(t *testing.T) {
-	tests := []struct {
-		name          string
-		withLocalHost bool
-		opts          TaskOptions
-		wantSuggests  []string
-		notSuggests   []string
-	}{
-		{
-			name:          "--local with a local host",
-			withLocalHost: true,
-			opts:          TaskOptions{TaskName: "pinned", Local: true},
-			wantSuggests:  []string{"box", "Drop --local", "add 'dev' to the task's hosts"},
-		},
-		{
-			name:         "--local without a local host",
-			opts:         TaskOptions{TaskName: "pinned", Local: true},
-			wantSuggests: []string{"box", "Drop --local"},
-			notSuggests:  []string{"add 'local'"},
-		},
-		{
-			name:          "--host naming the local host",
-			withLocalHost: true,
-			opts:          TaskOptions{TaskName: "pinned", Host: "dev"},
-			wantSuggests:  []string{"--host box", "add 'dev' to the task's hosts"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			projectDir, _ := writeRoutingConfigs(t, tt.withLocalHost, "hosts: [box, dev]")
-			t.Chdir(projectDir)
-			f, err := os.OpenFile(filepath.Join(projectDir, ".rr.yaml"), os.O_APPEND|os.O_WRONLY, 0)
-			require.NoError(t, err)
-			_, err = f.WriteString("  pinned:\n    hosts: [box]\n    run: touch ran.out\n")
-			require.NoError(t, err)
-			require.NoError(t, f.Close())
-			if tt.withLocalHost {
-				lockCfg := config.LockConfig{Enabled: true, Timeout: 2 * time.Second, Stale: 10 * time.Minute, Dir: lockBaseOf(t, projectDir)}
-				holdLocalHostLock(t, lockCfg)
-			}
+	projectDir := writePinnedTask(t, true)
+	lockCfg := config.LockConfig{Enabled: true, Timeout: 2 * time.Second, Stale: 10 * time.Minute, Dir: lockBaseOf(t, projectDir)}
+	holdLocalHostLock(t, lockCfg)
 
-			var code int
-			captureStderr(t, func() {
-				captureStdout(t, func() { code, err = RunTask(tt.opts) })
-			})
-			require.Error(t, err)
-			assert.Equal(t, 1, code)
-			// ErrLock here would mean rr waited out the held lock first.
-			assert.True(t, errors.IsCode(err, errors.ErrConfig), "got %v", err)
-			var rrErr *errors.Error
-			require.ErrorAs(t, err, &rrErr)
-			assert.Contains(t, rrErr.Message, "can't run on")
-			for _, s := range tt.wantSuggests {
-				assert.Contains(t, rrErr.Suggestion, s)
-			}
-			for _, s := range tt.notSuggests {
-				assert.NotContains(t, rrErr.Suggestion, s)
-			}
-			assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+	code, err := runTaskQuietly(t, TaskOptions{TaskName: "pinned", Host: "dev"})
+	require.Error(t, err)
+	assert.Equal(t, 1, code)
+	// ErrLock here would mean rr waited out the held lock first.
+	assert.True(t, errors.IsCode(err, errors.ErrConfig), "got %v", err)
+	var rrErr *errors.Error
+	require.ErrorAs(t, err, &rrErr)
+	assert.Contains(t, rrErr.Message, "can't run on host 'dev'")
+	assert.Contains(t, rrErr.Suggestion, "--host box")
+	assert.Contains(t, rrErr.Suggestion, "--local")
+	assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+}
+
+// --local is an explicit "run it here", so it overrides a task's hosts:
+// list the way it overrides the project's. A shared .rr.yaml can't name
+// each person's local host, so the pin can't be widened to allow it.
+func TestRunTask_LocalOverridesTaskHosts(t *testing.T) {
+	for _, withLocalHost := range []bool{true, false} {
+		t.Run(fmt.Sprintf("local host %v", withLocalHost), func(t *testing.T) {
+			projectDir := writePinnedTask(t, withLocalHost)
+			code, err := runTaskQuietly(t, TaskOptions{TaskName: "pinned", Local: true})
+			require.NoError(t, err)
+			assert.Equal(t, 0, code)
+			assert.FileExists(t, filepath.Join(projectDir, "ran.out"))
 		})
 	}
+}
+
+// A parallel task with --local runs its pinned subtasks here too.
+func TestRunParallelTask_LocalOverridesSubtaskHosts(t *testing.T) {
+	for _, withLocalHost := range []bool{true, false} {
+		t.Run(fmt.Sprintf("local host %v", withLocalHost), func(t *testing.T) {
+			projectDir := writePinnedTask(t, withLocalHost)
+			var code int
+			var err error
+			captureStderr(t, func() {
+				captureStdout(t, func() {
+					code, err = RunParallelTask(ParallelTaskOptions{TaskName: "both", Local: true})
+				})
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 0, code)
+			assert.FileExists(t, filepath.Join(projectDir, "ran.out"))
+			assert.FileExists(t, filepath.Join(projectDir, "show.out"))
+		})
+	}
+}
+
+// Without --host or --local, a pinned task is placed only on its own hosts:
+// the local host comes first in the project's order, but the task allows
+// only box, so rr tries box (unreachable here) instead of locking dev and
+// then refusing to run there.
+func TestRunTask_SelectionHonorsTaskHosts(t *testing.T) {
+	projectDir := writePinnedTask(t, true)
+	_, err := runTaskQuietly(t, TaskOptions{TaskName: "pinned"})
+	require.Error(t, err)
+	assert.False(t, errors.IsCode(err, errors.ErrConfig), "picked a host the task doesn't allow: %v", err)
+	assert.NotContains(t, err.Error(), "'dev'")
+	assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+}
+
+// writePinnedTask writes the routing configs with project hosts [dev, box],
+// a task "pinned" restricted to box that touches ran.out, and a parallel
+// task "both" running pinned and show. It chdirs into the project.
+func writePinnedTask(t *testing.T, withLocalHost bool) string {
+	t.Helper()
+	projectDir, _ := writeRoutingConfigs(t, withLocalHost, "hosts: [dev, box]")
+	t.Chdir(projectDir)
+	f, err := os.OpenFile(filepath.Join(projectDir, ".rr.yaml"), os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("  pinned:\n    hosts: [box]\n    run: touch ran.out\n  both:\n    parallel: [pinned, show]\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	return projectDir
+}
+
+func runTaskQuietly(t *testing.T, opts TaskOptions) (int, error) {
+	t.Helper()
+	var code int
+	var err error
+	captureStderr(t, func() {
+		captureStdout(t, func() { code, err = RunTask(opts) })
+	})
+	return code, err
 }
 
 // lockBaseOf reads the lock dir the project config in projectDir uses.

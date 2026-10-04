@@ -63,18 +63,11 @@ type TaskOptions struct {
 }
 
 // taskHostError refuses a task pinned to hosts other than conn's, and says
-// how to run it: on a host it allows, or (for this machine) by allowing it.
+// how to run it: on a host it allows, or here with --local, which overrides
+// the pin.
 func taskHostError(taskName string, task *config.TaskConfig, conn *host.Connection) error {
-	suggestion := fmt.Sprintf("This task is restricted to: %s.", util.JoinOrNone(task.Hosts))
-	switch {
-	case conn.LocalReason == host.LocalReasonFlag:
-		suggestion += " Drop --local to run it there."
-	case conn.LocalReason == "" && len(task.Hosts) > 0:
-		suggestion += fmt.Sprintf(" Run it with --host %s.", task.Hosts[0])
-	}
-	if conn.Host.Local {
-		suggestion += fmt.Sprintf(" To let it run on this machine, add '%s' to the task's hosts: list.", conn.Name)
-	}
+	suggestion := fmt.Sprintf("This task is restricted to: %s. Run it with --host %s, or with --local to run it on this machine anyway.",
+		util.JoinOrNone(task.Hosts), task.Hosts[0])
 	return errors.New(errors.ErrConfig,
 		fmt.Sprintf("Task '%s' can't run on host '%s'", taskName, conn.Name),
 		suggestion)
@@ -115,8 +108,8 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Verify task is allowed on the connected host
-	if !config.IsTaskHostAllowed(task, wf.Conn.Name) {
-		return 1, taskHostError(opts.TaskName, task, wf.Conn)
+	if err := checkTaskHost(wf, opts.TaskName); err != nil {
+		return 1, err
 	}
 
 	// Validate args are only used with single-command tasks

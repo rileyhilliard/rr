@@ -1016,11 +1016,21 @@ tasks:
     run: ./deploy.sh
 ```
 
-This task only runs on the `server` host, regardless of the default.
+This task only runs on the `server` host, regardless of the default. rr picks
+among the task's hosts (in the project's `hosts:` order), so a busy or
+unreachable host outside the list is never tried. `--host` must name one of
+them, or the task is refused with `CONFIG_INVALID` before rr waits on that
+host's lock.
 
 The restriction holds inside parallel groups too: a restricted subtask is
 scheduled only on a host it allows, and the run fails up front if `--host` or
 `--tag` leaves it with no host to run on.
+
+`--local` (and local mode) overrides the restriction, for a task and for
+every subtask of a parallel task: it's an explicit request to run on this
+machine, the same way it overrides the project's `hosts:` list. A shared
+`.rr.yaml` can't name each person's local host, so a pin can't allow it any
+other way.
 
 ### Reserved task names
 

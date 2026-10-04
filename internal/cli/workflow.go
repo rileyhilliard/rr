@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -234,6 +235,33 @@ func subdirOffset(projectRoot string) string {
 	return filepath.ToSlash(rel)
 }
 
+// taskHostsOnly narrows the candidate hosts to the task's hosts: list, in
+// project order, so a pinned task is placed on a host it allows instead of
+// being refused after rr has picked and locked another. With no task, no
+// pin, or no pinned host among the candidates, they're returned unchanged
+// (RunTask then refuses with the task's hosts named).
+func taskHostsOnly(project *config.Config, taskName string, order []string, hosts map[string]config.Host) ([]string, map[string]config.Host) {
+	if project == nil || taskName == "" {
+		return order, hosts
+	}
+	task, ok := project.Tasks[taskName]
+	if !ok || len(task.Hosts) == 0 {
+		return order, hosts
+	}
+	var narrowedOrder []string
+	narrowed := make(map[string]config.Host)
+	for _, name := range order {
+		if h, ok := hosts[name]; ok && slices.Contains(task.Hosts, name) {
+			narrowedOrder = append(narrowedOrder, name)
+			narrowed[name] = h
+		}
+	}
+	if len(narrowed) == 0 {
+		return order, hosts
+	}
+	return narrowedOrder, narrowed
+}
+
 // setupHostSelector creates and configures the host selector for a remote
 // target. It uses ResolveHosts to determine which hosts this project can use.
 // A local target never gets here (see connectLocalTarget).
@@ -249,6 +277,9 @@ func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 		// Fall back to all global hosts if resolution fails
 		ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
 	} else {
+		if opts.Host == "" {
+			hostOrder, projectHosts = taskHostsOnly(ctx.Resolved.Project, opts.TaskName, hostOrder, projectHosts)
+		}
 		ctx.selector = host.NewSelector(projectHosts)
 		ctx.selector.SetHostOrder(hostOrder)
 	}
@@ -302,6 +333,11 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		hostName, _, err := config.ResolveHost(ctx.Resolved, "")
 		if err == nil {
 			preferredHost = hostName
+		}
+		// The project default may be outside the candidates a task's hosts:
+		// list narrowed the selector to (see taskHostsOnly).
+		if names := ctx.selector.GetHostNames(); len(names) > 0 && !slices.Contains(names, preferredHost) {
+			preferredHost = names[0]
 		}
 	}
 
@@ -726,7 +762,7 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
-		if err := checkTaskHost(ctx, opts); err != nil {
+		if err := checkTaskHost(ctx, opts.TaskName); err != nil {
 			ctx.Close()
 			return nil, err
 		}
@@ -777,7 +813,7 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 	if err := connectPhase(ctx, opts); err != nil {
 		return err
 	}
-	if err := checkTaskHost(ctx, opts); err != nil {
+	if err := checkTaskHost(ctx, opts.TaskName); err != nil {
 		return err
 	}
 	// Phase 2: Acquire lock (before sync)
@@ -787,16 +823,18 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 // checkTaskHost refuses a task pinned to other hosts once its host is
 // known, before that host's lock is waited on: a busy host would otherwise
 // hold the run for lock.timeout only to refuse it. RunTask checks again
-// after a load-balanced pick.
-func checkTaskHost(ctx *WorkflowContext, opts WorkflowOptions) error {
-	if opts.TaskName == "" || ctx.Resolved.Project == nil {
+// after a load-balanced pick. A local target (--local, local mode) runs
+// here by explicit choice and overrides the pin, as it overrides the
+// project's hosts: list.
+func checkTaskHost(ctx *WorkflowContext, taskName string) error {
+	if taskName == "" || ctx.Resolved.Project == nil || ctx.target.local {
 		return nil
 	}
-	task, ok := ctx.Resolved.Project.Tasks[opts.TaskName]
+	task, ok := ctx.Resolved.Project.Tasks[taskName]
 	if !ok || config.IsTaskHostAllowed(&task, ctx.Conn.Name) {
 		return nil
 	}
-	return taskHostError(opts.TaskName, &task, ctx.Conn)
+	return taskHostError(taskName, &task, ctx.Conn)
 }
 
 // ExecutePullPhase downloads files from remote after command execution.

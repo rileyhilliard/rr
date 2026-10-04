@@ -94,15 +94,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		}
 	}
 
-	// Every host-restricted subtask needs at least one of its hosts in the
-	// run. Without this check the scheduler would have nowhere to send it and
-	// the run would end with a "no available host" failure after the other
-	// subtasks finished; with --host pointing at a disallowed host the old
-	// scheduler ran it there anyway.
-	if target.onHosts() {
-		if err := checkSubtaskHosts(tasks, hostOrder); err != nil {
-			return 1, err
-		}
+	if err := applySubtaskHosts(tasks, target, hostOrder); err != nil {
+		return 1, err
 	}
 
 	// If dry run, just show the plan
@@ -355,6 +348,23 @@ func rewriteForwardArgs(resolved *config.ResolvedConfig, task *config.TaskConfig
 		opts.Args = rewritten
 		announcePathRewrites(n, resolved.ProjectRoot, ".")
 	}
+}
+
+// applySubtaskHosts settles subtask host restrictions for the run. A local
+// target (--local, local mode) runs every subtask here by explicit choice,
+// so it drops their restrictions, as it overrides the project's hosts: list
+// (a shared config can't name each person's local host). Otherwise every
+// restricted subtask needs one of its hosts in the run: without this check
+// the scheduler would have nowhere to send it, and the run would end with a
+// "no available host" failure after the other subtasks finished.
+func applySubtaskHosts(tasks []parallel.TaskInfo, target execTarget, hostOrder []string) error {
+	if target.local {
+		for i := range tasks {
+			tasks[i].AllowedHosts = nil
+		}
+		return nil
+	}
+	return checkSubtaskHosts(tasks, hostOrder)
 }
 
 // checkSubtaskHosts fails when a restricted subtask has none of its allowed

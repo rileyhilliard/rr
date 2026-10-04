@@ -348,4 +348,8 @@ tasks:
     hosts: [fast, gpu-box]  # Multiple allowed hosts
 ```
 
+rr picks only among a task's allowed hosts, and `--host` naming another host fails with `CONFIG_INVALID` before any lock wait.
+
 Restrictions also apply to subtasks inside parallel tasks: a restricted subtask only runs on its allowed hosts, and fails with the restriction named if none of them is available. `--host`/`--tag` that excludes every allowed host fails up front.
+
+`--local` overrides restrictions, for single tasks and every parallel subtask: it runs them on this machine (the local host, if configured). To run a pinned task here, use `rr <task> --local`.

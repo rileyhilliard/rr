@@ -46,13 +46,6 @@ func resolveExecTarget(resolved *config.ResolvedConfig, localFlag bool, hostFlag
 	return target
 }
 
-// onHosts reports whether the run goes to configured hosts: a remote target,
-// or a local target on its local host, which runs there as --host would.
-// Only bare local execution ignores tasks' host restrictions.
-func (t execTarget) onHosts() bool {
-	return !t.local || t.hostName != ""
-}
-
 // connection returns the connection a local target runs on (see
 // host.LocalRunConnection).
 func (t execTarget) connection() *host.Connection {

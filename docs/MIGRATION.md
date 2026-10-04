@@ -5,7 +5,7 @@ This document covers breaking changes and upgrade instructions between versions.
 ## Contents
 
 - [Version compatibility](#version-compatibility)
-- [Upgrading from v0.28.0](#upgrading-from-v0280-local-host-routing-config-search-lock-interrupts)
+- [Upgrading from v0.28.0](#upgrading-from-v0280-local-host-routing-task-pins-config-search-lock-interrupts)
 - [Upgrading to v0.27.0](#upgrading-to-v0270-doctor-exit-codes-error-codes-case-sensitive-names)
 - [Upgrading to v0.26.0](#upgrading-to-v0260-worktree-pruning)
 - [Upgrading to v0.24.0](#upgrading-to-v0240-commands-run-in-your-current-subdirectory)
@@ -28,11 +28,13 @@ When the schema changes in incompatible ways, the version number bumps. rr refus
 
 rr is pre-1.0, so breaking changes ship in minor releases. [CHANGELOG.md](../CHANGELOG.md) has the full detail for each version.
 
-## Upgrading from v0.28.0 (local host routing, config search, lock interrupts)
+## Upgrading from v0.28.0 (local host routing, task pins, config search, lock interrupts)
 
 **Runs on this machine report the local host's name.** If your global config has a host with `local: true` (say `dev`), `--local`, local mode and `local_fallback` runs now go through it. The connect events, the fallback `warn` event and the result say `host: "dev"` instead of `host: "local"`, a `lock` phase runs on `dev`, and sync is skipped with `reason: in_place` instead of `local`. To tell why a run was local, read `details.reason` on the connect event, or `details.local_reason` and `details.fallback` on the result; those are unchanged. Don't match `host == "local"`.
 
-These runs also get what a run on `--host dev` gets: the host's `setup_commands`, `shell` and `require` checks (a missing tool now fails with `DEPENDENCY_MISSING`), the project's `defaults.setup`, the host's `env` for tasks, its lock, no terminal, and tasks at the project root. A parallel task with `--local` runs its subtasks on `dev`, so a subtask pinned to other hosts with `hosts:` fails the up-front host check. Without a local host, nothing changes.
+These runs also get what a run on `--host dev` gets: the host's `setup_commands`, `shell` and `require` checks (a missing tool now fails with `DEPENDENCY_MISSING`), the project's `defaults.setup`, the host's `env` for tasks, its lock, no terminal, and tasks at the project root. A parallel task with `--local` runs all its subtasks on `dev`, including ones pinned to other hosts with `hosts:`: `--local` overrides task pins. Without a local host, nothing changes.
+
+**A task's `hosts:` decides where it runs, and `--local` overrides it.** rr now picks only among a pinned task's hosts instead of checking the pin after picking (and locking) a host, so a pinned task is never refused for landing on the wrong host. `--host` naming a host outside the list is refused before any lock wait. `rr <task> --local` now runs a pinned task on this machine instead of refusing it with `can't run on host 'local'`. If you relied on a pin to stop `--local` for a task that can't run on a laptop, guard it in the command itself (check `hostname` or the OS and exit non-zero).
 
 **A host can't be named `local`.** Rename it in `~/.rr/config.yaml` (for example to `dev`) and update the `hosts:` lists that use it.
 
