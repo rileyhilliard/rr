@@ -676,17 +676,7 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	var err error
 	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, append(acquireOpts,
 		lock.WithWaitFunc(func(holder *lock.LockInfo) {
-			WritePhaseEvent(PhaseEvent{
-				Type:   "phase",
-				Phase:  "lock",
-				Status: "waiting",
-				Host:   hostName,
-				Details: map[string]interface{}{
-					"message":        lockWaitMessage(hostName, holder, lockCfg.Timeout),
-					"holders":        holderDetails([]hostAttempt{{hostName: hostName, lockInfo: holder}}),
-					"wait_timeout_s": lockCfg.Timeout.Seconds(),
-				},
-			})
+			lockWaitingEvent(hostName, holder, lockCfg.Timeout)
 		}))...)
 	if err != nil {
 		reporter.PhaseFailed("lock", err)
@@ -697,6 +687,22 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	recordLocalJob(ctx)
 	reporter.PhaseComplete("lock", hostName, time.Since(lockStart))
 	return nil
+}
+
+// lockWaitingEvent emits the lock/waiting event: the run found hostName's
+// lock held by holder (nil when unknown) and waits up to timeout for it.
+func lockWaitingEvent(hostName string, holder *lock.LockInfo, timeout time.Duration) {
+	WritePhaseEvent(PhaseEvent{
+		Type:   "phase",
+		Phase:  "lock",
+		Status: "waiting",
+		Host:   hostName,
+		Details: map[string]interface{}{
+			"message":        lockWaitMessage(hostName, holder, timeout),
+			"holders":        holderDetails([]hostAttempt{{hostName: hostName, lockInfo: holder}}),
+			"wait_timeout_s": timeout.Seconds(),
+		},
+	})
 }
 
 // lockWaitMessage says whose lock on hostName a run is waiting for, and for

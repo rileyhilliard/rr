@@ -35,7 +35,11 @@ When the host's lock is held, rr emits one `waiting` event before it waits, nami
 {"type":"phase","phase":"lock","status":"waiting","host":"dev","details":{"message":"Waiting up to 5m0s for the lock on dev: 'make test' held by me@laptop (pid 4242, started 1m0s ago, this machine)","holders":[{"host":"dev","user":"me","pid":4242,"command":"make test","age_s":60,"same_machine":true}],"wait_timeout_s":300}}
 ```
 
-That's a single host (the only candidate, or picked with `--host`/`--tag`), which waits up to `lock.timeout`. With several hosts all locked, the same details come on a `connect` `waiting` event with no `host`, and rr cycles through the hosts for up to `lock.wait_timeout`. Either wait ends with the lock, a `LOCK_HELD` error on timeout, or `INTERRUPTED` (exit 130) if rr is stopped with Ctrl+C or SIGTERM. Waiters poll every 2 seconds rather than queueing, so the order they get the lock in isn't guaranteed. A holder whose lock info can't be read has only `host`, with no `same_machine`: rr doesn't know where it runs.
+That's a single host (the only candidate, or picked with `--host`/`--tag`), which waits up to `lock.timeout`. With several hosts all locked, the same details come on a `connect` `waiting` event with no `host`, and rr cycles through the hosts for up to `lock.wait_timeout`. Either wait ends with the lock, a `LOCK_HELD` error on timeout, or `INTERRUPTED` (exit 130) if rr is stopped with Ctrl+C or SIGTERM. Waiters poll every 2 seconds rather than queueing, so the order they get the lock in isn't guaranteed.
+
+A parallel task's worker emits the same `lock` `waiting` event, with `host`, once for each host whose lock it finds held, and waits up to `lock.timeout`. Events from different hosts can interleave, but each is one whole line. On timeout, that host's subtasks fail with `LOCK_HELD` in the result's `failures`. Ctrl+C or SIGTERM while every subtask is still waiting for a lock ends the run with an `INTERRUPTED` error envelope and exit 130, as for a single run. Once any subtask has run, an interrupt gives the usual result event and exit 1.
+
+A holder whose lock info can't be read has only `host`, with no `same_machine`: rr doesn't know where it runs.
 
 The `exec` event's `details.command` is the command that actually ran, after `{args}` substitution, appended task args, and path rewriting.
 

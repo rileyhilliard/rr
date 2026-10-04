@@ -161,7 +161,8 @@ func Run(opts RunOptions) (int, error) {
 		if failureHint == "" {
 			failureHint = buildRelativePathHint(stderr, wf.WorkDir, wf.SubdirOffset, effectiveRunOffset(wf, opts))
 		}
-		if failureHint == "" {
+		// A bare local run ran the command alone, with no setup to blame.
+		if failureHint == "" && !wf.Conn.IsLocal {
 			failureHint = buildSetupFileHint(stderr, config.GetMergedSetupCommands(wf.Resolved.Project, &wf.Conn.Host), wf.Conn.Name)
 		}
 		if failureHint != "" {
