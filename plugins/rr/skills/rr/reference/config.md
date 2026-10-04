@@ -60,6 +60,8 @@ It runs **in place** in the local project dir: no sync, no path rewriting, and o
 
 Locking: as the only candidate (sole host, or picked by `--host`/`--tag`) a busy local host makes rr wait up to `lock.timeout` (5m); among several busy hosts rr cycles for up to `lock.wait_timeout` (1m), then fails. `--local`, local mode, and `local_fallback` runs also take the local host's lock when one is configured, so nothing rr starts runs here beside a job on it. When the local host is busy (even if `hosts:` or `--tag` left it out of the run), rr never falls back locally, even with `local_fallback: always`.
 
+Add one with `rr host add --local --name dev [--tag fast] [--env K=V]` (not combined with `--ssh`/`--dir`); interactive `rr host add` and `rr init` offer "This machine" when no host is local yet.
+
 A project with no `hosts:` list uses every global host in alphabetical order, so adding a local host puts this machine in every such project's rotation. Add `hosts:` lists to projects that shouldn't use it.
 
 ### SSH Entries

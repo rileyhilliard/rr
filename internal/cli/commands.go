@@ -391,14 +391,20 @@ Examples:
 var hostAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a new host",
-	Long: `Add a new remote host to your configuration.
+	Long: `Add a new host to your configuration.
 
 Launches an interactive wizard to configure the host's SSH connections,
-friendly name, and remote directory.
+friendly name, and remote directory. The wizard also offers this machine
+as a local host, which runs in place in the project directory with no SSH
+or sync. Only one host can be local.
+
+Pass --name with --ssh (or --local) to skip the wizard.
 
 Examples:
   rr host add
-  rr host add --skip-probe`,
+  rr host add --skip-probe
+  rr host add --name gpu-box --ssh gpu.local --tag gpu
+  rr host add --local --name dev --tag fast`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return hostAdd(HostAddOptions{
 			SkipProbe: hostAddSkipProbe,
@@ -599,6 +605,7 @@ func init() {
 	hostAddCmd.Flags().StringVar(&hostAddName, "name", "", "friendly name for the host (for non-interactive mode)")
 	hostAddCmd.Flags().StringVar(&hostAddSSH, "ssh", "", "SSH hostname/alias, comma-separated for multiple (for non-interactive mode)")
 	hostAddCmd.Flags().StringVar(&hostAddDir, "dir", "", "remote directory path (default: ~/rr/${PROJECT})")
+	hostAddCmd.Flags().BoolVar(&hostAddLocal, "local", false, "this machine: run in place in the project directory, no SSH or sync (needs --name)")
 	hostAddCmd.Flags().StringSliceVar(&hostAddTags, "tag", nil, "host tags (can be repeated)")
 	hostAddCmd.Flags().StringSliceVar(&hostAddEnv, "env", nil, "environment variables as KEY=VALUE (can be repeated)")
 

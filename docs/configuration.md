@@ -164,6 +164,8 @@ What's different:
 
 Only one host can be `local`.
 
+Add one with `rr host add --local --name dev` (`--tag` and `--env` work as for a remote host; it can't be combined with `--ssh` or `--dir`). The interactive `rr host add` and `rr init` also offer "This machine" when no host is local yet.
+
 **Adding one to an existing setup:** a project without a `hosts:` list uses every global host, in alphabetical order. Adding a local host therefore puts this machine into the rotation of every such project, and first if its name sorts first. Give those projects a `hosts:` list, or pick a name that sorts after your remotes, if you don't want that.
 
 How it relates to the other ways of running locally:
