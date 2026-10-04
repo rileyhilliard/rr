@@ -101,7 +101,7 @@ rr sync --dry-run
 
 ### Stuck Lock
 
-**Symptoms:** `LOCK_HELD`, "Lock timeout after 5m0s - someone else is using this remote", or "All hosts are locked - timed out after 1m0s". The message names the holder (user, pid, command, age).
+**Symptoms:** `LOCK_HELD`, "Lock timeout after 5m0s - another run is using m4-mini", or "All hosts are locked - timed out after 1m0s". The message names the holder (user, pid, command, age).
 
 There's one lock per host, shared across projects, so another project's run on the same host blocks you. The holder refreshes the lock every 30 seconds. A lock that stops being refreshed goes stale after `lock.stale` (default 90s) and is reclaimed automatically. A lock left by a dead rr process on your own machine is reclaimed immediately.
 

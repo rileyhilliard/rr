@@ -186,7 +186,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 			holder := describeLockHolder(conn.Client, infoFile)
 			log.Debug("timeout after %d iterations, elapsed=%s, holder=%s", iteration, elapsed, holder)
 			return nil, errors.New(errors.ErrLock,
-				fmt.Sprintf("Lock timeout after %s - someone else is using this remote", cfg.Timeout),
+				fmt.Sprintf("Lock timeout after %s - another run is using %s", cfg.Timeout, conn.Name),
 				fmt.Sprintf("Lock holder: %s. Wait for it to finish or run 'rr unlock %s' if it's stuck.", holder, conn.Name))
 		}
 
@@ -255,7 +255,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 				forceRemove(conn.Client, lockDir)
 				return nil, errors.New(errors.ErrLock,
 					"Couldn't write the lock info file",
-					"Check disk space and permissions on the remote.")
+					"Check disk space and permissions in the lock dir on that host.")
 			}
 
 			log.Debug("lock acquired successfully: %s", lockDir)
@@ -422,7 +422,7 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 		forceRemove(conn.Client, lockDir)
 		return nil, errors.New(errors.ErrLock,
 			"Couldn't write the lock info file",
-			fmt.Sprintf("Check disk space and permissions on the remote. Error: %s", strings.TrimSpace(string(writeStderr))))
+			fmt.Sprintf("Check disk space and permissions in the lock dir on that host. Error: %s", strings.TrimSpace(string(writeStderr))))
 	}
 
 	log.Debug("TryAcquire: lock acquired successfully: %s", lockDir)

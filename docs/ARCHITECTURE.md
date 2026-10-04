@@ -414,7 +414,7 @@ Every error follows this structure:
 **Lock held:**
 
 ```
-✗ Lock timeout after 5m0s - someone else is using this remote
+✗ Lock timeout after 5m0s - another run is using m4-mini
 
   Lock holder: <user, pid, command and age from info.json>. Wait for it to
   finish or run 'rr unlock mini' if it's stuck.

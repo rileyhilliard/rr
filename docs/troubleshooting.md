@@ -358,7 +358,7 @@ rr exec "ls -la \${HOME}/projects/"
 
 **Symptom:** The command waits, then fails with `LOCK_HELD` and one of:
 
-- `Lock timeout after 5m0s - someone else is using this remote` (single host, `lock.timeout`)
+- `Lock timeout after 5m0s - another run is using m4-mini` (single host, `lock.timeout`)
 - `All hosts are locked - timed out after 1m0s` (several hosts, `lock.wait_timeout`)
 
 The error names the holder: user, hostname, pid, command, and how long it has held the lock.
