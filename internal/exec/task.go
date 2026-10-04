@@ -269,7 +269,8 @@ const DefaultShell = "${SHELL:-/bin/bash}"
 const rcSourceCommand = `[ -f ~/.bashrc ] && . ~/.bashrc || true; [ -f ~/.zshrc ] && . ~/.zshrc || true;`
 
 // BuildRemoteCommand builds the command `rr run` sends to a host: rc files
-// sourced, then the host's setup commands, a cd into the host dir, and cmd,
+// sourced (except on a local host, which already runs in the user's session
+// environment), then the host's setup commands, a cd into the host dir, and cmd,
 // chained with && and wrapped in the host's shell. Setup commands and cmd are
 // user shell text, so each sits in its own brace group, as in BuildCommand:
 // a ; or || inside one can't run the rest of the command after a failed
@@ -295,7 +296,12 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	// Prepend rc sourcing to get PATH setup from tools like nvm, bun, pyenv, etc.
 	// SSH non-interactive sessions skip .bashrc/.zshrc, so we do it explicitly.
 	// The rc source command ends with semicolons and || true, so it's safe to concatenate.
-	fullCmd := rcSourceCommand + " " + cmdChain
+	// A local host skips this: rr's environment already has the session's
+	// setup, and re-sourcing would undo an activated venv or `nvm use`.
+	fullCmd := cmdChain
+	if !host.Local {
+		fullCmd = rcSourceCommand + " " + cmdChain
+	}
 
 	// Wrap in shell (use default login shell if not configured)
 	shell := host.Shell

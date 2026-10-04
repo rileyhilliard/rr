@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -210,7 +211,11 @@ func TestStatus_LocalHost(t *testing.T) {
 	assert.Equal(t, &Selected{Host: "dev", Alias: host.LocalAlias}, findSelectedHost(results))
 
 	mapping := buildProjectMapping(&config.GlobalConfig{Hosts: hosts})
-	assert.Equal(t, mapping.LocalRoot, mapping.RemoteDirs["dev"], "a local host runs in the local tree")
+	assert.NotContains(t, mapping.RemoteDirs, "dev", "a local host has no remote dir")
+	assert.Equal(t, []string{"dev"}, mapping.InPlaceHosts)
+	data, err := json.Marshal(mapping)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"in_place_hosts":["dev"]`)
 
 	out := captureStdout(t, func() {
 		require.NoError(t, outputStatusText(results, findSelectedHost(results), mapping))
@@ -268,8 +273,44 @@ func TestCheckHosts_LocalHost(t *testing.T) {
 	assert.True(t, r.results[0].Satisfied, "sh is on this machine")
 }
 
-func TestPruneHost_LocalHostIsClean(t *testing.T) {
+// Prune checks nothing on a local host, so it reports it skipped, with the
+// reason, in both output modes.
+func TestPrune_LocalHostIsSkipped(t *testing.T) {
 	outcome := pruneHost("dev", config.Host{Local: true}, t.TempDir(), false)
-	assert.Equal(t, "clean", outcome.Status)
+	assert.Equal(t, "skipped", outcome.Status)
+	assert.Equal(t, "in_place", outcome.Reason)
 	assert.Empty(t, outcome.Error)
+
+	out := captureStdout(t, func() { printPruneOutcome(outcome, false) })
+	assert.Contains(t, out, "dev: skipped (local host, runs in place; nothing synced to prune)")
+
+	projectDir, _ := writeLocalHostConfigs(t)
+	t.Chdir(projectDir)
+	withStructuredOutput(t)
+	var err error
+	out = captureStdout(t, func() { err = pruneCommand(PruneOptions{}) })
+	require.NoError(t, err)
+	var envelope struct {
+		Data struct {
+			Hosts []hostPruneOutcome `json:"hosts"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &envelope), out)
+	assert.Equal(t, []hostPruneOutcome{{Host: "dev", Status: "skipped", Reason: "in_place"}}, envelope.Data.Hosts)
+}
+
+// host list --json gives a local host an empty ssh_aliases list, not null,
+// and every host picker labels it "local".
+func TestHostListAndPickers_LocalHost(t *testing.T) {
+	cfg := &config.GlobalConfig{Hosts: map[string]config.Host{
+		"dev":  {Local: true},
+		"mini": {SSH: []string{"mini-lan", "mini-ts"}, Dir: "~/rr"},
+	}}
+	out := captureStdout(t, func() { require.NoError(t, outputHostListJSON(cfg, nil, "/cfg")) })
+	assert.Contains(t, out, `"ssh_aliases": []`)
+	assert.NotContains(t, out, `"ssh_aliases": null`)
+
+	assert.Equal(t, "dev - local", hostPickerLabel("dev", cfg.Hosts["dev"]))
+	assert.Equal(t, "mini - mini-lan", hostPickerLabel("mini", cfg.Hosts["mini"]))
+	assert.Equal(t, "bare", hostPickerLabel("bare", config.Host{}))
 }

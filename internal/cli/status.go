@@ -35,8 +35,9 @@ type ProjectMapping struct {
 	Worktree         string            `json:"worktree,omitempty"`
 	IsLinkedWorktree bool              `json:"is_linked_worktree"`
 	RemoteDirs       map[string]string `json:"remote_dirs"`
-
-	localHosts map[string]bool // hosts with local: true, which run in LocalRoot
+	// InPlaceHosts are hosts with local: true. They run in LocalRoot, so
+	// they have no entry in RemoteDirs.
+	InPlaceHosts []string `json:"in_place_hosts,omitempty"`
 }
 
 // buildProjectMapping resolves the current tree's remote directory on every
@@ -55,15 +56,12 @@ func buildProjectMapping(globalCfg *config.GlobalConfig) *ProjectMapping {
 	}
 	for name := range globalCfg.Hosts {
 		if globalCfg.Hosts[name].Local {
-			if m.localHosts == nil {
-				m.localHosts = make(map[string]bool)
-			}
-			m.localHosts[name] = true
-			m.RemoteDirs[name] = m.LocalRoot
+			m.InPlaceHosts = append(m.InPlaceHosts, name)
 			continue
 		}
 		m.RemoteDirs[name] = config.ExpandRemote(globalCfg.Hosts[name].Dir)
 	}
+	sort.Strings(m.InPlaceHosts)
 	return m
 }
 
@@ -274,7 +272,7 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 	}
 
 	// Show where this tree syncs (worktree-aware)
-	if mapping != nil && len(mapping.RemoteDirs) > 0 {
+	if mapping != nil && (len(mapping.RemoteDirs) > 0 || len(mapping.InPlaceHosts) > 0) {
 		fmt.Println()
 		treeDesc := "This tree"
 		if mapping.IsLinkedWorktree {
@@ -285,11 +283,10 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 			hostNames = append(hostNames, name)
 		}
 		sort.Strings(hostNames)
+		for _, name := range mapping.InPlaceHosts {
+			fmt.Printf("%s runs in place on %s\n", treeDesc, name)
+		}
 		for _, name := range hostNames {
-			if mapping.localHosts[name] {
-				fmt.Printf("%s runs in place on %s\n", treeDesc, name)
-				continue
-			}
 			fmt.Printf("%s syncs to: %s\n", treeDesc, mutedStyle.Render(fmt.Sprintf("%s:%s", name, mapping.RemoteDirs[name])))
 		}
 	}

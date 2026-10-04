@@ -724,12 +724,7 @@ func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
 	options := make([]huh.Option[string], 0, len(hostNames))
 
 	for _, name := range hostNames {
-		label := name
-		// Add first SSH connection as hint
-		if h, ok := globalCfg.Hosts[name]; ok && len(h.SSH) > 0 {
-			label += " - " + h.SSH[0]
-		}
-		options = append(options, huh.NewOption(label, name))
+		options = append(options, huh.NewOption(hostPickerLabel(name, globalCfg.Hosts[name]), name))
 	}
 
 	// Default to all hosts selected

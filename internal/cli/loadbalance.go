@@ -269,9 +269,9 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	if len(lockedHosts) > 0 {
 		mode := config.ResolveLocalFallbackMode(ctx.Resolved)
 		// A busy local host means this machine is already running an rr
-		// job. Falling back would put a second, unlocked run on it, so
-		// wait for a host instead.
-		if anyLocalHost(lockedHosts) {
+		// job. Falling back would put a second run on it, so wait for a
+		// host instead.
+		if mode != config.LocalFallbackNever && machineBusy(ctx, lockedHosts, lockCfg) {
 			mode = config.LocalFallbackNever
 		}
 		holders := holderDetails(lockedHosts)
@@ -324,14 +324,20 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	return nil, buildConnectionError(attempts)
 }
 
-// anyLocalHost reports whether any of the attempts is a host with local: true.
-func anyLocalHost(attempts []hostAttempt) bool {
-	for _, a := range attempts {
+// machineBusy reports whether this machine's local host is locked: it's
+// among the locked attempts, or it's in the global config (outside the pool
+// this run tried, because of hosts: or --tag) and another run holds its lock.
+func machineBusy(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig) bool {
+	for _, a := range lockedHosts {
 		if a.conn != nil && a.conn.Host.Local {
 			return true
 		}
 	}
-	return false
+	if ctx.Resolved == nil || ctx.Resolved.Global == nil {
+		return false
+	}
+	conn := host.LocalMachineConnection(ctx.Resolved.Global.Hosts)
+	return conn != nil && lock.IsLocked(conn, lockCfg)
 }
 
 // fallBackLocally reports a local fallback (warning event plus

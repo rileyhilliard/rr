@@ -36,9 +36,13 @@ func TestNewRemoteDepsChecks_LocalHostSkipsRsync(t *testing.T) {
 func TestWorktreeMappingCheck_LocalHost(t *testing.T) {
 	check := &WorktreeMappingCheck{Hosts: map[string]config.Host{
 		"dev":  {Local: true, Dir: "/work/proj"},
-		"mini": {SSH: []string{"mini"}, Dir: "~/rr/${PROJECT}"},
+		"mini": {SSH: []string{"mini"}, Dir: "/srv/rr/proj"},
 	}}
 	result := check.Run()
-	assert.Contains(t, result.Message, "dev (runs in place)")
-	assert.NotContains(t, result.Message, "dev:/work/proj")
+	assert.Regexp(t, `syncs to mini:/srv/rr/proj and runs in place on dev$`, result.Message)
+
+	check.Hosts = map[string]config.Host{"dev": {Local: true}}
+	result = check.Run()
+	assert.Regexp(t, `runs in place on dev$`, result.Message)
+	assert.NotContains(t, result.Message, "syncs to")
 }

@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +42,13 @@ type Collector struct {
 
 	// Lock checking configuration (optional)
 	lockConfig *config.LockConfig
+
+	// For a host with local: true: this machine's platform, and the
+	// commands run for a streaming round and a snapshot. Tests swap them
+	// for canned output.
+	localPlatform Platform
+	buildMetrics  func(Platform, string) string
+	buildSnapshot func(Platform, string) string
 }
 
 // NewCollector creates a new metrics collector for the specified hosts.
@@ -53,6 +60,21 @@ func NewCollector(hosts map[string]config.Host) *Collector {
 		prevJiffies:     make(map[string]cpuJiffies),
 		prevCoreJiffies: make(map[string][]cpuJiffies),
 		prevDisk:        make(map[string]diskSample),
+		localPlatform:   platformOf(runtime.GOOS),
+		buildMetrics:    BuildMetricsCommand,
+		buildSnapshot:   BuildSnapshotCommand,
+	}
+}
+
+// platformOf maps a GOOS value to the Platform the metrics commands use.
+func platformOf(goos string) Platform {
+	switch goos {
+	case "darwin":
+		return PlatformDarwin
+	case "linux":
+		return PlatformLinux
+	default:
+		return PlatformUnknown
 	}
 }
 
@@ -248,7 +270,7 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 // collectLocal gathers metrics for a host with local: true by running the
 // same commands on this machine. There's no network, so latency is zero.
 func (c *Collector) collectLocal(ctx context.Context, alias string) (*HostMetrics, *HostLockInfo, time.Duration, error) {
-	platform, out, err := c.runLocal(ctx, BuildMetricsCommand)
+	platform, out, err := c.runLocal(ctx, c.buildMetrics)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -256,16 +278,15 @@ func (c *Collector) collectLocal(ctx context.Context, alias string) (*HostMetric
 	return metrics, lockInfo, 0, nil
 }
 
-// runLocal detects this machine's platform, then runs the command build
-// returns for it (given the lock dir) and returns its combined output.
+// runLocal runs the command build returns for this machine's platform
+// (given the lock dir) and returns its combined output. When ctx is done the
+// command and everything it started are killed, and the error is ctx's.
 func (c *Collector) runLocal(ctx context.Context, build func(Platform, string) string) (Platform, string, error) {
-	platformOut, err := exec.CommandContext(ctx, "sh", "-c", PlatformDetectCommand()).Output()
-	if err != nil {
-		return PlatformUnknown, "", err
+	platform := c.localPlatform
+	out, err := host.LocalCommand(ctx, "sh", build(platform, c.lockDir())).CombinedOutput()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return platform, "", ctxErr
 	}
-	platform := ParsePlatform(strings.TrimSpace(string(platformOut)))
-
-	out, err := exec.CommandContext(ctx, "sh", "-c", build(platform, c.lockDir())).CombinedOutput()
 	if err != nil {
 		return platform, "", err
 	}

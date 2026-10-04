@@ -55,7 +55,7 @@ func (c *Collector) snapshotOne(ctx context.Context, alias string) HostResult {
 	}
 
 	if c.hosts[alias].Local {
-		platform, out, err := c.runLocal(ctx, BuildSnapshotCommand)
+		platform, out, err := c.runLocal(ctx, c.buildSnapshot)
 		result.Platform = platform
 		if err != nil {
 			result.Error = err

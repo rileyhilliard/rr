@@ -31,7 +31,8 @@ type PullOptions struct {
 // Pull downloads files from the remote host to the local machine using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
-// If conn.InPlace() (local fallback or a local host), pull is skipped.
+// If conn.InPlace() (local fallback or a local host), Pull does nothing: the
+// files are already on this machine, and PullInPlace copies them.
 //
 // The rsync command follows this pattern:
 // - Base flags: -az (archive mode, compress)

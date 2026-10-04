@@ -106,7 +106,7 @@ func buildLinuxCommand(lockDir string) string {
 // 7. sysctl -n kern.boottime + uname -r - System info
 // 8. Lock info.json - rr lock status (empty if unlocked)
 func buildDarwinCommand(lockDir string) string {
-	return `: ` + selfProcessMarker + `; top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ib; echo "---"; ioreg -r -c AGXAccelerator 2>/dev/null | grep -E '"(model|gpu-core-count|PerformanceStatistics)"' || true; echo "---"; ps aux -r 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; sysctl -n hw.ncpu 2>/dev/null || true; echo "---"; sysctl -n kern.boottime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
+	return `: ` + selfProcessMarker + `; top -l 1 -n 0 2>/dev/null; echo "---"; vm_stat; sysctl hw.memsize 2>/dev/null; echo "---"; netstat -ibn; echo "---"; ioreg -r -c AGXAccelerator 2>/dev/null | grep -E '"(model|gpu-core-count|PerformanceStatistics)"' || true; echo "---"; ps aux -r 2>/dev/null | head -16; echo "---"; df -P -k / 2>/dev/null || true; echo "---"; sysctl -n hw.ncpu 2>/dev/null || true; echo "---"; sysctl -n kern.boottime 2>/dev/null; uname -r 2>/dev/null || true; echo "---"; ` + buildLockSection(lockDir)
 }
 
 // BuildSnapshotCommand returns a batched command that collects everything
@@ -145,12 +145,12 @@ func buildLinuxSnapshotPrime() string {
 		SnapshotSleepSeconds)
 }
 
-// buildDarwinSnapshotPrime emits netstat -ib as section 0, then sleeps.
+// buildDarwinSnapshotPrime emits netstat -ibn as section 0, then sleeps.
 // macOS CPU comes from `top -l 1`, which is not delta-based, and there is no
 // cheap per-disk byte counter, so only network needs priming.
 func buildDarwinSnapshotPrime() string {
 	return fmt.Sprintf(
-		`netstat -ib; echo "---"; sleep %d; `,
+		`netstat -ibn; echo "---"; sleep %d; `,
 		SnapshotSleepSeconds)
 }
 

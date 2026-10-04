@@ -149,18 +149,25 @@ hosts:
 It's a host like any other:
 
 - **Selection**: it's tried in host order (the project's `hosts:` list, or alphabetical), and `--host dev` and `--tag fast` pick it.
-- **Locking**: it takes the same lock as a remote host, at `<lock.dir>/rr.lock` on this machine, so two `rr` runs don't both land on it. `rr unlock dev` releases it.
+- **Locking**: it takes the same lock as a remote host, at `<lock.dir>/rr.lock` on this machine, so two `rr` runs don't both land on it. `rr unlock dev` releases it. When it's the only candidate (the project's only host, or picked with `--host` or `--tag`) and it's busy, `rr` waits up to `lock.timeout` (default 5m), as for any single host. When it's one of several hosts and they're all busy, `rr` cycles through them for up to `lock.wait_timeout` (default 1m), then fails.
 - **Parallel tasks**: it gets one worker, like each remote host, and takes subtasks from the shared queue.
-- **Commands**: they get the host's `env`, `setup_commands`, and `shell`, and the `require:` checks, built exactly as for a remote host.
+- **Commands**: they're built as for a remote host: `setup_commands` and `shell` for every command, plus the host's `env` for tasks (`rr run` doesn't apply host `env` on any host), and the `require:` checks. Like an SSH session, a command starts in your home directory, then `cd`s into the project.
 - **`rr status`, `rr doctor`, `rr monitor`**: it shows as reachable without an SSH probe, doctor's `--path`/`--requirements` checks run on this machine, and the monitor reads its metrics and lock locally.
 
-What's different: it runs **in place**, in the local project directory (the directory holding `.rr.yaml`, or the current directory without one), with no rsync. So `ssh` and `dir` aren't allowed, there's nothing to sync, pull (`pull:` and `--pull` are skipped), or prune, and local paths in commands aren't rewritten. A run sees your working tree as it is, including edits you make while it runs, and anything it writes (build output, coverage files) lands in your checkout. Subtasks of a parallel task that land on it share that directory, the same as subtasks on one remote host share its `dir`.
+What's different:
 
-Only one host can be `local`. How it relates to the other ways of running locally:
+- **It runs in place**, in the local project directory (the directory holding `.rr.yaml`, or the current directory without one), with no rsync. So `ssh` and `dir` aren't allowed, and local paths in commands aren't rewritten. A run sees your working tree as it is, including edits you make while it runs, and anything it writes (build output, coverage files) lands in your checkout. Subtasks of a parallel task that land on it share that directory, the same as subtasks on one remote host share its `dir`.
+- **It keeps your environment.** A remote command sources `~/.bashrc` and `~/.zshrc` first, because SSH sessions don't. A local host's command skips that and inherits `rr`'s environment, so an activated virtualenv or `nvm use` stays in effect.
+- **Sync and pull.** `rr sync` and `rr pull` never pick it: with no `--host` they use the first remote host, and `--host dev` is a config error, since there's nothing to sync to or pull from. A run's `pull:` or `--pull` copies the files from the project directory to the destination with a local rsync. When the destination is the project directory itself, nothing is copied and the pull phase is reported as skipped (`reason: same_dir`). Parallel subtasks get their own `<dest>/<name>_<index>/` copy, as on a remote host. `rr prune` reports it as skipped.
 
-- `--local` is unchanged: it skips host selection and runs here without a lock.
-- `local_fallback` still applies when no host can be used, but with a local host in the pool that rarely happens, since it's always reachable. When every host is locked **and** one of them is the local host, `rr` waits for a host (up to `lock.wait_timeout`) and then fails, even with `local_fallback: always`: falling back would put a second, unlocked run on the machine the local host's lock protects.
-- Local mode (a project with `local_fallback` on and no `host`/`hosts`) is unchanged and doesn't use the local host.
+Only one host can be `local`.
+
+**Adding one to an existing setup:** a project without a `hosts:` list uses every global host, in alphabetical order. Adding a local host therefore puts this machine into the rotation of every such project, and first if its name sorts first. Give those projects a `hosts:` list, or pick a name that sorts after your remotes, if you don't want that.
+
+How it relates to the other ways of running locally:
+
+- `--local`, local mode (a project with `local_fallback` on and no `host`/`hosts`), and a `local_fallback` run all execute here without going through the local host. When the global config has a local host, they take its lock first, waiting up to `lock.timeout`, so nothing `rr` starts runs on this machine beside a job on it. Without a local host they take no lock, as before.
+- `local_fallback` still applies when no host can be used, but with a local host in the pool that rarely happens, since it's always reachable. When every host is locked and the local host is busy (in this run's pool or not, for example left out by `hosts:` or `--tag`), `rr` waits for a host (up to `lock.wait_timeout`) and then fails, even with `local_fallback: always`.
 
 ### Variable expansion
 
@@ -571,7 +578,7 @@ When multiple hosts are configured, `rr` distributes work automatically:
 4. If all hosts are locked, what happens depends on `local_fallback`:
    - `always`: runs locally right away with a loud warning (and `details.fallback` in structured output). If any lock holder is on this same machine (likely your own other run), it first waits up to `wait_timeout` for a host to free up.
    - `never` / `on-unreachable`: waits up to `wait_timeout`, cycling through the hosts, then fails with the lock holders listed
-   - If one of the locked hosts is a [local host](#local-host), `rr` waits and fails as with `never`, whatever `local_fallback` says
+   - If this machine's [local host](#local-host) is locked, whether or not it's one of the hosts tried, `rr` waits and fails as with `never`, whatever `local_fallback` says
 
 ```yaml
 lock:
@@ -978,7 +985,7 @@ tasks:
         dest: ./reports/        # to a specific local directory
 ```
 
-Sources are paths or globs relative to the host's `dir`. `dest` defaults to the current directory and is created if missing. A failed pull is reported but doesn't change the task's exit code. Pulling is skipped for local runs. For ad-hoc commands, use `rr run --pull <pattern> [--pull-dest <dir>]`, or `rr pull <pattern>` on its own.
+Sources are paths or globs relative to the host's `dir`. `dest` defaults to the current directory and is created if missing. A failed pull is reported but doesn't change the task's exit code. After a run that ran on this machine (a [local host](#local-host), `--local`, or a fallback), the files are copied from the project directory instead, and the pull is reported skipped when `dest` is the project directory. For ad-hoc commands, use `rr run --pull <pattern> [--pull-dest <dir>]`, or `rr pull <pattern>` on its own.
 
 **Subtasks of a parallel task** pull too, with three differences:
 

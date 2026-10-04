@@ -253,12 +253,7 @@ func hostRemove(name string) error {
 		// Build options with SSH info
 		options := make([]huh.Option[string], len(hostNames))
 		for i, h := range hostNames {
-			label := h
-			// Add first SSH connection as hint
-			if host, ok := cfg.Hosts[h]; ok && len(host.SSH) > 0 {
-				label += " - " + host.SSH[0]
-			}
-			options[i] = huh.NewOption(label, h)
+			options[i] = huh.NewOption(hostPickerLabel(h, cfg.Hosts[h]), h)
 		}
 
 		form := huh.NewForm(
@@ -357,6 +352,15 @@ func hostList() error {
 	return outputHostListText(cfg, globalPath)
 }
 
+// sshAliasesOrEmpty returns aliases, or an empty list for a host with none
+// (a local host), so the JSON has [] rather than null.
+func sshAliasesOrEmpty(aliases []string) []string {
+	if aliases == nil {
+		return []string{}
+	}
+	return aliases
+}
+
 // outputHostListJSON outputs hosts in JSON format with envelope.
 // hostOrder specifies the priority order from project config (if available).
 // The default host is the first valid host from hostOrder, falling back to alphabetical.
@@ -392,7 +396,7 @@ func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string, globalPath
 		h := cfg.Hosts[name]
 		info := HostConfigInfo{
 			Name:       name,
-			SSHAliases: h.SSH,
+			SSHAliases: sshAliasesOrEmpty(h.SSH),
 			Local:      h.Local,
 			Dir:        h.Dir,
 			Tags:       h.Tags,

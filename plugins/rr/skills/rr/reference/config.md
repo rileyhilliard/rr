@@ -39,7 +39,7 @@ defaults:
 | `local` | `true` makes this host the machine rr runs on (see [Local Host](#local-host)) |
 | `tags` | Labels for filtering with `--tag` flag |
 | `env` | Environment variables set for all commands |
-| `shell` | Shell invocation the command is appended to (default: `${SHELL:-/bin/bash} -c`, after sourcing `~/.bashrc` and `~/.zshrc` if present). Use `"zsh -l -c"` for a login shell or `"bash -o pipefail -c"` to catch failures inside pipes |
+| `shell` | Shell invocation the command is appended to (default: `${SHELL:-/bin/bash} -c`, after sourcing `~/.bashrc` and `~/.zshrc` if present; a local host skips the sourcing and keeps rr's environment). Use `"zsh -l -c"` for a login shell or `"bash -o pipefail -c"` to catch failures inside pipes |
 | `setup_commands` | Commands run before every remote command (`run`, `exec`, tasks) |
 | `require` | Tools that must exist on this host |
 
@@ -54,7 +54,13 @@ hosts:
     tags: [fast]
 ```
 
-It's selected in host order, takes the same lock (on this machine, so two rr runs don't pile onto it), gets a worker in parallel tasks, and works with `--host dev`, `--tag`, `rr status`, `rr doctor`, `rr monitor`, and `rr unlock dev`. Commands get its `env`, `setup_commands`, `shell`, and `require` checks like a remote host. It runs **in place** in the local project dir: no sync, no pull, no path rewriting, and output files land in your checkout. Only one host can be local. `--local` still means an unlocked run here without host selection. When every host is locked and one is the local host, rr waits and fails rather than falling back locally.
+It's selected in host order, takes the same lock (on this machine, so two rr runs don't pile onto it), gets a worker in parallel tasks, and works with `--host dev`, `--tag`, `rr status`, `rr doctor`, `rr monitor`, and `rr unlock dev`. Commands get its `setup_commands`, `shell`, and `require` checks like a remote host, and tasks also get its `env` (`rr run` doesn't apply host `env` on any host). Commands start in your home dir like an SSH session, and don't re-source `~/.bashrc`/`~/.zshrc`, so an activated venv or `nvm use` stays in effect.
+
+It runs **in place** in the local project dir: no sync, no path rewriting, and output files land in your checkout. `pull:`/`--pull` copy from the project dir to the dest (skipped, `reason: same_dir`, when the dest is the project dir), and parallel subtasks get their own `<dest>/<name>_<index>/` copy. `rr sync` and `rr pull` never default to it, and `--host dev` with them is a config error. Only one host can be local.
+
+Locking: as the only candidate (sole host, or picked by `--host`/`--tag`) a busy local host makes rr wait up to `lock.timeout` (5m); among several busy hosts rr cycles for up to `lock.wait_timeout` (1m), then fails. `--local`, local mode, and `local_fallback` runs also take the local host's lock when one is configured, so nothing rr starts runs here beside a job on it. When the local host is busy (even if `hosts:` or `--tag` left it out of the run), rr never falls back locally, even with `local_fallback: always`.
+
+A project with no `hosts:` list uses every global host in alphabetical order, so adding a local host puts this machine in every such project's rotation. Add `hosts:` lists to projects that shouldn't use it.
 
 ### SSH Entries
 

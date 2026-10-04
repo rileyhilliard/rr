@@ -284,6 +284,18 @@ func printUnlockOutcome(o hostUnlockOutcome) {
 	}
 }
 
+// hostPickerLabel is a host's label in a picker: its name, then "local" for
+// a local host or its first SSH alias.
+func hostPickerLabel(name string, h config.Host) string {
+	if h.Local {
+		return name + " - " + host.LocalAlias
+	}
+	if len(h.SSH) > 0 {
+		return name + " - " + h.SSH[0]
+	}
+	return name
+}
+
 // pickHostForUnlock shows a host picker for the unlock command.
 func pickHostForUnlock(globalCfg *config.GlobalConfig) (string, error) {
 	var hostNames []string
@@ -294,13 +306,7 @@ func pickHostForUnlock(globalCfg *config.GlobalConfig) (string, error) {
 
 	options := make([]huh.Option[string], len(hostNames))
 	for i, h := range hostNames {
-		label := h
-		if hostCfg, ok := globalCfg.Hosts[h]; ok && hostCfg.Local {
-			label += " - " + host.LocalAlias
-		} else if ok && len(hostCfg.SSH) > 0 {
-			label += " - " + hostCfg.SSH[0]
-		}
-		options[i] = huh.NewOption(label, h)
+		options[i] = huh.NewOption(hostPickerLabel(h, globalCfg.Hosts[h]), h)
 	}
 
 	var selected string

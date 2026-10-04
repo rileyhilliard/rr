@@ -207,7 +207,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// Pull every subtask's files, pass or fail: a failed shard's junit and
 	// coverage files are what you need to debug it. Skipped on Ctrl+C.
 	if ctx.Err() == nil {
-		pullSubtaskFiles(tasks, result, hosts, rrsync.Pull)
+		pullSubtaskFiles(tasks, result, hosts, resolved.ProjectRoot, rrsync.Pull)
 	}
 
 	return renderParallelResult(result, logWriter, opts.TaskName, target.reason), nil
@@ -511,11 +511,13 @@ func (n *parallelSyncNotices) flush() {
 // subtask order, from the host the subtask ran on, through the alias that
 // reached it. Each subtask's files land in <dest>/<stem>/, where <stem> is
 // its log file's name without .log (see subtaskPullDir), so shards with the
-// same output paths don't overwrite each other locally. Subtasks that never
-// reached a remote host (local runs, no host available) are skipped. A
-// failed pull is reported but doesn't change the run's exit code, same as
+// same output paths don't overwrite each other locally. A subtask that ran in
+// place (on a local host, or locally with --local) is copied from the dir it
+// ran in: the local host's dir, or localDir for a local run. Subtasks that
+// ran nowhere (no host available, cancelled before connecting) are skipped.
+// A failed pull is reported but doesn't change the run's exit code, same as
 // single tasks.
-func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, pull pullFunc) {
+func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, localDir string, pull pullFunc) {
 	ranOn := make(map[int]*parallel.TaskResult, len(result.TaskResults))
 	for i := range result.TaskResults {
 		ranOn[result.TaskResults[i].TaskIndex] = &result.TaskResults[i]
@@ -526,15 +528,24 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 		if !ok || len(t.Pull) == 0 {
 			continue
 		}
-		hostCfg, remote := hosts[tr.Host]
-		if !remote || hostCfg.Local {
-			continue // "local", "none", or a local host: nothing on a remote to pull
+		opts := rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}
+		if tr.Host == "local" {
+			pullAndReport(localConnection(), opts, inPlacePull(localDir), t.Name)
+			continue
+		}
+		hostCfg, known := hosts[tr.Host]
+		if !known {
+			continue // "none": the subtask never ran
 		}
 		if tr.Alias == "" {
 			continue // never connected (e.g. cancelled by fail-fast): nothing ran there
 		}
 		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
-		pullAndReport(conn, rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}, pull, t.Name)
+		if hostCfg.Local {
+			pullAndReport(conn, opts, inPlacePull(hostCfg.Dir), t.Name)
+			continue
+		}
+		pullAndReport(conn, opts, pull, t.Name)
 	}
 }
 
