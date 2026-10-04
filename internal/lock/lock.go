@@ -176,7 +176,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 	for {
 		iteration++
 		if err := options.ctx.Err(); err != nil {
-			return nil, interruptedError(conn.Name, err)
+			return nil, InterruptedError(conn.Name, err)
 		}
 		// Check if we've exceeded the timeout
 		elapsed := time.Since(startTime)
@@ -278,16 +278,18 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		select {
 		case <-options.ctx.Done():
 			timer.Stop()
-			return nil, interruptedError(conn.Name, options.ctx.Err())
+			return nil, InterruptedError(conn.Name, options.ctx.Err())
 		case <-timer.C:
 		}
 	}
 }
 
-// interruptedError is the error Acquire returns when its context is done
-// before it gets the lock. It isn't ErrLock: the lock wasn't the problem, and
-// an agent that retries a held lock shouldn't retry a run the user stopped.
-func interruptedError(hostName string, cause error) error {
+// InterruptedError is the error a lock wait returns when its context is done
+// before it gets the lock: Acquire's, and the load-balanced wait across
+// hosts. hostName names the host or hosts waited on. It isn't ErrLock: the
+// lock wasn't the problem, and an agent that retries a held lock shouldn't
+// retry a run the user stopped.
+func InterruptedError(hostName string, cause error) error {
 	return errors.WrapWithCode(cause, errors.ErrInterrupted,
 		fmt.Sprintf("Stopped waiting for the lock on %s", hostName),
 		"Nothing ran. Run the command again when you want it to run.")

@@ -294,6 +294,10 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 			if err == nil {
 				return result, nil
 			}
+			// The user stopped the wait: nothing should run, here or anywhere.
+			if rrerrors.IsCode(err, rrerrors.ErrInterrupted) {
+				return nil, err
+			}
 			// Wait exhausted (or connections lost): fall back, loudly
 			waited := time.Since(waitStart)
 			return fallBackLocally(ctx, fallbackDetail{
@@ -362,8 +366,10 @@ func localFallbackResult(reason string, attempts []hostAttempt) *findAvailableHo
 	}
 }
 
-// roundRobinWait cycles through locked hosts until one becomes available or timeout.
-func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, command string, allAttempts []hostAttempt, holders []lockHolderDetail) (*findAvailableHostResult, error) {
+// roundRobinWait cycles through locked hosts until one becomes available or
+// timeout. It stops with an ErrInterrupted error when the workflow's context
+// is cancelled (Ctrl+C, SIGTERM).
+func roundRobinWait(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, command string, allAttempts []hostAttempt, holders []lockHolderDetail) (*findAvailableHostResult, error) {
 	waitTimeout := lockCfg.WaitTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 1 * time.Minute // Default
@@ -388,17 +394,26 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 		})
 	}
 
+	stop := func() {
+		if spinner != nil {
+			spinner.Fail()
+		}
+		for _, a := range lockedHosts {
+			if a.conn != nil {
+				a.conn.Close()
+			}
+		}
+	}
+	waitCtx := ctx.Context()
+
 	for {
+		if err := waitCtx.Err(); err != nil {
+			stop()
+			return nil, lock.InterruptedError(lockedHostNames(lockedHosts), err)
+		}
 		elapsed := time.Since(startTime)
 		if elapsed >= waitTimeout {
-			if spinner != nil {
-				spinner.Fail()
-			}
-			for _, a := range lockedHosts {
-				if a.conn != nil {
-					a.conn.Close()
-				}
-			}
+			stop()
 			return nil, buildAllHostsLockedError(lockedHosts, waitTimeout)
 		}
 
@@ -446,8 +461,22 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 				"Check network connectivity and try again.")
 		}
 
-		time.Sleep(2 * time.Second)
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
+}
+
+// lockedHostNames lists the hosts a wait is on, for messages.
+func lockedHostNames(lockedHosts []hostAttempt) string {
+	names := make([]string, 0, len(lockedHosts))
+	for _, a := range lockedHosts {
+		names = append(names, a.hostName)
+	}
+	return strings.Join(names, ", ")
 }
 
 // waitMessage says exactly what the round-robin wait is waiting on.
