@@ -26,15 +26,17 @@ func skipOnWindows(t *testing.T) {
 	}
 }
 
-// A cancelled command built the way `rr run` builds one is a nested shell
-// running a compound list. Cancel has to stop the whole tree, not only the
+// A cancelled command built the way `rr run` builds one for a local host is
+// a nested shell running a compound list. (Built as a local host's, it
+// doesn't source the machine's ~/.bashrc/~/.zshrc, which would make the test
+// depend on them: a zsh-only ~/.zshrc fails under sh.) Cancel has to stop the whole tree, not only the
 // outer shell, and return without waiting on the grandchild's pipes.
 func TestLocalClient_CancelStopsNestedCommand(t *testing.T) {
 	skipOnWindows(t)
 	t.Parallel()
 	c := host.NewLocalClient()
 	marker := filepath.Join(t.TempDir(), "ran")
-	cmd := rrexec.BuildRemoteCommand("sleep 1; touch "+marker, &config.Host{Shell: "sh"})
+	cmd := rrexec.BuildRemoteCommand("sleep 1; touch "+marker, &config.Host{Shell: "sh", Local: true})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -59,7 +61,7 @@ func TestLocalClient_CancelKillsTreeIgnoringInterrupt(t *testing.T) {
 
 	c := host.NewLocalClient()
 	marker := filepath.Join(t.TempDir(), "ran")
-	cmd := rrexec.BuildRemoteCommand("trap '' INT; sleep 1; touch "+marker, &config.Host{Shell: "sh"})
+	cmd := rrexec.BuildRemoteCommand("trap '' INT; sleep 1; touch "+marker, &config.Host{Shell: "sh", Local: true})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
