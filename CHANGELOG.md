@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-04
+
 Three changes can break scripts and agents: runs on this machine report the local host's name when one is configured, a checkout nested inside another no longer picks up the outer checkout's `.rr.yaml`, and `--local` now overrides a task's `hosts:` list. They're marked Breaking under Changed, and [MIGRATION.md](docs/MIGRATION.md) has the upgrade steps.
 
 ### Added
