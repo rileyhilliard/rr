@@ -91,7 +91,7 @@ func hostAdd(opts HostAddOptions) error {
 	}
 
 	// Collect machine config interactively (don't skip probe)
-	machine, cancelled, err := collectMachineConfig(existingSSHHosts, false)
+	machine, cancelled, err := collectMachineConfig(existingSSHHosts, false, newHostNameValidator(cfg))
 	if err != nil {
 		return err
 	}
@@ -175,6 +175,11 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 		return errors.New(errors.ErrConfig,
 			fmt.Sprintf("Host '%s' already exists", hostAddName),
 			"Choose a different name, or use 'rr host remove' first.")
+	}
+	if hostAddName == "local" {
+		return errors.New(errors.ErrConfig,
+			"A host can't be named 'local' - that name is reserved for rr's local fallback",
+			"Pick another --name, for example the machine's hostname.")
 	}
 
 	// Determine remote directory
@@ -400,16 +405,16 @@ func promptThisMachine() (bool, error) {
 // promptLocalHostName asks for the name of the local host.
 func promptLocalHostName(cfg *config.GlobalConfig) (string, error) {
 	name := defaultLocalHostName(cfg)
-	if err := promptMachineName(&name, localHostNameValidator(cfg)); err != nil {
+	if err := promptMachineName(&name, newHostNameValidator(cfg)); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(name), nil
 }
 
-// localHostNameValidator checks a local host name at the prompt, rejecting
-// the names addLocalHost would (taken, or the reserved "local") so the user
-// can retype instead of losing every answer given so far.
-func localHostNameValidator(cfg *config.GlobalConfig) func(string) error {
+// newHostNameValidator checks a new host's name at the prompt, rejecting
+// names the saved config can't have (taken, or the reserved "local") so the
+// user can retype instead of losing every answer given so far.
+func newHostNameValidator(cfg *config.GlobalConfig) func(string) error {
 	return func(s string) error {
 		if err := validateMachineName(s); err != nil {
 			return err

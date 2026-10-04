@@ -809,6 +809,9 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 // and no --host/--tag it load-balances (connect + lock combined); otherwise
 // it connects, then locks.
 func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if err := checkTaskHostFlag(ctx, opts); err != nil {
+		return err
+	}
 	setupHostSelector(ctx, opts)
 	if err := checkTaskTag(ctx, opts); err != nil {
 		return err
@@ -852,7 +855,22 @@ func checkTaskHost(ctx *WorkflowContext, taskName string) error {
 	if !ok || config.IsTaskHostAllowed(&task, ctx.Conn.Name) {
 		return nil
 	}
-	return taskHostError(taskName, &task, ctx.Conn)
+	return taskHostError(taskName, &task, ctx.Conn.Name)
+}
+
+// checkTaskHostFlag refuses --host naming a host a pinned task doesn't
+// allow before that host is dialed: otherwise rr would wait out its probe
+// only to refuse it, or, if it's unreachable, fall back to a host the pin
+// does allow.
+func checkTaskHostFlag(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if opts.Host == "" {
+		return nil
+	}
+	task, ok := pinnedTask(ctx.Resolved, opts.TaskName)
+	if !ok || config.IsTaskHostAllowed(&task, opts.Host) {
+		return nil
+	}
+	return taskHostError(opts.TaskName, &task, opts.Host)
 }
 
 // pinnedTask returns taskName's config when its hosts: list restricts it.

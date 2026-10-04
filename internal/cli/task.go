@@ -16,7 +16,6 @@ import (
 	"github.com/rileyhilliard/rr/internal/deps"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
-	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
@@ -62,14 +61,14 @@ type TaskOptions struct {
 	Tail         int           // Print the last N lines of the run log after completion
 }
 
-// taskHostError refuses a task pinned to hosts other than conn's, and says
+// taskHostError refuses a task pinned to hosts other than hostName, and says
 // how to run it: on a host it allows, or here with --local, which overrides
 // the pin.
-func taskHostError(taskName string, task *config.TaskConfig, conn *host.Connection) error {
+func taskHostError(taskName string, task *config.TaskConfig, hostName string) error {
 	suggestion := fmt.Sprintf("This task is restricted to: %s. Run it with --host %s, or with --local to run it on this machine anyway.",
 		util.JoinOrNone(task.Hosts), task.Hosts[0])
 	return errors.New(errors.ErrConfig,
-		fmt.Sprintf("Task '%s' can't run on host '%s'", taskName, conn.Name),
+		fmt.Sprintf("Task '%s' can't run on host '%s'", taskName, hostName),
 		suggestion)
 }
 

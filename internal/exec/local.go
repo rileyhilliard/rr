@@ -89,6 +89,11 @@ func interruptedByTerminal(ctx context.Context) bool {
 // the shell passes the signal on or exits. If something it started still
 // holds the output open after the kill, this returns without waiting for it.
 func RunLocalCommand(ctx context.Context, command *exec.Cmd) (exitCode int, err error) {
+	// A command started after the Ctrl+C never got it from the terminal, and
+	// the SIGINT case below would wait for it to finish.
+	if ctx.Err() != nil {
+		return 130, ctx.Err()
+	}
 	if err := command.Start(); err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrExec,
 			"Couldn't run the command locally",

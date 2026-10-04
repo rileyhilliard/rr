@@ -145,6 +145,21 @@ func TestExecuteLocalContext_OtherSignalCauseStops(t *testing.T) {
 	}
 }
 
+// A Ctrl+C that lands before the command starts (during a host probe, say)
+// never reached it from the terminal, so the command isn't started at all.
+func TestExecuteLocalContext_CancelledBeforeStartDoesNotRun(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+	marker := filepath.Join(t.TempDir(), "ran")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(SignalCause{Signal: os.Interrupt})
+
+	code, err := ExecuteLocalContext(ctx, "touch "+marker, "", io.Discard, io.Discard)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 130, code)
+	assert.NoFileExists(t, marker)
+}
+
 // Without a cancel, the context changes nothing: the command runs to its
 // end and its exit code is returned with no error.
 func TestExecuteLocalContext_NoCancel(t *testing.T) {

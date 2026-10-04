@@ -295,7 +295,7 @@ tasks:
 | `--max-parallel N` | Limit concurrent tasks |
 | `--no-logs` | Don't save output to log files |
 | `--dry-run` | Show plan without executing |
-| `--local` | Force local execution. With a `local: true` host, it's the one worker (subtasks pinned to other hosts then fail the host check); without one, subtasks run here one after another |
+| `--local` | Force local execution. With a `local: true` host, it's the one worker and runs every subtask, including ones pinned to other hosts (`--local` overrides `hosts:`); without one, subtasks run here one after another |
 | `--host` / `--tag` | Restrict the host pool |
 
 ### Output Modes
@@ -348,7 +348,7 @@ tasks:
     hosts: [fast, gpu-box]  # Multiple allowed hosts
 ```
 
-rr picks only among a task's allowed hosts, and `--host` naming another host fails with `CONFIG_INVALID` before any lock wait.
+rr picks only among a task's allowed hosts, and `--host` naming another host fails with `CONFIG_INVALID` before rr connects to it.
 
 Restrictions also apply to subtasks inside parallel tasks: a restricted subtask only runs on its allowed hosts, and fails with the restriction named if none of them is available. `--host`/`--tag` that excludes every allowed host fails up front, for single tasks too (`CONFIG_INVALID`, naming the allowed hosts).
 

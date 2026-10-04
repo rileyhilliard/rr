@@ -145,6 +145,22 @@ func TestHostAddLocal_Errors(t *testing.T) {
 	}
 }
 
+// A remote host can't take the reserved name either: saving it would make
+// every later run fail config validation until the file is hand-edited.
+func TestHostAdd_RemoteNamedLocalRefused(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	seedGlobalConfig(t, nil)
+	setHostAddFlags(t, "local", "box.example", "~/rr", false, nil, nil)
+
+	rrErr := requireConfigError(t, hostAdd(HostAddOptions{SkipProbe: true}))
+	assert.Contains(t, rrErr.Message, "can't be named 'local'")
+	assert.Contains(t, rrErr.Suggestion, "--name")
+
+	cfg, err := config.LoadGlobal()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Hosts, "a refused add leaves the config as it was")
+}
+
 func TestAddLocalHost(t *testing.T) {
 	t.Run("adds, validates and saves", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
@@ -192,7 +208,7 @@ func TestFindLocalHost(t *testing.T) {
 
 // The local-host name prompt rejects what addLocalHost would, so a bad name
 // is retyped instead of aborting rr init or rr host add after the prompt.
-func TestLocalHostNameValidator(t *testing.T) {
+func TestNewHostNameValidator(t *testing.T) {
 	existing := map[string]config.Host{"box": {SSH: []string{"box.local"}, Dir: "~/rr"}}
 	tests := []struct {
 		name    string
@@ -210,7 +226,7 @@ func TestLocalHostNameValidator(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			cfg := seedGlobalConfig(t, maps.Clone(existing))
 
-			err := localHostNameValidator(cfg)(tt.input)
+			err := newHostNameValidator(cfg)(tt.input)
 			if tt.wantErr == "" {
 				require.NoError(t, err)
 			} else {

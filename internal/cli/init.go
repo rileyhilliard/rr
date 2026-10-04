@@ -183,7 +183,7 @@ func trySSHHostPicker(exclude ...string) (sshHost string, cancelled bool) {
 
 // collectMachineConfig collects configuration for a single machine.
 // Returns the machine config, cancelled flag, and any error.
-func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineConfig, bool, error) {
+func collectMachineConfig(excludeSSHHosts []string, skipProbe bool, validateName func(string) error) (*machineConfig, bool, error) {
 	machine := &machineConfig{}
 
 	// Get primary SSH connection for this machine
@@ -206,7 +206,7 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 		machine.name = hostname
 	}
 
-	if err := promptMachineName(&machine.name, validateMachineName); err != nil {
+	if err := promptMachineName(&machine.name, validateName); err != nil {
 		return nil, false, err
 	}
 
@@ -867,7 +867,7 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 		}
 
 		if addHost {
-			machine, cancelled, err := collectMachineConfig(nil, skipProbe)
+			machine, cancelled, err := collectMachineConfig(nil, skipProbe, newHostNameValidator(globalCfg))
 			if err != nil {
 				return nil, err
 			}
@@ -896,7 +896,7 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 		// Get existing SSH aliases to exclude from picker
 		existingAliases := getExistingGlobalHostSSHAliases(globalCfg)
 
-		machine, cancelled, err := collectMachineConfig(existingAliases, skipProbe)
+		machine, cancelled, err := collectMachineConfig(existingAliases, skipProbe, newHostNameValidator(globalCfg))
 		if err != nil {
 			return nil, err
 		}

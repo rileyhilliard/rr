@@ -245,6 +245,38 @@ func TestRunTask_PinnedTaskRefusedBeforeLock(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
 }
 
+// --host outside a task's pin is refused before rr dials it. Dialing first
+// would let an unreachable box fall back to dev, which the pin allows, and
+// run the task on a host the user didn't ask for.
+func TestRunTask_HostFlagOutsidePinRefusedBeforeDial(t *testing.T) {
+	projectDir := writeHostConfigs(t, `version: 1
+defaults:
+  probe_timeout: 1s
+hosts:
+  dev:
+    local: true
+  box:
+    ssh: [nonexistent-host-rr-test.invalid]
+    dir: ~/rr
+`, `version: 1
+hosts: [dev, box]
+local_fallback: always
+tasks:
+  pinned:
+    hosts: [dev]
+    run: touch ran.out
+`)
+	code, err := runTaskQuietly(t, TaskOptions{TaskName: "pinned", Host: "box"})
+	require.Error(t, err)
+	assert.Equal(t, 1, code)
+	assert.True(t, errors.IsCode(err, errors.ErrConfig), "got %v", err)
+	var rrErr *errors.Error
+	require.ErrorAs(t, err, &rrErr)
+	assert.Equal(t, "Task 'pinned' can't run on host 'box'", rrErr.Message)
+	assert.Contains(t, rrErr.Suggestion, "--host dev")
+	assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+}
+
 // --local is an explicit "run it here", so it overrides a task's hosts:
 // list the way it overrides the project's. A shared .rr.yaml can't name
 // each person's local host, so the pin can't be widened to allow it.
