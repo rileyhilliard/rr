@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,14 @@ func TestMain(m *testing.M) {
 		if err := os.Setenv(key, home); err != nil {
 			fmt.Fprintln(os.Stderr, "set test HOME:", err)
 			os.Exit(1)
+		}
+	}
+	// A git hook (lefthook's pre-push runs go test) exports GIT_DIR and
+	// friends; inherited, they point the temp repos tests create, and rr's own
+	// git calls, at this repo, so a test's commit lands on the branch.
+	for _, kv := range os.Environ() {
+		if key, _, _ := strings.Cut(kv, "="); strings.HasPrefix(key, "GIT_") {
+			_ = os.Unsetenv(key)
 		}
 	}
 
