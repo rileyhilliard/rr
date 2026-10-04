@@ -1288,6 +1288,8 @@ Fields that accept durations use Go's duration format:
 | "host 'X' can't set both 'local: true' and 'ssh'" | A local host runs on this machine. Remove `ssh:`, or remove `local: true` for a remote host |
 | "host 'X' is local, so it runs in the project directory and can't set 'dir'" | Remove `dir:` from the local host |
 | "only one host can be local" | Keep `local: true` on one host |
+| "a host can't be named 'local'" | `local` is reserved for rr's local fallback. Rename the host (for example `dev`) and update any `hosts:` lists that use it |
+| "host 'X' sets 'local: true', which isn't supported on Windows" | Local hosts run commands through `/bin/sh`. Use a remote host, or run rr from WSL |
 | "Can't use 'X' as a task name - that's a built-in command" | Rename the task to avoid built-in command names |
 | "task 'X' has both 'run' and 'steps'" | Use either `run` or `steps`, not both |
 | "task 'X' depends on non-existent task 'Y'" | Add the missing task or fix the dependency reference |

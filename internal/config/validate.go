@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -274,8 +275,17 @@ func ValidateResolved(r *ResolvedConfig, opts ...ValidationOption) error {
 	return nil
 }
 
+// hostGOOS is the OS local hosts are validated against. Tests override it to
+// cover Windows from any platform.
+var hostGOOS = runtime.GOOS
+
 // validateHost checks a single host configuration.
 func validateHost(name string, host Host) error {
+	// "local" is the name rr gives its local fallback connection, so a host
+	// with that name can't be told apart from a fallback in output.
+	if name == "local" {
+		return fmt.Errorf("a host can't be named 'local' - that name is reserved for rr's local fallback. Rename it in ~/.rr/config.yaml (for example 'dev' or 'this-machine') and update any 'hosts:' lists that use it")
+	}
 	if host.Local {
 		return validateLocalHost(name, host)
 	}
@@ -324,6 +334,9 @@ func validateHost(name string, host Host) error {
 // dir (it runs in the local project directory); the rest is validated as for
 // a remote host.
 func validateLocalHost(name string, host Host) error {
+	if hostGOOS == "windows" {
+		return fmt.Errorf("host '%s' sets 'local: true', which isn't supported on Windows - local hosts run commands through /bin/sh. Remove 'local: true' and use a remote host, or run rr from WSL", name)
+	}
 	if len(host.SSH) > 0 {
 		return fmt.Errorf("host '%s' can't set both 'local: true' and 'ssh' - a local host runs on this machine without SSH", name)
 	}

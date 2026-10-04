@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -961,6 +962,57 @@ func TestValidateGlobal_AtMostOneLocalHost(t *testing.T) {
 
 	delete(cfg.Hosts, "dev2")
 	assert.NoError(t, ValidateGlobal(cfg))
+}
+
+func TestValidateGlobal_HostNamedLocalRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		host Host
+	}{
+		{"remote host", Host{SSH: []string{"box"}, Dir: "/tmp/rr"}},
+		{"local host", Host{Local: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{"local": tt.host}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "can't be named 'local'")
+			assert.Contains(t, err.Error(), "Rename it")
+		})
+	}
+
+	assert.NoError(t, ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{
+		"dev": {Local: true},
+	}}))
+}
+
+func TestValidateHost_LocalUnsupportedOnWindows(t *testing.T) {
+	tests := []struct {
+		goos    string
+		host    Host
+		wantErr bool
+	}{
+		{"windows", Host{Local: true}, true},
+		{"linux", Host{Local: true}, false},
+		{"darwin", Host{Local: true}, false},
+		{"windows", Host{SSH: []string{"box"}, Dir: "/tmp/rr"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s local=%v", tt.goos, tt.host.Local), func(t *testing.T) {
+			old := hostGOOS
+			hostGOOS = tt.goos
+			t.Cleanup(func() { hostGOOS = old })
+
+			err := ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{"dev": tt.host}})
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "isn't supported on Windows")
+			assert.Contains(t, err.Error(), "host 'dev'")
+		})
+	}
 }
 
 func TestResolveHosts_LocalHostRunsInProjectRoot(t *testing.T) {
