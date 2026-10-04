@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-
-	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -593,11 +591,10 @@ func TestFind_StopsAtGitRoot(t *testing.T) {
 	err = os.Chdir(subdir)
 	require.NoError(t, err)
 
-	// Should NOT use config above git root, and says why
+	// Should NOT find config above git root. tmpdir isn't a checkout, so
+	// that config isn't another checkout's either: plain not-found.
 	path, err := Find("")
-	require.Error(t, err)
-	assert.True(t, errors.IsCode(err, errors.ErrConfigNotFound), "got %v", err)
-	assert.Contains(t, err.Error(), "belongs to another checkout")
+	require.NoError(t, err)
 	assert.Empty(t, path)
 }
 

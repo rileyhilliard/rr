@@ -226,7 +226,9 @@ The project config lives in your project root and contains settings that can be 
 2. `.rr.yaml` in the current directory
 3. `.rr.yaml` in parent directories, stopping at the git top level (the directory holding `.git`, which is a file in a linked worktree or submodule) or, outside git, at your home directory
 
-The search never leaves the checkout you're in. A worktree created inside the main checkout (say under `.claude/worktrees/`) without its own `.rr.yaml` doesn't pick up the main checkout's: that would make the main checkout the project root, so a local host would run its code and a remote host would sync it. rr fails with `CONFIG_NOT_FOUND` instead, naming the `.rr.yaml` it skipped and how to copy it in. Commit `.rr.yaml` so every branch and worktree has it.
+The search never leaves the checkout you're in. A worktree created inside the main checkout (say under `.claude/worktrees/`) without its own `.rr.yaml` doesn't pick up the main checkout's: that would make the main checkout the project root, so a local host would run its code and a remote host would sync it. rr fails with `CONFIG_NOT_FOUND` instead, naming the `.rr.yaml` it skipped and how to copy it in. Commit `.rr.yaml` so every branch and worktree has it. Commands that only read hosts (`rr monitor`, `rr status`, `rr host list`, `rr unlock`) don't fail; they use your global hosts.
+
+That refusal only applies when the `.rr.yaml` above sits inside an enclosing git checkout. One in a plain directory that holds your repos, like `~/code/.rr.yaml` over the repo `~/code/foo`, isn't any checkout's config: rr skips it, and a repo without its own `.rr.yaml` uses your global hosts.
 
 ### Complete project config example
 

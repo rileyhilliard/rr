@@ -31,11 +31,19 @@ func gitRepo(t *testing.T) string {
 
 	repo, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	git(t, repo, "init", "-q", "-b", "main")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "README"), []byte("hi\n"), 0o644))
-	git(t, repo, "add", "README")
-	git(t, repo, "commit", "-q", "-m", "init")
+	initRepo(t, repo)
 	return repo
+}
+
+// initRepo makes dir (created if missing) a git repo with one commit.
+// Call it after gitRepo, which sets up the git environment.
+func initRepo(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	git(t, dir, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README"), []byte("hi\n"), 0o644))
+	git(t, dir, "add", "README")
+	git(t, dir, "commit", "-q", "-m", "init")
 }
 
 func git(t *testing.T, dir string, args ...string) {
@@ -157,4 +165,67 @@ func TestFind_RepoWithoutConfigIsNotFound(t *testing.T) {
 	path, err := Find("")
 	require.NoError(t, err)
 	assert.Empty(t, path)
+}
+
+// A .rr.yaml above a repo with none of its own is only refused when it sits
+// in an enclosing checkout. One in a plain directory that holds several
+// repos (~/code/.rr.yaml over ~/code/foo) is skipped: the repo is
+// not-found, and commands fall back to global hosts as before.
+func TestFind_ConfigAboveCheckout(t *testing.T) {
+	tests := []struct {
+		name string
+		// layout builds the tree under root and returns the repo to search
+		// from and the .rr.yaml above it.
+		layout  func(t *testing.T, root string) (repo, above string)
+		refused bool
+	}{
+		{
+			name: "plain parent directory",
+			layout: func(t *testing.T, root string) (string, string) {
+				repo := filepath.Join(root, "foo")
+				initRepo(t, repo)
+				return repo, writeRRYAML(t, root)
+			},
+		},
+		{
+			name: "enclosing repo's top level",
+			layout: func(t *testing.T, root string) (string, string) {
+				initRepo(t, root)
+				repo := filepath.Join(root, "vendor", "foo")
+				initRepo(t, repo)
+				return repo, writeRRYAML(t, root)
+			},
+			refused: true,
+		},
+		{
+			name: "subdirectory of an enclosing repo",
+			layout: func(t *testing.T, root string) (string, string) {
+				initRepo(t, root)
+				sub := filepath.Join(root, "sub")
+				repo := filepath.Join(sub, "foo")
+				initRepo(t, repo)
+				return repo, writeRRYAML(t, sub)
+			},
+			refused: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitRepo(t) // git environment
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			repo, above := tt.layout(t, root)
+			t.Chdir(repo)
+
+			path, err := Find("")
+			assert.Empty(t, path)
+			if !tt.refused {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, errors.IsCode(err, errors.ErrConfigNotFound), "got %v", err)
+			assert.Contains(t, err.Error(), above)
+		})
+	}
 }

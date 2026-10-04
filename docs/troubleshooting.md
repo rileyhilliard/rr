@@ -416,7 +416,9 @@ The error code is `CONFIG_NOT_FOUND`. `rr doctor` reports a `config_file` warnin
 
 **Symptom:** `CONFIG_NOT_FOUND` from inside a git worktree or checkout that sits inside another one, typically a worktree under the main checkout (`.claude/worktrees/<name>`).
 
-rr looks for `.rr.yaml` only up to the top of the checkout you're in. The file it found belongs to the outer checkout, and using it would make that checkout the project root: a local host would run the outer checkout's code, and a remote host would sync it. Commit `.rr.yaml` so the worktree's branch has it, or copy it in with the `cp` command from the suggestion. `rr doctor` fails its `config_file` check with the same message.
+rr looks for `.rr.yaml` only up to the top of the checkout you're in. The file it found sits inside an outer git checkout and belongs to it, and using it would make that checkout the project root: a local host would run the outer checkout's code, and a remote host would sync it. Commit `.rr.yaml` so the worktree's branch has it, or copy it in with the `cp` command from the suggestion. `rr doctor` fails its `config_file` check with the same message. `rr monitor`, `rr status`, `rr host list` and `rr unlock` still work there with your global hosts.
+
+A `.rr.yaml` above the checkout that isn't inside another checkout (say `~/code/.rr.yaml` over the repo `~/code/foo`) doesn't trigger this: rr ignores it and treats the repo as having no project config.
 
 ### "No hosts configured"
 

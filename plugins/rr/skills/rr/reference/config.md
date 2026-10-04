@@ -192,7 +192,7 @@ There is one lock per host, shared by every project that uses the same `lock.dir
 
 ## Where `.rr.yaml` Is Found
 
-rr uses `--config`, else `.rr.yaml` in the current directory, else the nearest one in a parent directory, but it never looks above the git top level (the directory holding `.git`). A worktree nested inside the main checkout with no `.rr.yaml` of its own fails with `CONFIG_NOT_FOUND`, naming the main checkout's file, rather than running the main checkout's code. Commit `.rr.yaml` so every worktree has it.
+rr uses `--config`, else `.rr.yaml` in the current directory, else the nearest one in a parent directory, but it never looks above the git top level (the directory holding `.git`). A worktree nested inside the main checkout with no `.rr.yaml` of its own fails with `CONFIG_NOT_FOUND`, naming the main checkout's file, rather than running the main checkout's code. Commit `.rr.yaml` so every worktree has it. Only a `.rr.yaml` inside an enclosing git checkout is refused; one in a plain parent directory (`~/code/.rr.yaml` over the repo `~/code/foo`) is ignored, and the repo uses global hosts. `rr monitor`, `rr status`, `rr host list` and `rr unlock` use global hosts in either case.
 
 ## Config Warnings and Reserved Names
 
