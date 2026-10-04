@@ -400,10 +400,29 @@ func promptThisMachine() (bool, error) {
 // promptLocalHostName asks for the name of the local host.
 func promptLocalHostName(cfg *config.GlobalConfig) (string, error) {
 	name := defaultLocalHostName(cfg)
-	if err := promptMachineName(&name); err != nil {
+	if err := promptMachineName(&name, localHostNameValidator(cfg)); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(name), nil
+}
+
+// localHostNameValidator checks a local host name at the prompt, rejecting
+// the names addLocalHost would (taken, or the reserved "local") so the user
+// can retype instead of losing every answer given so far.
+func localHostNameValidator(cfg *config.GlobalConfig) func(string) error {
+	return func(s string) error {
+		if err := validateMachineName(s); err != nil {
+			return err
+		}
+		name := strings.TrimSpace(s)
+		if name == "local" {
+			return fmt.Errorf("a host can't be named 'local' - that name is reserved for rr's local fallback")
+		}
+		if _, exists := cfg.Hosts[name]; exists {
+			return fmt.Errorf("host '%s' already exists, choose a different name", name)
+		}
+		return nil
+	}
 }
 
 // hostRemove removes a host from the global configuration.

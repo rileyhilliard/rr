@@ -267,7 +267,7 @@ func taskHostsOnly(project *config.Config, taskName string, order []string, host
 // A local target never gets here (see connectLocalTarget).
 func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 	// Resolve local_fallback from project config (overrides global)
-	localFallback := config.ResolveLocalFallback(ctx.Resolved)
+	localFallback := localFallbackMode(ctx, opts.TaskName).Enabled()
 
 	// Get the hosts this project is allowed to use
 	// (respects project.Hosts list if specified, otherwise uses all global hosts)
@@ -278,7 +278,13 @@ func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 		ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
 	} else {
 		if opts.Host == "" {
-			hostOrder, projectHosts = taskHostsOnly(ctx.Resolved.Project, opts.TaskName, hostOrder, projectHosts)
+			// With --tag, narrow only when a task host has the tag: otherwise
+			// the selector keeps every host, so checkTaskTag can tell a tag
+			// the pin rules out from one no host has.
+			order, hosts := taskHostsOnly(ctx.Resolved.Project, opts.TaskName, hostOrder, projectHosts)
+			if opts.Tag == "" || anyHostTagged(hosts, opts.Tag) {
+				hostOrder, projectHosts = order, hosts
+			}
 		}
 		ctx.selector = host.NewSelector(projectHosts)
 		ctx.selector.SetHostOrder(hostOrder)
@@ -762,10 +768,6 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
-		if err := checkTaskHost(ctx, opts.TaskName); err != nil {
-			ctx.Close()
-			return nil, err
-		}
 		if err := lockPhase(ctx, opts); err != nil {
 			ctx.Close()
 			return nil, err
@@ -795,10 +797,13 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 // it connects, then locks.
 func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 	setupHostSelector(ctx, opts)
+	if err := checkTaskTag(ctx, opts); err != nil {
+		return err
+	}
 
 	if ctx.selector.HostCount() > 1 && opts.Host == "" && opts.Tag == "" {
 		if err := setupWorkflowLoadBalanced(ctx, opts); err != nil {
-			return err
+			return explainNoFallback(ctx, opts.TaskName, err)
 		}
 		// A fallback took no lock while picking; lock it now (a no-op for
 		// bare local execution).
@@ -811,7 +816,7 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 
 	// Phase 1: Connect
 	if err := connectPhase(ctx, opts); err != nil {
-		return err
+		return explainNoFallback(ctx, opts.TaskName, err)
 	}
 	if err := checkTaskHost(ctx, opts.TaskName); err != nil {
 		return err
@@ -835,6 +840,95 @@ func checkTaskHost(ctx *WorkflowContext, taskName string) error {
 		return nil
 	}
 	return taskHostError(taskName, &task, ctx.Conn)
+}
+
+// pinnedTask returns taskName's config when its hosts: list restricts it.
+func pinnedTask(resolved *config.ResolvedConfig, taskName string) (config.TaskConfig, bool) {
+	if resolved == nil || resolved.Project == nil || taskName == "" {
+		return config.TaskConfig{}, false
+	}
+	task, ok := resolved.Project.Tasks[taskName]
+	return task, ok && len(task.Hosts) > 0
+}
+
+// pinExcludesFallback reports whether taskName's hosts: list leaves out the
+// host a local fallback would run on: the global config's local host, or
+// bare local execution when there's none.
+func pinExcludesFallback(resolved *config.ResolvedConfig, taskName string) bool {
+	task, ok := pinnedTask(resolved, taskName)
+	if !ok {
+		return false
+	}
+	name, _ := config.LocalHost(resolved)
+	if name == "" {
+		name = host.LocalAlias
+	}
+	return !config.IsTaskHostAllowed(&task, name)
+}
+
+// localFallbackMode is local_fallback for this run. A task whose pin
+// excludes the fallback host never falls back: checkTaskHost would refuse
+// it there, and only after waiting on that host's lock when it's busy.
+func localFallbackMode(ctx *WorkflowContext, taskName string) config.LocalFallbackMode {
+	if pinExcludesFallback(ctx.Resolved, taskName) {
+		return config.LocalFallbackNever
+	}
+	return config.ResolveLocalFallbackMode(ctx.Resolved)
+}
+
+// explainNoFallback replaces the suggestion on a connection error for a
+// task that didn't fall back because of its pin (see localFallbackMode).
+// The generic one may tell the user to turn on a local_fallback that is
+// already on, or that wouldn't apply to this task.
+func explainNoFallback(ctx *WorkflowContext, taskName string, err error) error {
+	rrErr, ok := err.(*errors.Error)
+	if !ok || rrErr.Code != errors.ErrSSH || !pinExcludesFallback(ctx.Resolved, taskName) {
+		return err
+	}
+	task, _ := pinnedTask(ctx.Resolved, taskName)
+	rrErr.Suggestion = fmt.Sprintf("Task '%s' is restricted to: %s, so rr doesn't fall back to this machine for it. Check that those hosts are reachable, or run it with --local to run it here anyway.",
+		taskName, strings.Join(task.Hosts, ", "))
+	return rrErr
+}
+
+// anyHostTagged reports whether any of hosts has tag.
+func anyHostTagged(hosts map[string]config.Host, tag string) bool {
+	for name := range hosts {
+		if slices.Contains(hosts[name].Tags, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTaskTag refuses --tag for a pinned task when the hosts carrying the
+// tag are all outside the task's hosts: list. A tag no candidate host has
+// is left to SelectByTag, which lists the tags there are.
+func checkTaskTag(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if opts.Tag == "" {
+		return nil
+	}
+	task, ok := pinnedTask(ctx.Resolved, opts.TaskName)
+	if !ok {
+		return nil
+	}
+	tagged := false
+	for _, h := range ctx.selector.HostInfo() {
+		if !slices.Contains(h.Tags, opts.Tag) {
+			continue
+		}
+		if slices.Contains(task.Hosts, h.Name) {
+			return nil
+		}
+		tagged = true
+	}
+	if !tagged {
+		return nil
+	}
+	return errors.New(errors.ErrConfig,
+		fmt.Sprintf("Task '%s' can't run on any host tagged '%s'", opts.TaskName, opts.Tag),
+		fmt.Sprintf("This task is restricted to: %s. Use a tag one of those hosts has, run it with --host %s, or with --local to run it on this machine.",
+			strings.Join(task.Hosts, ", "), task.Hosts[0]))
 }
 
 // ExecutePullPhase downloads files from remote after command execution.

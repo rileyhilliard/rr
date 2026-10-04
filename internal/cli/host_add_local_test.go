@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"maps"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -186,6 +188,41 @@ func TestFindLocalHost(t *testing.T) {
 	assert.Equal(t, "", findLocalHost(cfg))
 	cfg.Hosts["z"] = config.Host{Local: true}
 	assert.Equal(t, "z", findLocalHost(cfg))
+}
+
+// The local-host name prompt rejects what addLocalHost would, so a bad name
+// is retyped instead of aborting rr init or rr host add after the prompt.
+func TestLocalHostNameValidator(t *testing.T) {
+	existing := map[string]config.Host{"box": {SSH: []string{"box.local"}, Dir: "~/rr"}}
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{name: "free name", input: "dev"},
+		{name: "taken name", input: "box", wantErr: "host 'box' already exists"},
+		{name: "reserved name", input: "local", wantErr: "reserved for rr's local fallback"},
+		{name: "empty", input: "  ", wantErr: "machine name is required"},
+		{name: "whitespace", input: "my box", wantErr: "cannot contain whitespace"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			cfg := seedGlobalConfig(t, maps.Clone(existing))
+
+			err := localHostNameValidator(cfg)(tt.input)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+			// A name the prompt accepts is one addLocalHost accepts.
+			if err == nil {
+				assert.NoError(t, addLocalHost(cfg, strings.TrimSpace(tt.input), nil, nil))
+			}
+		})
+	}
 }
 
 func TestDefaultLocalHostName(t *testing.T) {

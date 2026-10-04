@@ -329,3 +329,139 @@ func lockBaseOf(t *testing.T, projectDir string) string {
 	t.Fatal("no lock dir in the project config")
 	return ""
 }
+
+// writeHostConfigs writes global and project configs into a temp HOME and
+// project dir, appends a temp lock dir (lock.timeout 2s) to the project,
+// and chdirs into it. It returns the project dir.
+func writeHostConfigs(t *testing.T, global, project string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("local client uses a POSIX shell")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".rr"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".rr", "config.yaml"), []byte(global), 0o644))
+
+	projectDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	project += "lock:\n  timeout: 2s\n  dir: " + filepath.Join(t.TempDir(), "locks") + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, ".rr.yaml"), []byte(project), 0o644))
+	t.Chdir(projectDir)
+	return projectDir
+}
+
+// --tag picks among the hosts a pinned task allows. A tag that only hosts
+// outside the pin carry is refused up front with the restriction named,
+// not reported as a tag no host has.
+func TestRunTask_TagWithTaskHosts(t *testing.T) {
+	// gpu is this machine's local host, so a run placed on it succeeds.
+	global := `version: 1
+defaults:
+  probe_timeout: 1s
+hosts:
+  gpu:
+    local: true
+    tags: [big]
+  cpu:
+    ssh: [nonexistent-host-rr-test.invalid]
+    dir: ~/rr
+    tags: [fast]
+`
+	project := `version: 1
+hosts: [gpu, cpu]
+tasks:
+  train:
+    hosts: [gpu]
+    run: touch ran.out
+`
+	t.Run("tag only outside the pin", func(t *testing.T) {
+		projectDir := writeHostConfigs(t, global, project)
+		code, err := runTaskQuietly(t, TaskOptions{TaskName: "train", Tag: "fast"})
+		require.Error(t, err)
+		assert.Equal(t, 1, code)
+		assert.True(t, errors.IsCode(err, errors.ErrConfig), "got %v", err)
+		var rrErr *errors.Error
+		require.ErrorAs(t, err, &rrErr)
+		assert.Equal(t, "Task 'train' can't run on any host tagged 'fast'", rrErr.Message)
+		assert.Contains(t, rrErr.Suggestion, "restricted to: gpu")
+		assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+	})
+	t.Run("tag on a pinned host", func(t *testing.T) {
+		projectDir := writeHostConfigs(t, global, project)
+		code, err := runTaskQuietly(t, TaskOptions{TaskName: "train", Tag: "big"})
+		require.NoError(t, err)
+		assert.Equal(t, 0, code)
+		assert.FileExists(t, filepath.Join(projectDir, "ran.out"))
+	})
+	t.Run("tag no host has", func(t *testing.T) {
+		writeHostConfigs(t, global, project)
+		_, err := runTaskQuietly(t, TaskOptions{TaskName: "train", Tag: "nope"})
+		require.Error(t, err)
+		var rrErr *errors.Error
+		require.ErrorAs(t, err, &rrErr)
+		assert.Equal(t, "No hosts have the 'nope' tag", rrErr.Message)
+		assert.Contains(t, rrErr.Suggestion, "big")
+		assert.Contains(t, rrErr.Suggestion, "fast", "lists the tags of every host, not just the pinned ones")
+	})
+}
+
+// A task pinned to hosts that leave out this machine never falls back to
+// it: the fallback would only be refused, after waiting on the local host's
+// lock when it's busy. rr reports the pinned hosts it couldn't reach instead.
+func TestRunTask_PinnedTaskDoesNotFallBack(t *testing.T) {
+	global := `version: 1
+defaults:
+  probe_timeout: 1s
+hosts:
+  dev:
+    local: true
+  box:
+    ssh: [nonexistent-host-rr-test.invalid]
+    dir: ~/rr
+  box2:
+    ssh: [nonexistent-host-rr-test-2.invalid]
+    dir: ~/rr
+`
+	tests := []struct {
+		name  string
+		pin   string
+		hosts []string
+	}{
+		// Two pinned hosts take the load-balanced path, one the single-host path.
+		{name: "load balanced", pin: "[box, box2]", hosts: []string{"box", "box2"}},
+		{name: "single host", pin: "[box]", hosts: []string{"box"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projectDir := writeHostConfigs(t, global, `version: 1
+hosts: [dev, box, box2]
+local_fallback: always
+tasks:
+  pinned:
+    hosts: `+tt.pin+`
+    run: touch ran.out
+`)
+			lockCfg := config.LockConfig{Enabled: true, Timeout: 2 * time.Second, Stale: 10 * time.Minute, Dir: lockBaseOf(t, projectDir)}
+			holdLocalHostLock(t, lockCfg)
+
+			start := time.Now()
+			code, err := runTaskQuietly(t, TaskOptions{TaskName: "pinned"})
+			require.Error(t, err)
+			assert.Equal(t, 1, code)
+			// ErrLock would mean rr fell back and waited out dev's lock.
+			assert.False(t, errors.IsCode(err, errors.ErrLock), "waited on the local host's lock: %v", err)
+			assert.True(t, errors.IsCode(err, errors.ErrSSH), "got %v", err)
+			var rrErr *errors.Error
+			require.ErrorAs(t, err, &rrErr)
+			for _, h := range tt.hosts {
+				assert.Contains(t, rrErr.Message, h)
+			}
+			assert.NotContains(t, rrErr.Suggestion, "set 'local_fallback: true'", "local_fallback is already on")
+			assert.Contains(t, rrErr.Suggestion, "--local")
+			assert.Less(t, time.Since(start), 2*time.Second, "returned before lock.timeout")
+			assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+		})
+	}
+}
