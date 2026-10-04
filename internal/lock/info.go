@@ -87,6 +87,14 @@ func (i *LockInfo) IsDeadLocalHolder() bool {
 	return i.JobPGID <= 0 || !processGroupAlive(i.JobPGID)
 }
 
+// HasLiveLocalJob reports whether the lock's holder is on this machine and
+// the job it recorded (JobPGID) is still running. Such a lock is in use
+// however old its heartbeat is: a SIGKILLed rr stops touching info.json, but
+// its job runs on in the checkout.
+func (i *LockInfo) HasLiveLocalJob() bool {
+	return i.JobPGID > 0 && i.SameMachine() && processGroupAlive(i.JobPGID)
+}
+
 // Describe returns a human-readable description with command, holder, age,
 // and whether the holder is on this machine.
 func (i *LockInfo) Describe() string {

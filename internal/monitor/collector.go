@@ -190,7 +190,8 @@ func (c *Collector) parseLockSection(section string) *HostLockInfo {
 	if c.lockConfig != nil && c.lockConfig.Stale > 0 {
 		staleThreshold = c.lockConfig.Stale
 	}
-	if info.Age() > staleThreshold {
+	// A job still running on this machine keeps its lock, as in lock.Acquire.
+	if info.Age() > staleThreshold && !info.HasLiveLocalJob() {
 		return nil // Stale locks don't count
 	}
 

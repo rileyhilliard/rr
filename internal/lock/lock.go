@@ -678,6 +678,9 @@ func LockDir(cfg config.LockConfig) string {
 //
 // We err on the side of "not stale" when we can't read the file - better to
 // wait for a lock that might be legitimate than to break into an active one.
+//
+// A holder on this machine whose recorded job (JobPGID) is still running is
+// never stale, whatever the mtime: its rr may be dead, but its job isn't.
 func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.Duration) bool {
 	if staleThreshold <= 0 {
 		return false
@@ -697,7 +700,7 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 			age := time.Since(time.Unix(mtime, 0))
 			isStale := age > staleThreshold
 			debugf("isLockStale: mtime-based age=%s, threshold=%s, isStale=%v", age, staleThreshold, isStale)
-			return isStale
+			return isStale && !holderHasLiveLocalJob(client, infoFile)
 		}
 	}
 
@@ -716,9 +719,21 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 		return false
 	}
 
-	isStale := info.Age() > staleThreshold
+	isStale := info.Age() > staleThreshold && !info.HasLiveLocalJob()
 	debugf("isLockStale: fallback age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
 	return isStale
+}
+
+// holderHasLiveLocalJob reports whether the lock's holder recorded a job on
+// this machine that is still running (see LockInfo.HasLiveLocalJob). It's
+// only asked once a lock looks stale, so a fresh lock costs no extra read.
+func holderHasLiveLocalJob(client sshutil.SSHClient, infoFile string) bool {
+	info, err := readLockInfo(client, infoFile)
+	if err != nil || !info.HasLiveLocalJob() {
+		return false
+	}
+	debugf("isLockStale: holder's job group %d is still running on this machine, not stale", info.JobPGID)
+	return true
 }
 
 // readLockInfo reads and parses the lock info file.
