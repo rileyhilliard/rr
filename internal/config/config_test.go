@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -563,7 +565,7 @@ func TestFind_FindsConfigAtGitRoot(t *testing.T) {
 func TestFind_StopsAtGitRoot(t *testing.T) {
 	// Create project structure:
 	// tmpdir/
-	//   .rr.yaml      <- config above git root (should NOT be found)
+	//   .rr.yaml      <- config above git root (should NOT be used)
 	//   repo/
 	//     .git/       <- git root
 	//     src/
@@ -591,9 +593,11 @@ func TestFind_StopsAtGitRoot(t *testing.T) {
 	err = os.Chdir(subdir)
 	require.NoError(t, err)
 
-	// Should NOT find config above git root
+	// Should NOT use config above git root, and says why
 	path, err := Find("")
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.True(t, errors.IsCode(err, errors.ErrConfigNotFound), "got %v", err)
+	assert.Contains(t, err.Error(), "belongs to another checkout")
 	assert.Empty(t, path)
 }
 
