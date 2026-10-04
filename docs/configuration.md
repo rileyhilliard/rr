@@ -669,7 +669,7 @@ tasks:
 | `run` | string | if no steps/parallel/depends | Command to execute (simple tasks). |
 | `steps` | list | if no run/parallel | Steps for multi-step tasks. |
 | `parallel` | list | if no run/steps | Subtask names to run concurrently across hosts. |
-| `setup` | string | no | Command to run once per host before parallel subtasks. |
+| `setup` | string | no | Command to run once per host before parallel subtasks. Parallel tasks only: on any other task it never runs, and rr warns. |
 | `depends` | list | no | Task dependencies to run before this task. |
 | `hosts` | list | no | Restrict this task to specific hosts. |
 | `env` | map | no | Environment variables for this task. See [How commands are built](#how-commands-are-built). |

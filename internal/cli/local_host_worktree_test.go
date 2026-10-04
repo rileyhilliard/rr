@@ -202,6 +202,18 @@ func TestResolveMonitorScope_NestedWorktreeWithoutConfigUsesGlobalHosts(t *testi
 	assert.Contains(t, scope.hosts, "dev")
 }
 
+// Status, like monitor, runs no code: in the same nested worktree it shows the
+// global hosts instead of failing with CONFIG_NOT_FOUND.
+func TestStatus_NestedWorktreeWithoutConfigUsesGlobalHosts(t *testing.T) {
+	repo, _ := localHostRepo(t)
+	nested := addWorktree(t, repo, filepath.Join(repo, ".claude", "worktrees", "x"), "old", "HEAD~1")
+	t.Chdir(nested)
+
+	got := runStatusJSON(t)
+	assert.Equal(t, []string{"dev"}, statusHostNames(got))
+	assert.Equal(t, statusScopeGlobal, got.Scope)
+}
+
 // With the config committed on its branch, the same nested worktree uses its
 // own config and runs in place.
 func TestRun_NestedWorktreeWithConfigRunsInWorktree(t *testing.T) {

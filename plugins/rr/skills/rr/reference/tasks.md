@@ -234,7 +234,7 @@ rr run --repeat 5 "pytest"   # Run raw command 5x
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `parallel` | required | List of subtask names |
-| `setup` | none | Command to run once per host before subtasks |
+| `setup` | none | Command to run once per host before subtasks. Parallel tasks only: on any other task it never runs, and rr warns |
 | `fail_fast` | `false` | Stop on first failure |
 | `timeout` | none | Per-subtask timeout |
 | `max_parallel` | unlimited | Max concurrent tasks |

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -558,20 +559,26 @@ func Update(opts UpdateOptions) error {
 		return nil
 	}
 
-	// Find the right asset for this platform
-	asset := findAsset(release)
-	if asset == nil {
-		return errors.New(errors.ErrExec,
-			fmt.Sprintf("No release found for %s/%s", runtime.GOOS, runtime.GOARCH),
-			"You can build from source: go install github.com/rileyhilliard/rr@latest")
-	}
-
 	// Get current binary path
 	binaryPath, err := getCurrentBinaryPath()
 	if err != nil {
 		return errors.WrapWithCode(err, errors.ErrExec,
 			"Couldn't locate the current binary",
 			"Try reinstalling with: go install github.com/rileyhilliard/rr@latest")
+	}
+
+	// A Homebrew install is Homebrew's to update. Replacing the binary in
+	// place would leave brew recording the old version.
+	if prefix := homebrewPrefix(binaryPath); prefix != "" {
+		return updateViaBrew(prefix, currentVersion, latestVersion, release.HTMLURL, opts.Force)
+	}
+
+	// Find the right asset for this platform
+	asset := findAsset(release)
+	if asset == nil {
+		return errors.New(errors.ErrExec,
+			fmt.Sprintf("No release found for %s/%s", runtime.GOOS, runtime.GOARCH),
+			"You can build from source: go install github.com/rileyhilliard/rr@latest")
 	}
 
 	// Check if we can write to the binary location
@@ -613,6 +620,54 @@ func Update(opts UpdateOptions) error {
 	// Success message
 	printUpdateSuccess(latestVersion, release.HTMLURL)
 
+	return nil
+}
+
+// brewCask is the Homebrew cask GoReleaser publishes (.goreleaser.yaml).
+const brewCask = "rileyhilliard/tap/rr"
+
+// homebrewPrefix returns the Homebrew prefix when binaryPath (symlinks
+// resolved) is the cask's binary, such as /opt/homebrew for
+// /opt/homebrew/Caskroom/rr/0.29.0/rr, or "" otherwise.
+func homebrewPrefix(binaryPath string) string {
+	if i := strings.Index(filepath.ToSlash(binaryPath), "/Caskroom/rr/"); i > 0 {
+		return binaryPath[:i]
+	}
+	return ""
+}
+
+// updateViaBrew updates a Homebrew install with brew, so brew's record of
+// the installed version stays right. force reinstalls the current version.
+func updateViaBrew(prefix, currentVersion, latestVersion, releaseURL string, force bool) error {
+	brew := filepath.Join(prefix, "bin", "brew")
+	args := []string{"upgrade", "--cask", brewCask}
+	if force {
+		args[0] = "reinstall"
+	}
+	command := brew + " " + strings.Join(args, " ")
+
+	fmt.Printf("\nUpdating %s -> %s with Homebrew, which installed rr\n\n", formatVersion(currentVersion), formatVersion(latestVersion))
+
+	cmd := exec.Command(brew, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return errors.WrapWithCode(err, errors.ErrExec,
+			"Homebrew couldn't update rr",
+			"Run it yourself to see what went wrong: "+command)
+	}
+
+	// brew exits 0 when its tap doesn't have the release yet (for example
+	// with HOMEBREW_NO_AUTO_UPDATE set), so check that it was installed.
+	installed := filepath.Join(prefix, "Caskroom", "rr", normalizeVersion(latestVersion))
+	if _, err := os.Stat(installed); err != nil {
+		return errors.New(errors.ErrExec,
+			fmt.Sprintf("Homebrew finished but didn't install %s", formatVersion(latestVersion)),
+			"Its tap may not have the release yet. Run 'brew update', then 'rr update'.")
+	}
+
+	printUpdateSuccess(latestVersion, releaseURL)
 	return nil
 }
 
@@ -697,7 +752,8 @@ var updateCmd = &cobra.Command{
 	Long: `Check for and install the latest version of rr.
 
 Downloads the appropriate binary for your platform from GitHub releases
-and replaces the current binary.
+and replaces the current binary. If Homebrew installed rr, it runs
+'brew upgrade --cask rileyhilliard/tap/rr' instead.
 
 Examples:
   rr update              # Update to latest version

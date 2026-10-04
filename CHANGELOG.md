@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-10-04
+
+### Added
+
+- A config warning for `setup:` on a task that isn't parallel. rr only runs a task's `setup` before parallel subtasks, so on any other task it was silently skipped. The warning suggests chaining it into `run`, making it the first step, or moving it to `defaults.setup`.
+
+### Changed
+
+- `rr update` on a Homebrew install runs `brew upgrade --cask rileyhilliard/tap/rr` (`brew reinstall` with `--force`). It used to replace the binary inside `Caskroom/rr/<old version>/`, which left Homebrew recording the old version. If brew finishes without installing the release, rr says so instead of reporting success. If you already ran `rr update` on a Homebrew install, run `brew upgrade --cask rileyhilliard/tap/rr` once so Homebrew records the right version.
+
+### Fixed
+
+- `rr status` picked its "Selected" host at random when several were reachable, and listed every global host. It now lists the hosts in the order runs try them and selects the first reachable one:
+  - with `hosts:` (or `host:`) in `.rr.yaml`, the project's hosts in that order (`scope: project`)
+  - in local mode (`local_fallback` on and no hosts), this machine only (`scope: local`)
+  - otherwise every global host alphabetically (`scope: global`)
+
+  The JSON adds `scope`, and `hosts` is in preference order. A nested worktree without `.rr.yaml` still gets the global hosts instead of `CONFIG_NOT_FOUND`.
+
 ## [0.29.0] - 2026-10-04
 
 Three changes can break scripts and agents: runs on this machine report the local host's name when one is configured, a checkout nested inside another no longer picks up the outer checkout's `.rr.yaml`, and `--local` now overrides a task's `hosts:` list. They're marked Breaking under Changed, and [MIGRATION.md](docs/MIGRATION.md) has the upgrade steps.
