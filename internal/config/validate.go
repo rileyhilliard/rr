@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -179,10 +180,25 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 	}
 
 	// Validate each host
+	var localHosts []string
 	for name := range cfg.Hosts {
 		if err := validateHost(name, cfg.Hosts[name]); err != nil {
+			if rrErr, ok := err.(*errors.Error); ok {
+				return rrErr // already carries its own suggestion
+			}
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
 		}
+		if cfg.Hosts[name].Local {
+			localHosts = append(localHosts, name)
+		}
+	}
+	// Local hosts all run in the same directory under the same lock, so a
+	// second one adds nothing but confusion.
+	if len(localHosts) > 1 {
+		slices.Sort(localHosts)
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("only one host can be local, but %s all set 'local: true'", strings.Join(localHosts, ", ")),
+			"Keep 'local: true' on one host in ~/.rr/config.yaml.")
 	}
 
 	// Validate local_fallback mode when set (empty means "use default")
@@ -262,8 +278,23 @@ func ValidateResolved(r *ResolvedConfig, opts ...ValidationOption) error {
 	return nil
 }
 
+// hostGOOS is the OS local hosts are validated against. Tests override it to
+// cover Windows from any platform.
+var hostGOOS = runtime.GOOS
+
 // validateHost checks a single host configuration.
 func validateHost(name string, host Host) error {
+	// "local" is the name rr gives its local fallback connection, so a host
+	// with that name can't be told apart from a fallback in output.
+	if name == "local" {
+		return errors.New(errors.ErrConfig,
+			"A host can't be named 'local' - that name is reserved for rr's local fallback",
+			"Rename it in ~/.rr/config.yaml (for example 'dev' or 'this-machine') and update any 'hosts:' lists that use it.")
+	}
+	if host.Local {
+		return validateLocalHost(name, host)
+	}
+
 	if len(host.SSH) == 0 {
 		return fmt.Errorf("host '%s' needs at least one SSH connection (like 'user@hostname')", name)
 	}
@@ -302,6 +333,30 @@ func validateHost(name string, host Host) error {
 	}
 
 	return nil
+}
+
+// validateLocalHost checks a host with local: true. It has no SSH and no
+// dir (it runs in the local project directory); the rest is validated as for
+// a remote host.
+func validateLocalHost(name string, host Host) error {
+	if hostGOOS == "windows" {
+		return fmt.Errorf("host '%s' sets 'local: true', which isn't supported on Windows - local hosts run commands through /bin/sh. Remove 'local: true' and use a remote host, or run rr from WSL", name)
+	}
+	if len(host.SSH) > 0 {
+		return fmt.Errorf("host '%s' can't set both 'local: true' and 'ssh' - a local host runs on this machine without SSH", name)
+	}
+	if host.Dir != "" {
+		return fmt.Errorf("host '%s' is local, so it runs in the project directory and can't set 'dir' - remove it", name)
+	}
+	if err := validateEnv(fmt.Sprintf("host '%s' env", name), host.Env); err != nil {
+		return err
+	}
+	if host.Shell != "" {
+		if err := validateShellFormat(name, host.Shell); err != nil {
+			return err
+		}
+	}
+	return validateRequireList(fmt.Sprintf("host '%s'", name), host.Require)
 }
 
 // validateRemotePath checks for common remote path configuration mistakes.

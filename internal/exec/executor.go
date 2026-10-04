@@ -99,9 +99,21 @@ func IsCommandNotFound(stderr string, exitCode int) (string, bool) {
 		}
 	}
 
+	// A shell that can't find a file it was told to source or run also exits
+	// 127 ("zsh:.:1: no such file or directory: ./env.sh"). That's a wrong
+	// path, not a missing tool, and blaming the command's first word misleads.
+	if missingFilePattern.MatchString(stderr) {
+		return "", false
+	}
+
 	// Exit code is 127 but couldn't extract command name
 	return "", true
 }
+
+// missingFilePattern matches a shell reporting a missing file, in zsh's
+// ("no such file or directory: path") and bash's ("path: No such file or
+// directory") wording.
+var missingFilePattern = regexp.MustCompile(`(?i)no such file or directory`)
 
 // IsDependencyNotFound checks if a tool failed because a dependency command is missing.
 // This catches cases like make failing because 'go' isn't installed.

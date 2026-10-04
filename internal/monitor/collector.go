@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
@@ -40,6 +42,13 @@ type Collector struct {
 
 	// Lock checking configuration (optional)
 	lockConfig *config.LockConfig
+
+	// For a host with local: true: this machine's platform, and the
+	// commands run for a streaming round and a snapshot. Tests swap them
+	// for canned output.
+	localPlatform Platform
+	buildMetrics  func(Platform, string) string
+	buildSnapshot func(Platform, string) string
 }
 
 // NewCollector creates a new metrics collector for the specified hosts.
@@ -51,6 +60,21 @@ func NewCollector(hosts map[string]config.Host) *Collector {
 		prevJiffies:     make(map[string]cpuJiffies),
 		prevCoreJiffies: make(map[string][]cpuJiffies),
 		prevDisk:        make(map[string]diskSample),
+		localPlatform:   platformOf(runtime.GOOS),
+		buildMetrics:    BuildMetricsCommand,
+		buildSnapshot:   BuildSnapshotCommand,
+	}
+}
+
+// platformOf maps a GOOS value to the Platform the metrics commands use.
+func platformOf(goos string) Platform {
+	switch goos {
+	case "darwin":
+		return PlatformDarwin
+	case "linux":
+		return PlatformLinux
+	default:
+		return PlatformUnknown
 	}
 }
 
@@ -118,6 +142,9 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 			if metrics != nil {
 				result.LockInfo = hostLock
 				result.ConnectedVia = c.pool.GetConnectedVia(alias)
+				if c.hosts[alias].Local {
+					result.ConnectedVia = host.LocalAlias
+				}
 			}
 
 			results <- result
@@ -163,7 +190,8 @@ func (c *Collector) parseLockSection(section string) *HostLockInfo {
 	if c.lockConfig != nil && c.lockConfig.Stale > 0 {
 		staleThreshold = c.lockConfig.Stale
 	}
-	if info.Age() > staleThreshold {
+	// A job still running on this machine keeps its lock, as in lock.Acquire.
+	if info.Age() > staleThreshold && !info.HasLiveLocalJob() {
 		return nil // Stale locks don't count
 	}
 
@@ -184,6 +212,10 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	case <-ctx.Done():
 		return nil, nil, 0, ctx.Err()
 	default:
+	}
+
+	if c.hosts[alias].Local {
+		return c.collectLocal(ctx, alias)
 	}
 
 	// Get connection with platform detection
@@ -234,6 +266,32 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 		metrics, lockInfo := c.parseOutput(alias, platform, string(r.output))
 		return metrics, lockInfo, probeLatency, nil
 	}
+}
+
+// collectLocal gathers metrics for a host with local: true by running the
+// same commands on this machine. There's no network, so latency is zero.
+func (c *Collector) collectLocal(ctx context.Context, alias string) (*HostMetrics, *HostLockInfo, time.Duration, error) {
+	platform, out, err := c.runLocal(ctx, c.buildMetrics)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	metrics, lockInfo := c.parseOutput(alias, platform, out)
+	return metrics, lockInfo, 0, nil
+}
+
+// runLocal runs the command build returns for this machine's platform
+// (given the lock dir) and returns its combined output. When ctx is done the
+// command and everything it started are killed, and the error is ctx's.
+func (c *Collector) runLocal(ctx context.Context, build func(Platform, string) string) (Platform, string, error) {
+	platform := c.localPlatform
+	out, err := host.LocalCommand(ctx, "sh", build(platform, c.lockDir())).CombinedOutput()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return platform, "", ctxErr
+	}
+	if err != nil {
+		return platform, "", err
+	}
+	return platform, string(out), nil
 }
 
 // probeLatency measures the actual SSH round-trip latency using a lightweight command.

@@ -15,6 +15,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
@@ -94,15 +95,8 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		}
 	}
 
-	// Every host-restricted subtask needs at least one of its hosts in the
-	// run. Without this check the scheduler would have nowhere to send it and
-	// the run would end with a "no available host" failure after the other
-	// subtasks finished; with --host pointing at a disallowed host the old
-	// scheduler ran it there anyway.
-	if !target.local {
-		if err := checkSubtaskHosts(tasks, hostOrder); err != nil {
-			return 1, err
-		}
+	if err := applySubtaskHosts(tasks, target, hostOrder); err != nil {
+		return 1, err
 	}
 
 	// If dry run, just show the plan
@@ -130,10 +124,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		Setup:       task.Setup,
 		SyncOptions: syncNotices.optionsFor,
 	}
-	if !PrettyMode() {
-		parallelCfg.OnRequeue = requeuedEvent
-	}
-	parallelCfg.OnLockWarn = func(hostName, msg string) { lockWarn(hostName)(msg) }
+	setParallelEventHooks(&parallelCfg, resolved.Project.Lock.Timeout)
 
 	// Apply CLI overrides
 	if opts.FailFast {
@@ -179,7 +170,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	}
 
 	if target.local && !PrettyMode() {
-		emitLocalConnect(target.reason)
+		emitLocalConnect(target)
 	}
 
 	// Create orchestrator with host priority order preserved
@@ -203,14 +194,53 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	if stopErr := interruptedBeforeRunning(ctx, result); stopErr != nil {
+		if logWriter != nil {
+			writeTaskLogs(logWriter, result, opts.TaskName)
+		}
+		return 130, stopErr
+	}
 
 	// Pull every subtask's files, pass or fail: a failed shard's junit and
 	// coverage files are what you need to debug it. Skipped on Ctrl+C.
 	if ctx.Err() == nil {
-		pullSubtaskFiles(tasks, result, hosts, rrsync.Pull)
+		pullSubtaskFiles(tasks, result, hosts, resolved.ProjectRoot, rrsync.Pull)
 	}
 
 	return renderParallelResult(result, logWriter, opts.TaskName, target.reason), nil
+}
+
+// setParallelEventHooks makes workers report re-queues, lock waits and lock
+// warnings the way a single run does. Re-queues and lock waits are events
+// in structured mode only: pretty mode shows a re-queued or waiting subtask
+// in the live display, which has no line for the holder. lockTimeout is how
+// long a worker waits for a host's lock.
+func setParallelEventHooks(cfg *parallel.Config, lockTimeout time.Duration) {
+	if !PrettyMode() {
+		cfg.OnRequeue = requeuedEvent
+		cfg.OnLockWait = func(hostName string, holder *lock.LockInfo) {
+			lockWaitingEvent(hostName, holder, lockTimeout)
+		}
+	}
+	cfg.OnLockWarn = func(hostName, msg string) { lockWarn(hostName)(msg) }
+}
+
+// interruptedBeforeRunning returns the lock wait's INTERRUPTED error when
+// the user stopped the run (ctx cancelled) while every subtask was still
+// waiting for its host's lock, so none ran: the run then fails the way a
+// single run's interrupted wait does, exit 130, rather than as failed
+// subtasks an agent would retry. It returns nil when any subtask ended
+// another way (ran, failed to connect), and the result is reported as usual.
+func interruptedBeforeRunning(ctx context.Context, result *parallel.Result) error {
+	if ctx.Err() == nil || len(result.TaskResults) == 0 {
+		return nil
+	}
+	for i := range result.TaskResults {
+		if !errors.IsCode(result.TaskResults[i].Error, errors.ErrInterrupted) {
+			return nil
+		}
+	}
+	return result.TaskResults[0].Error
 }
 
 // renderParallelResult writes the logs and reports the run's result.
@@ -355,6 +385,23 @@ func rewriteForwardArgs(resolved *config.ResolvedConfig, task *config.TaskConfig
 		opts.Args = rewritten
 		announcePathRewrites(n, resolved.ProjectRoot, ".")
 	}
+}
+
+// applySubtaskHosts settles subtask host restrictions for the run. A local
+// target (--local, local mode) runs every subtask here by explicit choice,
+// so it drops their restrictions, as it overrides the project's hosts: list
+// (a shared config can't name each person's local host). Otherwise every
+// restricted subtask needs one of its hosts in the run: without this check
+// the scheduler would have nowhere to send it, and the run would end with a
+// "no available host" failure after the other subtasks finished.
+func applySubtaskHosts(tasks []parallel.TaskInfo, target execTarget, hostOrder []string) error {
+	if target.local {
+		for i := range tasks {
+			tasks[i].AllowedHosts = nil
+		}
+		return nil
+	}
+	return checkSubtaskHosts(tasks, hostOrder)
 }
 
 // checkSubtaskHosts fails when a restricted subtask has none of its allowed
@@ -511,11 +558,14 @@ func (n *parallelSyncNotices) flush() {
 // subtask order, from the host the subtask ran on, through the alias that
 // reached it. Each subtask's files land in <dest>/<stem>/, where <stem> is
 // its log file's name without .log (see subtaskPullDir), so shards with the
-// same output paths don't overwrite each other locally. Subtasks that never
-// reached a remote host (local runs, no host available) are skipped. A
-// failed pull is reported but doesn't change the run's exit code, same as
+// same output paths don't overwrite each other locally. A subtask that ran in
+// place (on a local host, or bare with --local and no local host) is copied
+// from the dir it ran in: the local host's dir, or localDir for a bare run.
+// Subtasks that ran nowhere (no host available, cancelled before
+// connecting) are skipped.
+// A failed pull is reported but doesn't change the run's exit code, same as
 // single tasks.
-func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, pull pullFunc) {
+func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, localDir string, pull pullFunc) {
 	ranOn := make(map[int]*parallel.TaskResult, len(result.TaskResults))
 	for i := range result.TaskResults {
 		ranOn[result.TaskResults[i].TaskIndex] = &result.TaskResults[i]
@@ -526,15 +576,23 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 		if !ok || len(t.Pull) == 0 {
 			continue
 		}
-		hostCfg, remote := hosts[tr.Host]
-		if !remote {
-			continue // "local" or "none": nothing on a remote to pull
+		opts := rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}
+		hostCfg, known := hosts[tr.Host]
+		if !known {
+			if tr.Host == host.LocalAlias { // bare local run (no local host)
+				pullAndReport(host.LocalRunConnection("", config.Host{}, ""), opts, inPlacePull(localDir), t.Name)
+			}
+			continue // otherwise "none": the subtask never ran
 		}
 		if tr.Alias == "" {
 			continue // never connected (e.g. cancelled by fail-fast): nothing ran there
 		}
 		conn := &host.Connection{Name: tr.Host, Alias: tr.Alias, Host: hostCfg}
-		pullAndReport(conn, rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}, pull, t.Name)
+		if hostCfg.Local {
+			pullAndReport(conn, opts, inPlacePull(hostCfg.Dir), t.Name)
+			continue
+		}
+		pullAndReport(conn, opts, pull, t.Name)
 	}
 }
 

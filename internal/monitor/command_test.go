@@ -34,7 +34,7 @@ func TestBuildMetricsCommand_Darwin(t *testing.T) {
 	assert.Contains(t, cmd, "top -l 1")
 	assert.Contains(t, cmd, "vm_stat")
 	assert.Contains(t, cmd, "sysctl hw.memsize")
-	assert.Contains(t, cmd, "netstat -ib")
+	assert.Contains(t, cmd, "netstat -ibn", "-n: resolving addresses to names takes seconds on some networks")
 	assert.Contains(t, cmd, "ps aux")
 	assert.Contains(t, cmd, "df -P -k /")
 	assert.Contains(t, cmd, "sysctl -n hw.ncpu")

@@ -101,9 +101,13 @@ rr sync --dry-run
 
 ### Stuck Lock
 
-**Symptoms:** `LOCK_HELD`, "Lock timeout after 5m0s - someone else is using this remote", or "All hosts are locked - timed out after 1m0s". The message names the holder (user, pid, command, age).
+**Symptoms:** `LOCK_HELD`, "Lock timeout after 5m0s - another run is using m4-mini", or "All hosts are locked - timed out after 1m0s". The message names the holder (user, pid, command, age).
 
-There's one lock per host, shared across projects, so another project's run on the same host blocks you. The holder refreshes the lock every 30 seconds. A lock that stops being refreshed goes stale after `lock.stale` (default 90s) and is reclaimed automatically. A lock left by a dead rr process on your own machine is reclaimed immediately.
+There's one lock per host, shared across projects, so another project's run on the same host blocks you. The holder refreshes the lock every 30 seconds. A lock that stops being refreshed goes stale after `lock.stale` (default 90s) and is reclaimed automatically. A lock left by a dead rr process on your own machine is reclaimed immediately, except on a `local: true` host whose job is still running: a SIGKILLed rr leaves its job running, and the lock holds until the job exits (`pgrep -l -g <job_pgid>` with the pgid from `<lock.dir>/rr.lock/info.json` shows it).
+
+You see the holder before the timeout: a `lock` `waiting` event (one host) or `connect` `waiting` event (several hosts) carries `details.holders` as soon as the wait starts.
+
+**`INTERRUPTED`, exit 130, "Stopped waiting for the lock on ..."**: rr was stopped with Ctrl+C or SIGTERM while waiting. Nothing ran. Don't retry unless the user asks.
 
 **Manual fix** (only when the holder is gone):
 ```bash
@@ -165,7 +169,13 @@ Or in project config (overrides global):
 local_fallback: on-unreachable
 ```
 
-A local fallback shows up as a `connect` phase event with `"status":"warn"` and `details.reason` (`hosts_unreachable` or `all_hosts_locked`), plus `details.fallback` on the result. A deliberate local run is a normal `connect` `complete` event with `host: local` and `details.reason` of `local_flag` (`--local`) or `local_mode` (`local_fallback` on with no hosts listed). Neither needs any host configured.
+A local fallback shows up as a `connect` phase event with `"status":"warn"` and `details.reason` (`hosts_unreachable` or `all_hosts_locked`), plus `details.fallback` on the result. A deliberate local run is a normal `connect` `complete` event with `details.reason` of `local_flag` (`--local`) or `local_mode` (`local_fallback` on with no hosts listed). Neither needs any host configured. `host` is `local`, or the local host's name (say `dev`) when the global config has a `local: true` host, since these runs then go through it, lock and all. Branch on `details.reason`, not on `host`.
+
+### "No .rr.yaml in this checkout"
+
+**Symptoms:** `CONFIG_NOT_FOUND` with "Found <path>/.rr.yaml above it, but didn't use it", usually in a worktree under the main checkout (`.claude/worktrees/...`).
+
+rr doesn't look for `.rr.yaml` above the git top level, because the outer file belongs to another checkout and would make rr run or sync that checkout's code. Copy it in with the `cp` command in `suggestion`, or commit `.rr.yaml` to the branch.
 
 ### Task Args Rejected
 

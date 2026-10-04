@@ -28,6 +28,14 @@ cat ~/.rr/config.yaml
 
 If missing or empty, ask the user for their remote machine details and help create the config. Refer to the rr skill for config format.
 
+If the user wants rr to run on this machine too (in rotation with remotes, or as the only host, for example so concurrent agents queue on one lock), add it as a local host:
+
+```bash
+rr host add --local --name dev
+```
+
+A local host runs in place in the project directory with no SSH or sync. Only one host can be local, and it can't be named `local`. Local hosts don't work on native Windows. Projects with no `hosts:` list in `.rr.yaml` pick it up automatically, so mention that to the user if they have other projects.
+
 ## Step 2: Project Config
 
 Detect the project's tech stack by checking for `package.json`, `go.mod`, `pyproject.toml`, `Makefile`, `Cargo.toml`, etc.
@@ -40,6 +48,8 @@ Create or update `.rr.yaml` with:
 Refer to the rr skill for config format and task syntax.
 
 ## Step 3: Verify SSH
+
+Skip the SSH debugging below for a local host: it has no SSH, `rr doctor` skips the SSH key and agent checks when every host is local, and `rr setup <local host>` fails by design.
 
 Run diagnostics:
 
@@ -84,7 +94,9 @@ Then test with sync:
 rr run "ls -la"
 ```
 
-If the remote directory is wrong, check the `dir` setting in global config.
+If the remote directory is wrong, check the `dir` setting in global config. A local host has no `dir`: it runs in the project directory, and the sync phase reports `skipped` with `reason: in_place`.
+
+If rr fails with `CONFIG_NOT_FOUND` naming a `.rr.yaml` above the current checkout, you're in a worktree nested inside the main checkout. Commit `.rr.yaml` (or copy it in) so the worktree has its own.
 
 ## Step 5: Configure and Verify Requirements
 
@@ -183,6 +195,14 @@ cat ~/.rr/config.yaml 2>/dev/null
 rr host add --name <name> --ssh "<alias>" --dir "~/projects/\${PROJECT}" --skip-probe
 ```
 
+**IF the user wants to run on this machine** (no remote, or alongside remotes):
+
+```bash
+rr host add --local --name dev
+```
+
+The envelope on stdout has `data.local: true`. `CONFIG_INVALID` with "only one host can be local" means one already exists; use that host's name instead.
+
 ### Step 2: Check Project Config
 
 ```bash
@@ -192,7 +212,8 @@ rr doctor
 **Parse response:**
 - `data.summary.all_clear == true` -> Setup OK
 - Otherwise look at `data.categories[].results[]` entries with a non-zero `status` (`0` pass, `1` warn, `2` fail). Doctor exits 1 when any check fails and 0 on warnings only; a warning (no SSH agent, an unreachable host while another is reachable) doesn't block runs
-- A `config_file` warning "No project config (.rr.yaml) found" -> Run `rr init --non-interactive --host <host>`
+- A `config_file` warning "No project config (.rr.yaml) found" -> Run `rr init --non-interactive --host <host>` (`<host>` can be a configured host's name, a local host included)
+- A `config_file` failure "No .rr.yaml in this checkout ... Found ... above it" -> A worktree nested in the main checkout; copy `.rr.yaml` in with the `cp` command from the message, or commit it
 
 ### Step 3: Verify Connectivity
 
@@ -200,7 +221,7 @@ rr doctor
 rr status
 ```
 
-**Parse `data.hosts[]` array:**
+**Parse `data.hosts[]` array** (a local host shows one alias, `local`, always connected):
 
 ```
 FOR each host in data.hosts:
@@ -232,7 +253,8 @@ stdout has the command output; stderr has JSON phase events and a final `{"type"
 **Expected:** Output contains "rr-test-ok", exit code 0
 
 **If fails:** If the command ran and exited nonzero, stderr ends with a `{"type":"result","status":"failed",...}` event: read its `exit_code` and `details`. If rr failed before the command started (connection, lock, sync), stderr has a JSON error envelope instead: read `error.code` and `error.suggestion`, and check:
-- Lock issues (`LOCK_HELD`): `rr unlock <host>` then retry
+- Lock issues (`LOCK_HELD`): the message names the holder; if it's gone, `rr unlock <host>` then retry
+- `INTERRUPTED` (exit 130): rr was stopped while waiting for a lock; nothing ran
 - Directory issues: Verify `dir` in `~/.rr/config.yaml`
 
 ### Step 5: Verify Requirements

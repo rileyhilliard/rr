@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
@@ -145,8 +147,13 @@ func (r *StructuredReporter) PhaseComplete(phase, host string, duration time.Dur
 }
 
 func (r *StructuredReporter) PhaseFailed(phase string, err error) {
+	// The error envelope that follows has the code and suggestion, so the
+	// event gets the one-line message, not the pretty-printed error.
 	errMsg := ""
-	if err != nil {
+	var rrErr *rrerrors.Error
+	if errors.As(err, &rrErr) {
+		errMsg = rrErr.Message
+	} else if err != nil {
 		errMsg = err.Error()
 	}
 	WritePhaseEvent(PhaseEvent{

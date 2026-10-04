@@ -1,6 +1,8 @@
 package lock
 
 import (
+	"context"
+	stderrors "errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -21,6 +23,8 @@ type AcquireOption func(*acquireOptions)
 type acquireOptions struct {
 	logger   logger.Logger
 	warnFunc func(msg string)
+	waitFunc func(holder *LockInfo)
+	ctx      context.Context
 }
 
 // WithLogger sets the logger for lock operations.
@@ -38,6 +42,37 @@ func WithWarnFunc(fn func(msg string)) AcquireOption {
 	return func(o *acquireOptions) {
 		o.warnFunc = fn
 	}
+}
+
+// WithWaitFunc sets a callback Acquire calls once, the first time it finds
+// the lock held and starts waiting, so the caller can say who it's waiting
+// on. holder is nil when the holder's info file can't be read.
+func WithWaitFunc(fn func(holder *LockInfo)) AcquireOption {
+	return func(o *acquireOptions) {
+		o.waitFunc = fn
+	}
+}
+
+// WithContext makes Acquire stop waiting when ctx is done. It then returns an
+// ErrInterrupted error that wraps ctx.Err(), so errors.Is(err,
+// context.Canceled) holds.
+func WithContext(ctx context.Context) AcquireOption {
+	return func(o *acquireOptions) {
+		o.ctx = ctx
+	}
+}
+
+// retryInterval is how long Acquire waits between attempts on a held lock.
+var retryInterval = 2 * time.Second
+
+// SetRetryIntervalForTesting sets how long Acquire waits between attempts
+// and returns a func that restores the old value. It's for tests that wait
+// on a lock and can't afford the default interval; don't call it otherwise,
+// and don't call it while an Acquire is running.
+func SetRetryIntervalForTesting(d time.Duration) func() {
+	old := retryInterval
+	retryInterval = d
+	return func() { retryInterval = old }
 }
 
 // defaultLogger returns a logger for lock operations.
@@ -59,6 +94,9 @@ type Lock struct {
 	heartbeatStop chan struct{}
 	heartbeatDone chan struct{}
 	heartbeatMu   sync.Mutex
+
+	infoMu   sync.Mutex // serializes Info updates, their writes, and Release
+	released bool       // set by Release; later calls leave the lock dir alone
 }
 
 // Acquire attempts to acquire a distributed lock on the remote host.
@@ -77,10 +115,14 @@ type Lock struct {
 //
 // Options can be passed to configure behavior:
 //   - WithLogger(l): Use a custom logger instead of the default
+//   - WithWarnFunc(fn): Report a stolen stale or dead-holder lock
+//   - WithWaitFunc(fn): Report the holder once, when the wait starts
+//   - WithContext(ctx): Stop waiting when ctx is done
 func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts ...AcquireOption) (*Lock, error) {
 	// Apply options
 	options := &acquireOptions{
 		logger: defaultLogger,
+		ctx:    context.Background(),
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -131,9 +173,13 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 
 	startTime := time.Now()
 	iteration := 0
+	waiting := false
 
 	for {
 		iteration++
+		if err := options.ctx.Err(); err != nil {
+			return nil, InterruptedError(conn.Name, err)
+		}
 		// Check if we've exceeded the timeout
 		elapsed := time.Since(startTime)
 		if elapsed > cfg.Timeout {
@@ -141,7 +187,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 			holder := describeLockHolder(conn.Client, infoFile)
 			log.Debug("timeout after %d iterations, elapsed=%s, holder=%s", iteration, elapsed, holder)
 			return nil, errors.New(errors.ErrLock,
-				fmt.Sprintf("Lock timeout after %s - someone else is using this remote", cfg.Timeout),
+				fmt.Sprintf("Lock timeout after %s - another run is using %s", cfg.Timeout, conn.Name),
 				fmt.Sprintf("Lock holder: %s. Wait for it to finish or run 'rr unlock %s' if it's stuck.", holder, conn.Name))
 		}
 
@@ -210,7 +256,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 				forceRemove(conn.Client, lockDir)
 				return nil, errors.New(errors.ErrLock,
 					"Couldn't write the lock info file",
-					"Check disk space and permissions on the remote.")
+					"Check disk space and permissions in the lock dir on that host.")
 			}
 
 			log.Debug("lock acquired successfully: %s", lockDir)
@@ -222,10 +268,72 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		}
 
 		// Lock is held by someone else, wait before retrying
-		log.Debug("mkdir failed (exitCode=%d), lock may be held by another process, waiting 2s before retry", exitCode)
-		time.Sleep(2 * time.Second)
+		log.Debug("mkdir failed (exitCode=%d), lock may be held by another process, waiting %s before retry", exitCode, retryInterval)
+		if !waiting {
+			waiting = true
+			if options.waitFunc != nil {
+				options.waitFunc(awaitHolderInfo(options.ctx, conn, infoFile))
+			}
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-options.ctx.Done():
+			timer.Stop()
+			return nil, InterruptedError(conn.Name, options.ctx.Err())
+		case <-timer.C:
+		}
 	}
 }
+
+// holderInfoGrace is how long a waiter gives a new holder to write its info
+// file. The holder writes it right after its mkdir, so a run that lost the
+// race by a moment would otherwise report the holder as unknown.
+const holderInfoGrace = 500 * time.Millisecond
+
+// awaitHolderInfo reads the holder's info, polling for up to holderInfoGrace
+// while the file isn't there yet. It returns nil when the holder still can't
+// be read, or when ctx is done.
+func awaitHolderInfo(ctx context.Context, conn *host.Connection, infoFile string) *LockInfo {
+	deadline := time.Now().Add(holderInfoGrace)
+	for {
+		if holder, err := readLockInfo(conn.Client, infoFile); err == nil {
+			return holder
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// InterruptedError is the error a lock wait returns when its context is done
+// before it gets the lock: Acquire's, and the load-balanced wait across
+// hosts. hostName names the host or hosts waited on. It isn't ErrLock: the
+// lock wasn't the problem, and an agent that retries a held lock shouldn't
+// retry a run the user stopped.
+func InterruptedError(hostName string, cause error) error {
+	return errors.WrapWithCode(stopReason{cause}, errors.ErrInterrupted,
+		fmt.Sprintf("Stopped waiting for the lock on %s", hostName),
+		"Nothing ran. Run the command again when you want it to run.")
+}
+
+// stopReason says in words why a lock wait's context ended, where the
+// context error would print "context canceled". It unwraps to that error,
+// so errors.Is still matches context.Canceled or DeadlineExceeded.
+type stopReason struct{ cause error }
+
+func (s stopReason) Error() string {
+	if stderrors.Is(s.cause, context.DeadlineExceeded) {
+		return "rr's time limit for the run ran out"
+	}
+	return "rr was stopped (Ctrl+C or SIGTERM)"
+}
+
+func (s stopReason) Unwrap() error { return s.cause }
 
 // TryAcquire attempts to acquire a lock without blocking.
 // Unlike Acquire, it returns immediately if the lock is held by another process.
@@ -353,7 +461,7 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 		forceRemove(conn.Client, lockDir)
 		return nil, errors.New(errors.ErrLock,
 			"Couldn't write the lock info file",
-			fmt.Sprintf("Check disk space and permissions on the remote. Error: %s", strings.TrimSpace(string(writeStderr))))
+			fmt.Sprintf("Check disk space and permissions in the lock dir on that host. Error: %s", strings.TrimSpace(string(writeStderr))))
 	}
 
 	log.Debug("TryAcquire: lock acquired successfully: %s", lockDir)
@@ -392,6 +500,17 @@ func IsLocked(conn *host.Connection, cfg config.LockConfig) bool {
 	}
 
 	return true
+}
+
+// IsHeld is IsLocked, except that a lock held by a process on this machine
+// that is no longer running counts as free: Acquire would steal it at once
+// (see stealDeadHolderLock), so it isn't holding anything up. It only reads.
+func IsHeld(conn *host.Connection, cfg config.LockConfig) bool {
+	if !IsLocked(conn, cfg) {
+		return false
+	}
+	info := GetLockInfo(conn, cfg)
+	return info == nil || !info.IsDeadLocalHolder()
 }
 
 // GetLockHolder returns information about the current lock holder, if any.
@@ -509,7 +628,21 @@ func (l *Lock) Release() error {
 	}
 
 	l.StopHeartbeat()
-	return forceRemove(l.conn.Client, l.Dir)
+
+	// Release runs once. A run releases early, when its command finishes,
+	// and again when its workflow closes; by then another run may hold the
+	// lock, and removing the dir again would delete that run's lock. A
+	// removal that fails leaves the lock ours, so a later call retries it.
+	l.infoMu.Lock()
+	defer l.infoMu.Unlock()
+	if l.released {
+		return nil
+	}
+	if err := forceRemove(l.conn.Client, l.Dir); err != nil {
+		return err
+	}
+	l.released = true
+	return nil
 }
 
 // UpdateCommand updates the command field in the lock info file.
@@ -518,11 +651,42 @@ func (l *Lock) UpdateCommand(command string) error {
 	if l == nil || l.conn == nil || l.conn.Client == nil || l.Info == nil {
 		return nil
 	}
+	l.infoMu.Lock()
+	defer l.infoMu.Unlock()
+	if l.released {
+		return nil // the dir may belong to another run now
+	}
 
 	// Update the in-memory info
 	l.Info.Command = command
+	return l.writeInfo()
+}
 
-	// Write updated info to the lock file
+// SetJobPGID records the process group of the job running under this lock,
+// and the current time as the job's start, so the lock stays held while that
+// job runs even if this rr process is killed (see LockInfo.IsDeadLocalHolder).
+// A local host calls it once the job has started. JobStarted must not be
+// earlier than the job's real start: jobGroupAlive takes a leader that
+// started more than jobStartTolerance after JobStarted for a reused pid.
+// Recording it late only errs toward keeping the lock.
+func (l *Lock) SetJobPGID(pgid int) error {
+	if l == nil || l.conn == nil || l.conn.Client == nil || l.Info == nil {
+		return nil
+	}
+	l.infoMu.Lock()
+	defer l.infoMu.Unlock()
+	if l.released {
+		return nil // the dir may belong to another run now
+	}
+
+	l.Info.JobPGID = pgid
+	l.Info.JobStarted = time.Now()
+	return l.writeInfo()
+}
+
+// writeInfo rewrites the lock's info file from l.Info. The caller holds
+// infoMu.
+func (l *Lock) writeInfo() error {
 	infoFile := filepath.Join(l.Dir, "info.json")
 	infoJSON, err := l.Info.Marshal()
 	if err != nil {
@@ -580,6 +744,9 @@ func LockDir(cfg config.LockConfig) string {
 //
 // We err on the side of "not stale" when we can't read the file - better to
 // wait for a lock that might be legitimate than to break into an active one.
+//
+// A holder on this machine whose recorded job (JobPGID) is still running is
+// never stale, whatever the mtime: its rr may be dead, but its job isn't.
 func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.Duration) bool {
 	if staleThreshold <= 0 {
 		return false
@@ -599,7 +766,7 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 			age := time.Since(time.Unix(mtime, 0))
 			isStale := age > staleThreshold
 			debugf("isLockStale: mtime-based age=%s, threshold=%s, isStale=%v", age, staleThreshold, isStale)
-			return isStale
+			return isStale && !holderHasLiveLocalJob(client, infoFile)
 		}
 	}
 
@@ -618,9 +785,21 @@ func isLockStale(client sshutil.SSHClient, infoFile string, staleThreshold time.
 		return false
 	}
 
-	isStale := info.Age() > staleThreshold
+	isStale := info.Age() > staleThreshold && !info.HasLiveLocalJob()
 	debugf("isLockStale: fallback age=%s, threshold=%s, isStale=%v", info.Age(), staleThreshold, isStale)
 	return isStale
+}
+
+// holderHasLiveLocalJob reports whether the lock's holder recorded a job on
+// this machine that is still running (see LockInfo.HasLiveLocalJob). It's
+// only asked once a lock looks stale, so a fresh lock costs no extra read.
+func holderHasLiveLocalJob(client sshutil.SSHClient, infoFile string) bool {
+	info, err := readLockInfo(client, infoFile)
+	if err != nil || !info.HasLiveLocalJob() {
+		return false
+	}
+	debugf("isLockStale: holder's job group %d is still running on this machine, not stale", info.JobPGID)
+	return true
 }
 
 // readLockInfo reads and parses the lock info file.

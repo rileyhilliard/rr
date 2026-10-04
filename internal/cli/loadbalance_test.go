@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveAllLockedAction(t *testing.T) {
@@ -69,6 +71,16 @@ func TestHolderDetails(t *testing.T) {
 
 	assert.Equal(t, "m1-linux", details[1].Host)
 	assert.Zero(t, details[1].Pid)
+
+	// In JSON, a known holder on another machine says so; an unreadable
+	// holder leaves same_machine out rather than claiming false.
+	raw, err := json.Marshal(details)
+	require.NoError(t, err)
+	var decoded []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	assert.Equal(t, false, decoded[0]["same_machine"])
+	assert.NotContains(t, decoded[1], "same_machine")
+	assert.Equal(t, "m1-linux", decoded[1]["host"])
 }
 
 func TestWaitMessage(t *testing.T) {
@@ -95,16 +107,67 @@ func TestDescribeHolders(t *testing.T) {
 	assert.Equal(t, "m4-mini: 'rr test-backend' (pid 46822, this machine); m1-linux (pid 99)", desc)
 }
 
-func TestLocalFallbackResult(t *testing.T) {
-	attempts := []hostAttempt{{hostName: "m4-mini"}}
-	result := localFallbackResult(host.LocalReasonAllHostsLocked, attempts)
+// A load-balanced fallback runs on the global config's local host when there
+// is one, and bare otherwise; the warn event names where it went.
+func TestFallBackLocally(t *testing.T) {
+	withStructuredOutput(t)
+	projectRoot := t.TempDir()
+	remote := config.Host{SSH: []string{"m4-mini"}, SetupCommands: []string{"echo remote-only"}}
 
-	assert.True(t, result.isLocal)
-	assert.True(t, result.fellBack)
-	assert.True(t, result.conn.IsLocal)
-	assert.Equal(t, "local", result.conn.Name)
-	assert.Nil(t, result.lock)
-	assert.Equal(t, attempts, result.hostsState)
+	tests := []struct {
+		name      string
+		hosts     map[string]config.Host
+		wantName  string
+		wantBare  bool
+		wantSetup []string
+	}{
+		{
+			name:     "no local host",
+			hosts:    map[string]config.Host{"m4-mini": remote},
+			wantName: "local",
+			wantBare: true,
+		},
+		{
+			name: "local host",
+			hosts: map[string]config.Host{
+				"m4-mini": remote,
+				"dev":     {Local: true, SetupCommands: []string{"export FROM_SETUP=yes"}},
+			},
+			wantName:  "dev",
+			wantSetup: []string{"export FROM_SETUP=yes"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &WorkflowContext{Resolved: &config.ResolvedConfig{
+				Global:      &config.GlobalConfig{Hosts: tt.hosts},
+				ProjectRoot: projectRoot,
+			}}
+			attempts := []hostAttempt{{hostName: "m4-mini"}}
+
+			var result *findAvailableHostResult
+			events := captureStderr(t, func() {
+				result = fallBackLocally(ctx, fallbackDetail{Reason: host.LocalReasonAllHostsLocked}, attempts)
+			})
+
+			conn := result.conn
+			assert.Equal(t, tt.wantName, conn.Name)
+			assert.Equal(t, tt.wantBare, conn.IsLocal)
+			assert.Equal(t, host.LocalReasonAllHostsLocked, conn.LocalReason)
+			assert.Equal(t, tt.wantSetup, conn.Host.SetupCommands, "never the remote's setup")
+			assert.True(t, conn.InPlace())
+			if !tt.wantBare {
+				assert.Equal(t, projectRoot, conn.Host.Dir)
+			}
+			assert.Nil(t, result.lock, "the caller locks a fallback")
+			assert.Equal(t, attempts, result.hostsState)
+
+			warn := eventsWith(parseEvents(t, events), "connect", "warn")
+			require.Len(t, warn, 1)
+			assert.Equal(t, tt.wantName, warn[0].Host)
+			assert.Equal(t, host.LocalReasonAllHostsLocked, warn[0].Details["reason"])
+		})
+	}
 }
 
 func TestBuildAllHostsLockedError_NoForceUnlockMention(t *testing.T) {

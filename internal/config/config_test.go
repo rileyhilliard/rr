@@ -563,7 +563,7 @@ func TestFind_FindsConfigAtGitRoot(t *testing.T) {
 func TestFind_StopsAtGitRoot(t *testing.T) {
 	// Create project structure:
 	// tmpdir/
-	//   .rr.yaml      <- config above git root (should NOT be found)
+	//   .rr.yaml      <- config above git root (should NOT be used)
 	//   repo/
 	//     .git/       <- git root
 	//     src/
@@ -591,7 +591,8 @@ func TestFind_StopsAtGitRoot(t *testing.T) {
 	err = os.Chdir(subdir)
 	require.NoError(t, err)
 
-	// Should NOT find config above git root
+	// Should NOT find config above git root. tmpdir isn't a checkout, so
+	// that config isn't another checkout's either: plain not-found.
 	path, err := Find("")
 	require.NoError(t, err)
 	assert.Empty(t, path)

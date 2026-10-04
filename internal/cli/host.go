@@ -22,11 +22,12 @@ import (
 var (
 	hostListJSON bool
 	// Non-interactive host add flags
-	hostAddName string
-	hostAddSSH  string
-	hostAddDir  string
-	hostAddTags []string
-	hostAddEnv  []string // KEY=VALUE pairs
+	hostAddName  string
+	hostAddSSH   string
+	hostAddDir   string
+	hostAddLocal bool
+	hostAddTags  []string
+	hostAddEnv   []string // KEY=VALUE pairs
 )
 
 // HostListOutput represents the JSON output for host list command.
@@ -40,6 +41,7 @@ type HostListOutput struct {
 type HostConfigInfo struct {
 	Name       string            `json:"name"`
 	SSHAliases []string          `json:"ssh_aliases"`
+	Local      bool              `json:"local,omitempty"`
 	Dir        string            `json:"dir"`
 	Tags       []string          `json:"tags,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
@@ -61,9 +63,25 @@ func hostAdd(opts HostAddOptions) error {
 		return err
 	}
 
+	if hostAddLocal {
+		return hostAddLocalFromFlags(cfg)
+	}
+
 	// Check if non-interactive mode is requested via flags
 	if hostAddName != "" && hostAddSSH != "" {
 		return hostAddNonInteractive(cfg, opts.SkipProbe)
+	}
+
+	// Offer this machine first, unless a local host already exists
+	if findLocalHost(cfg) == "" {
+		local, err := promptThisMachine()
+		if err != nil {
+			return err
+		}
+		if local {
+			_, err := addLocalHostInteractive(cfg)
+			return err
+		}
 	}
 
 	// Get list of existing SSH hosts to exclude from picker
@@ -73,7 +91,7 @@ func hostAdd(opts HostAddOptions) error {
 	}
 
 	// Collect machine config interactively (don't skip probe)
-	machine, cancelled, err := collectMachineConfig(existingSSHHosts, false)
+	machine, cancelled, err := collectMachineConfig(existingSSHHosts, false, newHostNameValidator(cfg))
 	if err != nil {
 		return err
 	}
@@ -158,6 +176,11 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 			fmt.Sprintf("Host '%s' already exists", hostAddName),
 			"Choose a different name, or use 'rr host remove' first.")
 	}
+	if hostAddName == "local" {
+		return errors.New(errors.ErrConfig,
+			"A host can't be named 'local' - that name is reserved for rr's local fallback",
+			"Pick another --name, for example the machine's hostname.")
+	}
 
 	// Determine remote directory
 	remoteDir := hostAddDir
@@ -184,17 +207,7 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 		}
 	}
 
-	// Parse environment variables from KEY=VALUE pairs
-	var envMap map[string]string
-	if len(hostAddEnv) > 0 {
-		envMap = make(map[string]string)
-		for _, pair := range hostAddEnv {
-			parts := strings.SplitN(pair, "=", 2)
-			if len(parts) == 2 {
-				envMap[parts[0]] = parts[1]
-			}
-		}
-	}
+	envMap := parseHostEnv(hostAddEnv)
 
 	// Build host config
 	hostConfig := config.Host{
@@ -227,6 +240,196 @@ func hostAddNonInteractive(cfg *config.GlobalConfig, skipProbe bool) error {
 	return nil
 }
 
+// parseHostEnv turns KEY=VALUE pairs into a map. Pairs without '=' are skipped.
+// Returns nil when there are no pairs.
+func parseHostEnv(pairs []string) map[string]string {
+	if len(pairs) == 0 {
+		return nil
+	}
+	envMap := make(map[string]string)
+	for _, pair := range pairs {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+	return envMap
+}
+
+// findLocalHost returns the name of the host with local: true, or "".
+func findLocalHost(cfg *config.GlobalConfig) string {
+	names := make([]string, 0, len(cfg.Hosts))
+	for name := range cfg.Hosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if cfg.Hosts[name].Local {
+			return name
+		}
+	}
+	return ""
+}
+
+// addLocalHost adds this machine to the global config as a local host and
+// saves it. It refuses a name that is taken or a second local host, and
+// validates the result before writing. Shared by `rr host add --local` and
+// `rr init`.
+func addLocalHost(cfg *config.GlobalConfig, name string, tags []string, env map[string]string) error {
+	if name == "" {
+		return errors.New(errors.ErrConfig,
+			"Host name is required",
+			"Use --name to specify a friendly name for the host")
+	}
+	if _, exists := cfg.Hosts[name]; exists {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("Host '%s' already exists", name),
+			"Choose a different name, or use 'rr host remove' first.")
+	}
+	if existing := findLocalHost(cfg); existing != "" {
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("only one host can be local, but '%s' already sets 'local: true'", existing),
+			fmt.Sprintf("Use '%s' as this machine, or run 'rr host remove %s' first.", existing, existing))
+	}
+
+	if cfg.Hosts == nil {
+		cfg.Hosts = make(map[string]config.Host)
+	}
+	cfg.Hosts[name] = config.Host{Local: true, Tags: tags, Env: env}
+
+	if err := config.ValidateGlobal(cfg); err != nil {
+		delete(cfg.Hosts, name)
+		return err
+	}
+	if err := saveGlobalConfig(cfg); err != nil {
+		delete(cfg.Hosts, name)
+		return err
+	}
+	return nil
+}
+
+// printLocalHostNote explains how a new local host joins project rotations.
+func printLocalHostNote() {
+	fmt.Println(ui.MutedStyle().Render("  Projects without a 'hosts:' list in .rr.yaml use every global host, so this"))
+	fmt.Println(ui.MutedStyle().Render("  machine joins their rotation. List hosts in 'hosts:' to control the order."))
+}
+
+// hostAddLocalFromFlags adds a local host from --name, --tag and --env.
+func hostAddLocalFromFlags(cfg *config.GlobalConfig) error {
+	if hostAddSSH != "" || hostAddDir != "" {
+		return errors.New(errors.ErrConfig,
+			"--local can't be combined with --ssh or --dir",
+			"A local host runs in place on this machine. Drop --local to add a remote host, or drop --ssh and --dir.")
+	}
+	if hostAddName == "" {
+		return errors.New(errors.ErrConfig,
+			"Host name is required",
+			"Use --name to specify a friendly name for the host")
+	}
+
+	envMap := parseHostEnv(hostAddEnv)
+	if err := addLocalHost(cfg, hostAddName, hostAddTags, envMap); err != nil {
+		return err
+	}
+
+	if MachineMode() {
+		data := map[string]interface{}{"name": hostAddName, "local": true}
+		if len(hostAddTags) > 0 {
+			data["tags"] = hostAddTags
+		}
+		if len(envMap) > 0 {
+			data["env"] = envMap
+		}
+		return WriteJSONSuccess(os.Stdout, data)
+	}
+
+	fmt.Printf("%s Added local host '%s'\n", ui.SymbolSuccess, hostAddName)
+	printLocalHostNote()
+	return nil
+}
+
+// addLocalHostInteractive asks for a name, then adds this machine as a local host.
+func addLocalHostInteractive(cfg *config.GlobalConfig) (string, error) {
+	name, err := promptLocalHostName(cfg)
+	if err != nil {
+		return "", err
+	}
+	if err := addLocalHost(cfg, name, nil, nil); err != nil {
+		return "", err
+	}
+	fmt.Printf("%s Added local host '%s'\n", ui.SymbolSuccess, name)
+	printLocalHostNote()
+	return name, nil
+}
+
+// defaultLocalHostName suggests a name for this machine: the short hostname,
+// or "local-dev" when that is unusable. It never returns "local".
+func defaultLocalHostName(cfg *config.GlobalConfig) string {
+	const fallback = "local-dev"
+	h, err := os.Hostname()
+	if err != nil {
+		return fallback
+	}
+	h = strings.ToLower(strings.TrimSpace(strings.SplitN(h, ".", 2)[0]))
+	if h == "" || h == "local" || h == "localhost" {
+		return fallback
+	}
+	if _, taken := cfg.Hosts[h]; taken {
+		return fallback
+	}
+	return h
+}
+
+// promptThisMachine asks whether to add this machine (local) or an SSH host.
+func promptThisMachine() (bool, error) {
+	var local bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[bool]().
+				Title("Which machine is this host?").
+				Options(
+					huh.NewOption("This machine (run in place, no SSH)", true),
+					huh.NewOption("A remote machine over SSH", false),
+				).
+				Value(&local),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return false, errors.WrapWithCode(err, errors.ErrConfig,
+			"Couldn't get your selection",
+			"Try non-interactive mode: rr host add --local --name <name>")
+	}
+	return local, nil
+}
+
+// promptLocalHostName asks for the name of the local host.
+func promptLocalHostName(cfg *config.GlobalConfig) (string, error) {
+	name := defaultLocalHostName(cfg)
+	if err := promptMachineName(&name, newHostNameValidator(cfg)); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(name), nil
+}
+
+// newHostNameValidator checks a new host's name at the prompt, rejecting
+// names the saved config can't have (taken, or the reserved "local") so the
+// user can retype instead of losing every answer given so far.
+func newHostNameValidator(cfg *config.GlobalConfig) func(string) error {
+	return func(s string) error {
+		if err := validateMachineName(s); err != nil {
+			return err
+		}
+		name := strings.TrimSpace(s)
+		if name == "local" {
+			return fmt.Errorf("a host can't be named 'local' - that name is reserved for rr's local fallback")
+		}
+		if _, exists := cfg.Hosts[name]; exists {
+			return fmt.Errorf("host '%s' already exists, choose a different name", name)
+		}
+		return nil
+	}
+}
+
 // hostRemove removes a host from the global configuration.
 func hostRemove(name string) error {
 	cfg, _, err := loadGlobalConfig()
@@ -252,12 +455,7 @@ func hostRemove(name string) error {
 		// Build options with SSH info
 		options := make([]huh.Option[string], len(hostNames))
 		for i, h := range hostNames {
-			label := h
-			// Add first SSH connection as hint
-			if host, ok := cfg.Hosts[h]; ok && len(host.SSH) > 0 {
-				label += " - " + host.SSH[0]
-			}
-			options[i] = huh.NewOption(label, h)
+			options[i] = huh.NewOption(hostPickerLabel(h, cfg.Hosts[h]), h)
 		}
 
 		form := huh.NewForm(
@@ -356,6 +554,15 @@ func hostList() error {
 	return outputHostListText(cfg, globalPath)
 }
 
+// sshAliasesOrEmpty returns aliases, or an empty list for a host with none
+// (a local host), so the JSON has [] rather than null.
+func sshAliasesOrEmpty(aliases []string) []string {
+	if aliases == nil {
+		return []string{}
+	}
+	return aliases
+}
+
 // outputHostListJSON outputs hosts in JSON format with envelope.
 // hostOrder specifies the priority order from project config (if available).
 // The default host is the first valid host from hostOrder, falling back to alphabetical.
@@ -391,7 +598,8 @@ func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string, globalPath
 		h := cfg.Hosts[name]
 		info := HostConfigInfo{
 			Name:       name,
-			SSHAliases: h.SSH,
+			SSHAliases: sshAliasesOrEmpty(h.SSH),
+			Local:      h.Local,
 			Dir:        h.Dir,
 			Tags:       h.Tags,
 			Env:        h.Env,
@@ -438,6 +646,10 @@ func outputHostListText(cfg *config.GlobalConfig, globalPath string) error {
 
 		// Name
 		fmt.Println(nameStyle.Render(name))
+
+		if h.Local {
+			fmt.Printf("%s%s\n", dimStyle.Render("  └─ "), "local (this machine, runs in the project dir)")
+		}
 
 		// SSH connections
 		for i, ssh := range h.SSH {

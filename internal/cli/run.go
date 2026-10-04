@@ -110,7 +110,7 @@ func Run(opts RunOptions) (int, error) {
 		// localRunDir re-stats and degrades to the project root, so a second
 		// computation could silently discard an explicit --cwd that passed
 		// validation a moment ago.
-		exitCode, err = exec.ExecuteLocal(opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = exec.ExecuteLocalContext(wf.Context(), opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
 		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
@@ -151,7 +151,7 @@ func Run(opts RunOptions) (int, error) {
 	failureHint := ""
 	if exitCode != 0 {
 		stderr := streamHandler.GetStderrCapture()
-		if !wf.Conn.IsLocal {
+		if !wf.Conn.InPlace() {
 			failureHint = buildFailureHint(opts.Command, stderr, wf.WorkDir, remoteProjectDir, wf.Conn.Name)
 		}
 		// A relative path that resolves from the caller's directory but not
@@ -160,6 +160,10 @@ func Run(opts RunOptions) (int, error) {
 		// way, and it applies equally to an explicit --cwd.
 		if failureHint == "" {
 			failureHint = buildRelativePathHint(stderr, wf.WorkDir, wf.SubdirOffset, effectiveRunOffset(wf, opts))
+		}
+		// A bare local run ran the command alone, with no setup to blame.
+		if failureHint == "" && !wf.Conn.IsLocal {
+			failureHint = buildSetupFileHint(stderr, config.GetMergedSetupCommands(wf.Resolved.Project, &wf.Conn.Host), wf.Conn.Name)
 		}
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
@@ -194,7 +198,7 @@ func Run(opts RunOptions) (int, error) {
 	if failureHint != "" {
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
 	} else if exitCode != 0 && !failureExplained {
-		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
+		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name, wf.Conn.InPlace())
 	}
 
 	printLogTail(logPath, opts.Tail)
@@ -212,7 +216,7 @@ func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *outp
 	}
 
 	var sshClient exec.SSHExecer
-	if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+	if !wf.Conn.InPlace() && wf.Conn.Client != nil {
 		sshClient = wf.Conn.Client
 	}
 
@@ -222,7 +226,7 @@ func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *outp
 		fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
 		fmt.Println(missingTool.Suggestion)
 
-		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+		if !wf.Conn.InPlace() && wf.Conn.Client != nil {
 			configPath, _ := config.Find(Config())
 			if configPath != "" {
 				fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
@@ -245,8 +249,9 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 	cmd := opts.Command
 
 	// Rewrite local absolute paths to their remote equivalents so commands
-	// authored against the local checkout work on the mirror.
-	if config.ResolveRewritePaths(wf.Resolved) {
+	// authored against the local checkout work on the mirror. A local host
+	// runs in the checkout itself, so its paths are already right.
+	if config.ResolveRewritePaths(wf.Resolved) && !wf.Conn.InPlace() {
 		rewritten, n := RewriteLocalPaths(cmd, wf.WorkDir, remoteProjectDir)
 		if n > 0 {
 			cmd = rewritten
@@ -260,14 +265,6 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 	// Group the command before anything is prefixed to it, so a ; or ||
 	// inside it can't run part of it after a failed setup or cd.
 	cmd = exec.ShellGroup(cmd)
-
-	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
-		setup := make([]string, 0, len(wf.Resolved.Project.Defaults.Setup))
-		for _, s := range wf.Resolved.Project.Defaults.Setup {
-			setup = append(setup, exec.ShellGroup(s))
-		}
-		cmd = strings.Join(setup, " && ") + " && " + cmd
-	}
 
 	// --cwd prepends a cd into a subdirectory of the remote project root.
 	// Reject paths that escape the project root via ../ traversal.
@@ -304,6 +301,17 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 			"rr: warning: %s/ isn't on the remote (excluded from sync?), so this ran at the project root", offset))
 		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || echo %s >&2; } && %s", subdir, warning, cmd)
 		reportAutoCWD(wf, offset)
+	}
+
+	// defaults.setup goes before the cd into a subdirectory: it runs at the
+	// project root, as for tasks, so a setup command like
+	// `. ./scripts/env.sh` finds its file wherever rr was run from.
+	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
+		setup := make([]string, 0, len(wf.Resolved.Project.Defaults.Setup))
+		for _, s := range wf.Resolved.Project.Defaults.Setup {
+			setup = append(setup, exec.ShellGroup(s))
+		}
+		cmd = strings.Join(setup, " && ") + " && " + cmd
 	}
 
 	return exec.BuildRemoteCommand(cmd, &wf.Conn.Host), nil
@@ -451,7 +459,9 @@ func renderFinalStatus(_ *ui.PhaseDisplay, exitCode int, totalTime, execTime tim
 
 // renderFailureHelp displays contextual help for command failures.
 // This is shown when the failure wasn't already explained (e.g., missing tool).
-func renderFailureHelp(exitCode int, command, host string) {
+// inPlace is true for a run on this machine (a local host or a bare local
+// run), which has no SSH to suggest.
+func renderFailureHelp(exitCode int, command, host string, inPlace bool) {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 
 	var hint string
@@ -461,7 +471,7 @@ func renderFailureHelp(exitCode int, command, host string) {
 	case 2:
 		hint = "Misuse or command failed. Check if a dependency is missing or command syntax is wrong."
 	case 126:
-		hint = "Command found but not executable. Check file permissions on remote."
+		hint = "Command found but not executable. Check file permissions on the host."
 	case 127:
 		hint = "Command not found. The tool may not be installed or not in PATH."
 	case 128:
@@ -469,7 +479,7 @@ func renderFailureHelp(exitCode int, command, host string) {
 	case 130:
 		hint = "Interrupted by Ctrl+C."
 	case 137:
-		hint = "Killed (likely OOM). The remote may have run out of memory."
+		hint = "Killed (likely OOM). The host may have run out of memory."
 	case 139:
 		hint = "Segmentation fault. The command crashed."
 	case 143:
@@ -488,8 +498,14 @@ func renderFailureHelp(exitCode int, command, host string) {
 	// Always show recovery suggestions for non-trivial failures
 	if exitCode != 130 && exitCode != 143 { // Skip for user interrupts
 		fmt.Printf("\n%s\n", mutedStyle.Render("Troubleshooting:"))
-		fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
-		fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))
+		if !inPlace {
+			fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
+		}
+		if inPlace {
+			fmt.Printf("%s\n", mutedStyle.Render("  - Check the command output above and your local environment"))
+		} else {
+			fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))
+		}
 		fmt.Printf("%s\n", mutedStyle.Render("  - Run 'rr doctor' to verify configuration"))
 	}
 }
@@ -656,7 +672,7 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 	_ = logs.Cleanup(resolved.Global.Logs)
 
 	if target.local && !PrettyMode() {
-		emitLocalConnect(target.reason)
+		emitLocalConnect(target)
 	}
 
 	// Create orchestrator

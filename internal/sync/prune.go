@@ -37,12 +37,12 @@ type PruneOptions struct {
 // worktrees that no longer exist locally. It returns the directories removed
 // (or, in dry-run mode, the candidates). localDir is the tree being synced.
 //
-// It does nothing when: the connection is local or nil; the host dir does
-// not end in ${PROJECT} (the remote layout is not "<parent>/<repo>@<wt>");
-// or git cannot list the local worktrees (an unknown live set must never be
-// treated as empty).
+// It does nothing when: the connection is nil or runs in place (see
+// host.Connection.InPlace); the host dir does not end in ${PROJECT} (the
+// remote layout is not "<parent>/<repo>@<wt>"); or git cannot list the
+// local worktrees (an unknown live set must never be treated as empty).
 func PruneStaleWorktrees(conn *host.Connection, localDir string, opts PruneOptions) ([]string, error) {
-	if conn == nil || conn.IsLocal || conn.Client == nil {
+	if conn == nil || conn.InPlace() || conn.Client == nil {
 		return nil, nil
 	}
 	remoteDir := strings.TrimSuffix(config.ExpandRemote(conn.Host.Dir), "/")

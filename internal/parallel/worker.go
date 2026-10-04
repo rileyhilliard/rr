@@ -27,6 +27,7 @@ type hostWorker struct {
 	conn         *host.Connection
 	connMu       sync.Mutex
 	hostLock     *lock.Lock
+	syncErr      error // the first task's lock-and-sync outcome (see ensureSync)
 	resultChan   chan<- TaskResult
 	failed       *bool
 	failedMu     *sync.Mutex
@@ -197,12 +198,20 @@ func (w *hostWorker) ensureConnection(_ context.Context) error {
 
 // ensureSync syncs files to the host and acquires a lock if not already done.
 // The lock is held for the lifetime of the worker to prevent conflicts with
-// other rr processes while parallel tasks are running on this host.
-func (w *hostWorker) ensureSync(_ context.Context) error {
+// other rr processes while parallel tasks are running on this host. Only the
+// first task tries; later ones get its outcome, so a task never runs on a
+// host whose lock the first one failed to take.
+func (w *hostWorker) ensureSync(ctx context.Context) error {
 	// Check if already synced (and locked)
 	if w.orchestrator.markHostSynced(w.hostName) {
-		return nil
+		return w.syncErr
 	}
+	w.syncErr = w.lockAndSync(ctx)
+	return w.syncErr
+}
+
+// lockAndSync takes the host's lock and syncs files to it.
+func (w *hostWorker) lockAndSync(ctx context.Context) error {
 
 	// Skip sync for local connections
 	if w.conn != nil && w.conn.IsLocal {
@@ -229,9 +238,12 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 
 	if lockCfg.Enabled && w.conn != nil {
 		// Acquire lock with placeholder - UpdateCommand is called per-task with actual task name
-		var lockOpts []lock.AcquireOption
+		lockOpts := []lock.AcquireOption{lock.WithContext(ctx)}
 		if onWarn := w.orchestrator.config.OnLockWarn; onWarn != nil {
 			lockOpts = append(lockOpts, lock.WithWarnFunc(func(msg string) { onWarn(w.hostName, msg) }))
+		}
+		if onWait := w.orchestrator.config.OnLockWait; onWait != nil {
+			lockOpts = append(lockOpts, lock.WithWaitFunc(func(holder *lock.LockInfo) { onWait(w.hostName, holder) }))
 		}
 		hostLock, err := lock.Acquire(w.conn, lockCfg, "starting...", lockOpts...)
 		if err != nil {
@@ -239,6 +251,7 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 		}
 		hostLock.StartHeartbeat()
 		w.hostLock = hostLock
+		w.recordLocalJobs(hostLock)
 	}
 
 	// Get sync config
@@ -251,6 +264,22 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	// and prune callbacks, so a parallel sync reports the same notices as a
 	// single run.
 	return rrsync.SyncWithOptions(w.conn, workDir, syncCfg, nil, w.syncOptions())
+}
+
+// recordLocalJobs makes a local host record the process group of each task it
+// starts in hostLock, so a task left running by a killed rr keeps the host
+// locked until it stops (see lock.LockInfo.IsDeadLocalHolder).
+func (w *hostWorker) recordLocalJobs(hostLock *lock.Lock) {
+	client, ok := w.conn.Client.(*host.LocalClient)
+	if !ok {
+		return
+	}
+	onWarn := w.orchestrator.config.OnLockWarn
+	client.SetOnStart(func(pgid int) {
+		if err := hostLock.SetJobPGID(pgid); err != nil && onWarn != nil {
+			onWarn(w.hostName, fmt.Sprintf("Warning: couldn't record the task in the lock on %s (%v); if rr is killed, another run may start before the task stops", w.hostName, err))
+		}
+	})
 }
 
 // syncOptions returns the caller-supplied sync options for this host, or nil
@@ -412,7 +441,7 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 	var outputBuf bytes.Buffer
 
 	// Run the command locally
-	cmd := w.command(execCtx, task.Command, task.Env)
+	cmd := w.command(task.Command, task.Env)
 	cmd.Stdout = &outputBuf
 	cmd.Stderr = &outputBuf
 
@@ -421,17 +450,16 @@ func (w *localWorker) executeTask(ctx context.Context, task TaskInfo) TaskResult
 		cmd.Dir = task.WorkDir
 	}
 
-	err := cmd.Run()
+	exitCode, err := rrexec.RunLocalCommand(execCtx, cmd)
 	result.Output = outputBuf.Bytes()
 	result.EndTime = time.Now()
 	result.Duration = result.EndTime.Sub(result.StartTime)
-
+	result.ExitCode = exitCode
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
+		// Couldn't run, or cancelled or timed out (exit code from the stop).
+		result.Error = err
+		if result.ExitCode <= 0 {
 			result.ExitCode = 1
-			result.Error = err
 		}
 	}
 
@@ -463,19 +491,18 @@ func (w *localWorker) ensureSetup(ctx context.Context) error {
 	}
 
 	// Execute setup command locally
-	cmd := w.command(ctx, w.orchestrator.config.Setup, nil)
+	cmd := w.command(w.orchestrator.config.Setup, nil)
 	var outputBuf bytes.Buffer
 	cmd.Stdout = &outputBuf
 	cmd.Stderr = &outputBuf
 
 	var setupErr error
-	err := cmd.Run()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			setupErr = fmt.Errorf("setup command failed with exit code %d: %s", exitErr.ExitCode(), outputBuf.String())
-		} else {
-			setupErr = fmt.Errorf("setup command failed: %w", err)
-		}
+	exitCode, err := rrexec.RunLocalCommand(ctx, cmd)
+	switch {
+	case err != nil:
+		setupErr = fmt.Errorf("setup command failed: %w", err)
+	case exitCode != 0:
+		setupErr = fmt.Errorf("setup command failed with exit code %d: %s", exitCode, outputBuf.String())
 	}
 
 	// Record result so subsequent tasks get the same outcome
@@ -486,12 +513,13 @@ func (w *localWorker) ensureSetup(ctx context.Context) error {
 
 // command builds a local shell command with project defaults setup chained
 // in front and taskEnv merged over defaults env, built the same way as a
-// local single task (there is no host layer locally).
-func (w *localWorker) command(ctx context.Context, script string, taskEnv map[string]string) *exec.Cmd {
+// local single task (there is no host layer locally). Run it with
+// rrexec.RunLocalCommand, which stops it on cancel.
+func (w *localWorker) command(script string, taskEnv map[string]string) *exec.Cmd {
 	project := w.orchestrator.project()
 	env := config.MergedTaskEnv(project, nil, taskEnv)
 	setup := config.GetMergedSetupCommands(project, nil)
-	return exec.CommandContext(ctx, "sh", "-c", rrexec.BuildCommand(script, env, "", setup))
+	return exec.Command("sh", "-c", rrexec.BuildCommand(script, env, "", setup))
 }
 
 // resolveWorkDir returns the project root from the resolved config if available,

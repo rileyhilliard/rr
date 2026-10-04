@@ -188,14 +188,16 @@ func hostsForUnlockAll(globalCfg *config.GlobalConfig) []string {
 func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig, showSpinner bool) hostUnlockOutcome {
 	outcome := hostUnlockOutcome{Host: hostName}
 
+	if hostCfg.Local {
+		conn := host.NewLocalHostConnection(hostName, hostCfg)
+		return releaseHostLock(conn, lockCfg, outcome)
+	}
+
 	if len(hostCfg.SSH) == 0 {
 		outcome.Status = "failed"
 		outcome.Error = "no SSH connections configured"
 		return outcome
 	}
-
-	// Get lock directory path
-	lockDir := lock.LockDir(lockCfg)
 
 	var spinner *ui.Spinner
 	if showSpinner {
@@ -233,6 +235,14 @@ func unlockHost(hostName string, hostCfg config.Host, lockCfg config.LockConfig,
 	if spinner != nil {
 		spinner.Success()
 	}
+
+	return releaseHostLock(conn, lockCfg, outcome)
+}
+
+// releaseHostLock force-releases the lock on conn's host, recording the
+// holder it removed on outcome.
+func releaseHostLock(conn *host.Connection, lockCfg config.LockConfig, outcome hostUnlockOutcome) hostUnlockOutcome {
+	lockDir := lock.LockDir(lockCfg)
 
 	// Check if lock exists
 	if !lock.IsLocked(conn, lockCfg) {
@@ -274,6 +284,18 @@ func printUnlockOutcome(o hostUnlockOutcome) {
 	}
 }
 
+// hostPickerLabel is a host's label in a picker: its name, then "local" for
+// a local host or its first SSH alias.
+func hostPickerLabel(name string, h config.Host) string {
+	if h.Local {
+		return name + " - " + host.LocalAlias
+	}
+	if len(h.SSH) > 0 {
+		return name + " - " + h.SSH[0]
+	}
+	return name
+}
+
 // pickHostForUnlock shows a host picker for the unlock command.
 func pickHostForUnlock(globalCfg *config.GlobalConfig) (string, error) {
 	var hostNames []string
@@ -284,11 +306,7 @@ func pickHostForUnlock(globalCfg *config.GlobalConfig) (string, error) {
 
 	options := make([]huh.Option[string], len(hostNames))
 	for i, h := range hostNames {
-		label := h
-		if hostCfg, ok := globalCfg.Hosts[h]; ok && len(hostCfg.SSH) > 0 {
-			label += " - " + hostCfg.SSH[0]
-		}
-		options[i] = huh.NewOption(label, h)
+		options[i] = huh.NewOption(hostPickerLabel(h, globalCfg.Hosts[h]), h)
 	}
 
 	var selected string

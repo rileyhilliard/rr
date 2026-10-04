@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rileyhilliard/rr/internal/host"
 )
 
 // snapshotInterval is the wall-clock gap between the two samples taken by
@@ -50,6 +52,18 @@ func (c *Collector) snapshotOne(ctx context.Context, alias string) HostResult {
 		result.Error = ctx.Err()
 		return result
 	default:
+	}
+
+	if c.hosts[alias].Local {
+		platform, out, err := c.runLocal(ctx, c.buildSnapshot)
+		result.Platform = platform
+		if err != nil {
+			result.Error = err
+			return result
+		}
+		result.Metrics, result.LockInfo, result.NetRates = c.parseSnapshotOutput(alias, platform, out)
+		result.ConnectedVia = host.LocalAlias
+		return result
 	}
 
 	client, platform, err := c.pool.GetWithPlatform(alias)

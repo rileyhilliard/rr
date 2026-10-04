@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -182,7 +183,7 @@ func trySSHHostPicker(exclude ...string) (sshHost string, cancelled bool) {
 
 // collectMachineConfig collects configuration for a single machine.
 // Returns the machine config, cancelled flag, and any error.
-func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineConfig, bool, error) {
+func collectMachineConfig(excludeSSHHosts []string, skipProbe bool, validateName func(string) error) (*machineConfig, bool, error) {
 	machine := &machineConfig{}
 
 	// Get primary SSH connection for this machine
@@ -205,7 +206,7 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 		machine.name = hostname
 	}
 
-	if err := promptMachineName(&machine.name); err != nil {
+	if err := promptMachineName(&machine.name, validateName); err != nil {
 		return nil, false, err
 	}
 
@@ -236,7 +237,7 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 }
 
 // promptMachineName prompts for a friendly name for the machine.
-func promptMachineName(name *string) error {
+func promptMachineName(name *string, validate func(string) error) error {
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -244,21 +245,24 @@ func promptMachineName(name *string) error {
 				Description("A friendly name to identify this machine in your config").
 				Placeholder("gpu-box").
 				Value(name).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("machine name is required")
-					}
-					if strings.ContainsAny(s, " \t\n") {
-						return fmt.Errorf("machine name cannot contain whitespace")
-					}
-					return nil
-				}),
+				Validate(validate),
 		),
 	)
 	if err := form.Run(); err != nil {
 		return errors.WrapWithCode(err, errors.ErrConfig,
 			"Couldn't get your input",
 			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+	}
+	return nil
+}
+
+// validateMachineName checks a machine name typed at the name prompt.
+func validateMachineName(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("machine name is required")
+	}
+	if strings.ContainsAny(s, " \t\n") {
+		return fmt.Errorf("machine name cannot contain whitespace")
 	}
 	return nil
 }
@@ -710,6 +714,10 @@ func addHostToGlobal(globalCfg *config.GlobalConfig, machine *machineConfig) (st
 	return machine.name, nil
 }
 
+// thisMachineOption is the multi-select value for "add this machine as a local
+// host". It contains whitespace, which host names can't.
+const thisMachineOption = " this-machine"
+
 // promptHostsSelection shows a multi-select to choose which hosts this project can use.
 // Returns selected host names (empty = use all global hosts).
 func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
@@ -724,17 +732,17 @@ func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
 	options := make([]huh.Option[string], 0, len(hostNames))
 
 	for _, name := range hostNames {
-		label := name
-		// Add first SSH connection as hint
-		if h, ok := globalCfg.Hosts[name]; ok && len(h.SSH) > 0 {
-			label += " - " + h.SSH[0]
-		}
-		options = append(options, huh.NewOption(label, name))
+		options = append(options, huh.NewOption(hostPickerLabel(name, globalCfg.Hosts[name]), name))
 	}
 
 	// Default to all hosts selected
 	selected := make([]string, len(hostNames))
 	copy(selected, hostNames)
+
+	// Offer this machine when no host is local yet. Unchecked by default.
+	if findLocalHost(globalCfg) == "" {
+		options = append(options, huh.NewOption("This machine (local, run in place)", thisMachineOption))
+	}
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -824,6 +832,16 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 			return nil, err
 		}
 		vals.hostRefs = selected
+
+		// "This machine" was checked: create the local host, then use it
+		if idx := slices.Index(selected, thisMachineOption); idx >= 0 {
+			vals.hostRefs = slices.Delete(slices.Clone(selected), idx, idx+1)
+			name, err := addLocalHostInteractive(globalCfg)
+			if err != nil {
+				return nil, err
+			}
+			vals.hostRefs = append(vals.hostRefs, name)
+		}
 	}
 
 	// If no hosts exist yet, prompt to add at least one
@@ -834,7 +852,22 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 		}
 
 		if addHost {
-			machine, cancelled, err := collectMachineConfig(nil, skipProbe)
+			local, err := promptThisMachine()
+			if err != nil {
+				return nil, err
+			}
+			if local {
+				name, err := addLocalHostInteractive(globalCfg)
+				if err != nil {
+					return nil, err
+				}
+				vals.hostRefs = []string{name}
+				addHost = false
+			}
+		}
+
+		if addHost {
+			machine, cancelled, err := collectMachineConfig(nil, skipProbe, newHostNameValidator(globalCfg))
 			if err != nil {
 				return nil, err
 			}
@@ -863,7 +896,7 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 		// Get existing SSH aliases to exclude from picker
 		existingAliases := getExistingGlobalHostSSHAliases(globalCfg)
 
-		machine, cancelled, err := collectMachineConfig(existingAliases, skipProbe)
+		machine, cancelled, err := collectMachineConfig(existingAliases, skipProbe, newHostNameValidator(globalCfg))
 		if err != nil {
 			return nil, err
 		}

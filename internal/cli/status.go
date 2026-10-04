@@ -35,6 +35,9 @@ type ProjectMapping struct {
 	Worktree         string            `json:"worktree,omitempty"`
 	IsLinkedWorktree bool              `json:"is_linked_worktree"`
 	RemoteDirs       map[string]string `json:"remote_dirs"`
+	// InPlaceHosts are hosts with local: true. They run in LocalRoot, so
+	// they have no entry in RemoteDirs.
+	InPlaceHosts []string `json:"in_place_hosts,omitempty"`
 }
 
 // buildProjectMapping resolves the current tree's remote directory on every
@@ -48,12 +51,19 @@ func buildProjectMapping(globalCfg *config.GlobalConfig) *ProjectMapping {
 	}
 	if wt.TopLevel != "" {
 		m.LocalRoot = wt.TopLevel
-	} else if cwd, err := os.Getwd(); err == nil {
-		m.LocalRoot = cwd
+	} else {
+		// No repo: the project root (where .rr.yaml is), which is where a
+		// sync starts and an in-place host runs, or the current directory.
+		m.LocalRoot = config.DefaultLocalHostDir()
 	}
 	for name := range globalCfg.Hosts {
+		if globalCfg.Hosts[name].Local {
+			m.InPlaceHosts = append(m.InPlaceHosts, name)
+			continue
+		}
 		m.RemoteDirs[name] = config.ExpandRemote(globalCfg.Hosts[name].Dir)
 	}
+	sort.Strings(m.InPlaceHosts)
 	return m
 }
 
@@ -128,7 +138,13 @@ func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
 		go func(hostName string, hostCfg config.Host) {
 			defer wg.Done()
 
-			aliasResults := host.ProbeAll(hostCfg.SSH, timeout)
+			var aliasResults []host.ProbeResult
+			if hostCfg.Local {
+				// Nothing to dial: a local host is this machine.
+				aliasResults = []host.ProbeResult{{SSHAlias: host.LocalAlias, Success: true}}
+			} else {
+				aliasResults = host.ProbeAll(hostCfg.SSH, timeout)
+			}
 
 			mu.Lock()
 			results[hostName] = probeResult{
@@ -258,7 +274,7 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 	}
 
 	// Show where this tree syncs (worktree-aware)
-	if mapping != nil && len(mapping.RemoteDirs) > 0 {
+	if mapping != nil && (len(mapping.RemoteDirs) > 0 || len(mapping.InPlaceHosts) > 0) {
 		fmt.Println()
 		treeDesc := "This tree"
 		if mapping.IsLinkedWorktree {
@@ -269,6 +285,9 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 			hostNames = append(hostNames, name)
 		}
 		sort.Strings(hostNames)
+		for _, name := range mapping.InPlaceHosts {
+			fmt.Printf("%s runs in place on %s\n", treeDesc, name)
+		}
 		for _, name := range hostNames {
 			fmt.Printf("%s syncs to: %s\n", treeDesc, mutedStyle.Render(fmt.Sprintf("%s:%s", name, mapping.RemoteDirs[name])))
 		}

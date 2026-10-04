@@ -54,6 +54,16 @@ func (c *HostConnectivityCheck) Run() CheckResult {
 
 // probe checks every alias and grades this host on its own.
 func (c *HostConnectivityCheck) probe() CheckResult {
+	if c.HostConfig.Local {
+		// Nothing to dial: a local host is the machine doctor runs on.
+		c.Results = []host.ProbeResult{{SSHAlias: host.LocalAlias, Success: true}}
+		return CheckResult{
+			Name:    c.Name(),
+			Status:  StatusPass,
+			Message: fmt.Sprintf("%s (local: this machine)", c.HostName),
+		}
+	}
+
 	if len(c.HostConfig.SSH) == 0 {
 		return CheckResult{
 			Name:       c.Name(),
@@ -229,6 +239,21 @@ func ScopeHosts(projectCfg *config.Config, globalCfg *config.GlobalConfig) ([]st
 		Project: projectCfg,
 		Source:  config.Both,
 	}, "")
+}
+
+// AllLocal reports whether the hosts in scope are all local (local: true), so
+// nothing in the run needs SSH. An empty scope is not all-local: with no hosts
+// to go by, the SSH checks still apply.
+func AllLocal(names []string, hosts map[string]config.Host) bool {
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if !hosts[name].Local {
+			return false
+		}
+	}
+	return true
 }
 
 // HostResolutionCheck reports that the project's host list can't be resolved

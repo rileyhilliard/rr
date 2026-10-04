@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -34,6 +35,19 @@ type lockHolderDetail struct {
 	SameMachine bool    `json:"same_machine"`
 }
 
+// MarshalJSON leaves same_machine out for a holder whose lock info couldn't
+// be read: rr doesn't know where it runs, and false would say it does.
+func (d lockHolderDetail) MarshalJSON() ([]byte, error) {
+	type detail lockHolderDetail // no methods, so no recursion
+	if d.Pid != 0 || d.User != "" {
+		return json.Marshal(detail(d))
+	}
+	return json.Marshal(struct {
+		detail
+		SameMachine *bool `json:"same_machine,omitempty"`
+	}{detail: detail(d)})
+}
+
 // fallbackDetail explains a local fallback in the result envelope.
 type fallbackDetail struct {
 	Reason  string             `json:"reason"` // host.LocalReasonHostsUnreachable or host.LocalReasonAllHostsLocked
@@ -42,13 +56,11 @@ type fallbackDetail struct {
 }
 
 // findAvailableHostResult contains the result of finding an available host.
+// A fallback's conn has LocalReason set and no lock yet.
 type findAvailableHostResult struct {
-	conn           *host.Connection
-	lock           *lock.Lock
-	isLocal        bool
-	fellBack       bool          // isLocal because of a fallback (see fallbackReason)
-	fallbackReason string        // host.LocalReason* explaining the fallback
-	hostsState     []hostAttempt // State of all hosts tried
+	conn       *host.Connection
+	lock       *lock.Lock
+	hostsState []hostAttempt // State of all hosts tried
 }
 
 // allLockedAction is the decision for the "every host is locked" scenario.
@@ -132,7 +144,8 @@ func lockStealWarn(msg string) {
 }
 
 // emitFallbackWarning makes a local fallback unmissable in both output modes.
-func emitFallbackWarning(fb fallbackDetail) {
+// hostName is where the run falls back to: the local host, or "local".
+func emitFallbackWarning(fb fallbackDetail, hostName string) {
 	if PrettyMode() {
 		msg := "Falling back to LOCAL execution - " + host.DescribeLocalReason(fb.Reason)
 		if len(fb.Holders) > 0 {
@@ -156,7 +169,7 @@ func emitFallbackWarning(fb fallbackDetail) {
 		Type:    "phase",
 		Phase:   "connect",
 		Status:  "warn",
-		Host:    "local",
+		Host:    hostName,
 		Details: details,
 	})
 }
@@ -212,16 +225,6 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		}
 		attempt.conn = conn
 
-		// Skip lock for local connections
-		if conn.IsLocal {
-			return &findAvailableHostResult{
-				conn:       conn,
-				lock:       nil,
-				isLocal:    true,
-				hostsState: append(attempts, attempt),
-			}, nil
-		}
-
 		// Skip lock if disabled
 		if !lockCfg.Enabled || opts.SkipLock {
 			return &findAvailableHostResult{
@@ -267,7 +270,13 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 	// Phase 2: All hosts tried - handle "all locked" scenario
 	if len(lockedHosts) > 0 {
-		mode := config.ResolveLocalFallbackMode(ctx.Resolved)
+		mode := localFallbackMode(ctx, opts.TaskName)
+		// A busy local host means this machine is already running an rr
+		// job. Falling back would queue behind it on that host, so wait for
+		// any host instead.
+		if mode != config.LocalFallbackNever && machineBusy(ctx, lockCfg) {
+			mode = config.LocalFallbackNever
+		}
 		holders := holderDetails(lockedHosts)
 
 		switch resolveAllLockedAction(mode, holders) {
@@ -287,6 +296,10 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 			result, err := roundRobinWait(ctx, lockedHosts, lockCfg, opts.Command, attempts, holders)
 			if err == nil {
 				return result, nil
+			}
+			// The user stopped the wait: nothing should run, here or anywhere.
+			if rrerrors.IsCode(err, rrerrors.ErrInterrupted) {
+				return nil, err
 			}
 			// Wait exhausted (or connections lost): fall back, loudly
 			waited := time.Since(waitStart)
@@ -312,35 +325,40 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 	// No hosts could be connected to at all. Both non-never local_fallback
 	// modes run locally in that case, same as the single-host path.
-	if config.ResolveLocalFallback(ctx.Resolved) {
+	if localFallbackMode(ctx, opts.TaskName).Enabled() {
 		return fallBackLocally(ctx, fallbackDetail{Reason: host.LocalReasonHostsUnreachable}, attempts), nil
 	}
 	return nil, buildConnectionError(attempts)
 }
 
-// fallBackLocally reports a local fallback (warning event plus
-// details.fallback on the result) and returns the local result.
-func fallBackLocally(ctx *WorkflowContext, fb fallbackDetail, attempts []hostAttempt) *findAvailableHostResult {
-	emitFallbackWarning(fb)
-	ctx.AddResultDetail("fallback", fb)
-	return localFallbackResult(fb.Reason, attempts)
-}
-
-// localFallbackResult builds the local-execution result used when rr falls
-// back to running locally for reason.
-func localFallbackResult(reason string, attempts []hostAttempt) *findAvailableHostResult {
-	return &findAvailableHostResult{
-		conn:           localConnection(),
-		lock:           nil,
-		isLocal:        true,
-		fellBack:       true,
-		fallbackReason: reason,
-		hostsState:     attempts,
+// machineBusy reports whether the global config's local host, the one a
+// fallback would run on, is locked by another live run, whether or not it
+// was in the pool this run tried. A lock left by a dead process on this
+// machine doesn't count.
+func machineBusy(ctx *WorkflowContext, lockCfg config.LockConfig) bool {
+	if ctx.Resolved == nil || ctx.Resolved.Global == nil {
+		return false
 	}
+	conn := host.LocalMachineConnection(ctx.Resolved.Global.Hosts)
+	return conn != nil && lock.IsHeld(conn, lockCfg)
 }
 
-// roundRobinWait cycles through locked hosts until one becomes available or timeout.
-func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, command string, allAttempts []hostAttempt, holders []lockHolderDetail) (*findAvailableHostResult, error) {
+// fallBackLocally reports a local fallback (warning event plus
+// details.fallback on the result) and returns the result that runs here:
+// on the global config's local host when there is one, bare otherwise. The
+// caller takes its lock.
+func fallBackLocally(ctx *WorkflowContext, fb fallbackDetail, attempts []hostAttempt) *findAvailableHostResult {
+	name, h := config.LocalHost(ctx.Resolved)
+	conn := host.LocalRunConnection(name, h, fb.Reason)
+	emitFallbackWarning(fb, conn.Name)
+	ctx.AddResultDetail("fallback", fb)
+	return &findAvailableHostResult{conn: conn, hostsState: attempts}
+}
+
+// roundRobinWait cycles through locked hosts until one becomes available or
+// timeout. It stops with an ErrInterrupted error when the workflow's context
+// is cancelled (Ctrl+C, SIGTERM).
+func roundRobinWait(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig, command string, allAttempts []hostAttempt, holders []lockHolderDetail) (*findAvailableHostResult, error) {
 	waitTimeout := lockCfg.WaitTimeout
 	if waitTimeout <= 0 {
 		waitTimeout = 1 * time.Minute // Default
@@ -365,17 +383,26 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 		})
 	}
 
+	stop := func() {
+		if spinner != nil {
+			spinner.Fail()
+		}
+		for _, a := range lockedHosts {
+			if a.conn != nil {
+				a.conn.Close()
+			}
+		}
+	}
+	waitCtx := ctx.Context()
+
 	for {
+		if err := waitCtx.Err(); err != nil {
+			stop()
+			return nil, lock.InterruptedError(lockedHostNames(lockedHosts), err)
+		}
 		elapsed := time.Since(startTime)
 		if elapsed >= waitTimeout {
-			if spinner != nil {
-				spinner.Fail()
-			}
-			for _, a := range lockedHosts {
-				if a.conn != nil {
-					a.conn.Close()
-				}
-			}
+			stop()
 			return nil, buildAllHostsLockedError(lockedHosts, waitTimeout)
 		}
 
@@ -423,8 +450,22 @@ func roundRobinWait(_ *WorkflowContext, lockedHosts []hostAttempt, lockCfg confi
 				"Check network connectivity and try again.")
 		}
 
-		time.Sleep(2 * time.Second)
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
+}
+
+// lockedHostNames lists the hosts a wait is on, for messages.
+func lockedHostNames(lockedHosts []hostAttempt) string {
+	names := make([]string, 0, len(lockedHosts))
+	for _, a := range lockedHosts {
+		names = append(names, a.hostName)
+	}
+	return strings.Join(names, ", ")
 }
 
 // waitMessage says exactly what the round-robin wait is waiting on.
@@ -521,8 +562,8 @@ func setupWorkflowLoadBalanced(ctx *WorkflowContext, opts WorkflowOptions) error
 	ctx.Conn = result.conn
 	ctx.Lock = result.lock
 
-	if result.isLocal {
-		connDisplay.SuccessLocal(host.DescribeLocalReason(result.fallbackReason))
+	if ctx.Conn.LocalReason != "" {
+		connDisplay.SuccessLocal(localRunDetail(ctx.Conn))
 	} else {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}
@@ -544,11 +585,7 @@ func setupWorkflowLoadBalancedStructured(ctx *WorkflowContext, opts WorkflowOpti
 	ctx.Conn = result.conn
 	ctx.Lock = result.lock
 
-	host := ctx.Conn.Name
-	if result.isLocal {
-		host = "local"
-	}
-	reporter.PhaseComplete("connect", host, time.Since(connectStart))
+	reporter.PhaseComplete("connect", ctx.Conn.Name, time.Since(connectStart))
 
 	return nil
 }

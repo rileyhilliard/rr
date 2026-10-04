@@ -295,7 +295,7 @@ tasks:
 | `--max-parallel N` | Limit concurrent tasks |
 | `--no-logs` | Don't save output to log files |
 | `--dry-run` | Show plan without executing |
-| `--local` | Force local execution |
+| `--local` | Force local execution. With a `local: true` host, it's the one worker and runs every subtask, including ones pinned to other hosts (`--local` overrides `hosts:`); without one, subtasks run here one after another |
 | `--host` / `--tag` | Restrict the host pool |
 
 ### Output Modes
@@ -311,7 +311,7 @@ These apply to `--pretty` mode. In the default structured mode, a parallel task 
 ```bash
 rr test-all --stream    # See all output in real-time
 rr test-all --dry-run   # Preview what would run
-rr test-all --local     # Run locally without remote hosts
+rr test-all --local     # Run on this machine (the local host, if configured)
 ```
 
 ### Work-Stealing Distribution
@@ -348,4 +348,10 @@ tasks:
     hosts: [fast, gpu-box]  # Multiple allowed hosts
 ```
 
-Restrictions also apply to subtasks inside parallel tasks: a restricted subtask only runs on its allowed hosts, and fails with the restriction named if none of them is available. `--host`/`--tag` that excludes every allowed host fails up front.
+rr picks only among a task's allowed hosts, and `--host` naming another host fails with `CONFIG_INVALID` before rr connects to it.
+
+Restrictions also apply to subtasks inside parallel tasks: a restricted subtask only runs on its allowed hosts, and fails with the restriction named if none of them is available. `--host`/`--tag` that excludes every allowed host fails up front, for single tasks too (`CONFIG_INVALID`, naming the allowed hosts).
+
+A restricted task never uses `local_fallback` unless its list names your local host: unreachable hosts fail with `SSH_CONNECTION_FAILED` naming them, and busy ones are waited for.
+
+`--local` overrides restrictions, for single tasks and every parallel subtask: it runs them on this machine (the local host, if configured). To run a pinned task here, use `rr <task> --local`.

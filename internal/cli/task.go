@@ -61,6 +61,17 @@ type TaskOptions struct {
 	Tail         int           // Print the last N lines of the run log after completion
 }
 
+// taskHostError refuses a task pinned to hosts other than hostName, and says
+// how to run it: on a host it allows, or here with --local, which overrides
+// the pin.
+func taskHostError(taskName string, task *config.TaskConfig, hostName string) error {
+	suggestion := fmt.Sprintf("This task is restricted to: %s. Run it with --host %s, or with --local to run it on this machine anyway.",
+		util.JoinOrNone(task.Hosts), task.Hosts[0])
+	return errors.New(errors.ErrConfig,
+		fmt.Sprintf("Task '%s' can't run on host '%s'", taskName, hostName),
+		suggestion)
+}
+
 // RunTask executes a named task from the configuration.
 // This handles the full workflow: connect, sync, lock, execute.
 func RunTask(opts TaskOptions) (int, error) {
@@ -96,10 +107,8 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Verify task is allowed on the connected host
-	if !config.IsTaskHostAllowed(task, wf.Conn.Name) {
-		return 1, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Task '%s' can't run on host '%s'", opts.TaskName, wf.Conn.Name),
-			fmt.Sprintf("This task is restricted to: %s", util.JoinOrNone(task.Hosts)))
+	if err := checkTaskHost(wf, opts.TaskName); err != nil {
+		return 1, err
 	}
 
 	// Validate args are only used with single-command tasks
@@ -124,7 +133,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// execution cds into the remote project dir, so relative paths resolve
 	// there. Remaining local-only paths get a warning.
 	taskArgs := opts.Args
-	if !wf.Conn.IsLocal && len(taskArgs) > 0 && config.ResolveRewritePaths(wf.Resolved) {
+	if !wf.Conn.InPlace() && len(taskArgs) > 0 && config.ResolveRewritePaths(wf.Resolved) {
 		rewritten, n := RewriteArgsToRelative(taskArgs, wf.WorkDir)
 		if n > 0 {
 			taskArgs = rewritten
@@ -201,8 +210,14 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Post-failure hint: detect local-machine assumptions (paths that only
 	// exist here, git commands against the synced snapshot).
 	failureHint := ""
-	if result.ExitCode != 0 && !wf.Conn.IsLocal {
-		failureHint = buildFailureHint(command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
+	if result.ExitCode != 0 {
+		stderr := streamHandler.GetStderrCapture()
+		if !wf.Conn.InPlace() {
+			failureHint = buildFailureHint(command, stderr, wf.WorkDir, remoteDir, wf.Conn.Name)
+		}
+		if failureHint == "" {
+			failureHint = buildSetupFileHint(stderr, setupCommands, wf.Conn.Name)
+		}
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
 		}
@@ -217,7 +232,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	if PrettyMode() {
 		renderOutcomeFailures(outcome, result.ExitCode)
 		wf.PhaseDisplay.ThinDivider()
-		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 		repeatFallbackWarning(wf.ResultDetails)
 		warnNoTests(wf.ResultDetails)
 		if failureHint != "" {
@@ -339,7 +354,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
-		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 		repeatFallbackWarning(wf.ResultDetails)
 		// No warnNoTests here: deps.TaskExecutionResult carries only a name,
 		// exit code, and duration - no command or output for a formatter to
@@ -1118,7 +1133,7 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 	_ = logs.Cleanup(resolved.Global.Logs)
 
 	if target.local && !PrettyMode() {
-		emitLocalConnect(target.reason)
+		emitLocalConnect(target)
 	}
 
 	// Create orchestrator

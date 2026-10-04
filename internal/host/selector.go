@@ -22,6 +22,9 @@ type ConnectionEvent struct {
 	// Reason says why execution went local (one of the LocalReason
 	// constants). Set only on EventLocalFallback.
 	Reason string
+	// Host names the connection a fallback runs on: the local host's name,
+	// or "local" for bare local execution. Set only on EventLocalFallback.
+	Host string
 }
 
 // Reasons a run executes locally. They appear as details.reason on the
@@ -97,15 +100,33 @@ type EventHandler func(event ConnectionEvent)
 // DefaultProbeTimeout is the default timeout for SSH connection probes.
 const DefaultProbeTimeout = 5 * time.Second
 
-// Connection represents an established SSH connection to a host,
-// or a local execution context when IsLocal is true.
+// Connection represents an established SSH connection to a host, a host with
+// local: true, or bare local execution when IsLocal is true.
 type Connection struct {
-	Name    string            // The host name from config (e.g., "gpu-box")
+	Name    string            // The host name from config (e.g., "gpu-box"); "local" when IsLocal
 	Alias   string            // The SSH alias used to connect (e.g., "gpu-local")
-	Client  sshutil.SSHClient // The active SSH client (nil for local connections)
-	Host    config.Host       // The host configuration
+	Client  sshutil.SSHClient // The active SSH client (nil when IsLocal)
+	Host    config.Host       // The host configuration (empty when IsLocal)
 	Latency time.Duration     // Connection latency from probe
-	IsLocal bool              // True when falling back to local execution
+	// IsLocal marks bare local execution: no host, no client, no lock, the
+	// command run in the caller's terminal. rr uses it for --local, local
+	// mode and a local fallback when the global config has no local host;
+	// with one, those runs get that host's connection instead (see
+	// LocalRunConnection).
+	IsLocal bool
+	// LocalReason says why rr put the run on this machine by itself (one of
+	// the LocalReason constants). It's set on a bare local connection and on
+	// a local host's connection standing in for one, and empty when the
+	// host was chosen normally.
+	LocalReason string
+}
+
+// InPlace reports whether commands on this connection run in the local
+// project directory: bare local execution (IsLocal) or a host with local:
+// true. Nothing is synced to, pulled from, or path-rewritten for such a
+// connection. A local host still takes its lock; bare execution doesn't.
+func (c *Connection) InPlace() bool {
+	return c != nil && (c.IsLocal || c.Host.Local)
 }
 
 // Close closes the SSH connection.
@@ -166,6 +187,11 @@ type Selector struct {
 	eventHandler  EventHandler
 	localFallback bool // Whether to fall back to local execution when all hosts fail
 
+	// The global config's local host, which a local fallback runs on; an
+	// empty name when there's none (see SetLocalHost).
+	localHostName string
+	localHost     config.Host
+
 	// Connection cache for session reuse
 	mu     sync.Mutex
 	cached *Connection
@@ -194,6 +220,20 @@ func (s *Selector) SetEventHandler(handler EventHandler) {
 // When enabled, if all remote hosts fail, Select returns a local Connection.
 func (s *Selector) SetLocalFallback(enabled bool) {
 	s.localFallback = enabled
+}
+
+// SetLocalHost names the global config's local host (h its config, dir
+// resolved), which a local fallback then runs on instead of bare local
+// execution. It needn't be among the selector's hosts: the fallback is for
+// when those fail. An empty name means there's no local host.
+func (s *Selector) SetLocalHost(name string, h config.Host) {
+	s.localHostName = name
+	s.localHost = h
+}
+
+// localRun returns the connection a local fallback runs on, for reason.
+func (s *Selector) localRun(reason string) *Connection {
+	return LocalRunConnection(s.localHostName, s.localHost, reason)
 }
 
 // SetHostOrder sets the priority order for host selection.
@@ -370,6 +410,8 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 		timeout:       s.timeout,
 		eventHandler:  s.eventHandler,
 		localFallback: s.localFallback,
+		localHostName: s.localHostName,
+		localHost:     s.localHost,
 	}
 
 	// Use Select logic without preferred host (will use first available from filtered set)
@@ -396,28 +438,23 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 	// If no hosts configured and local fallback is enabled, go straight to local
 	if len(s.hosts) == 0 && s.localFallback {
 		// Check for cached local connection
-		if s.cached != nil && s.cached.IsLocal {
+		if s.cached != nil && s.cached.LocalReason != "" {
 			s.emit(ConnectionEvent{
 				Type:    EventCacheHit,
-				Alias:   "local",
+				Alias:   s.cached.Alias,
 				Message: "reusing local execution",
 			})
 			return s.cached, nil
 		}
 
+		localConn := s.localRun(LocalReasonMode)
 		s.emit(ConnectionEvent{
 			Type:    EventLocalFallback,
-			Alias:   "local",
+			Alias:   localConn.Alias,
+			Host:    localConn.Name,
 			Message: "No remote hosts configured, using local execution",
 			Reason:  LocalReasonMode,
 		})
-		localConn := &Connection{
-			Name:    "local",
-			Alias:   "local",
-			Client:  nil,
-			Host:    config.Host{},
-			IsLocal: true,
-		}
 		s.cached = localConn
 		return localConn, nil
 	}
@@ -425,7 +462,7 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 	// If we have a cached connection for the preferred host, return it
 	if s.cached != nil {
 		// Local fallback connections are reused regardless of preferred host
-		if preferred == "" || s.cached.Name == preferred || s.cached.IsLocal {
+		if preferred == "" || s.cached.Name == preferred || s.cached.LocalReason != "" {
 			// Verify connection is still alive
 			if s.cached.Alive() {
 				s.emit(ConnectionEvent{
@@ -451,6 +488,13 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 		return nil, err
 	}
 
+	if host.Local {
+		conn := NewLocalHostConnection(hostName, host)
+		s.emit(ConnectionEvent{Type: EventConnected, Alias: conn.Alias, Message: "running on this machine"})
+		s.cached = conn
+		return conn, nil
+	}
+
 	if len(host.SSH) == 0 {
 		return nil, errors.New(errors.ErrConfig,
 			fmt.Sprintf("Host '%s' needs at least one SSH connection", hostName),
@@ -466,19 +510,16 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 
 	// All remote hosts failed - check if local fallback is enabled
 	if s.localFallback {
+		// Not the unreachable host's config: its setup_commands, env and
+		// require are for that machine, not this one.
+		localConn := s.localRun(LocalReasonHostsUnreachable)
 		s.emit(ConnectionEvent{
 			Type:    EventLocalFallback,
-			Alias:   "local",
+			Alias:   localConn.Alias,
+			Host:    localConn.Name,
 			Message: "All remote hosts unreachable, falling back to local execution",
 			Reason:  LocalReasonHostsUnreachable,
 		})
-		localConn := &Connection{
-			Name:    "local",
-			Alias:   "local",
-			Client:  nil, // No SSH client for local execution
-			Host:    host,
-			IsLocal: true,
-		}
 		s.cached = localConn
 		return localConn, nil
 	}
@@ -530,9 +571,13 @@ func (s *Selector) HostInfo() []HostInfoItem {
 
 	items := make([]HostInfoItem, 0, len(s.hosts))
 	for name := range s.hosts {
+		ssh := s.hosts[name].SSH
+		if s.hosts[name].Local {
+			ssh = []string{LocalAlias}
+		}
 		items = append(items, HostInfoItem{
 			Name: name,
-			SSH:  s.hosts[name].SSH,
+			SSH:  ssh,
 			Dir:  config.ExpandRemote(s.hosts[name].Dir),
 			Tags: s.hosts[name].Tags,
 		})
@@ -585,6 +630,12 @@ func (s *Selector) SelectHost(hostName string) (*Connection, error) {
 		return nil, errors.New(errors.ErrHostNotFound,
 			fmt.Sprintf("Host '%s' doesn't exist", hostName),
 			fmt.Sprintf("Available hosts: %s", s.hostNames()))
+	}
+
+	if host.Local {
+		conn := NewLocalHostConnection(hostName, host)
+		s.emit(ConnectionEvent{Type: EventConnected, Alias: conn.Alias, Message: "running on this machine"})
+		return conn, nil
 	}
 
 	if len(host.SSH) == 0 {

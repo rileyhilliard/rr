@@ -307,6 +307,20 @@ func TestBuildRelativePathHint(t *testing.T) {
 		assert.NotEmpty(t, buildRelativePathHint(stderr, root, "sub", ""))
 	})
 
+	// zsh puts its own colon-separated prefix first ("zsh:.:2:"), which the
+	// generic form would read as the path.
+	t.Run("zsh form", func(t *testing.T) {
+		stderr := "zsh:.:2: no such file or directory: tests/foo.py"
+		assert.Contains(t, buildRelativePathHint(stderr, root, "sub", ""), "'tests/foo.py'")
+	})
+
+	// bash 5 adds "line N:" under -c, which the generic form would read as
+	// the path.
+	t.Run("bash 5 form", func(t *testing.T) {
+		stderr := "bash: line 1: tests/foo.py: No such file or directory"
+		assert.Contains(t, buildRelativePathHint(stderr, root, "sub", ""), "'tests/foo.py'")
+	})
+
 	t.Run("pytest node id selector stripped", func(t *testing.T) {
 		stderr := "ERROR: file or directory not found: tests/foo.py::test_bar"
 		hint := buildRelativePathHint(stderr, root, "sub", "")
@@ -377,4 +391,38 @@ func TestBuildRelativePathHint(t *testing.T) {
 		stderr := "ERROR: file or directory not found: tests/typo.py\nERROR: file or directory not found: tests/foo.py"
 		assert.Empty(t, buildRelativePathHint(stderr, root, "sub", ""))
 	})
+}
+
+// Each shell reports a missing sourced file in its own words; the setup hint
+// has to read all of them. Forms come from real shells: bash 3.2 and dash
+// from macOS, zsh, bash 5 under -c (adds "line N:"), and older dash (Can't).
+func TestBuildSetupFileHint_ShellForms(t *testing.T) {
+	setup := []string{"source ./scripts/env.sh"}
+
+	tests := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{name: "bash 3", stderr: "bash: ./scripts/env.sh: No such file or directory", want: true},
+		{name: "bash 5 under -c", stderr: "bash: line 1: ./scripts/env.sh: No such file or directory", want: true},
+		{name: "bash 5 with path", stderr: "/usr/bin/bash: line 3: ./scripts/env.sh: No such file or directory", want: true},
+		{name: "zsh", stderr: "zsh:source:1: no such file or directory: ./scripts/env.sh", want: true},
+		{name: "dash", stderr: "sh: 1: .: cannot open ./scripts/env.sh: No such file", want: true},
+		{name: "older dash", stderr: "sh: 1: .: Can't open ./scripts/env.sh", want: true},
+		{name: "other file missing", stderr: "bash: line 1: ./other.sh: No such file or directory"},
+		{name: "python can't open isn't a sourced file", stderr: "python3: can't open file './scripts/env.sh': [Errno 2] No such file or directory"},
+		{name: "unrelated failure", stderr: "bash: line 1: make: command not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hint := buildSetupFileHint(tt.stderr, setup, "dev")
+			if !tt.want {
+				assert.Empty(t, hint)
+				return
+			}
+			assert.Contains(t, hint, "'./scripts/env.sh' doesn't exist on dev")
+			assert.NotContains(t, hint, "source ./scripts/env.sh", "setup lines can carry tokens; the hint doesn't quote them")
+		})
+	}
 }

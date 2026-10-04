@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/require"
@@ -98,31 +100,36 @@ func (w *WorkflowContext) lostConnectionAsResult(err error) error {
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
 // Instead of calling os.Exit, it cancels the workflow context so in-flight
 // commands (like remote SSH sessions) can send SIGINT to the remote process
-// before the connection is torn down.
+// before the connection is torn down. The lock stays held until the caller's
+// Close, after the command has stopped, so no other run starts on the host
+// while it's still shutting down.
+//
+// The cancel cause is an exec.SignalCause naming the signal, so a bare local
+// command, which shares rr's terminal, isn't sent a Ctrl+C it already got
+// (see exec.RunLocalCommand).
 func (w *WorkflowContext) setupSignalHandler() {
-	w.ctx, w.cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
+	w.ctx, w.cancel = ctx, func() { cancel(nil) }
 	w.signalChan = make(chan os.Signal, 2)
-	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
-		_, ok := <-w.signalChan
+		sig, ok := <-w.signalChan
 		if !ok {
 			// Channel was closed by Close(), not a signal
 			return
 		}
 		// Cancel context first so in-flight SSH commands can clean up
-		w.cancel()
+		cancel(exec.SignalCause{Signal: sig})
 
-		// Second signal force-quits immediately (users expect double Ctrl+C to kill)
-		go func() {
-			_, ok := <-w.signalChan
-			if !ok {
-				return
-			}
-			os.Exit(130)
-		}()
-
-		w.Close()
+		// Second signal force-quits immediately (users expect double Ctrl+C
+		// to kill). Local commands are killed first: exiting doesn't stop
+		// them, since each runs in its own session.
+		if _, ok := <-w.signalChan; !ok {
+			return
+		}
+		host.KillLocalCommands()
+		os.Exit(130)
 	}()
 }
 
@@ -235,12 +242,39 @@ func subdirOffset(projectRoot string) string {
 	return filepath.ToSlash(rel)
 }
 
+// taskHostsOnly narrows the candidate hosts to the task's hosts: list, in
+// project order, so a pinned task is placed on a host it allows instead of
+// being refused after rr has picked and locked another. With no task, no
+// pin, or no pinned host among the candidates, they're returned unchanged
+// (RunTask then refuses with the task's hosts named).
+func taskHostsOnly(project *config.Config, taskName string, order []string, hosts map[string]config.Host) ([]string, map[string]config.Host) {
+	if project == nil || taskName == "" {
+		return order, hosts
+	}
+	task, ok := project.Tasks[taskName]
+	if !ok || len(task.Hosts) == 0 {
+		return order, hosts
+	}
+	var narrowedOrder []string
+	narrowed := make(map[string]config.Host)
+	for _, name := range order {
+		if h, ok := hosts[name]; ok && slices.Contains(task.Hosts, name) {
+			narrowedOrder = append(narrowedOrder, name)
+			narrowed[name] = h
+		}
+	}
+	if len(narrowed) == 0 {
+		return order, hosts
+	}
+	return narrowedOrder, narrowed
+}
+
 // setupHostSelector creates and configures the host selector for a remote
 // target. It uses ResolveHosts to determine which hosts this project can use.
 // A local target never gets here (see connectLocalTarget).
 func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 	// Resolve local_fallback from project config (overrides global)
-	localFallback := config.ResolveLocalFallback(ctx.Resolved)
+	localFallback := localFallbackMode(ctx, opts.TaskName).Enabled()
 
 	// Get the hosts this project is allowed to use
 	// (respects project.Hosts list if specified, otherwise uses all global hosts)
@@ -250,10 +284,20 @@ func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 		// Fall back to all global hosts if resolution fails
 		ctx.selector = host.NewSelector(ctx.Resolved.Global.Hosts)
 	} else {
+		if opts.Host == "" {
+			// With --tag, narrow only when a task host has the tag: otherwise
+			// the selector keeps every host, so checkTaskTag can tell a tag
+			// the pin rules out from one no host has.
+			order, hosts := taskHostsOnly(ctx.Resolved.Project, opts.TaskName, hostOrder, projectHosts)
+			if opts.Tag == "" || anyHostTagged(hosts, opts.Tag) {
+				hostOrder, projectHosts = order, hosts
+			}
+		}
 		ctx.selector = host.NewSelector(projectHosts)
 		ctx.selector.SetHostOrder(hostOrder)
 	}
 	ctx.selector.SetLocalFallback(localFallback)
+	ctx.selector.SetLocalHost(config.LocalHost(ctx.Resolved))
 
 	probeTimeout := ctx.Resolved.Global.Defaults.ProbeTimeout
 	if opts.ProbeTimeout > 0 {
@@ -303,6 +347,11 @@ func connectPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		if err == nil {
 			preferredHost = hostName
 		}
+		// The project default may be outside the candidates a task's hosts:
+		// list narrowed the selector to (see taskHostsOnly).
+		if names := ctx.selector.GetHostNames(); len(names) > 0 && !slices.Contains(names, preferredHost) {
+			preferredHost = names[0]
+		}
 	}
 
 	if PrettyMode() {
@@ -323,8 +372,6 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		return err
 	}
 
-	var fallbackReason string
-
 	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
 		case host.EventFailed:
@@ -333,7 +380,6 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		case host.EventConnected:
 			connDisplay.AddAttempt(event.Alias, ui.StatusSuccess, event.Latency, "")
 		case host.EventLocalFallback:
-			fallbackReason = event.Reason
 			ctx.AddResultDetail("fallback", fallbackDetail{Reason: event.Reason})
 		}
 	})
@@ -348,8 +394,8 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		return err
 	}
 
-	if fallbackReason != "" {
-		connDisplay.SuccessLocal(host.DescribeLocalReason(fallbackReason))
+	if ctx.Conn.LocalReason != "" {
+		connDisplay.SuccessLocal(localRunDetail(ctx.Conn))
 	} else {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}
@@ -369,7 +415,7 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 				Type:   "phase",
 				Phase:  "connect",
 				Status: "warn",
-				Host:   "local",
+				Host:   event.Host,
 				Details: map[string]interface{}{
 					"local_fallback": true,
 					"reason":         event.Reason,
@@ -391,28 +437,34 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 		return err
 	}
 
-	host := ctx.Conn.Name
-	if ctx.Conn.IsLocal {
-		host = "local"
-	}
-	reporter.PhaseComplete("connect", host, time.Since(connectStart))
+	reporter.PhaseComplete("connect", ctx.Conn.Name, time.Since(connectStart))
 	return nil
 }
 
 // connectLocalTarget completes the connect phase for a local target
 // (--local or local mode), and records the reason as details.local_reason
 // on the result. Nothing is dialed and nothing went wrong, so it's a normal
-// connect completion carrying the reason, not a fallback warning.
+// connect completion carrying the reason, not a fallback warning. With a
+// local host the run goes through its connection (see execTarget).
 func connectLocalTarget(ctx *WorkflowContext) {
-	ctx.Conn = localConnection()
-	reason := ctx.target.reason
-	ctx.AddResultDetail("local_reason", reason)
+	ctx.Conn = ctx.target.connection()
+	ctx.AddResultDetail("local_reason", ctx.target.reason)
 
 	if PrettyMode() {
-		ctx.PhaseDisplay.RenderSuccess("Running locally ("+host.DescribeLocalReason(reason)+")", 0)
+		ctx.PhaseDisplay.RenderSuccess("Running locally ("+localRunDetail(ctx.Conn)+")", 0)
 		return
 	}
-	emitLocalConnect(reason)
+	emitLocalConnect(ctx.target)
+}
+
+// localRunDetail says why a run rr put on this machine by itself runs here,
+// and on which local host if it has one, for "Running locally (<detail>)".
+func localRunDetail(conn *host.Connection) string {
+	detail := host.DescribeLocalReason(conn.LocalReason)
+	if !conn.IsLocal {
+		detail += ", on " + conn.Name
+	}
+	return detail
 }
 
 // syncPhase handles the file sync phase of the workflow.
@@ -420,7 +472,13 @@ func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter := ctx.GetReporter()
 
 	if ctx.Conn.IsLocal {
+		// Bare local execution, with no local host to run on.
 		reporter.PhaseSkipped("sync", "local")
+		return nil
+	}
+	if ctx.Conn.InPlace() {
+		// A local host: it runs in the project dir, so there's nothing to sync.
+		reporter.PhaseSkipped("sync", "in_place")
 		return nil
 	}
 	if opts.SkipSync {
@@ -577,7 +635,10 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	return nil
 }
 
-// lockPhase handles the lock acquisition phase of the workflow.
+// lockPhase handles the lock acquisition phase of the workflow. Bare local
+// execution (--local, local mode or a fallback with no local host) takes no
+// lock; everything else, a local host standing in for those included, locks
+// its connection's host.
 func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	lockCfg := config.DefaultConfig().Lock
 	if ctx.Resolved.Project != nil {
@@ -588,20 +649,29 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return nil
 	}
 
+	hostName := ctx.Conn.Name
 	lockStart := time.Now()
+	acquireOpts := []lock.AcquireOption{
+		lock.WithContext(ctx.Context()),
+		lock.WithWarnFunc(lockWarn(hostName)),
+	}
 
 	if PrettyMode() {
 		lockSpinner := ui.NewSpinner("Acquiring lock")
 		lockSpinner.Start()
 
 		var err error
-		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(ctx.Conn.Name)))
+		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, append(acquireOpts,
+			lock.WithWaitFunc(func(holder *lock.LockInfo) {
+				lockSpinner.SetLabel(lockWaitMessage(hostName, holder, lockCfg.Timeout))
+			}))...)
 		if err != nil {
 			lockSpinner.Fail()
 			return err
 		}
 
 		ctx.Lock.StartHeartbeat()
+		recordLocalJob(ctx)
 		lockSpinner.Success()
 		ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
 		return nil
@@ -611,22 +681,71 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter.PhaseStart("lock")
 
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(ctx.Conn.Name)))
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, append(acquireOpts,
+		lock.WithWaitFunc(func(holder *lock.LockInfo) {
+			lockWaitingEvent(hostName, holder, lockCfg.Timeout)
+		}))...)
 	if err != nil {
 		reporter.PhaseFailed("lock", err)
 		return err
 	}
 
 	ctx.Lock.StartHeartbeat()
-	reporter.PhaseComplete("lock", ctx.Conn.Name, time.Since(lockStart))
+	recordLocalJob(ctx)
+	reporter.PhaseComplete("lock", hostName, time.Since(lockStart))
 	return nil
+}
+
+// lockWaitingEvent emits the lock/waiting event: the run found hostName's
+// lock held by holder (nil when unknown) and waits up to timeout for it.
+func lockWaitingEvent(hostName string, holder *lock.LockInfo, timeout time.Duration) {
+	WritePhaseEvent(PhaseEvent{
+		Type:   "phase",
+		Phase:  "lock",
+		Status: "waiting",
+		Host:   hostName,
+		Details: map[string]interface{}{
+			"message":        lockWaitMessage(hostName, holder, timeout),
+			"holders":        holderDetails([]hostAttempt{{hostName: hostName, lockInfo: holder}}),
+			"wait_timeout_s": timeout.Seconds(),
+		},
+	})
+}
+
+// lockWaitMessage says whose lock on hostName a run is waiting for, and for
+// how long it will wait.
+func lockWaitMessage(hostName string, holder *lock.LockInfo, timeout time.Duration) string {
+	desc := "holder unknown"
+	if holder != nil {
+		desc = holder.Describe()
+	}
+	return fmt.Sprintf("Waiting up to %s for the lock on %s: %s", timeout, hostName, desc)
+}
+
+// recordLocalJob makes a local host record the process group of the job it
+// starts in the lock just taken. The job runs in its own session, so if rr is
+// killed it keeps running; with its group in the lock, the next run waits for
+// it instead of taking the lock from the dead rr. Remote hosts don't need it.
+func recordLocalJob(ctx *WorkflowContext) {
+	client, ok := ctx.Conn.Client.(*host.LocalClient)
+	if !ok || ctx.Lock == nil {
+		return
+	}
+	lck, hostName := ctx.Lock, ctx.Conn.Name
+	warn := lockWarn(hostName)
+	client.SetOnStart(func(pgid int) {
+		if err := lck.SetJobPGID(pgid); err != nil {
+			warn(fmt.Sprintf("Warning: couldn't record the job in the lock on %s (%v); if rr is killed, another run may start before the job stops", hostName, err))
+		}
+	})
 }
 
 // SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
 // Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
 //
-// A local target (--local or local mode) dials nothing, takes no lock, and
-// skips sync.
+// A local target (--local or local mode) dials nothing and skips sync. With
+// a local host it runs on that host and takes its lock, as a local fallback
+// does; without one it runs bare, with no lock.
 // When multiple hosts are configured, this function implements load balancing
 // (see findAvailableHost):
 //  1. Try each host with non-blocking lock acquisition
@@ -662,6 +781,10 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
+		if err := lockPhase(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 	} else if err := connectRemote(ctx, opts); err != nil {
 		ctx.Close()
 		return nil, err
@@ -686,25 +809,171 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 // and no --host/--tag it load-balances (connect + lock combined); otherwise
 // it connects, then locks.
 func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if err := checkTaskHostFlag(ctx, opts); err != nil {
+		return err
+	}
 	setupHostSelector(ctx, opts)
+	if err := checkTaskTag(ctx, opts); err != nil {
+		return err
+	}
 
 	if ctx.selector.HostCount() > 1 && opts.Host == "" && opts.Tag == "" {
-		return setupWorkflowLoadBalanced(ctx, opts)
+		if err := setupWorkflowLoadBalanced(ctx, opts); err != nil {
+			return explainNoFallback(ctx, opts.TaskName, err)
+		}
+		// A fallback took no lock while picking; lock it now (a no-op for
+		// bare local execution).
+		if ctx.Conn.LocalReason != "" {
+			return lockPhase(ctx, opts)
+		}
+		recordLocalJob(ctx)
+		return nil
 	}
 
 	// Phase 1: Connect
 	if err := connectPhase(ctx, opts); err != nil {
+		return explainNoFallback(ctx, opts.TaskName, err)
+	}
+	if err := checkTaskHost(ctx, opts.TaskName); err != nil {
 		return err
 	}
 	// Phase 2: Acquire lock (before sync)
 	return lockPhase(ctx, opts)
 }
 
+// checkTaskHost refuses a task pinned to other hosts once its host is
+// known, before that host's lock is waited on: a busy host would otherwise
+// hold the run for lock.timeout only to refuse it. RunTask checks again
+// after a load-balanced pick. A local target (--local, local mode) runs
+// here by explicit choice and overrides the pin, as it overrides the
+// project's hosts: list.
+func checkTaskHost(ctx *WorkflowContext, taskName string) error {
+	if taskName == "" || ctx.Resolved.Project == nil || ctx.target.local {
+		return nil
+	}
+	task, ok := ctx.Resolved.Project.Tasks[taskName]
+	if !ok || config.IsTaskHostAllowed(&task, ctx.Conn.Name) {
+		return nil
+	}
+	return taskHostError(taskName, &task, ctx.Conn.Name)
+}
+
+// checkTaskHostFlag refuses --host naming a host a pinned task doesn't
+// allow before that host is dialed: otherwise rr would wait out its probe
+// only to refuse it, or, if it's unreachable, fall back to a host the pin
+// does allow.
+func checkTaskHostFlag(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if opts.Host == "" {
+		return nil
+	}
+	task, ok := pinnedTask(ctx.Resolved, opts.TaskName)
+	if !ok || config.IsTaskHostAllowed(&task, opts.Host) {
+		return nil
+	}
+	if _, known := ctx.Resolved.Global.Hosts[opts.Host]; !known {
+		return nil // host selection reports it as HOST_NOT_FOUND
+	}
+	return taskHostError(opts.TaskName, &task, opts.Host)
+}
+
+// pinnedTask returns taskName's config when its hosts: list restricts it.
+func pinnedTask(resolved *config.ResolvedConfig, taskName string) (config.TaskConfig, bool) {
+	if resolved == nil || resolved.Project == nil || taskName == "" {
+		return config.TaskConfig{}, false
+	}
+	task, ok := resolved.Project.Tasks[taskName]
+	return task, ok && len(task.Hosts) > 0
+}
+
+// pinExcludesFallback reports whether taskName's hosts: list leaves out the
+// host a local fallback would run on: the global config's local host, or
+// bare local execution when there's none.
+func pinExcludesFallback(resolved *config.ResolvedConfig, taskName string) bool {
+	task, ok := pinnedTask(resolved, taskName)
+	if !ok {
+		return false
+	}
+	name, _ := config.LocalHost(resolved)
+	if name == "" {
+		name = host.LocalAlias
+	}
+	return !config.IsTaskHostAllowed(&task, name)
+}
+
+// localFallbackMode is local_fallback for this run. A task whose pin
+// excludes the fallback host never falls back: checkTaskHost would refuse
+// it there, and only after waiting on that host's lock when it's busy.
+func localFallbackMode(ctx *WorkflowContext, taskName string) config.LocalFallbackMode {
+	if pinExcludesFallback(ctx.Resolved, taskName) {
+		return config.LocalFallbackNever
+	}
+	return config.ResolveLocalFallbackMode(ctx.Resolved)
+}
+
+// explainNoFallback replaces the suggestion on a connection error for a
+// task that didn't fall back because of its pin (see localFallbackMode).
+// The generic one may tell the user to turn on a local_fallback that is
+// already on, or that wouldn't apply to this task.
+func explainNoFallback(ctx *WorkflowContext, taskName string, err error) error {
+	rrErr, ok := err.(*errors.Error)
+	if !ok || rrErr.Code != errors.ErrSSH || !pinExcludesFallback(ctx.Resolved, taskName) {
+		return err
+	}
+	task, _ := pinnedTask(ctx.Resolved, taskName)
+	rrErr.Suggestion = fmt.Sprintf("Task '%s' is restricted to: %s, so rr doesn't fall back to this machine for it. Check that those hosts are reachable, or run it with --local to run it here anyway.",
+		taskName, strings.Join(task.Hosts, ", "))
+	return rrErr
+}
+
+// anyHostTagged reports whether any of hosts has tag.
+func anyHostTagged(hosts map[string]config.Host, tag string) bool {
+	for name := range hosts {
+		if slices.Contains(hosts[name].Tags, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTaskTag refuses --tag for a pinned task when the hosts carrying the
+// tag are all outside the task's hosts: list. A tag no candidate host has
+// is left to SelectByTag, which lists the tags there are.
+func checkTaskTag(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if opts.Tag == "" {
+		return nil
+	}
+	task, ok := pinnedTask(ctx.Resolved, opts.TaskName)
+	if !ok {
+		return nil
+	}
+	tagged := false
+	for _, h := range ctx.selector.HostInfo() {
+		if !slices.Contains(h.Tags, opts.Tag) {
+			continue
+		}
+		if slices.Contains(task.Hosts, h.Name) {
+			return nil
+		}
+		tagged = true
+	}
+	if !tagged {
+		return nil
+	}
+	return errors.New(errors.ErrConfig,
+		fmt.Sprintf("Task '%s' can't run on any host tagged '%s'", opts.TaskName, opts.Tag),
+		fmt.Sprintf("This task is restricted to: %s. Use a tag one of those hosts has, run it with --host %s, or with --local to run it on this machine.",
+			strings.Join(task.Hosts, ", "), task.Hosts[0]))
+}
+
 // ExecutePullPhase downloads files from remote after command execution.
 // Pull happens regardless of command exit code - often you want test artifacts on failure.
 // Errors are logged but don't fail the overall workflow.
+//
+// A run that ran in place (a local host, --local, a fallback) left its files
+// in the project dir; they're copied from there to the dest, and the phase
+// is reported skipped when the dest is the project dir itself.
 func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest string) {
-	if len(pullItems) == 0 || wf.Conn == nil || wf.Conn.IsLocal {
+	if len(pullItems) == 0 || wf.Conn == nil {
 		return
 	}
 
@@ -713,9 +982,48 @@ func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest str
 		Patterns:    pullItems,
 		DefaultDest: dest,
 	}
-	if pullAndReport(wf.Conn, pullOpts, rrsync.Pull, "") && PrettyMode() {
+	pull := rrsync.Pull
+	if wf.Conn.InPlace() {
+		if !rrsync.InPlaceCopyNeeded(wf.WorkDir, pullOpts) {
+			reportPullSkipped(wf.Conn, "")
+			return
+		}
+		pull = inPlacePull(wf.WorkDir)
+	}
+	if pullAndReport(wf.Conn, pullOpts, pull, "") && PrettyMode() {
 		wf.PhaseDisplay.RenderSuccess("Files pulled", time.Since(pullStart))
 	}
+}
+
+// inPlacePull returns a pullFunc that copies from srcDir on this machine,
+// for a command that ran in place there.
+func inPlacePull(srcDir string) pullFunc {
+	return func(_ *host.Connection, opts rrsync.PullOptions, progress io.Writer) error {
+		_, err := rrsync.PullInPlace(srcDir, opts, progress)
+		return err
+	}
+}
+
+// pullSkippedReason is the reason a pull phase that copied nothing reports:
+// the command ran in place and the dest is the dir it ran in.
+const pullSkippedReason = "same_dir"
+
+// reportPullSkipped reports a pull phase with nothing to copy. task names
+// the parallel subtask, empty for a single run.
+func reportPullSkipped(conn *host.Connection, task string) {
+	if PrettyMode() {
+		label := "pull"
+		if task != "" {
+			label = fmt.Sprintf("pull %s (%s)", task, conn.Name)
+		}
+		ui.NewPhaseDisplay(os.Stdout).RenderSkipped(label, "files are already in the project dir")
+		return
+	}
+	details := map[string]interface{}{"reason": pullSkippedReason}
+	if task != "" {
+		details["task"] = task
+	}
+	WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "skipped", Host: conn.Name, Details: details})
 }
 
 // pullFunc matches rrsync.Pull; tests swap in a fake.
@@ -768,7 +1076,7 @@ func pullAndReport(conn *host.Connection, opts rrsync.PullOptions, pull pullFunc
 
 // requirementsPhase verifies that required tools are available on the remote.
 func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	// Skip for local execution or if explicitly disabled
+	// Skip for bare local execution or if explicitly disabled
 	if ctx.Conn.IsLocal || opts.SkipRequirements {
 		return nil
 	}
