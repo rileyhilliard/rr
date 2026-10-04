@@ -203,6 +203,8 @@ rr status --json
 
 Shows each host's alias probe results, which host would be selected, and which remote directory the current tree syncs to. Output is a JSON envelope by default.
 
+Hosts are listed in the order a run tries them. With a `hosts:` (or `host:`) in `.rr.yaml`, that's the project's hosts in the listed order, and `scope` is `project`. In local mode (`local_fallback` on and no hosts), it's this machine only (the local host, or `local`), and `scope` is `local`. Otherwise it's every global host alphabetically, and `scope` is `global`. `selected` is the first reachable host in that order. Status doesn't check locks, so a run goes to the next host when the selected one is locked.
+
 ## Setup & Utilities
 
 ### `rr init`
@@ -301,6 +303,7 @@ rr update --check   # Only check for a newer version
 rr version
 ```
 
+If Homebrew installed rr, `rr update` runs `brew upgrade --cask rileyhilliard/tap/rr` (`--force` runs `brew reinstall`), so Homebrew's record of the installed version stays right.
 ### `rr completion <shell>`
 
 Generate shell completion script.

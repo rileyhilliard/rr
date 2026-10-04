@@ -87,6 +87,17 @@ func TestLoad_Warnings(t *testing.T) {
 			contains: "parallel",
 		},
 		{
+			name:     "setup on a non-parallel task",
+			content:  "version: 1\ntasks:\n  a:\n    run: echo a\n    setup: bun install\n",
+			wantKeys: []string{"tasks.a.setup"},
+			contains: "never runs",
+		},
+		{
+			name:     "setup on a parallel task is fine",
+			content:  "version: 1\ntasks:\n  a:\n    run: echo a\n  all:\n    parallel: [a]\n    setup: bun install\n",
+			wantKeys: []string{},
+		},
+		{
 			name:     "output on a parallel task and pull on a subtask are fine",
 			content:  "version: 1\ntasks:\n  a:\n    run: echo a\n    pull: [out.xml]\n  all:\n    parallel: [a]\n    output: quiet\n",
 			wantKeys: []string{},

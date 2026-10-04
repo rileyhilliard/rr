@@ -202,14 +202,15 @@ func TestRunTask_LocalHost(t *testing.T) {
 func TestStatus_LocalHost(t *testing.T) {
 	hosts := map[string]config.Host{"dev": {Local: true}}
 
-	results := probeAllHosts(hosts)
-	require.Contains(t, results, "dev")
-	require.Len(t, results["dev"].Aliases, 1)
-	assert.True(t, results["dev"].Aliases[0].Success, "a local host is always reachable")
-	assert.Equal(t, host.LocalAlias, results["dev"].Aliases[0].SSHAlias)
+	results := probeAllHosts([]string{"dev"}, hosts)
+	require.Len(t, results, 1)
+	require.Equal(t, "dev", results[0].HostName)
+	require.Len(t, results[0].Aliases, 1)
+	assert.True(t, results[0].Aliases[0].Success, "a local host is always reachable")
+	assert.Equal(t, host.LocalAlias, results[0].Aliases[0].SSHAlias)
 	assert.Equal(t, &Selected{Host: "dev", Alias: host.LocalAlias}, findSelectedHost(results))
 
-	mapping := buildProjectMapping(&config.GlobalConfig{Hosts: hosts})
+	mapping := buildProjectMapping(hosts)
 	assert.NotContains(t, mapping.RemoteDirs, "dev", "a local host has no remote dir")
 	assert.Equal(t, []string{"dev"}, mapping.InPlaceHosts)
 	data, err := json.Marshal(mapping)
@@ -217,7 +218,7 @@ func TestStatus_LocalHost(t *testing.T) {
 	assert.Contains(t, string(data), `"in_place_hosts":["dev"]`)
 
 	out := captureStdout(t, func() {
-		require.NoError(t, outputStatusText(results, findSelectedHost(results), mapping))
+		require.NoError(t, outputStatusText(results, statusScopeGlobal, findSelectedHost(results), mapping))
 	})
 	assert.Contains(t, out, "runs in place on dev")
 }
@@ -228,7 +229,7 @@ func TestStatus_LocalRootIsProjectRootOutsideGit(t *testing.T) {
 	projectDir, _ := writeLocalHostConfigs(t)
 	t.Chdir(filepath.Join(projectDir, "sub"))
 
-	mapping := buildProjectMapping(&config.GlobalConfig{Hosts: map[string]config.Host{"dev": {Local: true}}})
+	mapping := buildProjectMapping(map[string]config.Host{"dev": {Local: true}})
 	assert.Equal(t, projectDir, mapping.LocalRoot)
 }
 
