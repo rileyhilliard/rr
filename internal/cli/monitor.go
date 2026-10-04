@@ -64,7 +64,17 @@ const defaultMonitorTimeout = 8 * time.Second
 // settings resolution shared by `rr monitor` and `rr monitor --once`.
 func resolveMonitorScope(hostsFilter string) (*monitorScope, error) {
 	resolved, err := config.LoadResolved("")
-	if err != nil {
+	if errors.IsCode(err, errors.ErrConfigNotFound) {
+		// With no explicit path, this is a checkout without .rr.yaml inside
+		// another checkout that has one. That config is skipped so a run
+		// doesn't use the other checkout's code; monitor runs no code, so it
+		// shows the global hosts, as it does with no project config.
+		global, globalErr := config.LoadGlobal()
+		if globalErr != nil {
+			return nil, globalErr
+		}
+		resolved = &config.ResolvedConfig{Global: global, Project: config.DefaultConfig(), Source: config.GlobalOnly}
+	} else if err != nil {
 		return nil, err
 	}
 

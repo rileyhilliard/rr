@@ -188,6 +188,20 @@ func TestRun_NestedWorktreeWithoutConfigDoesNotRunMainCheckout(t *testing.T) {
 	}
 }
 
+// Monitor only needs the global hosts, so the skipped main-checkout config
+// that stops a run doesn't stop it: it shows the global hosts, as it does
+// anywhere without a project config.
+func TestResolveMonitorScope_NestedWorktreeWithoutConfigUsesGlobalHosts(t *testing.T) {
+	repo, _ := localHostRepo(t)
+	nested := addWorktree(t, repo, filepath.Join(repo, ".claude", "worktrees", "x"), "old", "HEAD~1")
+	t.Chdir(nested)
+
+	scope, err := resolveMonitorScope("")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dev"}, scope.order)
+	assert.Contains(t, scope.hosts, "dev")
+}
+
 // With the config committed on its branch, the same nested worktree uses its
 // own config and runs in place.
 func TestRun_NestedWorktreeWithConfigRunsInWorktree(t *testing.T) {
