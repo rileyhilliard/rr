@@ -128,7 +128,7 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
   "error": {
     "code": "SSH_AUTH_FAILED",
     "message": "probe m1-mini failed: authentication failed (ssh: handshake failed: ...)",
-    "suggestion": "Deploy SSH key: ssh-copy-id <hostname>",
+    "suggestion": "Deploy SSH key: ssh-copy-id m1-mini",
     "details": {"reason": "authentication failed", "alias": "m1-mini"}
   }
 }

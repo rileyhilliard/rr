@@ -2,6 +2,7 @@ package sshutil
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -11,6 +12,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// dialViaProxy starts proxyCommand for settings the way Dial does.
+func dialViaProxy(proxyCommand, originalHost string, settings *sshSettings) (net.Conn, error) {
+	settings.proxyCommand = proxyCommand
+	return startProxy(proxyCmd(originalHost, settings), settings)
+}
 
 func TestExpandProxyTokens(t *testing.T) {
 	tests := []struct {

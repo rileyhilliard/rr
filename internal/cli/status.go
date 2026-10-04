@@ -296,7 +296,7 @@ func outputStatusText(results []probeResult, scope string, selected *Selected, m
 				row.Status = "fail"
 				errMsg := "Connection failed"
 				if probeErr, ok := alias.Error.(*host.ProbeError); ok {
-					errMsg = probeErr.Reason.String()
+					errMsg = probeErr.Summary()
 				} else if alias.Error != nil {
 					errMsg = alias.Error.Error()
 				}

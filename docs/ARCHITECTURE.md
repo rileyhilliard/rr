@@ -888,7 +888,7 @@ flowchart TB
 
 **Transport Layer**
 
-- **SSH Client** (`pkg/sshutil`): Dial using `~/.ssh/config` settings (including ProxyCommand), agent and key-file auth, exec/stream/PTY/interactive/shell modes
+- **SSH Client** (`pkg/sshutil`): Dial using `~/.ssh/config` settings (including ProxyCommand, and ProxyJump through the system `ssh -W`), agent and key-file auth, exec/stream/PTY/interactive/shell modes
 - **Local Executor**: os/exec wrapper for bare local execution (`--local`, local mode and fallback with no local host); stops the command on cancel with SIGINT, then SIGKILL after 3s
 
 **Setup & Diagnostics**
@@ -1368,7 +1368,7 @@ rr/
 │   ├── logger/                  # Minimal logging interface
 │   └── util/                    # Shell quoting, string helpers
 ├── pkg/                         # Potentially reusable packages
-│   └── sshutil/                 # SSH client, ~/.ssh/config parsing, ProxyCommand
+│   └── sshutil/                 # SSH client, ~/.ssh/config parsing, ProxyCommand/ProxyJump
 ├── configs/
 │   └── schema.json              # JSON Schema for .rr.yaml (editor support, not used at runtime)
 ├── completions/                 # Generated shell completions (bash, zsh, fish, powershell)

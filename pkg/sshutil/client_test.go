@@ -280,12 +280,13 @@ func TestSuggestionForHandshakeError(t *testing.T) {
 		contains string
 	}{
 		{"unable to authenticate", "Auth failed"},
-		{"host key verification", "Host key issue"},
+		{"host key verification", "StrictHostKeyChecking=accept-new myhost"},
+		{"ssh: handshake failed: knownhosts: key is unknown", "StrictHostKeyChecking=accept-new myhost"},
 		{"random error", "went wrong during SSH"},
 	}
 
 	for _, tt := range tests {
-		suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), nil)
+		suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), nil, "myhost")
 		if suggestion == "" {
 			t.Errorf("suggestionForHandshakeError(%q) returned empty string", tt.errMsg)
 		}
@@ -295,7 +296,7 @@ func TestSuggestionForHandshakeError(t *testing.T) {
 	}
 
 	// Test with encrypted keys
-	suggestion := suggestionForHandshakeError(errFromString("unable to authenticate"), []string{"/path/to/key"})
+	suggestion := suggestionForHandshakeError(errFromString("unable to authenticate"), []string{"/path/to/key"}, "myhost")
 	if !containsSubstring(suggestion, "ssh-add") || !containsSubstring(suggestion, "/path/to/key") {
 		t.Errorf("suggestionForHandshakeError with encrypted keys should suggest ssh-add, got: %q", suggestion)
 	}
@@ -850,14 +851,14 @@ func TestSuggestionForDialError_NetworkUnreachable(t *testing.T) {
 
 func TestSuggestionForHandshakeError_NoSupportedMethods(t *testing.T) {
 	err := errFromString("no supported methods remain")
-	suggestion := suggestionForHandshakeError(err, nil)
+	suggestion := suggestionForHandshakeError(err, nil, "myhost")
 
 	assert.Contains(t, suggestion, "Auth failed")
 }
 
 func TestSuggestionForHandshakeError_HostKey(t *testing.T) {
 	err := errFromString("host key verification failed")
-	suggestion := suggestionForHandshakeError(err, nil)
+	suggestion := suggestionForHandshakeError(err, nil, "myhost")
 
 	assert.Contains(t, suggestion, "Host key")
 }
@@ -1362,7 +1363,7 @@ func TestSuggestionForHandshakeError_AllPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), tt.encryptedKeys)
+			suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), tt.encryptedKeys, "myhost")
 			for _, substr := range tt.contains {
 				assert.Contains(t, suggestion, substr)
 			}

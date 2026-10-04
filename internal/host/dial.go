@@ -177,7 +177,7 @@ func raceAliases[C interface{ Close() error }](
 				errMsg := "connection failed"
 				var probeErr *ProbeError
 				if stderrors.As(r.err, &probeErr) {
-					errMsg = probeErr.Reason.String()
+					errMsg = probeErr.Summary()
 				}
 				emit(ConnectionEvent{
 					Type:    EventFailed,

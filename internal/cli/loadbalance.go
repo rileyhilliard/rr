@@ -492,20 +492,24 @@ func buildConnectionError(attempts []hostAttempt) error {
 
 	// Build list of hosts and their errors
 	var failedHosts []string
+	var failures []error
 	for _, a := range attempts {
 		if a.connErr != nil {
 			failedHosts = append(failedHosts, a.hostName)
+			failures = append(failures, a.connErr)
 		}
 	}
 
-	if len(failedHosts) == 1 {
-		return rrerrors.New(rrerrors.ErrSSH,
-			fmt.Sprintf("Couldn't connect to host '%s'", failedHosts[0]),
-			"Check if the host is reachable and your SSH configuration.")
+	if len(failures) == 1 {
+		// The dial's own error already names the host, its aliases, and
+		// what to check.
+		return failures[0]
 	}
 
-	return rrerrors.New(rrerrors.ErrSSH,
-		fmt.Sprintf("Couldn't connect to any host (tried: %v)", failedHosts),
+	// Keep each host's failure as the cause, so the error says why each one
+	// couldn't be reached.
+	return rrerrors.WrapWithCode(errors.Join(failures...), rrerrors.ErrSSH,
+		fmt.Sprintf("Couldn't connect to any host (tried: %s)", strings.Join(failedHosts, ", ")),
 		"Check if your hosts are reachable and your SSH configuration.")
 }
 

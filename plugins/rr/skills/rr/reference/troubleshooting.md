@@ -35,7 +35,7 @@ ssh -vv <host-alias>
 - Permission denied → run `ssh-copy-id <host-alias>`
 - `SSH_AUTH_FAILED` but `ssh` works → passphrase-protected key not in the agent: `ssh-add ~/.ssh/id_ed25519`
 - `SSH_HOST_KEY` → rr checks `~/.ssh/known_hosts` and never prompts; accept the key once with `ssh -o StrictHostKeyChecking=accept-new <host-alias> exit`
-- `ProxyJump` isn't supported; rr warns and suggests an equivalent `ProxyCommand`
+- "Couldn't reach '...' through jump host '...'" → the `ProxyJump` leg failed; the line under it is `ssh`'s own message. Check `ssh <jump-host>`, then that the jump host can reach the target's `HostName`/`Port`
 
 ### "command not found" Errors
 
