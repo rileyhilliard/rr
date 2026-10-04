@@ -133,7 +133,7 @@ func TestJobGroupLiveness_RecordedStartTime(t *testing.T) {
 	}{
 		{name: "leader started with the job", jobPGID: pgid, started: started, wantLive: true},
 		{name: "leader started an hour after the job: pid reused", jobPGID: pgid, started: started.Add(-time.Hour), wantLive: false},
-		{name: "leader started before the job: pid reused", jobPGID: pgid, started: started.Add(time.Hour), wantLive: false},
+		{name: "leader looks older than the job (clock moved): still the job", jobPGID: pgid, started: started.Add(time.Hour), wantLive: true},
 		{name: "no start time recorded (older lock)", jobPGID: pgid, wantLive: true},
 		{name: "leader gone, a member still running", jobPGID: orphanPGID, started: orphanStarted, wantLive: true},
 		{name: "group gone", jobPGID: deadPid(t), started: started, wantLive: false},

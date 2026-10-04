@@ -34,8 +34,8 @@ func processGroupAlive(pgid int) bool {
 	return errors.Is(err, syscall.EPERM)
 }
 
-// jobStartTolerance is how far the start time ps gives a job group's leader
-// may be from the recorded JobStarted and still be the same process. ps
+// jobStartTolerance is how much later than the recorded JobStarted the start
+// time ps gives a job group's leader may be and still be the same process. ps
 // reports elapsed time in whole seconds, and JobStarted is taken just after
 // the job starts.
 const jobStartTolerance = 2 * time.Second
@@ -44,9 +44,8 @@ const jobStartTolerance = 2 * time.Second
 // started at started, is still running.
 //
 // A group's id is its leader's pid, and the kernel doesn't reuse a pid while
-// a group with that id exists. So if the leader is running, the group is
-// the job's exactly when the leader started when the job did; a leader that
-// started at another time got the pid after the job and rr were both gone.
+// a group with that id exists. So a running leader that started later than
+// the job got the pid after the job and rr were both gone.
 //
 // If the leader is gone, the group is alive while any member runs (a job's
 // shell can exit before what it started in the background). That's taken
@@ -69,11 +68,10 @@ func jobGroupAlive(pgid int, started time.Time) bool {
 		debugf("jobGroupAlive: couldn't get the start time of pid %d (%v); counting group %d as the job", pgid, err, pgid)
 		return true
 	}
-	diff := time.Since(started) - elapsed
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > jobStartTolerance {
+	// A reused pid's process started after the job was gone, so only a
+	// leader that started later than the job can be one. One that looks
+	// older is the job with the clock moved since; it keeps the lock.
+	if time.Since(started)-elapsed > jobStartTolerance {
 		debugf("jobGroupAlive: pid %d started %s ago, the job %s ago; the pid was reused", pgid, elapsed, time.Since(started).Truncate(time.Second))
 		return false
 	}
