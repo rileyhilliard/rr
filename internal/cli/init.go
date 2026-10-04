@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -710,6 +711,10 @@ func addHostToGlobal(globalCfg *config.GlobalConfig, machine *machineConfig) (st
 	return machine.name, nil
 }
 
+// thisMachineOption is the multi-select value for "add this machine as a local
+// host". It contains whitespace, which host names can't.
+const thisMachineOption = " this-machine"
+
 // promptHostsSelection shows a multi-select to choose which hosts this project can use.
 // Returns selected host names (empty = use all global hosts).
 func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
@@ -730,6 +735,11 @@ func promptHostsSelection(globalCfg *config.GlobalConfig) ([]string, error) {
 	// Default to all hosts selected
 	selected := make([]string, len(hostNames))
 	copy(selected, hostNames)
+
+	// Offer this machine when no host is local yet. Unchecked by default.
+	if findLocalHost(globalCfg) == "" {
+		options = append(options, huh.NewOption("This machine (local, run in place)", thisMachineOption))
+	}
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -819,6 +829,16 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 			return nil, err
 		}
 		vals.hostRefs = selected
+
+		// "This machine" was checked: create the local host, then use it
+		if idx := slices.Index(selected, thisMachineOption); idx >= 0 {
+			vals.hostRefs = slices.Delete(slices.Clone(selected), idx, idx+1)
+			name, err := addLocalHostInteractive(globalCfg)
+			if err != nil {
+				return nil, err
+			}
+			vals.hostRefs = append(vals.hostRefs, name)
+		}
 	}
 
 	// If no hosts exist yet, prompt to add at least one
@@ -826,6 +846,21 @@ func collectInteractiveValues(globalCfg *config.GlobalConfig, skipProbe bool) (*
 		addHost, err := promptAddHost()
 		if err != nil {
 			return nil, err
+		}
+
+		if addHost {
+			local, err := promptThisMachine()
+			if err != nil {
+				return nil, err
+			}
+			if local {
+				name, err := addLocalHostInteractive(globalCfg)
+				if err != nil {
+					return nil, err
+				}
+				vals.hostRefs = []string{name}
+				addHost = false
+			}
 		}
 
 		if addHost {
