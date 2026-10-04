@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -70,6 +71,16 @@ func TestHolderDetails(t *testing.T) {
 
 	assert.Equal(t, "m1-linux", details[1].Host)
 	assert.Zero(t, details[1].Pid)
+
+	// In JSON, a known holder on another machine says so; an unreadable
+	// holder leaves same_machine out rather than claiming false.
+	raw, err := json.Marshal(details)
+	require.NoError(t, err)
+	var decoded []map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	assert.Equal(t, false, decoded[0]["same_machine"])
+	assert.NotContains(t, decoded[1], "same_machine")
+	assert.Equal(t, "m1-linux", decoded[1]["host"])
 }
 
 func TestWaitMessage(t *testing.T) {

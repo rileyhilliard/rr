@@ -271,8 +271,7 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 		if !waiting {
 			waiting = true
 			if options.waitFunc != nil {
-				holder, _ := readLockInfo(conn.Client, infoFile) // nil when unreadable
-				options.waitFunc(holder)
+				options.waitFunc(awaitHolderInfo(options.ctx, conn, infoFile))
 			}
 		}
 		timer := time.NewTimer(retryInterval)
@@ -281,6 +280,31 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 			timer.Stop()
 			return nil, InterruptedError(conn.Name, options.ctx.Err())
 		case <-timer.C:
+		}
+	}
+}
+
+// holderInfoGrace is how long a waiter gives a new holder to write its info
+// file. The holder writes it right after its mkdir, so a run that lost the
+// race by a moment would otherwise report the holder as unknown.
+const holderInfoGrace = 500 * time.Millisecond
+
+// awaitHolderInfo reads the holder's info, polling for up to holderInfoGrace
+// while the file isn't there yet. It returns nil when the holder still can't
+// be read, or when ctx is done.
+func awaitHolderInfo(ctx context.Context, conn *host.Connection, infoFile string) *LockInfo {
+	deadline := time.Now().Add(holderInfoGrace)
+	for {
+		if holder, err := readLockInfo(conn.Client, infoFile); err == nil {
+			return holder
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }

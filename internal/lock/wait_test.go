@@ -3,6 +3,7 @@ package lock
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -117,4 +118,33 @@ func TestAcquire_WaitFuncNotCalledWhenFree(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, lck.Release())
 	assert.False(t, called)
+}
+
+// A run that loses the mkdir race sees the lock dir before the holder has
+// written its info file. The wait is reported with the holder once the file
+// appears, not as an unknown holder.
+func TestAcquire_WaitFuncWaitsBrieflyForHolderInfo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local client uses a POSIX shell")
+	}
+	cfg := config.LockConfig{Enabled: true, Timeout: 300 * time.Millisecond, Stale: time.Minute, Dir: filepath.Join(t.TempDir(), "locks")}
+	defer SetRetryIntervalForTesting(20 * time.Millisecond)()
+	lockDir := filepath.Join(cfg.Dir, "rr.lock")
+	require.NoError(t, os.MkdirAll(lockDir, 0o755))
+	info, err := NewLockInfo("go test ./... (other run)")
+	require.NoError(t, err)
+	data, err := info.Marshal()
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = os.WriteFile(filepath.Join(lockDir, "info.json"), data, 0o644)
+	}()
+
+	var holders []*LockInfo
+	_, err = Acquire(host.NewLocalHostConnection("dev", config.Host{Local: true}), cfg, "make test",
+		WithWaitFunc(func(h *LockInfo) { holders = append(holders, h) }))
+	require.Error(t, err, "the other run still holds the lock")
+	require.Len(t, holders, 1)
+	require.NotNil(t, holders[0], "the holder was identified once its info file appeared")
+	assert.Equal(t, "go test ./... (other run)", holders[0].Command)
 }

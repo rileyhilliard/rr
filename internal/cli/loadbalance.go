@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,19 @@ type lockHolderDetail struct {
 	Command     string  `json:"command,omitempty"`
 	AgeS        float64 `json:"age_s,omitempty"`
 	SameMachine bool    `json:"same_machine"`
+}
+
+// MarshalJSON leaves same_machine out for a holder whose lock info couldn't
+// be read: rr doesn't know where it runs, and false would say it does.
+func (d lockHolderDetail) MarshalJSON() ([]byte, error) {
+	type detail lockHolderDetail // no methods, so no recursion
+	if d.Pid != 0 || d.User != "" {
+		return json.Marshal(detail(d))
+	}
+	return json.Marshal(struct {
+		detail
+		SameMachine *bool `json:"same_machine,omitempty"`
+	}{detail: detail(d)})
 }
 
 // fallbackDetail explains a local fallback in the result envelope.
