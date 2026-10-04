@@ -17,6 +17,7 @@ import (
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
+	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/require"
@@ -102,18 +103,24 @@ func (w *WorkflowContext) lostConnectionAsResult(err error) error {
 // before the connection is torn down. The lock stays held until the caller's
 // Close, after the command has stopped, so no other run starts on the host
 // while it's still shutting down.
+//
+// The cancel cause is an exec.SignalCause naming the signal, so a bare local
+// command, which shares rr's terminal, isn't sent a Ctrl+C it already got
+// (see exec.RunLocalCommand).
 func (w *WorkflowContext) setupSignalHandler() {
-	w.ctx, w.cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
+	w.ctx, w.cancel = ctx, func() { cancel(nil) }
 	w.signalChan = make(chan os.Signal, 2)
 	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
-		if _, ok := <-w.signalChan; !ok {
+		sig, ok := <-w.signalChan
+		if !ok {
 			// Channel was closed by Close(), not a signal
 			return
 		}
 		// Cancel context first so in-flight SSH commands can clean up
-		w.cancel()
+		cancel(exec.SignalCause{Signal: sig})
 
 		// Second signal force-quits immediately (users expect double Ctrl+C
 		// to kill). Local commands are killed first: exiting doesn't stop
