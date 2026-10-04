@@ -344,6 +344,13 @@ var missingPathPatterns = []*regexp.Regexp{
 	// zsh and bare: "zsh:.:2: no such file or directory: tests/foo.py". Before
 	// the generic pattern, which would take ".:2" from zsh's prefix as the path.
 	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
+	// bash 5 under -c: "bash: line 1: ./scripts/env.sh: No such file or
+	// directory". Before the generic pattern, which stops at "line 1".
+	regexp.MustCompile(`(?i)^[^:\n]*:\s*line \d+:\s*(\S+):\s*no such file or directory`),
+	// dash's "." builtin: "sh: 1: .: cannot open ./env.sh: No such file", and
+	// older dash's "sh: 1: .: Can't open ./env.sh". Anchored on the "."
+	// builtin, so python's "can't open file '...'" doesn't match.
+	regexp.MustCompile(`(?i)^[^:\n]*:\s*\d+:\s*\.:\s*(?:cannot|can't) open\s+(\S+?):?(?:\s|$)`),
 	// generic shell/tool: "cat: tests/foo.py: No such file or directory"
 	regexp.MustCompile(`(?i)^[^:\n]*:\s*(\S+):\s*no such file or directory`),
 }
