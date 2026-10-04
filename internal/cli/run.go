@@ -463,7 +463,7 @@ func renderFailureHelp(exitCode int, command, host string, localHost bool) {
 	case 2:
 		hint = "Misuse or command failed. Check if a dependency is missing or command syntax is wrong."
 	case 126:
-		hint = "Command found but not executable. Check file permissions on remote."
+		hint = "Command found but not executable. Check file permissions on the host."
 	case 127:
 		hint = "Command not found. The tool may not be installed or not in PATH."
 	case 128:
@@ -471,7 +471,7 @@ func renderFailureHelp(exitCode int, command, host string, localHost bool) {
 	case 130:
 		hint = "Interrupted by Ctrl+C."
 	case 137:
-		hint = "Killed (likely OOM). The remote may have run out of memory."
+		hint = "Killed (likely OOM). The host may have run out of memory."
 	case 139:
 		hint = "Segmentation fault. The command crashed."
 	case 143:
