@@ -30,13 +30,27 @@ var localInterruptGrace = 3 * time.Second
 // unchanged. Commands run under /bin/sh -c; the command rr builds for a host
 // picks the user's shell inside that (see exec.BuildRemoteCommand), so the
 // outer shell only has to parse it, which a non-POSIX $SHELL like fish can't.
-type LocalClient struct{}
+type LocalClient struct {
+	mu      sync.Mutex
+	onStart func(pgid int)
+}
 
 var _ sshutil.SSHClient = (*LocalClient)(nil)
 
 // NewLocalClient returns a client that runs commands locally.
 func NewLocalClient() *LocalClient {
 	return &LocalClient{}
+}
+
+// SetOnStart sets a callback ExecStreamContext calls with the process group
+// of each command it starts, once it's running; nil clears it. The command is
+// its own session, so its pid is the group id. rr uses it to record the job
+// in the host's lock, which then stays held while the job runs even if rr is
+// killed. Exec, which the lock itself uses, doesn't call it.
+func (c *LocalClient) SetOnStart(fn func(pgid int)) {
+	c.mu.Lock()
+	c.onStart = fn
+	c.mu.Unlock()
 }
 
 // localWaitDelay bounds how long Wait keeps reading a command's output after
@@ -157,6 +171,12 @@ func (c *LocalClient) ExecStreamContext(ctx context.Context, cmd string, stdout,
 			"Make sure the command exists on this machine.")
 	}
 	defer untrack(command)
+	c.mu.Lock()
+	onStart := c.onStart
+	c.mu.Unlock()
+	if onStart != nil {
+		onStart(command.Process.Pid)
+	}
 
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()

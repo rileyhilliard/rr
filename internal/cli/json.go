@@ -92,6 +92,7 @@ const (
 	ErrCodeLockHeld          = "LOCK_HELD"
 	ErrCodeCommandFailed     = "COMMAND_FAILED"
 	ErrCodeDependencyMissing = "DEPENDENCY_MISSING"
+	ErrCodeInterrupted       = "INTERRUPTED"
 	ErrCodeUnknown           = "UNKNOWN"
 )
 
@@ -181,6 +182,7 @@ var internalToPublicCode = map[string]string{
 	errors.ErrSync:           ErrCodeRsyncFailed,
 	errors.ErrLock:           ErrCodeLockHeld,
 	errors.ErrExec:           ErrCodeCommandFailed,
+	errors.ErrInterrupted:    ErrCodeInterrupted,
 }
 
 // mapErrorCode maps an internal error code to its public code, or UNKNOWN.

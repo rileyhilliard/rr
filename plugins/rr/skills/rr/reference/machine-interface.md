@@ -129,6 +129,7 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 | `LOCK_HELD` | Another process has lock | Run `rr unlock` |
 | `COMMAND_FAILED` | Remote command failed | Check command output |
 | `DEPENDENCY_MISSING` | A required tool is missing: local or remote `rsync`, `ssh-copy-id` (for `rr setup`), or a `require:` tool (`Missing required tools: ...`) | `rr provision`, or install it |
+| `INTERRUPTED` | rr was stopped (Ctrl+C, SIGTERM) while it waited for a lock; nothing ran | Don't retry on your own; the user stopped it |
 | `UNKNOWN` | Unclassified error | Read `message` |
 
 Codes are set where the error is created, never guessed from the message. Transition note: rr binaries older than v0.27.0 report missing required tools as `COMMAND_FAILED` with a message starting `Missing required tools`, and an unknown host as `CONFIG_NOT_FOUND` or `CONFIG_INVALID`. Treat `COMMAND_FAILED` + `Missing required tools` the same as `DEPENDENCY_MISSING`. Always read `message` and `suggestion`.

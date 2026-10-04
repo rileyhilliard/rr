@@ -17,3 +17,13 @@ func processAlive(pid int) bool {
 	}
 	return errors.Is(err, syscall.EPERM)
 }
+
+// processGroupAlive reports whether any process in the process group pgid
+// still exists. As with processAlive, EPERM means it exists.
+func processGroupAlive(pgid int) bool {
+	err := syscall.Kill(-pgid, 0)
+	if err == nil {
+		return true
+	}
+	return errors.Is(err, syscall.EPERM)
+}

@@ -7,3 +7,9 @@ package lock
 func processAlive(pid int) bool {
 	return true
 }
+
+// processGroupAlive reports false on Windows, where a local job isn't
+// recorded by process group; processAlive already keeps the holder alive.
+func processGroupAlive(pgid int) bool {
+	return false
+}
