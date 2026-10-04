@@ -20,9 +20,12 @@ import (
 // SSH alias a remote host connects through.
 const LocalAlias = "local"
 
-// localInterruptGrace is how long a cancelled command gets to exit after
-// SIGINT before it's killed, matching the SSH client.
-var localInterruptGrace = 3 * time.Second
+// LocalInterruptGrace is how long a cancelled local command gets to exit
+// after SIGINT before it's killed, matching the SSH client.
+const LocalInterruptGrace = 3 * time.Second
+
+// localInterruptGrace is LocalInterruptGrace, a var so tests can shorten it.
+var localInterruptGrace = LocalInterruptGrace
 
 // LocalClient runs commands on this machine through the same interface the
 // SSH client implements, so a host with local: true goes through the remote
@@ -246,11 +249,29 @@ func NewLocalHostConnection(name string, h config.Host) *Connection {
 	}
 }
 
+// LocalRunConnection returns the connection for a run rr puts on this machine
+// by itself rather than on a host the user picked: --local, local mode, or a
+// local fallback, with reason saying which (one of the LocalReason
+// constants).
+//
+// With a local host (name non-empty, h its config) it's that host's
+// connection, so the run gets the host's setup_commands, env, shell, require
+// checks and lock, runs in its dir with no TTY, and reports the host's name.
+// Without one (name empty) it's a bare local connection: IsLocal, no host
+// config, no client, no lock, run in the caller's terminal. Either way
+// LocalReason is set, so the run can still say why it ran here.
+func LocalRunConnection(name string, h config.Host, reason string) *Connection {
+	if name == "" {
+		return &Connection{Name: LocalAlias, Alias: LocalAlias, IsLocal: true, LocalReason: reason}
+	}
+	conn := NewLocalHostConnection(name, h)
+	conn.LocalReason = reason
+	return conn
+}
+
 // LocalMachineConnection returns the connection for the host in hosts that
-// has local: true, or nil when there's none. Runs that execute on this
-// machine without going through that host (--local, local mode, a local
-// fallback) take its lock through this connection, so they can't run beside
-// a job on it.
+// has local: true, or nil when there's none. A fallback deciding whether
+// this machine is already busy reads that host's lock through it.
 func LocalMachineConnection(hosts map[string]config.Host) *Connection {
 	for name := range hosts {
 		if hosts[name].Local {

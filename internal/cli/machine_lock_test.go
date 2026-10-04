@@ -151,20 +151,49 @@ func TestRun_LocalFlagTakesLocalHostLock(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "the command never ran")
 }
 
-// A parallel task with --local runs here too, under the same lock.
+// A parallel task with --local runs on the local host as its one worker,
+// as with --host dev, so it waits for that host's lock. When the wait times
+// out, every subtask fails on the lock and none of them runs, not even after
+// the first one gave up.
 func TestRunParallelTask_LocalFlagWaitsForLocalHostLock(t *testing.T) {
+	withStructuredOutput(t)
 	projectDir, lockCfg := writeMachineLockConfigs(t, "[box]")
 	t.Chdir(projectDir)
 	holdMachineLock(t, lockCfg)
 
+	var code int
 	var err error
+	var events string
 	captureStdout(t, func() {
-		captureStderr(t, func() {
-			_, err = RunParallelTask(ParallelTaskOptions{TaskName: "pair", Local: true, NoLogs: true})
+		events = captureStderr(t, func() {
+			code, err = RunParallelTask(ParallelTaskOptions{TaskName: "pair", Local: true, NoLogs: true})
 		})
 	})
-	require.Error(t, err)
-	assert.True(t, errors.IsCode(err, errors.ErrLock), "got %v", err)
+	require.NoError(t, err, events)
+	assert.Equal(t, 1, code, events)
+
+	parsed := parseEvents(t, events)
+	connect := eventsWith(parsed, "connect", "complete")
+	require.Len(t, connect, 1, events)
+	assert.Equal(t, "dev", connect[0].Host)
+
+	var result *PhaseEvent
+	for i := range parsed {
+		if parsed[i].Type == "result" {
+			result = &parsed[i]
+		}
+	}
+	require.NotNil(t, result, events)
+	assert.Equal(t, "local_flag", result.Details["local_reason"])
+	assert.EqualValues(t, 0, result.Details["passed"], "no subtask ran beside the lock holder")
+	failures, ok := result.Details["failures"].([]interface{})
+	require.True(t, ok, events)
+	require.Len(t, failures, 2)
+	for _, f := range failures {
+		entry := f.(map[string]interface{})
+		assert.Equal(t, "dev", entry["host"])
+		assert.Equal(t, "LOCK_HELD", entry["error"].(map[string]interface{})["code"], events)
+	}
 }
 
 // In the all-locked phase, a fallback is ruled out when this machine's
@@ -178,14 +207,13 @@ func TestMachineBusy_LocalHostOutsidePool(t *testing.T) {
 		"dev": {Local: true},
 		"box": {SSH: []string{"box"}},
 	}}}}
-	lockedRemote := []hostAttempt{{hostName: "box", conn: &host.Connection{Name: "box", Host: config.Host{SSH: []string{"box"}}}}}
 
-	assert.False(t, machineBusy(ctx, lockedRemote, lockCfg))
+	assert.False(t, machineBusy(ctx, lockCfg))
 	holdMachineLock(t, lockCfg)
-	assert.True(t, machineBusy(ctx, lockedRemote, lockCfg))
+	assert.True(t, machineBusy(ctx, lockCfg))
 
 	ctx.Resolved.Global.Hosts = map[string]config.Host{"box": {SSH: []string{"box"}}}
-	assert.False(t, machineBusy(ctx, lockedRemote, lockCfg), "no local host, nothing to protect")
+	assert.False(t, machineBusy(ctx, lockCfg), "no local host, nothing to protect")
 }
 
 // A lock on the local host left by a dead rr process on this machine doesn't
@@ -199,7 +227,6 @@ func TestMachineBusy_DeadLocalHolderIsFree(t *testing.T) {
 		"dev": {Local: true},
 		"box": {SSH: []string{"box"}},
 	}}}}
-	lockedRemote := []hostAttempt{{hostName: "box", conn: &host.Connection{Name: "box", Host: config.Host{SSH: []string{"box"}}}}}
 
 	gone := exec.Command("true")
 	require.NoError(t, gone.Run())
@@ -212,7 +239,7 @@ func TestMachineBusy_DeadLocalHolderIsFree(t *testing.T) {
 	require.NoError(t, os.MkdirAll(lockDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(lockDir, "info.json"), data, 0o644))
 
-	assert.False(t, machineBusy(ctx, lockedRemote, lockCfg))
+	assert.False(t, machineBusy(ctx, lockCfg))
 	_, statErr := os.Stat(lockDir)
 	assert.NoError(t, statErr, "the check only reads; the lock is left for Acquire to steal")
 }

@@ -1118,7 +1118,7 @@ func runTaskRepeated(taskName string, repeatCount int, hostFlag, tagFlag string,
 	_ = logs.Cleanup(resolved.Global.Logs)
 
 	if target.local && !PrettyMode() {
-		emitLocalConnect(target.reason)
+		emitLocalConnect(target)
 	}
 
 	// Create orchestrator

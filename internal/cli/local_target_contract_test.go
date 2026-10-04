@@ -1,15 +1,16 @@
 package cli
 
-// Characterization tests of the pre-routing behavior: what --local, local
-// mode (local_fallback with no hosts list) and a local_fallback run report
-// in structured output today, and where their command runs, both without a
-// local host in the global config and with one.
+// Contract tests of the routed behavior: what --local, local mode
+// (local_fallback with no hosts list) and a local_fallback run report in
+// structured output, and where their command runs, both without a local host
+// in the global config and with one.
 //
-// These pin current values on purpose, including ones planned to change
-// (with a local host, the next change routes these runs through it, so the
-// host becomes "dev" and the sync skip reason "in_place"). That change
-// should show up here as explicit diffs to the expected values, not as a
-// silent shift in the contract agents parse.
+// With a local host these runs are routed through it: the host is reported
+// as "dev", it's locked, sync is skipped as "in_place", and a task runs at
+// the project root, while details.reason, local_reason and fallback still
+// say why the run is here. Without one they run bare, exactly as before
+// routing. Agents parse these values, so a change to them should show up
+// here as an explicit diff, not as a silent shift.
 
 import (
 	"encoding/json"
@@ -121,10 +122,11 @@ const (
 	localModeProject = "local_fallback: always" // no hosts list: local mode
 )
 
-// Today a local target reports host "local" and skips sync as "local"
-// whether or not a local host exists; a local host only adds a lock phase
-// on it. rr run and a task report the same, and both run in the caller's
-// directory (a task on a local *host* runs at the project root instead).
+// Without a local host, a local target reports host "local", skips sync as
+// "local", takes no lock, and rr run and a task both run in the caller's
+// directory. With one, it runs on that host as --host dev would: host "dev"
+// everywhere, its lock, sync skipped as "in_place", rr run in the caller's
+// directory and a task at the project root.
 func TestLocalTargetContract(t *testing.T) {
 	flag := localTargetObserved{
 		ConnectHost: "local", ConnectReason: "local_flag",
@@ -138,8 +140,14 @@ func TestLocalTargetContract(t *testing.T) {
 		ConnectHost: "local", WarnHost: "local", WarnReason: "hosts_unreachable",
 		SyncSkipReason: "local", ResultHost: "local", FallbackReason: "hosts_unreachable", Cwd: "sub",
 	}
-	withLock := func(o localTargetObserved) localTargetObserved {
-		o.LockHost = "dev"
+	// Routed through the local host "dev": its name wherever a host is
+	// reported, its lock, and sync skipped as in_place. The reasons stay.
+	routed := func(o localTargetObserved) localTargetObserved {
+		o.ConnectHost, o.LockHost, o.ResultHost = "dev", "dev", "dev"
+		if o.WarnHost != "" {
+			o.WarnHost = "dev"
+		}
+		o.SyncSkipReason = "in_place"
 		return o
 	}
 
@@ -149,13 +157,14 @@ func TestLocalTargetContract(t *testing.T) {
 		projectHosts  string
 		localFlag     bool
 		want          localTargetObserved
+		taskCwd       string // where a task runs, when not want.Cwd
 	}{
 		{name: "--local, no local host", projectHosts: hostsBox, localFlag: true, want: flag},
 		{name: "local mode, no local host", projectHosts: localModeProject, want: mode},
 		{name: "local_fallback, no local host", projectHosts: hostsBoxFallback, want: fallback},
-		{name: "--local, local host configured", withLocalHost: true, projectHosts: hostsBox, localFlag: true, want: withLock(flag)},
-		{name: "local mode, local host configured", withLocalHost: true, projectHosts: localModeProject, want: withLock(mode)},
-		{name: "local_fallback, local host configured", withLocalHost: true, projectHosts: hostsBoxFallback, want: withLock(fallback)},
+		{name: "--local, local host configured", withLocalHost: true, projectHosts: hostsBox, localFlag: true, want: routed(flag), taskCwd: "."},
+		{name: "local mode, local host configured", withLocalHost: true, projectHosts: localModeProject, want: routed(mode), taskCwd: "."},
+		{name: "local_fallback, local host configured", withLocalHost: true, projectHosts: hostsBoxFallback, want: routed(fallback), taskCwd: "."},
 	}
 	for _, tt := range tests {
 		t.Run("run/"+tt.name, func(t *testing.T) {
@@ -182,7 +191,11 @@ func TestLocalTargetContract(t *testing.T) {
 			})
 			require.NoError(t, err, events)
 			require.Equal(t, 0, code, events)
-			assert.Equal(t, tt.want, observeLocalTarget(t, events, projectDir, filepath.Join(projectDir, "task.out")), events)
+			want := tt.want
+			if tt.taskCwd != "" {
+				want.Cwd = tt.taskCwd
+			}
+			assert.Equal(t, want, observeLocalTarget(t, events, projectDir, filepath.Join(projectDir, "task.out")), events)
 		})
 	}
 }

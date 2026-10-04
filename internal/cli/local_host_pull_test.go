@@ -147,5 +147,5 @@ func TestSyncPhase_SkipReasons(t *testing.T) {
 	}
 
 	assert.Equal(t, "in_place", reason(host.NewLocalHostConnection("dev", config.Host{Local: true})))
-	assert.Equal(t, "local", reason(localConnection()))
+	assert.Equal(t, "local", reason(host.LocalRunConnection("", config.Host{}, host.LocalReasonFlag)))
 }

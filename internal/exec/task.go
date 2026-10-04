@@ -193,7 +193,7 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 // into workDir first; local ones run in the current directory.
 func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
 	if conn.IsLocal {
-		return ExecuteLocal(BuildCommand(cmd, env, "", setupCommands), "", stdout, stderr)
+		return ExecuteLocalContext(ctx, BuildCommand(cmd, env, "", setupCommands), "", stdout, stderr)
 	}
 
 	fullCmd := BuildCommand(cmd, env, config.ExpandRemote(workDir), setupCommands)

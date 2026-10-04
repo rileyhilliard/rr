@@ -253,6 +253,7 @@ func setupHostSelector(ctx *WorkflowContext, opts WorkflowOptions) {
 		ctx.selector.SetHostOrder(hostOrder)
 	}
 	ctx.selector.SetLocalFallback(localFallback)
+	ctx.selector.SetLocalHost(config.LocalHost(ctx.Resolved))
 
 	probeTimeout := ctx.Resolved.Global.Defaults.ProbeTimeout
 	if opts.ProbeTimeout > 0 {
@@ -322,8 +323,6 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		return err
 	}
 
-	var fallbackReason string
-
 	ctx.selector.SetEventHandler(func(event host.ConnectionEvent) {
 		switch event.Type {
 		case host.EventFailed:
@@ -332,7 +331,6 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		case host.EventConnected:
 			connDisplay.AddAttempt(event.Alias, ui.StatusSuccess, event.Latency, "")
 		case host.EventLocalFallback:
-			fallbackReason = event.Reason
 			ctx.AddResultDetail("fallback", fallbackDetail{Reason: event.Reason})
 		}
 	})
@@ -347,8 +345,8 @@ func connectPhasePretty(ctx *WorkflowContext, opts WorkflowOptions, preferredHos
 		return err
 	}
 
-	if fallbackReason != "" {
-		connDisplay.SuccessLocal(host.DescribeLocalReason(fallbackReason))
+	if ctx.Conn.LocalReason != "" {
+		connDisplay.SuccessLocal(localRunDetail(ctx.Conn))
 	} else {
 		connDisplay.Success(ctx.Conn.Name, ctx.Conn.Alias)
 	}
@@ -368,7 +366,7 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 				Type:   "phase",
 				Phase:  "connect",
 				Status: "warn",
-				Host:   "local",
+				Host:   event.Host,
 				Details: map[string]interface{}{
 					"local_fallback": true,
 					"reason":         event.Reason,
@@ -390,28 +388,34 @@ func connectPhaseStructured(ctx *WorkflowContext, opts WorkflowOptions, preferre
 		return err
 	}
 
-	host := ctx.Conn.Name
-	if ctx.Conn.IsLocal {
-		host = "local"
-	}
-	reporter.PhaseComplete("connect", host, time.Since(connectStart))
+	reporter.PhaseComplete("connect", ctx.Conn.Name, time.Since(connectStart))
 	return nil
 }
 
 // connectLocalTarget completes the connect phase for a local target
 // (--local or local mode), and records the reason as details.local_reason
 // on the result. Nothing is dialed and nothing went wrong, so it's a normal
-// connect completion carrying the reason, not a fallback warning.
+// connect completion carrying the reason, not a fallback warning. With a
+// local host the run goes through its connection (see execTarget).
 func connectLocalTarget(ctx *WorkflowContext) {
-	ctx.Conn = localConnection()
-	reason := ctx.target.reason
-	ctx.AddResultDetail("local_reason", reason)
+	ctx.Conn = ctx.target.connection()
+	ctx.AddResultDetail("local_reason", ctx.target.reason)
 
 	if PrettyMode() {
-		ctx.PhaseDisplay.RenderSuccess("Running locally ("+host.DescribeLocalReason(reason)+")", 0)
+		ctx.PhaseDisplay.RenderSuccess("Running locally ("+localRunDetail(ctx.Conn)+")", 0)
 		return
 	}
-	emitLocalConnect(reason)
+	emitLocalConnect(ctx.target)
+}
+
+// localRunDetail says why a run rr put on this machine by itself runs here,
+// and on which local host if it has one, for "Running locally (<detail>)".
+func localRunDetail(conn *host.Connection) string {
+	detail := host.DescribeLocalReason(conn.LocalReason)
+	if !conn.IsLocal {
+		detail += ", on " + conn.Name
+	}
+	return detail
 }
 
 // syncPhase handles the file sync phase of the workflow.
@@ -419,6 +423,7 @@ func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter := ctx.GetReporter()
 
 	if ctx.Conn.IsLocal {
+		// Bare local execution, with no local host to run on.
 		reporter.PhaseSkipped("sync", "local")
 		return nil
 	}
@@ -581,36 +586,25 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	return nil
 }
 
-// lockPhase handles the lock acquisition phase of the workflow. A run that
-// executes on this machine without a host (--local, local mode, a local
-// fallback) takes the lock of the global config's local host when there is
-// one, so it can't run beside a job on that host; with no local host it
-// takes no lock.
+// lockPhase handles the lock acquisition phase of the workflow. Bare local
+// execution (--local, local mode or a fallback with no local host) takes no
+// lock; everything else, a local host standing in for those included, locks
+// its connection's host.
 func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	lockCfg := config.DefaultConfig().Lock
 	if ctx.Resolved.Project != nil {
 		lockCfg = ctx.Resolved.Project.Lock
 	}
 
-	if !lockCfg.Enabled || opts.SkipLock {
+	if !lockCfg.Enabled || opts.SkipLock || ctx.Conn.IsLocal {
 		return nil
 	}
 
-	lockConn := ctx.Conn
-	if ctx.Conn.IsLocal {
-		if ctx.Resolved.Global == nil {
-			return nil
-		}
-		lockConn = host.LocalMachineConnection(ctx.Resolved.Global.Hosts)
-		if lockConn == nil {
-			return nil
-		}
-	}
-
+	hostName := ctx.Conn.Name
 	lockStart := time.Now()
 	acquireOpts := []lock.AcquireOption{
 		lock.WithContext(ctx.Context()),
-		lock.WithWarnFunc(lockWarn(lockConn.Name)),
+		lock.WithWarnFunc(lockWarn(hostName)),
 	}
 
 	if PrettyMode() {
@@ -618,9 +612,9 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		lockSpinner.Start()
 
 		var err error
-		ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, append(acquireOpts,
+		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, append(acquireOpts,
 			lock.WithWaitFunc(func(holder *lock.LockInfo) {
-				lockSpinner.SetLabel(lockWaitMessage(lockConn.Name, holder, lockCfg.Timeout))
+				lockSpinner.SetLabel(lockWaitMessage(hostName, holder, lockCfg.Timeout))
 			}))...)
 		if err != nil {
 			lockSpinner.Fail()
@@ -628,7 +622,7 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		}
 
 		ctx.Lock.StartHeartbeat()
-		recordLocalJob(ctx, lockConn)
+		recordLocalJob(ctx)
 		lockSpinner.Success()
 		ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
 		return nil
@@ -638,16 +632,16 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter.PhaseStart("lock")
 
 	var err error
-	ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, append(acquireOpts,
+	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, append(acquireOpts,
 		lock.WithWaitFunc(func(holder *lock.LockInfo) {
 			WritePhaseEvent(PhaseEvent{
 				Type:   "phase",
 				Phase:  "lock",
 				Status: "waiting",
-				Host:   lockConn.Name,
+				Host:   hostName,
 				Details: map[string]interface{}{
-					"message":        lockWaitMessage(lockConn.Name, holder, lockCfg.Timeout),
-					"holders":        holderDetails([]hostAttempt{{hostName: lockConn.Name, lockInfo: holder}}),
+					"message":        lockWaitMessage(hostName, holder, lockCfg.Timeout),
+					"holders":        holderDetails([]hostAttempt{{hostName: hostName, lockInfo: holder}}),
 					"wait_timeout_s": lockCfg.Timeout.Seconds(),
 				},
 			})
@@ -658,8 +652,8 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	}
 
 	ctx.Lock.StartHeartbeat()
-	recordLocalJob(ctx, lockConn)
-	reporter.PhaseComplete("lock", lockConn.Name, time.Since(lockStart))
+	recordLocalJob(ctx)
+	reporter.PhaseComplete("lock", hostName, time.Since(lockStart))
 	return nil
 }
 
@@ -676,17 +670,17 @@ func lockWaitMessage(hostName string, holder *lock.LockInfo, timeout time.Durati
 // recordLocalJob makes a local host record the process group of the job it
 // starts in the lock just taken. The job runs in its own session, so if rr is
 // killed it keeps running; with its group in the lock, the next run waits for
-// it instead of taking the lock from the dead rr. Remote hosts, and runs that
-// only borrow the local host's lock (--local, a fallback), don't need it.
-func recordLocalJob(ctx *WorkflowContext, lockConn *host.Connection) {
+// it instead of taking the lock from the dead rr. Remote hosts don't need it.
+func recordLocalJob(ctx *WorkflowContext) {
 	client, ok := ctx.Conn.Client.(*host.LocalClient)
-	if !ok || lockConn != ctx.Conn || ctx.Lock == nil {
+	if !ok || ctx.Lock == nil {
 		return
 	}
-	lck, warn := ctx.Lock, lockWarn(lockConn.Name)
+	lck, hostName := ctx.Lock, ctx.Conn.Name
+	warn := lockWarn(hostName)
 	client.SetOnStart(func(pgid int) {
 		if err := lck.SetJobPGID(pgid); err != nil {
-			warn(fmt.Sprintf("Warning: couldn't record the job in the lock on %s (%v); if rr is killed, another run may start before the job stops", lockConn.Name, err))
+			warn(fmt.Sprintf("Warning: couldn't record the job in the lock on %s (%v); if rr is killed, another run may start before the job stops", hostName, err))
 		}
 	})
 }
@@ -694,9 +688,9 @@ func recordLocalJob(ctx *WorkflowContext, lockConn *host.Connection) {
 // SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
 // Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
 //
-// A local target (--local or local mode) dials nothing and skips sync. It
-// takes the lock of the global config's local host, if there is one, as a
-// local fallback does.
+// A local target (--local or local mode) dials nothing and skips sync. With
+// a local host it runs on that host and takes its lock, as a local fallback
+// does; without one it runs bare, with no lock.
 // When multiple hosts are configured, this function implements load balancing
 // (see findAvailableHost):
 //  1. Try each host with non-blocking lock acquisition
@@ -766,11 +760,12 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 		if err := setupWorkflowLoadBalanced(ctx, opts); err != nil {
 			return err
 		}
-		// A fallback runs on this machine; take its local host's lock.
-		if ctx.Conn.IsLocal {
+		// A fallback took no lock while picking; lock it now (a no-op for
+		// bare local execution).
+		if ctx.Conn.LocalReason != "" {
 			return lockPhase(ctx, opts)
 		}
-		recordLocalJob(ctx, ctx.Conn)
+		recordLocalJob(ctx)
 		return nil
 	}
 
@@ -893,7 +888,7 @@ func pullAndReport(conn *host.Connection, opts rrsync.PullOptions, pull pullFunc
 
 // requirementsPhase verifies that required tools are available on the remote.
 func requirementsPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
-	// Skip for local execution or if explicitly disabled
+	// Skip for bare local execution or if explicitly disabled
 	if ctx.Conn.IsLocal || opts.SkipRequirements {
 		return nil
 	}

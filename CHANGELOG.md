@@ -14,10 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking for agents: runs on this machine report the local host's name** - With a local host configured, `--local`, local mode and `local_fallback` runs report that host's name (e.g. `dev`) as `host` on the connect events and the result, instead of `local`, and skip sync with `reason: in_place` instead of `local`. `details.local_reason` and `details.fallback` are unchanged, so match on those to tell why a run was local, not on `host == "local"`. Without a local host nothing changes.
+- **`--local` runs on the local host when there is one** - With a local host configured, `--local`, local mode and `local_fallback` runs go through it as `--host` would. They get its `setup_commands`, `shell` and `require` checks and the project's `defaults.setup`, and tasks get its `env`. The command runs in its own session with no terminal, and a task runs at the project root (`rr run` still keeps the directory you ran it from). A parallel task with `--local` uses the local host as its one worker, so subtasks restricted to other hosts now fail the up-front host check, as with `--host`.
 - **Pulls after local runs copy the files** - `pull:` and `--pull` used to do nothing after a `--local` or `local_fallback` run. They now copy from the project directory to the destination, the same as after a run on a local host, and report the pull phase skipped (`reason: same_dir`) when the destination is the project directory. Parallel subtasks run with `--local` get their own `<dest>/<name>_<index>/` copy.
 
 ### Fixed
 
+- **A parallel subtask could run on a host whose lock rr didn't get** - When a parallel worker's first subtask timed out waiting for its host's lock, the worker's later subtasks skipped the lock and ran anyway. They now fail with the same lock error.
+- **Stopping a bare local run** - Without a local host, `--local`, local mode and `local_fallback` commands only stopped when the terminal's Ctrl+C reached them. Cancelling rr (SIGTERM, or a parallel subtask's timeout) now interrupts the command and kills it 3 seconds later if it's still running.
 - **`rr monitor` on a Mac took seconds per host** - `netstat -ib` resolved every interface address to a host name, which took about 5 seconds per call on some networks, and a snapshot calls it twice. The metrics command now uses `netstat -ibn`. The parsed counters are unchanged.
 
 ## [0.28.0] - 2026-09-28

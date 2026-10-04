@@ -170,7 +170,8 @@ Add one with `rr host add --local --name dev` (`--tag` and `--env` work as for a
 
 How it relates to the other ways of running locally:
 
-- `--local`, local mode (a project with `local_fallback` on and no `host`/`hosts`), and a `local_fallback` run all execute here without going through the local host. When the global config has a local host, they take its lock first, waiting up to `lock.timeout`, so nothing `rr` starts runs on this machine beside a job on it. Without a local host they take no lock, as before.
+- `--local`, local mode (a project with `local_fallback` on and no `host`/`hosts`), and a `local_fallback` run go through the local host, as if `--host` had named it. They take its lock (waiting up to `lock.timeout`), get its `setup_commands`, `shell` and `require` checks plus the project's `defaults.setup` (tasks also get its `env`), and run in their own session with no terminal. A task runs at the project root; `rr run` keeps the directory you ran it from. A parallel task run with `--local` uses the local host as its one worker. Structured output names the host (`dev`), and `details.local_reason` or `details.fallback` still says why the run is here.
+- Without a local host, those runs execute here directly, as before: no lock, none of a host's settings, the command attached to your terminal, reported as host `local`.
 - `local_fallback` still applies when no host can be used, but with a local host in the pool that rarely happens, since it's always reachable. When every host is locked and the local host is busy (in this run's pool or not, for example left out by `hosts:` or `--tag`), `rr` waits for a host (up to `lock.wait_timeout`) and then fails, even with `local_fallback: always`.
 
 ### Variable expansion

@@ -62,8 +62,7 @@ func TestFindAvailableHost_LocalHostFirstInOrder(t *testing.T) {
 	ctx.Lock = result.lock
 
 	assert.Equal(t, "dev", result.conn.Name)
-	assert.False(t, result.isLocal, "a local host is a host, not a fallback")
-	assert.False(t, result.fellBack)
+	assert.Empty(t, result.conn.LocalReason, "a local host is a host, not a fallback")
 	require.NotNil(t, result.lock, "the local host is locked like any host")
 	assert.Len(t, result.hostsState, 1, "the remote after it is never tried")
 

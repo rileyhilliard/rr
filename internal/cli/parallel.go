@@ -99,7 +99,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	// the run would end with a "no available host" failure after the other
 	// subtasks finished; with --host pointing at a disallowed host the old
 	// scheduler ran it there anyway.
-	if !target.local {
+	if target.onHosts() {
 		if err := checkSubtaskHosts(tasks, hostOrder); err != nil {
 			return 1, err
 		}
@@ -179,7 +179,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	}
 
 	if target.local && !PrettyMode() {
-		emitLocalConnect(target.reason)
+		emitLocalConnect(target)
 	}
 
 	// Create orchestrator with host priority order preserved
@@ -512,9 +512,10 @@ func (n *parallelSyncNotices) flush() {
 // reached it. Each subtask's files land in <dest>/<stem>/, where <stem> is
 // its log file's name without .log (see subtaskPullDir), so shards with the
 // same output paths don't overwrite each other locally. A subtask that ran in
-// place (on a local host, or locally with --local) is copied from the dir it
-// ran in: the local host's dir, or localDir for a local run. Subtasks that
-// ran nowhere (no host available, cancelled before connecting) are skipped.
+// place (on a local host, or bare with --local and no local host) is copied
+// from the dir it ran in: the local host's dir, or localDir for a bare run.
+// Subtasks that ran nowhere (no host available, cancelled before
+// connecting) are skipped.
 // A failed pull is reported but doesn't change the run's exit code, same as
 // single tasks.
 func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts map[string]config.Host, localDir string, pull pullFunc) {
@@ -529,13 +530,12 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 			continue
 		}
 		opts := rrsync.PullOptions{Patterns: subtaskPullItems(t.Pull, subtaskPullDir(t))}
-		if tr.Host == "local" {
-			pullAndReport(localConnection(), opts, inPlacePull(localDir), t.Name)
-			continue
-		}
 		hostCfg, known := hosts[tr.Host]
 		if !known {
-			continue // "none": the subtask never ran
+			if tr.Host == host.LocalAlias { // bare local run (no local host)
+				pullAndReport(host.LocalRunConnection("", config.Host{}, ""), opts, inPlacePull(localDir), t.Name)
+			}
+			continue // otherwise "none": the subtask never ran
 		}
 		if tr.Alias == "" {
 			continue // never connected (e.g. cancelled by fail-fast): nothing ran there

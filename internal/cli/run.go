@@ -110,7 +110,7 @@ func Run(opts RunOptions) (int, error) {
 		// localRunDir re-stats and degrades to the project root, so a second
 		// computation could silently discard an explicit --cwd that passed
 		// validation a moment ago.
-		exitCode, err = exec.ExecuteLocal(opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = exec.ExecuteLocalContext(wf.Context(), opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
 		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
@@ -664,7 +664,7 @@ func runRepeated(cmd string, repeatCount int, hostFlag, tagFlag string, localFla
 	_ = logs.Cleanup(resolved.Global.Logs)
 
 	if target.local && !PrettyMode() {
-		emitLocalConnect(target.reason)
+		emitLocalConnect(target)
 	}
 
 	// Create orchestrator

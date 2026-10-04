@@ -35,12 +35,17 @@ The connect event says where the command runs and why:
 
 | Situation | Connect event | `details.reason` | Result `details.fallback` |
 |-----------|---------------|------------------|---------------------------|
-| `--local` | `status: complete`, `host: local` | `local_flag` | none |
-| Local mode: `.rr.yaml` enables `local_fallback` and lists no `host`/`hosts`, or `local_fallback` is on and no hosts are configured at all; no `--host`/`--tag` | `status: complete`, `host: local` | `local_mode` | none |
-| No host reachable, `local_fallback` on | `status: warn`, `host: local`, `details.local_fallback: true` | `hosts_unreachable` | `{reason}` |
-| Every host locked, `local_fallback` on | `status: warn`, `host: local`, `details.local_fallback: true` | `all_hosts_locked` | `{reason, waited_s, holders}` |
+| `--local` | `status: complete`, `host: local` (see below) | `local_flag` | none |
+| Local mode: `.rr.yaml` enables `local_fallback` and lists no `host`/`hosts`, or `local_fallback` is on and no hosts are configured at all; no `--host`/`--tag` | `status: complete`, `host: local` (see below) | `local_mode` | none |
+| No host reachable, `local_fallback` on | `status: warn`, `host: local` (see below), `details.local_fallback: true` | `hosts_unreachable` | `{reason}` |
+| Every host locked, `local_fallback` on | `status: warn`, `host: local` (see below), `details.local_fallback: true` | `all_hosts_locked` | `{reason, waited_s, holders}` |
 
 The result of a `--local` or local-mode run carries the same value in `details.local_reason`; `details.fallback` appears only for runtime fallbacks, never alongside it. `--local` and local mode need no configured hosts. Transition note: rr binaries older than v0.27.0 report a `--local` run as a connect `warn` event with `reason: hosts_unreachable`. Treat that as `local_flag` when you passed `--local`.
+
+Which `host` these runs report depends on whether the global config has a local host (`local: true`):
+
+- **With a local host** (say `dev`), all four run on it, as `--host dev` would. The connect events and the result say `host: "dev"`, a `lock` phase runs on `dev`, and the sync phase is skipped with `reason: in_place`. `details.reason`, `details.local_reason` and `details.fallback` still say why the run is here, so branch on those, not on `host == "local"`.
+- **Without one**, they report `host: "local"`, take no lock, and skip sync with `reason: local`.
 
 In a parallel run, a host that becomes unavailable is dropped for the rest of the run, and the subtask its worker had picked up moves to another host. That emits one connect `warn` event with the `host`, `details.task`, `details.error` (`{code, message, suggestion}`), and `details.reason`: `connection_lost` when the connection died mid-run, `connect_failed` when the host was never reached. A subtask that was running when its connection dropped isn't moved, since it may have partly run. It fails with `Lost the connection before the command finished`. For a single `rr run` or task, that same error shows up as `details.error` on a failed result with `exit_code: -1`, and `log_file` still points at the partial output (tasks with `depends` don't write a run log, so they have no `log_file`).
 

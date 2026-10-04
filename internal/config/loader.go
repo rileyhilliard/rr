@@ -455,6 +455,23 @@ func localHostDir(resolved *ResolvedConfig) string {
 	return projectRootOrCwd(resolved.ProjectRoot)
 }
 
+// LocalHost returns the global config's host with local: true, its dir
+// resolved as ResolveHosts resolves it, or an empty name when there's none.
+// Validation allows at most one.
+func LocalHost(resolved *ResolvedConfig) (string, Host) {
+	if resolved == nil || resolved.Global == nil {
+		return "", Host{}
+	}
+	for name := range resolved.Global.Hosts {
+		if resolved.Global.Hosts[name].Local {
+			h := resolved.Global.Hosts[name]
+			h.Dir = localHostDir(resolved)
+			return name, h
+		}
+	}
+	return "", Host{}
+}
+
 // DefaultLocalHostDir is localHostDir for a caller without a resolved
 // config: the dir of the .rr.yaml found from the current directory, or the
 // current directory.
