@@ -104,6 +104,114 @@ func TestAcquire_KilledHolderWithLiveJobKeepsLock(t *testing.T) {
 	assert.Contains(t, warnings[0], "dead local process")
 }
 
+// A recorded job group counts as the job only while its leader is the
+// process that started when the job did. Once the job and rr are gone, a
+// later process can get the job's pid and lead a group with the same id;
+// that group must not keep the lock held forever.
+func TestJobGroupLiveness_RecordedStartTime(t *testing.T) {
+	pgid := startJobGroup(t)
+	started := time.Now()
+
+	// A group whose leader exited while a member runs on, as when a job's
+	// shell is gone but something it started in the background isn't.
+	orphanDir := t.TempDir()
+	orphan := exec.Command("sh", "-c", "sleep 300 & echo $! > '"+filepath.Join(orphanDir, "member")+"'")
+	orphan.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	orphanStarted := time.Now()
+	require.NoError(t, orphan.Start())
+	orphanPGID := orphan.Process.Pid
+	t.Cleanup(func() { _ = syscall.Kill(-orphanPGID, syscall.SIGKILL) })
+	require.NoError(t, orphan.Wait(), "the leader exits")
+	require.False(t, processAlive(orphanPGID), "the leader is gone")
+	require.True(t, processGroupAlive(orphanPGID), "its member isn't")
+
+	tests := []struct {
+		name     string
+		jobPGID  int
+		started  time.Time
+		wantLive bool
+	}{
+		{name: "leader started with the job", jobPGID: pgid, started: started, wantLive: true},
+		{name: "leader started an hour after the job: pid reused", jobPGID: pgid, started: started.Add(-time.Hour), wantLive: false},
+		{name: "leader started before the job: pid reused", jobPGID: pgid, started: started.Add(time.Hour), wantLive: false},
+		{name: "no start time recorded (older lock)", jobPGID: pgid, wantLive: true},
+		{name: "leader gone, a member still running", jobPGID: orphanPGID, started: orphanStarted, wantLive: true},
+		{name: "group gone", jobPGID: deadPid(t), started: started, wantLive: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := NewLockInfo("rr test")
+			require.NoError(t, err)
+			info.PID = deadPid(t)
+			info.JobPGID = tt.jobPGID
+			info.JobStarted = tt.started
+			assert.Equal(t, tt.wantLive, info.HasLiveLocalJob(), "HasLiveLocalJob")
+			assert.Equal(t, !tt.wantLive, info.IsDeadLocalHolder(), "IsDeadLocalHolder")
+		})
+	}
+}
+
+func TestParseEtime(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{in: "00:07", want: 7 * time.Second},
+		{in: "12:34", want: 12*time.Minute + 34*time.Second},
+		{in: "01:02:03", want: time.Hour + 2*time.Minute + 3*time.Second},
+		{in: "3-04:05:06", want: 3*24*time.Hour + 4*time.Hour + 5*time.Minute + 6*time.Second},
+		{in: "", wantErr: true},
+		{in: "7", wantErr: true},
+		{in: "3-05:06", wantErr: true},
+		{in: "1:2:3:4", wantErr: true},
+		{in: "aa:bb", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got, err := parseEtime(tt.in)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// ps reports a process just started as having run for well under the
+// tolerance, on whichever of macOS or Linux the test runs.
+func TestProcessElapsed_FreshProcess(t *testing.T) {
+	elapsed, err := processElapsed(startJobGroup(t))
+	require.NoError(t, err)
+	assert.Less(t, elapsed, jobStartTolerance)
+}
+
+// A killed rr's lock whose job group id now belongs to an unrelated process
+// is taken at once, not held until someone runs rr unlock.
+func TestAcquire_ReusedJobPGIDDoesNotHoldLock(t *testing.T) {
+	cfg := config.LockConfig{Enabled: true, Timeout: 2 * time.Second, Stale: 10 * time.Minute, Dir: filepath.Join(t.TempDir(), "locks")}
+	defer SetRetryIntervalForTesting(20 * time.Millisecond)()
+
+	holder, err := NewLockInfo("rr test (killed)")
+	require.NoError(t, err)
+	holder.PID = deadPid(t)
+	holder.JobPGID = startJobGroup(t) // the unrelated process now leading that id
+	holder.JobStarted = time.Now().Add(-time.Hour)
+	lockDir := LockDir(cfg)
+	require.NoError(t, os.MkdirAll(lockDir, 0o755))
+	data, err := holder.Marshal()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(lockDir, "info.json"), data, 0o644))
+
+	conn := host.NewLocalHostConnection("dev", config.Host{Local: true})
+	assert.False(t, IsHeld(conn, cfg))
+	lck, err := Acquire(conn, cfg, "next run")
+	require.NoError(t, err)
+	require.NoError(t, lck.Release())
+}
+
 // A lock written before job_pgid existed, or by a remote run, has no job to
 // check: a dead holder pid alone frees it, as before.
 func TestIsDeadLocalHolder_JobPGID(t *testing.T) {
