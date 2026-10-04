@@ -50,7 +50,10 @@ func TestSetupFileHint_OnlyForSetupThatRan(t *testing.T) {
 		require.True(t, os.IsNotExist(statErr), "the failed setup stopped the task")
 
 		result := commandResult(t, events)
-		assert.Contains(t, result.Details["hint"], "the setup command '. ./scripts/env.sh' needs it", events)
+		assert.Contains(t, result.Details["hint"], "scripts/env.sh' doesn't exist", events)
+		assert.Contains(t, result.Details["hint"], "a setup command", events)
+		// Setup lines can carry tokens, so the hint never quotes one.
+		assert.NotContains(t, result.Details["hint"], ". ./scripts/env.sh", events)
 	})
 }
 

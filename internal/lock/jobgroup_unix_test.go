@@ -152,6 +152,16 @@ func TestJobGroupLiveness_RecordedStartTime(t *testing.T) {
 	}
 }
 
+// A pid of 0 or -1 in a hand-edited info.json would make kill() probe rr's
+// own group or every process, which always looks alive.
+func TestLiveness_NonPositiveIDsAreNotAlive(t *testing.T) {
+	for _, id := range []int{0, -1} {
+		assert.False(t, processAlive(id), "processAlive(%d)", id)
+		assert.False(t, processGroupAlive(id), "processGroupAlive(%d)", id)
+		assert.False(t, jobGroupAlive(id, time.Now()), "jobGroupAlive(%d)", id)
+	}
+}
+
 func TestParseEtime(t *testing.T) {
 	tests := []struct {
 		in      string

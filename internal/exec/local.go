@@ -17,6 +17,10 @@ import (
 // host's commands get. A var so tests can shorten it.
 var localInterruptGrace = host.LocalInterruptGrace
 
+// localKillWait bounds the wait for a killed command's output to drain. A
+// child it started can hold the output open long after the kill.
+const localKillWait = time.Second
+
 // ExecuteLocal runs a command locally, streaming output to the provided writers.
 // Returns the exit code and any execution error.
 // This provides the same interface as SSH execution for consistent handling.
@@ -86,8 +90,9 @@ func interruptedByTerminal(ctx context.Context) bool {
 //     still running localInterruptGrace later (exit code 130).
 //
 // Only the process itself is signalled; a child a shell started stops when
-// the shell passes the signal on or exits. If something it started still
-// holds the output open after the kill, this returns without waiting for it.
+// the shell passes the signal on or exits. After the kill this waits up to
+// localKillWait for the output to drain; if something the command started
+// still holds it open, this returns without waiting for it.
 func RunLocalCommand(ctx context.Context, command *exec.Cmd) (exitCode int, err error) {
 	// A command started after the Ctrl+C never got it from the terminal, and
 	// the SIGINT case below would wait for it to finish.
@@ -115,6 +120,12 @@ func RunLocalCommand(ctx context.Context, command *exec.Cmd) (exitCode int, err 
 			return host.LocalExitCode(runErr), ctx.Err()
 		case <-time.After(localInterruptGrace):
 			_ = command.Process.Kill()
+			// Let Wait finish copying output, so the caller doesn't read it
+			// mid-write, unless something the command started holds it open.
+			select {
+			case <-done:
+			case <-time.After(localKillWait):
+			}
 			return 130, ctx.Err() // as a local host reports a killed command
 		}
 	}

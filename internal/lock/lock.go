@@ -631,14 +631,18 @@ func (l *Lock) Release() error {
 
 	// Release runs once. A run releases early, when its command finishes,
 	// and again when its workflow closes; by then another run may hold the
-	// lock, and removing the dir again would delete that run's lock.
+	// lock, and removing the dir again would delete that run's lock. A
+	// removal that fails leaves the lock ours, so a later call retries it.
 	l.infoMu.Lock()
 	defer l.infoMu.Unlock()
 	if l.released {
 		return nil
 	}
+	if err := forceRemove(l.conn.Client, l.Dir); err != nil {
+		return err
+	}
 	l.released = true
-	return forceRemove(l.conn.Client, l.Dir)
+	return nil
 }
 
 // UpdateCommand updates the command field in the lock info file.

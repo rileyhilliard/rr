@@ -15,8 +15,13 @@ import (
 
 // processAlive reports whether a process with the given pid exists on this
 // machine. Signal 0 performs the existence check without sending anything;
-// EPERM means the process exists but belongs to another user.
+// EPERM means the process exists but belongs to another user. Ids come from
+// info.json, which anyone can write, and kill(0) or kill(-1) would probe
+// whole groups, so only positive ids are checked.
 func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
 	err := syscall.Kill(pid, 0)
 	if err == nil {
 		return true
@@ -25,8 +30,12 @@ func processAlive(pid int) bool {
 }
 
 // processGroupAlive reports whether any process in the process group pgid
-// still exists. As with processAlive, EPERM means it exists.
+// still exists. As with processAlive, EPERM means it exists, and only a
+// positive id is checked: kill(0) would probe rr's own group.
 func processGroupAlive(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
 	err := syscall.Kill(-pgid, 0)
 	if err == nil {
 		return true

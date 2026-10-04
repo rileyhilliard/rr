@@ -417,8 +417,10 @@ func buildSetupFileHint(stderr string, setup []string, hostName string) string {
 	}
 	for _, s := range setup {
 		if strings.Contains(s, rel) {
-			return fmt.Sprintf("'%s' doesn't exist on %s, and the setup command '%s' needs it. Setup runs from the project root, so check the path is right relative to it, and that the file is committed or synced.",
-				rel, hostName, s)
+			// The command isn't quoted: setup lines can carry tokens, and
+			// this hint lands in shared run output.
+			return fmt.Sprintf("'%s' doesn't exist on %s, and a setup command (setup_commands or defaults.setup) needs it. Setup runs from the project root, so check the path is right relative to it, and that the file is committed or synced.",
+				rel, hostName)
 		}
 	}
 	return ""

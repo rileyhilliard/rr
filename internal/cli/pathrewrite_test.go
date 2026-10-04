@@ -422,7 +422,7 @@ func TestBuildSetupFileHint_ShellForms(t *testing.T) {
 				return
 			}
 			assert.Contains(t, hint, "'./scripts/env.sh' doesn't exist on dev")
-			assert.Contains(t, hint, "'source ./scripts/env.sh'")
+			assert.NotContains(t, hint, "source ./scripts/env.sh", "setup lines can carry tokens; the hint doesn't quote them")
 		})
 	}
 }

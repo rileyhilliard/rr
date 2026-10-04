@@ -320,8 +320,11 @@ func collectChecks(cfgPath string, projectCfg *config.Config, globalCfg *config.
 		checks = append(checks, &doctor.WorktreeMappingCheck{Hosts: hosts})
 	}
 
-	// Dependency checks (local; remote rsync runs with --requirements)
-	checks = append(checks, doctor.NewDepsChecks()...)
+	// Dependency checks (local; remote rsync runs with --requirements). Only
+	// syncing needs rsync here, and nothing syncs to a local host.
+	if !doctor.AllLocal(hostNames, hosts) {
+		checks = append(checks, doctor.NewDepsChecks()...)
+	}
 
 	return checks
 }

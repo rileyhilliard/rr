@@ -7,9 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// A local host has no SSH, so the SSH key and agent checks only add a false
-// warning when every host in scope is local. Any remote host brings them back.
-func TestCollectChecks_SSHChecksSkippedForLocalOnlyHosts(t *testing.T) {
+// A local host has no SSH and nothing syncs to it, so the SSH key, agent and
+// local rsync checks only add a false warning when every host in scope is
+// local. Any remote host brings them back.
+func TestCollectChecks_RemoteChecksSkippedForLocalOnlyHosts(t *testing.T) {
 	remote := config.Host{SSH: []string{"box"}, Dir: "/tmp/rr"}
 	local := config.Host{Local: true}
 
@@ -35,6 +36,7 @@ func TestCollectChecks_SSHChecksSkippedForLocalOnlyHosts(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantSSH, names["ssh_key"], "ssh_key check")
 			assert.Equal(t, tt.wantSSH, names["ssh_agent"], "ssh_agent check")
+			assert.Equal(t, tt.wantSSH, names["rsync_local"], "rsync_local check")
 		})
 	}
 }

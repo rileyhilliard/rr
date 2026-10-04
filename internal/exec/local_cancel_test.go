@@ -54,9 +54,8 @@ func startCancellableCause(t *testing.T, script string) (context.CancelCauseFunc
 	return cancel, pid, done
 }
 
-// processGone reports whether pid no longer exists. ExecuteLocalContext
-// still reaps a killed command in the background, so this polls past the
-// brief zombie.
+// processGone reports whether pid no longer exists (an unreaped zombie
+// still does).
 func processGone(pid int) func() bool {
 	return func() bool { return syscall.Kill(pid, 0) != nil }
 }
@@ -94,7 +93,9 @@ func TestExecuteLocalContext_CancelKillsAfterGrace(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the command wasn't killed after the grace")
 	}
-	assert.Eventually(t, processGone(pid), 5*time.Second, 10*time.Millisecond, "the shell is gone")
+	// Reaped before returning, so the output is done being written when the
+	// caller reads it.
+	assert.True(t, processGone(pid)(), "the shell is reaped by the time it returns")
 }
 
 // When rr is cancelled for a SIGINT, the command already got that Ctrl+C

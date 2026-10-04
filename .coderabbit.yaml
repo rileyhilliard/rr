@@ -19,12 +19,6 @@ reviews:
   # Request changes workflow (auto requests changes for high-severity issues)
   request_changes_workflow: false
 
-  # TEMPORARY for PR #254 (121 files, over the 100-file limit): review code
-  # only. Remove before merging.
-  path_filters:
-    - "!**/*_test.go"
-    - "!**/*.md"
-
   # Path-based instructions for different file types
   path_instructions:
     - path: "**/*.go"
