@@ -87,7 +87,7 @@ func resolveMonitorScope(hostsFilter string) (*monitorScope, error) {
 
 	// Hosts named with --hosts are looked up among all global hosts, not just
 	// the project's: an explicit request wins over the project's hosts: list,
-	// which usually leaves the local host out. They're shown in the order given.
+	// which usually leaves the local host out.
 	if strings.Trim(hostsFilter, ", ") != "" {
 		hosts = filterHosts(resolved.Global.Hosts, hostsFilter)
 		hostOrder = hostOrder[:0:0]
