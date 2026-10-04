@@ -17,25 +17,27 @@ import (
 	"github.com/rileyhilliard/rr/internal/lock"
 )
 
-// cancelOnPhaseEvent routes stderr through a pipe and calls cancel when a
-// phase event with the given phase and status is written. It restores stderr
-// on cleanup.
-func cancelOnPhaseEvent(t *testing.T, phase, status string, cancel context.CancelFunc) <-chan time.Time {
+// onPhaseEvent routes stderr through a pipe and calls fn when a phase event
+// with the given phase and status is written, sending the time it did so on
+// the returned channel. It restores stderr on cleanup.
+func onPhaseEvent(t *testing.T, phase, status string, fn func()) <-chan time.Time {
 	t.Helper()
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	old := os.Stderr
 	os.Stderr = w
-	cancelled := make(chan time.Time, 1)
+	fired := make(chan time.Time, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		scanner := bufio.NewScanner(r)
+		once := false
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.Contains(line, `"phase":"`+phase+`"`) && strings.Contains(line, `"status":"`+status+`"`) {
-				cancelled <- time.Now()
-				cancel()
+			if !once && strings.Contains(line, `"phase":"`+phase+`"`) && strings.Contains(line, `"status":"`+status+`"`) {
+				once = true
+				fired <- time.Now()
+				fn()
 			}
 		}
 	}()
@@ -45,7 +47,7 @@ func cancelOnPhaseEvent(t *testing.T, phase, status string, cancel context.Cance
 		<-done
 		_ = r.Close()
 	})
-	return cancelled
+	return fired
 }
 
 // Ctrl+C while every host is locked stops the load-balanced wait at once,
@@ -69,7 +71,7 @@ func TestFindAvailableHost_CancelStopsAllLockedWait(t *testing.T) {
 	require.NoError(t, err)
 	defer holder.Release()
 
-	cancelled := cancelOnPhaseEvent(t, "connect", "waiting", ctx.cancel)
+	cancelled := onPhaseEvent(t, "connect", "waiting", ctx.cancel)
 
 	result, err := findAvailableHost(ctx, WorkflowOptions{Command: "rr test"})
 	returned := time.Now()

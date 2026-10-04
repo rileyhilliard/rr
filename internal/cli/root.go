@@ -97,29 +97,45 @@ func run() int {
 			return handleUnknownCommand(err)
 		}
 
-		// In structured mode, emit JSON error to stderr
-		if !PrettyMode() {
-			emitStructuredError(err)
-			return 1
-		}
-
-		// Pretty mode: print human-readable error
-		var rrErr *errors.Error
-		if ok := errors.IsCode(err, ""); !ok {
-			if e, ok := err.(*errors.Error); ok {
-				rrErr = e
-			}
-		}
-
-		if rrErr != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-		} else {
-			wrapped := errors.Wrap(err, err.Error())
-			fmt.Fprintln(os.Stderr, wrapped.Error())
-		}
-		return 1
+		return reportCommandError(err)
 	}
 	return 0
+}
+
+// reportCommandError prints a command's error in the active output mode and
+// returns the exit code for it.
+func reportCommandError(err error) int {
+	// In structured mode, emit JSON error to stderr
+	if !PrettyMode() {
+		emitStructuredError(err)
+		return errorExitCode(err)
+	}
+
+	// Pretty mode: print human-readable error
+	var rrErr *errors.Error
+	if ok := errors.IsCode(err, ""); !ok {
+		if e, ok := err.(*errors.Error); ok {
+			rrErr = e
+		}
+	}
+
+	if rrErr != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+	} else {
+		wrapped := errors.Wrap(err, err.Error())
+		fmt.Fprintln(os.Stderr, wrapped.Error())
+	}
+	return errorExitCode(err)
+}
+
+// errorExitCode is the exit code for a command that failed with err: 130 when
+// the user stopped rr before the command ran (a cancelled lock wait), the same
+// code as Ctrl+C during the command, and 1 otherwise.
+func errorExitCode(err error) int {
+	if errors.IsCode(err, errors.ErrInterrupted) {
+		return 130
+	}
+	return 1
 }
 
 // registerTasksFromConfig attempts to load config and register task commands.
