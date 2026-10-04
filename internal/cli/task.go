@@ -16,6 +16,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/deps"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
@@ -61,6 +62,24 @@ type TaskOptions struct {
 	Tail         int           // Print the last N lines of the run log after completion
 }
 
+// taskHostError refuses a task pinned to hosts other than conn's, and says
+// how to run it: on a host it allows, or (for this machine) by allowing it.
+func taskHostError(taskName string, task *config.TaskConfig, conn *host.Connection) error {
+	suggestion := fmt.Sprintf("This task is restricted to: %s.", util.JoinOrNone(task.Hosts))
+	switch {
+	case conn.LocalReason == host.LocalReasonFlag:
+		suggestion += " Drop --local to run it there."
+	case conn.LocalReason == "" && len(task.Hosts) > 0:
+		suggestion += fmt.Sprintf(" Run it with --host %s.", task.Hosts[0])
+	}
+	if conn.Host.Local {
+		suggestion += fmt.Sprintf(" To let it run on this machine, add '%s' to the task's hosts: list.", conn.Name)
+	}
+	return errors.New(errors.ErrConfig,
+		fmt.Sprintf("Task '%s' can't run on host '%s'", taskName, conn.Name),
+		suggestion)
+}
+
 // RunTask executes a named task from the configuration.
 // This handles the full workflow: connect, sync, lock, execute.
 func RunTask(opts TaskOptions) (int, error) {
@@ -97,9 +116,7 @@ func RunTask(opts TaskOptions) (int, error) {
 
 	// Verify task is allowed on the connected host
 	if !config.IsTaskHostAllowed(task, wf.Conn.Name) {
-		return 1, errors.New(errors.ErrConfig,
-			fmt.Sprintf("Task '%s' can't run on host '%s'", opts.TaskName, wf.Conn.Name),
-			fmt.Sprintf("This task is restricted to: %s", util.JoinOrNone(task.Hosts)))
+		return 1, taskHostError(opts.TaskName, task, wf.Conn)
 	}
 
 	// Validate args are only used with single-command tasks

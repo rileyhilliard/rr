@@ -8,10 +8,12 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 )
 
@@ -218,6 +220,73 @@ func TestRun_LocalFlagRecordsJobInLock(t *testing.T) {
 	require.NoError(t, err, events)
 	require.Equal(t, 0, code, events)
 	assertJobRecorded(t, projectDir)
+}
+
+// A task pinned to other hosts is refused on the host rr was sent to before
+// that host's lock is waited on (a busy local host would otherwise hold an
+// agent for lock.timeout just to be told no), and the suggestion says what
+// to do instead.
+func TestRunTask_PinnedTaskRefusedBeforeLock(t *testing.T) {
+	tests := []struct {
+		name          string
+		withLocalHost bool
+		opts          TaskOptions
+		wantSuggests  []string
+		notSuggests   []string
+	}{
+		{
+			name:          "--local with a local host",
+			withLocalHost: true,
+			opts:          TaskOptions{TaskName: "pinned", Local: true},
+			wantSuggests:  []string{"box", "Drop --local", "add 'dev' to the task's hosts"},
+		},
+		{
+			name:         "--local without a local host",
+			opts:         TaskOptions{TaskName: "pinned", Local: true},
+			wantSuggests: []string{"box", "Drop --local"},
+			notSuggests:  []string{"add 'local'"},
+		},
+		{
+			name:          "--host naming the local host",
+			withLocalHost: true,
+			opts:          TaskOptions{TaskName: "pinned", Host: "dev"},
+			wantSuggests:  []string{"--host box", "add 'dev' to the task's hosts"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projectDir, _ := writeRoutingConfigs(t, tt.withLocalHost, "hosts: [box, dev]")
+			t.Chdir(projectDir)
+			f, err := os.OpenFile(filepath.Join(projectDir, ".rr.yaml"), os.O_APPEND|os.O_WRONLY, 0)
+			require.NoError(t, err)
+			_, err = f.WriteString("  pinned:\n    hosts: [box]\n    run: touch ran.out\n")
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			if tt.withLocalHost {
+				lockCfg := config.LockConfig{Enabled: true, Timeout: 2 * time.Second, Stale: 10 * time.Minute, Dir: lockBaseOf(t, projectDir)}
+				holdLocalHostLock(t, lockCfg)
+			}
+
+			var code int
+			captureStderr(t, func() {
+				captureStdout(t, func() { code, err = RunTask(tt.opts) })
+			})
+			require.Error(t, err)
+			assert.Equal(t, 1, code)
+			// ErrLock here would mean rr waited out the held lock first.
+			assert.True(t, errors.IsCode(err, errors.ErrConfig), "got %v", err)
+			var rrErr *errors.Error
+			require.ErrorAs(t, err, &rrErr)
+			assert.Contains(t, rrErr.Message, "can't run on")
+			for _, s := range tt.wantSuggests {
+				assert.Contains(t, rrErr.Suggestion, s)
+			}
+			for _, s := range tt.notSuggests {
+				assert.NotContains(t, rrErr.Suggestion, s)
+			}
+			assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+		})
+	}
 }
 
 // lockBaseOf reads the lock dir the project config in projectDir uses.

@@ -726,6 +726,10 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
+		if err := checkTaskHost(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 		if err := lockPhase(ctx, opts); err != nil {
 			ctx.Close()
 			return nil, err
@@ -773,8 +777,26 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 	if err := connectPhase(ctx, opts); err != nil {
 		return err
 	}
+	if err := checkTaskHost(ctx, opts); err != nil {
+		return err
+	}
 	// Phase 2: Acquire lock (before sync)
 	return lockPhase(ctx, opts)
+}
+
+// checkTaskHost refuses a task pinned to other hosts once its host is
+// known, before that host's lock is waited on: a busy host would otherwise
+// hold the run for lock.timeout only to refuse it. RunTask checks again
+// after a load-balanced pick.
+func checkTaskHost(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if opts.TaskName == "" || ctx.Resolved.Project == nil {
+		return nil
+	}
+	task, ok := ctx.Resolved.Project.Tasks[opts.TaskName]
+	if !ok || config.IsTaskHostAllowed(&task, ctx.Conn.Name) {
+		return nil
+	}
+	return taskHostError(opts.TaskName, &task, ctx.Conn)
 }
 
 // ExecutePullPhase downloads files from remote after command execution.
