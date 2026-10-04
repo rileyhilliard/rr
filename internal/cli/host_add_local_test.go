@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"testing"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -53,6 +54,16 @@ func TestHostAddLocal_WritesLocalHost(t *testing.T) {
 	assert.True(t, h.Local)
 	assert.Empty(t, h.SSH)
 	assert.Empty(t, h.Dir)
+
+	// The saved entry is what a person would write by hand: no empty ssh,
+	// dir, tags or env keys for fields a local host doesn't use.
+	path, err := config.GlobalConfigPath()
+	require.NoError(t, err)
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	for _, key := range []string{"ssh:", "dir:", "tags:", "env:"} {
+		assert.NotContains(t, string(raw), key)
+	}
 }
 
 func TestHostAddLocal_HonorsTagAndEnv(t *testing.T) {

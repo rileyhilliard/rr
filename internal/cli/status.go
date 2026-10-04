@@ -51,8 +51,10 @@ func buildProjectMapping(globalCfg *config.GlobalConfig) *ProjectMapping {
 	}
 	if wt.TopLevel != "" {
 		m.LocalRoot = wt.TopLevel
-	} else if cwd, err := os.Getwd(); err == nil {
-		m.LocalRoot = cwd
+	} else {
+		// No repo: the project root (where .rr.yaml is), which is where a
+		// sync starts and an in-place host runs, or the current directory.
+		m.LocalRoot = config.DefaultLocalHostDir()
 	}
 	for name := range globalCfg.Hosts {
 		if globalCfg.Hosts[name].Local {

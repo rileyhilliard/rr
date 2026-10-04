@@ -222,6 +222,16 @@ func TestStatus_LocalHost(t *testing.T) {
 	assert.Contains(t, out, "runs in place on dev")
 }
 
+// Outside a git repo, local_root is the project root a local host runs in,
+// not the subdirectory rr status was run from.
+func TestStatus_LocalRootIsProjectRootOutsideGit(t *testing.T) {
+	projectDir, _ := writeLocalHostConfigs(t)
+	t.Chdir(filepath.Join(projectDir, "sub"))
+
+	mapping := buildProjectMapping(&config.GlobalConfig{Hosts: map[string]config.Host{"dev": {Local: true}}})
+	assert.Equal(t, projectDir, mapping.LocalRoot)
+}
+
 func TestConnectDoctorHosts_LocalHostIsNotDialed(t *testing.T) {
 	hosts := map[string]config.Host{"dev": {Local: true}}
 	dial := func(alias string, _ time.Duration) (*sshutil.Client, time.Duration, error) {

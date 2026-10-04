@@ -328,12 +328,14 @@ func hostAddLocalFromFlags(cfg *config.GlobalConfig) error {
 	}
 
 	if MachineMode() {
-		return WriteJSONSuccess(os.Stdout, map[string]interface{}{
-			"name":  hostAddName,
-			"local": true,
-			"tags":  hostAddTags,
-			"env":   envMap,
-		})
+		data := map[string]interface{}{"name": hostAddName, "local": true}
+		if len(hostAddTags) > 0 {
+			data["tags"] = hostAddTags
+		}
+		if len(envMap) > 0 {
+			data["env"] = envMap
+		}
+		return WriteJSONSuccess(os.Stdout, data)
 	}
 
 	fmt.Printf("%s Added local host '%s'\n", ui.SymbolSuccess, hostAddName)

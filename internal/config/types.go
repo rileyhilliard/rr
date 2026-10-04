@@ -134,17 +134,17 @@ type Host struct {
 	// earliest-listed alias that connects wins, so list the preferred
 	// route (e.g. LAN) first. Can be: hostname, user@hostname, or SSH
 	// config alias.
-	SSH []string `yaml:"ssh" mapstructure:"ssh"`
+	SSH []string `yaml:"ssh,omitempty" mapstructure:"ssh"`
 
 	// Dir is the working directory on remote (where files sync to).
 	// Supports variable expansion: ${PROJECT}, ${USER}, ${HOME}, and ~.
-	Dir string `yaml:"dir" mapstructure:"dir"`
+	Dir string `yaml:"dir,omitempty" mapstructure:"dir"`
 
 	// Tags for filtering hosts with --tag flag.
-	Tags []string `yaml:"tags" mapstructure:"tags"`
+	Tags []string `yaml:"tags,omitempty" mapstructure:"tags"`
 
 	// Env contains environment variables specific to this host.
-	Env map[string]string `yaml:"env" mapstructure:"env"`
+	Env map[string]string `yaml:"env,omitempty" mapstructure:"env"`
 
 	// Shell specifies how to invoke the shell for commands.
 	// Default is "${SHELL:-/bin/bash} -c". On a remote host commands are
