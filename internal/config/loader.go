@@ -427,8 +427,23 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 // directory when there's no project config (the same choice the workflow
 // makes for its sync root). Commands cd into it like a remote host's dir.
 func localHostDir(resolved *ResolvedConfig) string {
-	if resolved.ProjectRoot != "" {
-		return resolved.ProjectRoot
+	return projectRootOrCwd(resolved.ProjectRoot)
+}
+
+// DefaultLocalHostDir is localHostDir for a caller without a resolved
+// config: the dir of the .rr.yaml found from the current directory, or the
+// current directory.
+func DefaultLocalHostDir() string {
+	root := ""
+	if path, err := Find(""); err == nil && path != "" {
+		root = filepath.Dir(path)
+	}
+	return projectRootOrCwd(root)
+}
+
+func projectRootOrCwd(root string) string {
+	if root != "" {
+		return root
 	}
 	wd, err := os.Getwd()
 	if err != nil {

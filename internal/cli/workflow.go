@@ -98,31 +98,30 @@ func (w *WorkflowContext) lostConnectionAsResult(err error) error {
 // setupSignalHandler registers interrupt handlers to ensure cleanup on Ctrl+C.
 // Instead of calling os.Exit, it cancels the workflow context so in-flight
 // commands (like remote SSH sessions) can send SIGINT to the remote process
-// before the connection is torn down.
+// before the connection is torn down. The lock stays held until the caller's
+// Close, after the command has stopped, so no other run starts on the host
+// while it's still shutting down.
 func (w *WorkflowContext) setupSignalHandler() {
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	w.signalChan = make(chan os.Signal, 2)
-	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(w.signalChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
-		_, ok := <-w.signalChan
-		if !ok {
+		if _, ok := <-w.signalChan; !ok {
 			// Channel was closed by Close(), not a signal
 			return
 		}
 		// Cancel context first so in-flight SSH commands can clean up
 		w.cancel()
 
-		// Second signal force-quits immediately (users expect double Ctrl+C to kill)
-		go func() {
-			_, ok := <-w.signalChan
-			if !ok {
-				return
-			}
-			os.Exit(130)
-		}()
-
-		w.Close()
+		// Second signal force-quits immediately (users expect double Ctrl+C
+		// to kill). Local commands are killed first: exiting doesn't stop
+		// them, since each runs in its own session.
+		if _, ok := <-w.signalChan; !ok {
+			return
+		}
+		host.KillLocalCommands()
+		os.Exit(130)
 	}()
 }
 

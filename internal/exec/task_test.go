@@ -480,6 +480,30 @@ func TestBuildRemoteCommand_DefaultShell(t *testing.T) {
 	assert.Contains(t, result, "make test")
 }
 
+// A local host runs under the user's $SHELL. When that's a shell that can't
+// run sh syntax (fish), the command defaults to bash instead.
+func TestBuildRemoteCommand_LocalHostNonPOSIXShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local client uses a POSIX shell")
+	}
+	dir := t.TempDir()
+	t.Setenv("SHELL", filepath.Join(t.TempDir(), "fish"))
+
+	result := BuildRemoteCommand("echo $0", &config.Host{Local: true, Dir: dir})
+	assert.True(t, strings.HasPrefix(result, "/bin/bash -c "), result)
+	stdout, _, code, err := host.NewLocalClient().Exec(result)
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "/bin/bash\n", string(stdout))
+
+	// A remote host's $SHELL is the remote's, so it keeps the default.
+	assert.Contains(t, BuildRemoteCommand("make", &config.Host{Dir: dir}), "${SHELL:-/bin/bash} -c")
+
+	// A POSIX $SHELL keeps the default too.
+	t.Setenv("SHELL", "/bin/zsh")
+	assert.Contains(t, BuildRemoteCommand("make", &config.Host{Local: true, Dir: dir}), "${SHELL:-/bin/bash} -c")
+}
+
 func TestBuildRemoteCommand_CustomShell(t *testing.T) {
 	host := &config.Host{
 		Dir:   "/home/user/project",

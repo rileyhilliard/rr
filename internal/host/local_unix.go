@@ -8,10 +8,14 @@ import (
 	"syscall"
 )
 
-// startOwnProcessGroup puts cmd in a new process group, so a signal sent to
-// the group reaches the shell's children and grandchildren too.
+// startOwnProcessGroup starts cmd in a new session, which also makes it a new
+// process group, so a signal sent to the group reaches the shell's children
+// and grandchildren too. The session has no controlling terminal, so opening
+// /dev/tty fails (ENXIO) as it does on a remote host, rather than succeeding
+// and then stopping the job with SIGTTIN when it reads from a terminal it
+// doesn't own.
 func startOwnProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
 
 // signalProcessGroup sends sig to cmd's whole process group.

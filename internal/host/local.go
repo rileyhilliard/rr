@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
@@ -26,8 +27,9 @@ var localInterruptGrace = 3 * time.Second
 // LocalClient runs commands on this machine through the same interface the
 // SSH client implements, so a host with local: true goes through the remote
 // code paths (lock, requirement checks, command building, parallel workers)
-// unchanged. Commands run under $SHELL -c (/bin/sh when unset), the way sshd
-// runs a remote command under the user's login shell.
+// unchanged. Commands run under /bin/sh -c; the command rr builds for a host
+// picks the user's shell inside that (see exec.BuildRemoteCommand), so the
+// outer shell only has to parse it, which a non-POSIX $SHELL like fish can't.
 type LocalClient struct{}
 
 var _ sshutil.SSHClient = (*LocalClient)(nil)
@@ -48,7 +50,9 @@ const localWaitDelay = time.Second
 // dir mean the same thing on every host. It runs in its own process group:
 // when ctx is done the whole group is killed, not only the shell, and Wait
 // stops reading output localWaitDelay later even if something the command
-// started still holds the pipes.
+// started still holds the pipes. The group is a new session with no
+// controlling terminal, as under sshd without a pty, so a command that reads
+// /dev/tty fails at once instead of stopping on SIGTTIN.
 func LocalCommand(ctx context.Context, shell, cmd string) *exec.Cmd {
 	command := exec.CommandContext(ctx, shell, "-c", cmd)
 	if home, err := os.UserHomeDir(); err == nil {
@@ -63,15 +67,48 @@ func LocalCommand(ctx context.Context, shell, cmd string) *exec.Cmd {
 	return command
 }
 
-// localShellCommand builds the command for cmd under $SHELL (/bin/sh when
-// unset). Cancellation is handled by ExecStreamContext, which interrupts
-// before it kills.
+// localShellCommand builds the command for cmd under /bin/sh.
+// Cancellation is handled by ExecStreamContext, which interrupts before it
+// kills.
 func localShellCommand(cmd string) *exec.Cmd {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+	return LocalCommand(context.Background(), "/bin/sh", cmd)
+}
+
+// liveCommands are the local commands started by a LocalClient that haven't
+// finished yet, so a force-quit can kill them instead of leaving them
+// running after rr exits.
+var liveCommands = struct {
+	sync.Mutex
+	cmds map[*exec.Cmd]struct{}
+}{cmds: make(map[*exec.Cmd]struct{})}
+
+// startTracked starts command and records it in liveCommands. The caller
+// removes it with untrack once it has waited for it.
+func startTracked(command *exec.Cmd) error {
+	liveCommands.Lock()
+	defer liveCommands.Unlock()
+	if err := command.Start(); err != nil {
+		return err
 	}
-	return LocalCommand(context.Background(), shell, cmd)
+	liveCommands.cmds[command] = struct{}{}
+	return nil
+}
+
+func untrack(command *exec.Cmd) {
+	liveCommands.Lock()
+	delete(liveCommands.cmds, command)
+	liveCommands.Unlock()
+}
+
+// KillLocalCommands kills the process group of every command a LocalClient
+// is still running. rr calls it before a force-quit (a second Ctrl+C), which
+// exits without waiting for a cancelled command to stop.
+func KillLocalCommands() {
+	liveCommands.Lock()
+	defer liveCommands.Unlock()
+	for command := range liveCommands.cmds {
+		killProcessGroup(command)
+	}
 }
 
 // Exec runs cmd and returns its output and exit code. A non-zero exit is not
@@ -82,7 +119,12 @@ func (c *LocalClient) Exec(cmd string) (stdout, stderr []byte, exitCode int, err
 	command.Stdout = &outBuf
 	command.Stderr = &errBuf
 
-	if runErr := command.Run(); runErr != nil && !stderrors.Is(runErr, exec.ErrWaitDelay) {
+	runErr := startTracked(command)
+	if runErr == nil {
+		runErr = command.Wait()
+		untrack(command)
+	}
+	if runErr != nil && !stderrors.Is(runErr, exec.ErrWaitDelay) {
 		var exitErr *exec.ExitError
 		if stderrors.As(runErr, &exitErr) {
 			return outBuf.Bytes(), errBuf.Bytes(), LocalExitCode(runErr), nil
@@ -101,17 +143,20 @@ func (c *LocalClient) ExecStream(cmd string, stdout, stderr io.Writer) (int, err
 
 // ExecStreamContext runs cmd, streaming its output. When ctx is cancelled the
 // command's process group gets SIGINT, then is killed if it hasn't exited
-// after a grace period; the result is then ctx.Err().
+// after a grace period; the result is then ctx.Err(). Whatever is left in
+// the group once the command exits is killed too: a background job ignores
+// SIGINT (`sleep 30 & wait`), and would otherwise outlive the cancel.
 func (c *LocalClient) ExecStreamContext(ctx context.Context, cmd string, stdout, stderr io.Writer) (int, error) {
 	command := localShellCommand(cmd)
 	command.Stdout = stdout
 	command.Stderr = stderr
 
-	if err := command.Start(); err != nil {
+	if err := startTracked(command); err != nil {
 		return -1, errors.WrapWithCode(err, errors.ErrExec,
 			fmt.Sprintf("Couldn't start: %s", cmd),
 			"Make sure the command exists on this machine.")
 	}
+	defer untrack(command)
 
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()
@@ -121,6 +166,7 @@ func (c *LocalClient) ExecStreamContext(ctx context.Context, cmd string, stdout,
 		interruptProcessGroup(command)
 		select {
 		case waitErr := <-done:
+			killProcessGroup(command)
 			return LocalExitCode(waitErr), ctx.Err()
 		case <-time.After(localInterruptGrace):
 			killProcessGroup(command)
@@ -165,7 +211,13 @@ type localSession struct{}
 func (localSession) Close() error { return nil }
 
 // NewLocalHostConnection returns the connection for a host with local: true.
+// A host without a dir gets the one config.ResolveHosts gives it (the
+// project root, or the current directory), so a command built for it never
+// runs in the home directory it starts in.
 func NewLocalHostConnection(name string, h config.Host) *Connection {
+	if h.Dir == "" {
+		h.Dir = config.DefaultLocalHostDir()
+	}
 	return &Connection{
 		Name:   name,
 		Alias:  LocalAlias,

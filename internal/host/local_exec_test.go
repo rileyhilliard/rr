@@ -3,9 +3,11 @@ package host_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -120,9 +122,123 @@ func TestLocalClient_BackgroundChildHoldingOutput(t *testing.T) {
 
 	start := time.Now()
 	var out bytes.Buffer
-	code, err := c.ExecStreamContext(context.Background(), "sleep 3 & echo started", &out, &out)
+	code, err := c.ExecStreamContext(context.Background(), "sleep 3 & echo started $!", &out, &out)
+	require.NoError(t, err)
+	var pid int
+	_, scanErr := fmt.Sscanf(out.String(), "started %d", &pid)
+	require.NoError(t, scanErr, out.String())
+	t.Cleanup(func() { killPid(pid) })
+	assert.Equal(t, 0, code)
+	assert.Less(t, time.Since(start), 2500*time.Millisecond)
+}
+
+// startBackgroundSleep is a command whose background sleep ignores SIGINT,
+// as an async job in a non-interactive shell does, and outlives the shell
+// unless something kills it. It writes the sleep's pid to the returned file.
+func startBackgroundSleep(t *testing.T) (cmd, pidFile string) {
+	t.Helper()
+	pidFile = filepath.Join(t.TempDir(), "pid")
+	return "sleep 30 & echo $! > " + pidFile + "; wait", pidFile
+}
+
+// readPid waits for pidFile and returns the pid in it, killing that process
+// when the test ends in case the test failed before it did.
+func readPid(t *testing.T, pidFile string) int {
+	t.Helper()
+	var pid int
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Sscanf(string(data), "%d", &pid)
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
+	t.Cleanup(func() { killPid(pid) })
+	return pid
+}
+
+func killPid(pid int) {
+	if p, err := os.FindProcess(pid); err == nil {
+		_ = p.Kill()
+	}
+}
+
+func assertGone(t *testing.T, pid int) {
+	t.Helper()
+	assert.Eventually(t, func() bool {
+		p, err := os.FindProcess(pid)
+		return err != nil || p.Signal(syscall.Signal(0)) != nil
+	},
+		2*time.Second, 20*time.Millisecond, "pid %d is still running", pid)
+}
+
+// A cancel stops background jobs too. SIGINT ends the shell, but its
+// background sleep ignores SIGINT; it must not outlive the cancel.
+func TestLocalClient_CancelKillsBackgroundJob(t *testing.T) {
+	skipOnWindows(t)
+	t.Parallel()
+	c := host.NewLocalClient()
+	cmd, pidFile := startBackgroundSleep(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	var out bytes.Buffer
+	_, err := c.ExecStreamContext(ctx, cmd, &out, &out)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+	assertGone(t, readPid(t, pidFile))
+}
+
+// A force-quit kills every local command still running, background jobs
+// included, before rr exits. Not parallel: KillLocalCommands kills every
+// command in the process.
+func TestKillLocalCommands(t *testing.T) {
+	skipOnWindows(t)
+	c := host.NewLocalClient()
+	cmd, pidFile := startBackgroundSleep(t)
+
+	done := make(chan struct{})
+	go func() {
+		var out bytes.Buffer
+		_, _ = c.ExecStreamContext(context.Background(), cmd, &out, &out)
+		close(done)
+	}()
+	pid := readPid(t, pidFile)
+
+	host.KillLocalCommands()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the command didn't return after KillLocalCommands")
+	}
+	assertGone(t, pid)
+}
+
+// A local command has no controlling terminal, as on a remote host without
+// a pty: opening /dev/tty fails at once rather than the job stopping on
+// SIGTTIN when it reads. (Without a terminal in the test run, this can't
+// tell the difference.)
+func TestLocalClient_NoControllingTerminal(t *testing.T) {
+	skipOnWindows(t)
+	t.Parallel()
+	c := host.NewLocalClient()
+
+	stdout, _, code, err := c.Exec("if (exec </dev/tty) 2>/dev/null; then echo tty; else echo notty; fi")
 	require.NoError(t, err)
 	assert.Equal(t, 0, code)
-	assert.Contains(t, out.String(), "started")
-	assert.Less(t, time.Since(start), 2500*time.Millisecond)
+	assert.Equal(t, "notty\n", string(stdout))
+}
+
+// The client's own shell is /bin/sh, not $SHELL, which may be a shell (fish)
+// that can't parse the command rr builds.
+func TestLocalClient_OuterShellIsSh(t *testing.T) {
+	skipOnWindows(t)
+	t.Setenv("SHELL", filepath.Join(t.TempDir(), "fish"))
+	c := host.NewLocalClient()
+
+	stdout, _, code, err := c.Exec("x=1; [ \"$x\" = 1 ] && echo ok")
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, "ok\n", string(stdout))
 }

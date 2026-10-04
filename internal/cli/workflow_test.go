@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1926,4 +1927,35 @@ func TestLockWarn(t *testing.T) {
 		assert.Empty(t, stdout)
 		assert.Contains(t, stderr, "removing lock held by dead local process")
 	})
+}
+
+// The first Ctrl+C only cancels: the command still has its grace period to
+// stop, so the lock stays held until Close, after exec returns. Releasing it
+// on the signal would let another run start beside the stopping command.
+func TestWorkflowContext_FirstSignalKeepsLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local client uses a POSIX shell")
+	}
+	lockCfg := config.LockConfig{Enabled: true, Timeout: time.Second, Stale: time.Minute, Dir: filepath.Join(t.TempDir(), "locks")}
+	held, err := lock.TryAcquire(host.NewLocalHostConnection("dev", config.Host{Local: true}), lockCfg, "rr run")
+	require.NoError(t, err)
+	lockDir := filepath.Join(lockCfg.Dir, "rr.lock")
+
+	ctx := &WorkflowContext{Lock: held}
+	ctx.setupSignalHandler()
+	ctx.signalChan <- os.Interrupt
+
+	select {
+	case <-ctx.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("the signal didn't cancel the workflow context")
+	}
+	assert.Never(t, func() bool {
+		_, statErr := os.Stat(lockDir)
+		return os.IsNotExist(statErr)
+	}, 200*time.Millisecond, 10*time.Millisecond, "the lock is released on the signal")
+
+	ctx.Close()
+	_, statErr := os.Stat(lockDir)
+	assert.True(t, os.IsNotExist(statErr), "Close releases the lock")
 }
