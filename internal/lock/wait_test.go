@@ -66,6 +66,8 @@ func TestAcquire_CancelStopsWait(t *testing.T) {
 		assert.True(t, errors.Is(err, context.Canceled), "got %v", err)
 		assert.True(t, rrerrors.IsCode(err, rrerrors.ErrInterrupted), "got %v", err)
 		assert.False(t, rrerrors.IsCode(err, rrerrors.ErrLock), "a cancel isn't a held lock")
+		assert.NotContains(t, err.Error(), "context canceled", "says why in words, not Go's")
+		assert.Contains(t, err.Error(), "rr was stopped")
 	case <-time.After(5 * time.Second):
 		t.Fatal("Acquire kept waiting after its context was cancelled")
 	}

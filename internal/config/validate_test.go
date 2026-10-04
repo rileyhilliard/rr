@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 func TestValidateParallelTasks(t *testing.T) {
@@ -977,7 +979,10 @@ func TestValidateGlobal_HostNamedLocalRejected(t *testing.T) {
 			err := ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{"local": tt.host}})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "can't be named 'local'")
-			assert.Contains(t, err.Error(), "Rename it")
+			var rrErr *errors.Error
+			require.ErrorAs(t, err, &rrErr)
+			assert.Equal(t, errors.ErrConfig, rrErr.Code)
+			assert.Contains(t, rrErr.Suggestion, "Rename it", "the advice is in the suggestion agents read")
 		})
 	}
 

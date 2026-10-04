@@ -197,7 +197,7 @@ func Run(opts RunOptions) (int, error) {
 	if failureHint != "" {
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
 	} else if exitCode != 0 && !failureExplained {
-		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name, wf.Conn.Host.Local)
+		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name, wf.Conn.InPlace())
 	}
 
 	printLogTail(logPath, opts.Tail)
@@ -458,8 +458,9 @@ func renderFinalStatus(_ *ui.PhaseDisplay, exitCode int, totalTime, execTime tim
 
 // renderFailureHelp displays contextual help for command failures.
 // This is shown when the failure wasn't already explained (e.g., missing tool).
-// localHost is true for a host with local: true, which has no SSH to suggest.
-func renderFailureHelp(exitCode int, command, host string, localHost bool) {
+// inPlace is true for a run on this machine (a local host or a bare local
+// run), which has no SSH to suggest.
+func renderFailureHelp(exitCode int, command, host string, inPlace bool) {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 
 	var hint string
@@ -496,10 +497,10 @@ func renderFailureHelp(exitCode int, command, host string, localHost bool) {
 	// Always show recovery suggestions for non-trivial failures
 	if exitCode != 130 && exitCode != 143 { // Skip for user interrupts
 		fmt.Printf("\n%s\n", mutedStyle.Render("Troubleshooting:"))
-		if !localHost {
+		if !inPlace {
 			fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
 		}
-		if localHost {
+		if inPlace {
 			fmt.Printf("%s\n", mutedStyle.Render("  - Check the command output above and your local environment"))
 		} else {
 			fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))

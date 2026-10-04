@@ -65,6 +65,28 @@ func TestRenderFailureHelp_LocalHostWording(t *testing.T) {
 	}
 }
 
+// A failed bare --local run (no local host configured) gets local advice
+// too, not an ssh command for a host called "local".
+func TestRun_BareLocalFailureHelpIsLocal(t *testing.T) {
+	projectDir, _ := writeRoutingConfigs(t, false, "hosts: [box]")
+	t.Chdir(projectDir)
+	prettyMode = true
+	t.Cleanup(func() { prettyMode = false })
+
+	var exitCode int
+	var err error
+	out := captureStdout(t, func() {
+		captureStderr(t, func() {
+			exitCode, err = Run(RunOptions{Command: "exit 3", Local: true})
+		})
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, exitCode, out)
+	assert.Contains(t, out, "your local environment")
+	assert.NotContains(t, out, "ssh local")
+	assert.NotContains(t, out, "remote logs")
+}
+
 // rr setup on a local host returns before any key discovery or prompt.
 func TestSetup_LocalHostRejected(t *testing.T) {
 	writeLocalHostConfigs(t)

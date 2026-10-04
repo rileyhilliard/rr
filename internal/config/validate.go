@@ -183,6 +183,9 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 	var localHosts []string
 	for name := range cfg.Hosts {
 		if err := validateHost(name, cfg.Hosts[name]); err != nil {
+			if rrErr, ok := err.(*errors.Error); ok {
+				return rrErr // already carries its own suggestion
+			}
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
 		}
 		if cfg.Hosts[name].Local {
@@ -284,7 +287,9 @@ func validateHost(name string, host Host) error {
 	// "local" is the name rr gives its local fallback connection, so a host
 	// with that name can't be told apart from a fallback in output.
 	if name == "local" {
-		return fmt.Errorf("a host can't be named 'local' - that name is reserved for rr's local fallback. Rename it in ~/.rr/config.yaml (for example 'dev' or 'this-machine') and update any 'hosts:' lists that use it")
+		return errors.New(errors.ErrConfig,
+			"A host can't be named 'local' - that name is reserved for rr's local fallback",
+			"Rename it in ~/.rr/config.yaml (for example 'dev' or 'this-machine') and update any 'hosts:' lists that use it.")
 	}
 	if host.Local {
 		return validateLocalHost(name, host)

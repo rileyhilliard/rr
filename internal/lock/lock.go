@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -315,10 +316,24 @@ func awaitHolderInfo(ctx context.Context, conn *host.Connection, infoFile string
 // lock wasn't the problem, and an agent that retries a held lock shouldn't
 // retry a run the user stopped.
 func InterruptedError(hostName string, cause error) error {
-	return errors.WrapWithCode(cause, errors.ErrInterrupted,
+	return errors.WrapWithCode(stopReason{cause}, errors.ErrInterrupted,
 		fmt.Sprintf("Stopped waiting for the lock on %s", hostName),
 		"Nothing ran. Run the command again when you want it to run.")
 }
+
+// stopReason says in words why a lock wait's context ended, where the
+// context error would print "context canceled". It unwraps to that error,
+// so errors.Is still matches context.Canceled or DeadlineExceeded.
+type stopReason struct{ cause error }
+
+func (s stopReason) Error() string {
+	if stderrors.Is(s.cause, context.DeadlineExceeded) {
+		return "rr's time limit for the run ran out"
+	}
+	return "rr was stopped (Ctrl+C or SIGTERM)"
+}
+
+func (s stopReason) Unwrap() error { return s.cause }
 
 // TryAcquire attempts to acquire a lock without blocking.
 // Unlike Acquire, it returns immediately if the lock is held by another process.
