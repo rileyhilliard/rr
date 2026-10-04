@@ -341,10 +341,11 @@ func buildFailureHint(command, stderr, localRoot, remoteDir, host string) string
 var missingPathPatterns = []*regexp.Regexp{
 	// pytest: "ERROR: file or directory not found: tests/foo.py"
 	regexp.MustCompile(`(?i)file or directory not found:\s*(\S+)`),
+	// zsh and bare: "zsh:.:2: no such file or directory: tests/foo.py". Before
+	// the generic pattern, which would take ".:2" from zsh's prefix as the path.
+	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
 	// generic shell/tool: "cat: tests/foo.py: No such file or directory"
 	regexp.MustCompile(`(?i)^[^:\n]*:\s*(\S+):\s*no such file or directory`),
-	// bare: "no such file or directory: tests/foo.py"
-	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
 }
 
 // buildRelativePathHint explains a relative path that failed because it was
@@ -392,6 +393,26 @@ func buildRelativePathHint(stderr, projectRoot, invocationDir, runDir string) st
 		return fmt.Sprintf("'%s' doesn't exist in %s, where rr ran the command, but it does in %s. Use '%s', or run with %s",
 			rel, describeOffset(runDir), describeOffset(cand),
 			relFromRunDir(cand, rel, runDir), describeCWDFix(cand))
+	}
+	return ""
+}
+
+// buildSetupFileHint explains a failure where a setup command (host
+// setup_commands or defaults.setup) names a file that doesn't exist where it
+// ran. Setup runs from the project root on hostName, before the command's own
+// cd, so its relative paths are root-relative. Returns "" when the missing
+// path isn't named by a setup command: a typo in the command itself already
+// reads clearly from the shell's error.
+func buildSetupFileHint(stderr string, setup []string, hostName string) string {
+	rel := extractMissingRelPath(stderr)
+	if rel == "" {
+		return ""
+	}
+	for _, s := range setup {
+		if strings.Contains(s, rel) {
+			return fmt.Sprintf("'%s' doesn't exist on %s, and the setup command '%s' needs it. Setup runs from the project root, so check the path is right relative to it, and that the file is committed or synced.",
+				rel, hostName, s)
+		}
 	}
 	return ""
 }

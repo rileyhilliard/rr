@@ -307,6 +307,13 @@ func TestBuildRelativePathHint(t *testing.T) {
 		assert.NotEmpty(t, buildRelativePathHint(stderr, root, "sub", ""))
 	})
 
+	// zsh puts its own colon-separated prefix first ("zsh:.:2:"), which the
+	// generic form would read as the path.
+	t.Run("zsh form", func(t *testing.T) {
+		stderr := "zsh:.:2: no such file or directory: tests/foo.py"
+		assert.Contains(t, buildRelativePathHint(stderr, root, "sub", ""), "'tests/foo.py'")
+	})
+
 	t.Run("pytest node id selector stripped", func(t *testing.T) {
 		stderr := "ERROR: file or directory not found: tests/foo.py::test_bar"
 		hint := buildRelativePathHint(stderr, root, "sub", "")

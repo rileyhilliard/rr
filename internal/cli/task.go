@@ -201,8 +201,14 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Post-failure hint: detect local-machine assumptions (paths that only
 	// exist here, git commands against the synced snapshot).
 	failureHint := ""
-	if result.ExitCode != 0 && !wf.Conn.InPlace() {
-		failureHint = buildFailureHint(command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
+	if result.ExitCode != 0 {
+		stderr := streamHandler.GetStderrCapture()
+		if !wf.Conn.InPlace() {
+			failureHint = buildFailureHint(command, stderr, wf.WorkDir, remoteDir, wf.Conn.Name)
+		}
+		if failureHint == "" {
+			failureHint = buildSetupFileHint(stderr, setupCommands, wf.Conn.Name)
+		}
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
 		}

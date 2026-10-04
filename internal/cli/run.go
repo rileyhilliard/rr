@@ -161,6 +161,9 @@ func Run(opts RunOptions) (int, error) {
 		if failureHint == "" {
 			failureHint = buildRelativePathHint(stderr, wf.WorkDir, wf.SubdirOffset, effectiveRunOffset(wf, opts))
 		}
+		if failureHint == "" {
+			failureHint = buildSetupFileHint(stderr, config.GetMergedSetupCommands(wf.Resolved.Project, &wf.Conn.Host), wf.Conn.Name)
+		}
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)
 		}
@@ -262,14 +265,6 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 	// inside it can't run part of it after a failed setup or cd.
 	cmd = exec.ShellGroup(cmd)
 
-	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
-		setup := make([]string, 0, len(wf.Resolved.Project.Defaults.Setup))
-		for _, s := range wf.Resolved.Project.Defaults.Setup {
-			setup = append(setup, exec.ShellGroup(s))
-		}
-		cmd = strings.Join(setup, " && ") + " && " + cmd
-	}
-
 	// --cwd prepends a cd into a subdirectory of the remote project root.
 	// Reject paths that escape the project root via ../ traversal.
 	if opts.RemoteCWD != "" {
@@ -305,6 +300,17 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 			"rr: warning: %s/ isn't on the remote (excluded from sync?), so this ran at the project root", offset))
 		cmd = fmt.Sprintf("{ cd %s 2>/dev/null || echo %s >&2; } && %s", subdir, warning, cmd)
 		reportAutoCWD(wf, offset)
+	}
+
+	// defaults.setup goes before the cd into a subdirectory: it runs at the
+	// project root, as for tasks, so a setup command like
+	// `. ./scripts/env.sh` finds its file wherever rr was run from.
+	if len(wf.Resolved.Project.Defaults.Setup) > 0 {
+		setup := make([]string, 0, len(wf.Resolved.Project.Defaults.Setup))
+		for _, s := range wf.Resolved.Project.Defaults.Setup {
+			setup = append(setup, exec.ShellGroup(s))
+		}
+		cmd = strings.Join(setup, " && ") + " && " + cmd
 	}
 
 	return exec.BuildRemoteCommand(cmd, &wf.Conn.Host), nil
