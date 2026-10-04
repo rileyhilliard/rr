@@ -217,7 +217,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	if PrettyMode() {
 		renderOutcomeFailures(outcome, result.ExitCode)
 		wf.PhaseDisplay.ThinDivider()
-		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		renderTaskSummary(wf.PhaseDisplay, result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 		repeatFallbackWarning(wf.ResultDetails)
 		warnNoTests(wf.ResultDetails)
 		if failureHint != "" {
@@ -339,7 +339,7 @@ func runTaskWithDeps(wf *WorkflowContext, task *config.TaskConfig, opts TaskOpti
 
 	if PrettyMode() {
 		wf.PhaseDisplay.ThinDivider()
-		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Alias)
+		renderDependencySummary(result, opts.TaskName, time.Since(wf.StartTime), execDuration, wf.Conn.Name)
 		repeatFallbackWarning(wf.ResultDetails)
 		// No warnNoTests here: deps.TaskExecutionResult carries only a name,
 		// exit code, and duration - no command or output for a formatter to
