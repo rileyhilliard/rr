@@ -108,8 +108,9 @@ hosts:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `ssh` | list | yes | SSH connection strings, tried in order. |
-| `dir` | string | yes | Working directory on remote. Supports variable expansion. |
+| `ssh` | list | yes, unless `local` | SSH connection strings, tried in order. |
+| `dir` | string | yes, unless `local` | Working directory on remote. Supports variable expansion. |
+| `local` | bool | no | Make this host the machine `rr` runs on. Can't be combined with `ssh` or `dir`. See [Local host](#local-host). |
 | `tags` | list | no | Tags for filtering with `--tag` flag. |
 | `env` | map | no | Environment variables for commands on this host. See [How commands are built](#how-commands-are-built). |
 | `shell` | string | no | Shell invocation format (e.g., `zsh -l -c`). Default uses `$SHELL -l -c`. |
@@ -128,6 +129,38 @@ Each entry in `ssh` can be:
 `rr` tries each SSH alias in order until one connects. This is useful when a machine is reachable via multiple networks (e.g., local network vs. VPN).
 
 **Passwordless SSH is required.** You must be able to run `ssh <alias>` without entering a password. See the [SSH setup guide](ssh-setup.md) if you need to configure key-based auth.
+
+### Local host
+
+A host with `local: true` is the machine you run `rr` from, in rotation with your remote hosts instead of only as a fallback. Use it when your own machine is as fast as the remotes.
+
+```yaml
+hosts:
+  dev:
+    local: true
+    tags: [fast]
+    setup_commands:
+      - export PATH=$HOME/.local/bin:$PATH
+  m4-mini:
+    ssh: [m4-mini.local, m4-mini-tailscale]
+    dir: ~/rr/${PROJECT}
+```
+
+It's a host like any other:
+
+- **Selection**: it's tried in host order (the project's `hosts:` list, or alphabetical), and `--host dev` and `--tag fast` pick it.
+- **Locking**: it takes the same lock as a remote host, at `<lock.dir>/rr.lock` on this machine, so two `rr` runs don't both land on it. `rr unlock dev` releases it.
+- **Parallel tasks**: it gets one worker, like each remote host, and takes subtasks from the shared queue.
+- **Commands**: they get the host's `env`, `setup_commands`, and `shell`, and the `require:` checks, built exactly as for a remote host.
+- **`rr status`, `rr doctor`, `rr monitor`**: it shows as reachable without an SSH probe, doctor's `--path`/`--requirements` checks run on this machine, and the monitor reads its metrics and lock locally.
+
+What's different: it runs **in place**, in the local project directory (the directory holding `.rr.yaml`, or the current directory without one), with no rsync. So `ssh` and `dir` aren't allowed, there's nothing to sync, pull (`pull:` and `--pull` are skipped), or prune, and local paths in commands aren't rewritten. A run sees your working tree as it is, including edits you make while it runs, and anything it writes (build output, coverage files) lands in your checkout. Subtasks of a parallel task that land on it share that directory, the same as subtasks on one remote host share its `dir`.
+
+Only one host can be `local`. How it relates to the other ways of running locally:
+
+- `--local` is unchanged: it skips host selection and runs here without a lock.
+- `local_fallback` still applies when no host can be used, but with a local host in the pool that rarely happens, since it's always reachable. When every host is locked **and** one of them is the local host, `rr` waits for a host (up to `lock.wait_timeout`) and then fails, even with `local_fallback: always`: falling back would put a second, unlocked run on the machine the local host's lock protects.
+- Local mode (a project with `local_fallback` on and no `host`/`hosts`) is unchanged and doesn't use the local host.
 
 ### Variable expansion
 
@@ -538,6 +571,7 @@ When multiple hosts are configured, `rr` distributes work automatically:
 4. If all hosts are locked, what happens depends on `local_fallback`:
    - `always`: runs locally right away with a loud warning (and `details.fallback` in structured output). If any lock holder is on this same machine (likely your own other run), it first waits up to `wait_timeout` for a host to free up.
    - `never` / `on-unreachable`: waits up to `wait_timeout`, cycling through the hosts, then fails with the lock holders listed
+   - If one of the locked hosts is a [local host](#local-host), `rr` waits and fails as with `never`, whatever `local_fallback` says
 
 ```yaml
 lock:
@@ -1242,6 +1276,9 @@ Fields that accept durations use Go's duration format:
 | "Project references host 'X' which doesn't exist in global config" | The host referenced in `.rr.yaml` doesn't exist in `~/.rr/config.yaml` |
 | "host 'X' needs at least one SSH connection" | Add `ssh:` list to the host in global config |
 | "host 'X' needs a 'dir'" | Add `dir:` to the host in global config |
+| "host 'X' can't set both 'local: true' and 'ssh'" | A local host runs on this machine. Remove `ssh:`, or remove `local: true` for a remote host |
+| "host 'X' is local, so it runs in the project directory and can't set 'dir'" | Remove `dir:` from the local host |
+| "only one host can be local" | Keep `local: true` on one host |
 | "Can't use 'X' as a task name - that's a built-in command" | Rename the task to avoid built-in command names |
 | "task 'X' has both 'run' and 'steps'" | Use either `run` or `steps`, not both |
 | "task 'X' depends on non-existent task 'Y'" | Add the missing task or fix the dependency reference |

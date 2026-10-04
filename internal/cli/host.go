@@ -40,6 +40,7 @@ type HostListOutput struct {
 type HostConfigInfo struct {
 	Name       string            `json:"name"`
 	SSHAliases []string          `json:"ssh_aliases"`
+	Local      bool              `json:"local,omitempty"`
 	Dir        string            `json:"dir"`
 	Tags       []string          `json:"tags,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
@@ -392,6 +393,7 @@ func outputHostListJSON(cfg *config.GlobalConfig, hostOrder []string, globalPath
 		info := HostConfigInfo{
 			Name:       name,
 			SSHAliases: h.SSH,
+			Local:      h.Local,
 			Dir:        h.Dir,
 			Tags:       h.Tags,
 			Env:        h.Env,
@@ -438,6 +440,10 @@ func outputHostListText(cfg *config.GlobalConfig, globalPath string) error {
 
 		// Name
 		fmt.Println(nameStyle.Render(name))
+
+		if h.Local {
+			fmt.Printf("%s%s\n", dimStyle.Render("  └─ "), "local (this machine, runs in the project dir)")
+		}
 
 		// SSH connections
 		for i, ssh := range h.SSH {

@@ -31,7 +31,7 @@ type PullOptions struct {
 // Pull downloads files from the remote host to the local machine using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
-// If conn.IsLocal is true, pull is skipped since we're already local.
+// If conn.InPlace() (local fallback or a local host), pull is skipped.
 //
 // The rsync command follows this pattern:
 // - Base flags: -az (archive mode, compress)
@@ -45,8 +45,9 @@ func Pull(conn *host.Connection, opts PullOptions, progress io.Writer) error {
 			"Connect to the remote host first.")
 	}
 
-	// Skip pull for local connections - we're already working with local files
-	if conn.IsLocal {
+	// Skip pull for connections that run in the local project dir (local
+	// fallback or a local host) - we're already working with local files
+	if conn.InPlace() {
 		return nil
 	}
 

@@ -35,6 +35,8 @@ type ProjectMapping struct {
 	Worktree         string            `json:"worktree,omitempty"`
 	IsLinkedWorktree bool              `json:"is_linked_worktree"`
 	RemoteDirs       map[string]string `json:"remote_dirs"`
+
+	localHosts map[string]bool // hosts with local: true, which run in LocalRoot
 }
 
 // buildProjectMapping resolves the current tree's remote directory on every
@@ -52,6 +54,14 @@ func buildProjectMapping(globalCfg *config.GlobalConfig) *ProjectMapping {
 		m.LocalRoot = cwd
 	}
 	for name := range globalCfg.Hosts {
+		if globalCfg.Hosts[name].Local {
+			if m.localHosts == nil {
+				m.localHosts = make(map[string]bool)
+			}
+			m.localHosts[name] = true
+			m.RemoteDirs[name] = m.LocalRoot
+			continue
+		}
 		m.RemoteDirs[name] = config.ExpandRemote(globalCfg.Hosts[name].Dir)
 	}
 	return m
@@ -128,7 +138,13 @@ func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
 		go func(hostName string, hostCfg config.Host) {
 			defer wg.Done()
 
-			aliasResults := host.ProbeAll(hostCfg.SSH, timeout)
+			var aliasResults []host.ProbeResult
+			if hostCfg.Local {
+				// Nothing to dial: a local host is this machine.
+				aliasResults = []host.ProbeResult{{SSHAlias: host.LocalAlias, Success: true}}
+			} else {
+				aliasResults = host.ProbeAll(hostCfg.SSH, timeout)
+			}
 
 			mu.Lock()
 			results[hostName] = probeResult{
@@ -270,6 +286,10 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 		}
 		sort.Strings(hostNames)
 		for _, name := range hostNames {
+			if mapping.localHosts[name] {
+				fmt.Printf("%s runs in place on %s\n", treeDesc, name)
+				continue
+			}
 			fmt.Printf("%s syncs to: %s\n", treeDesc, mutedStyle.Render(fmt.Sprintf("%s:%s", name, mapping.RemoteDirs[name])))
 		}
 	}

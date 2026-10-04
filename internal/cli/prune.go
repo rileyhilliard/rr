@@ -89,6 +89,12 @@ func pruneCommand(opts PruneOptions) error {
 func pruneHost(hostName string, hostCfg config.Host, projectRoot string, dryRun bool) hostPruneOutcome {
 	outcome := hostPruneOutcome{Host: hostName}
 
+	// A local host runs in the checkout itself: no sync dirs to prune.
+	if hostCfg.Local {
+		outcome.Status = "clean"
+		return outcome
+	}
+
 	var conn *host.Connection
 	var connErr error
 	for _, alias := range hostCfg.SSH {

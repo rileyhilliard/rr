@@ -34,13 +34,27 @@ defaults:
 
 | Field | Purpose |
 |-------|---------|
-| `ssh` | List of SSH connection strings, tried in order |
-| `dir` | Working directory on remote (supports variable expansion) |
+| `ssh` | List of SSH connection strings, tried in order (not allowed with `local`) |
+| `dir` | Working directory on remote (supports variable expansion; not allowed with `local`) |
+| `local` | `true` makes this host the machine rr runs on (see [Local Host](#local-host)) |
 | `tags` | Labels for filtering with `--tag` flag |
 | `env` | Environment variables set for all commands |
 | `shell` | Shell invocation the command is appended to (default: `${SHELL:-/bin/bash} -c`, after sourcing `~/.bashrc` and `~/.zshrc` if present). Use `"zsh -l -c"` for a login shell or `"bash -o pipefail -c"` to catch failures inside pipes |
 | `setup_commands` | Commands run before every remote command (`run`, `exec`, tasks) |
 | `require` | Tools that must exist on this host |
+
+### Local Host
+
+A host with `local: true` puts this machine in rotation with the remotes:
+
+```yaml
+hosts:
+  dev:
+    local: true            # no ssh, no dir
+    tags: [fast]
+```
+
+It's selected in host order, takes the same lock (on this machine, so two rr runs don't pile onto it), gets a worker in parallel tasks, and works with `--host dev`, `--tag`, `rr status`, `rr doctor`, `rr monitor`, and `rr unlock dev`. Commands get its `env`, `setup_commands`, `shell`, and `require` checks like a remote host. It runs **in place** in the local project dir: no sync, no pull, no path rewriting, and output files land in your checkout. Only one host can be local. `--local` still means an unlocked run here without host selection. When every host is locked and one is the local host, rr waits and fails rather than falling back locally.
 
 ### SSH Entries
 

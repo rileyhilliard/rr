@@ -1071,7 +1071,7 @@ Locking happens before sync so a run never rewrites files under another run's co
 
 ### Host Selection Flow
 
-The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`):
+The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`). A host with `local: true` skips the dial: its connection carries a `LocalClient` (`internal/host/local.go`), which implements `sshutil.SSHClient` by running commands under the local shell, so the lock, requirement checks, command building and parallel workers treat it like any remote host. `Connection.InPlace()` (a local host or a local fallback) is what sync, pull, prune and path rewriting check to skip themselves; `config.ResolveHosts` sets a local host's `dir` to the project root.
 
 ```mermaid
 flowchart TB

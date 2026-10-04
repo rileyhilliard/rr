@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Local host (`local: true`)** - A host entry can now be the machine rr runs on, in rotation with the remote hosts instead of only as a fallback. Give it `local: true` and no `ssh` or `dir`. It's tried in host order, takes the same lock as any host (at `<lock.dir>/rr.lock` on this machine, so two rr runs don't both land on it), gets a worker in parallel tasks, and works with `--host`, `--tag`, `rr status`, `rr doctor` (including `--path` and `--requirements`), `rr monitor`, `rr unlock`, and `rr provision`. Commands get its `env`, `setup_commands`, `shell`, and `require` checks like a remote host. It runs in place in the local project directory, so nothing is synced, pulled, pruned, or path-rewritten, and output files land in the checkout. Only one host can be local, and `local: true` with `ssh` or `dir` fails validation. `--local` is unchanged. When every host is locked and one of them is the local host, rr waits for a host and then fails instead of falling back locally, even with `local_fallback: always`.
+
 ## [0.28.0] - 2026-09-28
 
 ### Changed

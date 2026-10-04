@@ -179,10 +179,22 @@ func ValidateGlobal(cfg *GlobalConfig) error {
 	}
 
 	// Validate each host
+	var localHosts []string
 	for name := range cfg.Hosts {
 		if err := validateHost(name, cfg.Hosts[name]); err != nil {
 			return errors.WrapWithCode(err, errors.ErrConfig, err.Error(), "Check your host config in ~/.rr/config.yaml.")
 		}
+		if cfg.Hosts[name].Local {
+			localHosts = append(localHosts, name)
+		}
+	}
+	// Local hosts all run in the same directory under the same lock, so a
+	// second one adds nothing but confusion.
+	if len(localHosts) > 1 {
+		slices.Sort(localHosts)
+		return errors.New(errors.ErrConfig,
+			fmt.Sprintf("only one host can be local, but %s all set 'local: true'", strings.Join(localHosts, ", ")),
+			"Keep 'local: true' on one host in ~/.rr/config.yaml.")
 	}
 
 	// Validate local_fallback mode when set (empty means "use default")
@@ -264,6 +276,10 @@ func ValidateResolved(r *ResolvedConfig, opts ...ValidationOption) error {
 
 // validateHost checks a single host configuration.
 func validateHost(name string, host Host) error {
+	if host.Local {
+		return validateLocalHost(name, host)
+	}
+
 	if len(host.SSH) == 0 {
 		return fmt.Errorf("host '%s' needs at least one SSH connection (like 'user@hostname')", name)
 	}
@@ -302,6 +318,27 @@ func validateHost(name string, host Host) error {
 	}
 
 	return nil
+}
+
+// validateLocalHost checks a host with local: true. It has no SSH and no
+// dir (it runs in the local project directory); the rest is validated as for
+// a remote host.
+func validateLocalHost(name string, host Host) error {
+	if len(host.SSH) > 0 {
+		return fmt.Errorf("host '%s' can't set both 'local: true' and 'ssh' - a local host runs on this machine without SSH", name)
+	}
+	if host.Dir != "" {
+		return fmt.Errorf("host '%s' is local, so it runs in the project directory and can't set 'dir' - remove it", name)
+	}
+	if err := validateEnv(fmt.Sprintf("host '%s' env", name), host.Env); err != nil {
+		return err
+	}
+	if host.Shell != "" {
+		if err := validateShellFormat(name, host.Shell); err != nil {
+			return err
+		}
+	}
+	return validateRequireList(fmt.Sprintf("host '%s'", name), host.Require)
 }
 
 // validateRemotePath checks for common remote path configuration mistakes.

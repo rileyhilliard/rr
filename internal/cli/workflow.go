@@ -419,7 +419,7 @@ func connectLocalTarget(ctx *WorkflowContext) {
 func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter := ctx.GetReporter()
 
-	if ctx.Conn.IsLocal {
+	if ctx.Conn.InPlace() {
 		reporter.PhaseSkipped("sync", "local")
 		return nil
 	}
@@ -704,7 +704,7 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 // Pull happens regardless of command exit code - often you want test artifacts on failure.
 // Errors are logged but don't fail the overall workflow.
 func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest string) {
-	if len(pullItems) == 0 || wf.Conn == nil || wf.Conn.IsLocal {
+	if len(pullItems) == 0 || wf.Conn == nil || wf.Conn.InPlace() {
 		return
 	}
 

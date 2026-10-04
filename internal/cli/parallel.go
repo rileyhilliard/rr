@@ -527,8 +527,8 @@ func pullSubtaskFiles(tasks []parallel.TaskInfo, result *parallel.Result, hosts 
 			continue
 		}
 		hostCfg, remote := hosts[tr.Host]
-		if !remote {
-			continue // "local" or "none": nothing on a remote to pull
+		if !remote || hostCfg.Local {
+			continue // "local", "none", or a local host: nothing on a remote to pull
 		}
 		if tr.Alias == "" {
 			continue // never connected (e.g. cancelled by fail-fast): nothing ran there

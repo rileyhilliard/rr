@@ -268,6 +268,12 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	// Phase 2: All hosts tried - handle "all locked" scenario
 	if len(lockedHosts) > 0 {
 		mode := config.ResolveLocalFallbackMode(ctx.Resolved)
+		// A busy local host means this machine is already running an rr
+		// job. Falling back would put a second, unlocked run on it, so
+		// wait for a host instead.
+		if anyLocalHost(lockedHosts) {
+			mode = config.LocalFallbackNever
+		}
 		holders := holderDetails(lockedHosts)
 
 		switch resolveAllLockedAction(mode, holders) {
@@ -316,6 +322,16 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 		return fallBackLocally(ctx, fallbackDetail{Reason: host.LocalReasonHostsUnreachable}, attempts), nil
 	}
 	return nil, buildConnectionError(attempts)
+}
+
+// anyLocalHost reports whether any of the attempts is a host with local: true.
+func anyLocalHost(attempts []hostAttempt) bool {
+	for _, a := range attempts {
+		if a.conn != nil && a.conn.Host.Local {
+			return true
+		}
+	}
+	return false
 }
 
 // fallBackLocally reports a local fallback (warning event plus

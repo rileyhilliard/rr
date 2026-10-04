@@ -225,8 +225,9 @@ rr test --tail 50            # reprint the last 50 log lines after the result
 
 - **Pipes hide failures.** Without `pipefail`, `pytest | tail` exits with `tail`'s status. Set `shell: "bash -o pipefail -c"` on the host, or check `details.summary`/`failures`.
 - **Zero tests isn't success.** Check `details.no_tests` after narrowing with `-k`, `-run`, or paths.
-- **Locks are per host, shared across projects.** A run from another project on the same host blocks you. With several hosts, rr tries the next free one. If all are locked it waits up to `lock.wait_timeout` (1m) for one to free up, then fails, or runs locally when `local_fallback: always`. With one host it waits up to `lock.timeout` (5m).
+- **Locks are per host, shared across projects.** A run from another project on the same host blocks you. With several hosts, rr tries the next free one. If all are locked it waits up to `lock.wait_timeout` (1m) for one to free up, then fails, or runs locally when `local_fallback: always` (never when a `local: true` host is among the locked ones). With one host it waits up to `lock.timeout` (5m).
 - **`rr unlock` with no host only works when one host is configured.** With several, the host picker only appears in `--pretty` mode; otherwise pass a name (`rr unlock mini`) or `--all`.
+- **A `local: true` host runs in your checkout.** It's a host in rotation (locked, selected in order), but it doesn't sync: the run sees your working tree as it is, and its output files land there.
 - **Parallel subtasks on the same host share one remote directory.** Have each write reports to its own path (`reports/unit.xml`, not `reports/junit.xml` for all). Pulled files land locally in `<dest>/<subtask>_<index>/`, named like the subtask's log file (`test:unit` first in the list lands in `test-unit_0/`).
 - **Custom `sync.exclude` replaces the defaults.** Include `.git`, `node_modules`, `.venv` yourself.
 - **Relative paths follow your cwd** for `run`/`exec` (see Where Commands Run). If a path fails, read `details.hint`.
@@ -284,10 +285,10 @@ Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task
 
 ## How It Works
 
-1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred). `--local` skips this and needs no hosts configured
+1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred). A `local: true` host is this machine and needs no SSH. `--local` skips this and needs no hosts configured
 2. **Locking**: Takes a lock on the host; if it's locked, tries the next host
 3. **Requirements**: Verifies required tools exist (if configured)
-4. **File sync**: rsync with exclude/preserve patterns
+4. **File sync**: rsync with exclude/preserve patterns (skipped for a `local: true` host, which runs in the project dir)
 5. **Execution**: Runs the command with configured env and setup commands, then releases the lock
 
 ## Troubleshooting

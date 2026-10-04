@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
@@ -118,6 +120,9 @@ func (c *Collector) CollectStreamingHosts(ctx context.Context, hostList []string
 			if metrics != nil {
 				result.LockInfo = hostLock
 				result.ConnectedVia = c.pool.GetConnectedVia(alias)
+				if c.hosts[alias].Local {
+					result.ConnectedVia = host.LocalAlias
+				}
 			}
 
 			results <- result
@@ -186,6 +191,10 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 	default:
 	}
 
+	if c.hosts[alias].Local {
+		return c.collectLocal(ctx, alias)
+	}
+
 	// Get connection with platform detection
 	client, platform, err := c.pool.GetWithPlatform(alias)
 	if err != nil {
@@ -234,6 +243,33 @@ func (c *Collector) collectOneWithContext(ctx context.Context, alias string) (*H
 		metrics, lockInfo := c.parseOutput(alias, platform, string(r.output))
 		return metrics, lockInfo, probeLatency, nil
 	}
+}
+
+// collectLocal gathers metrics for a host with local: true by running the
+// same commands on this machine. There's no network, so latency is zero.
+func (c *Collector) collectLocal(ctx context.Context, alias string) (*HostMetrics, *HostLockInfo, time.Duration, error) {
+	platform, out, err := c.runLocal(ctx, BuildMetricsCommand)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	metrics, lockInfo := c.parseOutput(alias, platform, out)
+	return metrics, lockInfo, 0, nil
+}
+
+// runLocal detects this machine's platform, then runs the command build
+// returns for it (given the lock dir) and returns its combined output.
+func (c *Collector) runLocal(ctx context.Context, build func(Platform, string) string) (Platform, string, error) {
+	platformOut, err := exec.CommandContext(ctx, "sh", "-c", PlatformDetectCommand()).Output()
+	if err != nil {
+		return PlatformUnknown, "", err
+	}
+	platform := ParsePlatform(strings.TrimSpace(string(platformOut)))
+
+	out, err := exec.CommandContext(ctx, "sh", "-c", build(platform, c.lockDir())).CombinedOutput()
+	if err != nil {
+		return platform, "", err
+	}
+	return platform, string(out), nil
 }
 
 // probeLatency measures the actual SSH round-trip latency using a lightweight command.

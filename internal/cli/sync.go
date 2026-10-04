@@ -102,7 +102,7 @@ func Sync(opts SyncOptions) error {
 		lockCfg = resolved.Project.Lock
 	}
 
-	if lockCfg.Enabled && !opts.DryRun && !opts.SkipLock && !conn.IsLocal {
+	if lockCfg.Enabled && !opts.DryRun && !opts.SkipLock && !conn.InPlace() {
 		locking := startSyncCmdPhase(phaseDisplay, "lock", "Acquiring lock")
 
 		lck, err := lock.Acquire(conn, lockCfg, "sync", lock.WithWarnFunc(lockWarn(conn.Name)))

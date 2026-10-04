@@ -108,6 +108,14 @@ type Connection struct {
 	IsLocal bool              // True when falling back to local execution
 }
 
+// InPlace reports whether commands on this connection run in the local
+// project directory: a local fallback (IsLocal) or a host with local: true.
+// Nothing is synced to, pulled from, or path-rewritten for such a
+// connection. A local host still takes its lock; a fallback doesn't.
+func (c *Connection) InPlace() bool {
+	return c != nil && (c.IsLocal || c.Host.Local)
+}
+
 // Close closes the SSH connection.
 func (c *Connection) Close() error {
 	if c.Client != nil {
@@ -451,6 +459,13 @@ func (s *Selector) selectUnlocked(preferred string) (*Connection, error) {
 		return nil, err
 	}
 
+	if host.Local {
+		conn := NewLocalHostConnection(hostName, host)
+		s.emit(ConnectionEvent{Type: EventConnected, Alias: conn.Alias, Message: "running on this machine"})
+		s.cached = conn
+		return conn, nil
+	}
+
 	if len(host.SSH) == 0 {
 		return nil, errors.New(errors.ErrConfig,
 			fmt.Sprintf("Host '%s' needs at least one SSH connection", hostName),
@@ -530,9 +545,13 @@ func (s *Selector) HostInfo() []HostInfoItem {
 
 	items := make([]HostInfoItem, 0, len(s.hosts))
 	for name := range s.hosts {
+		ssh := s.hosts[name].SSH
+		if s.hosts[name].Local {
+			ssh = []string{LocalAlias}
+		}
 		items = append(items, HostInfoItem{
 			Name: name,
-			SSH:  s.hosts[name].SSH,
+			SSH:  ssh,
 			Dir:  config.ExpandRemote(s.hosts[name].Dir),
 			Tags: s.hosts[name].Tags,
 		})
@@ -585,6 +604,12 @@ func (s *Selector) SelectHost(hostName string) (*Connection, error) {
 		return nil, errors.New(errors.ErrHostNotFound,
 			fmt.Sprintf("Host '%s' doesn't exist", hostName),
 			fmt.Sprintf("Available hosts: %s", s.hostNames()))
+	}
+
+	if host.Local {
+		conn := NewLocalHostConnection(hostName, host)
+		s.emit(ConnectionEvent{Type: EventConnected, Alias: conn.Alias, Message: "running on this machine"})
+		return conn, nil
 	}
 
 	if len(host.SSH) == 0 {

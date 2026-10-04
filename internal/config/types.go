@@ -124,6 +124,12 @@ type Warning struct {
 
 // Host defines a remote machine and its connection settings.
 type Host struct {
+	// Local makes this host the machine rr runs on. A local host is in
+	// rotation like any other (host order, lock, --host, --tag, parallel
+	// workers) but runs commands in the local project directory: nothing is
+	// synced or pulled, and SSH and Dir must be unset.
+	Local bool `yaml:"local,omitempty" mapstructure:"local"`
+
 	// SSH connection strings. All aliases are dialed in parallel and the
 	// earliest-listed alias that connects wins, so list the preferred
 	// route (e.g. LAN) first. Can be: hostname, user@hostname, or SSH
