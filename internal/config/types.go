@@ -124,6 +124,12 @@ type Warning struct {
 
 // Host defines a remote machine and its connection settings.
 type Host struct {
+	// Local makes this host the machine rr runs on. A local host is in
+	// rotation like any other (host order, lock, --host, --tag, parallel
+	// workers) but runs commands in the local project directory: nothing is
+	// synced or pulled, and SSH and Dir must be unset.
+	Local bool `yaml:"local,omitempty" mapstructure:"local"`
+
 	// SSH connection strings. All aliases are dialed in parallel and the
 	// earliest-listed alias that connects wins, so list the preferred
 	// route (e.g. LAN) first. Can be: hostname, user@hostname, or SSH
@@ -141,9 +147,10 @@ type Host struct {
 	Env map[string]string `yaml:"env" mapstructure:"env"`
 
 	// Shell specifies how to invoke the shell for commands.
-	// Default is "${SHELL:-/bin/bash} -c". Commands are always prefixed
-	// with sourcing ~/.bashrc and ~/.zshrc (when present) so PATH setup
-	// from tools like nvm or pyenv is available, whatever shell is used.
+	// Default is "${SHELL:-/bin/bash} -c". On a remote host commands are
+	// prefixed with sourcing ~/.bashrc and ~/.zshrc (when present) so PATH
+	// setup from tools like nvm or pyenv is available, whatever shell is
+	// used. A local host skips that and keeps rr's own environment.
 	// Format: "<shell> <flags> <command-flag>" where the command will be appended.
 	Shell string `yaml:"shell,omitempty" mapstructure:"shell"`
 

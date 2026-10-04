@@ -1575,3 +1575,18 @@ func TestStreamPipes_ReadsBothPipesToEOF(t *testing.T) {
 	assert.Equal(t, strings.Join(stdoutLines, "\n")+"\n", out.String())
 	assert.Equal(t, strings.Join(stderrLines, "\n")+"\n", errOut.String())
 }
+
+// A host with local: true runs in the project directory, so there's nothing
+// to sync to it.
+func TestSync_SkipsForLocalHost(t *testing.T) {
+	conn := &host.Connection{
+		Name:   "dev",
+		Alias:  "local",
+		Client: host.NewLocalClient(),
+		Host:   config.Host{Local: true, Dir: t.TempDir()},
+	}
+	err := Sync(conn, "/some/path/that/does/not/exist", config.SyncConfig{
+		Invalidations: []config.LockfileInvalidation{{Lockfile: "bun.lock", Dirs: []string{"node_modules/"}}},
+	}, nil)
+	assert.NoError(t, err)
+}

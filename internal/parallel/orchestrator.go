@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/lock"
 )
 
 // Orchestrator coordinates parallel task execution across multiple hosts.
@@ -729,13 +731,52 @@ func (o *Orchestrator) getSlowHostDelay(hostName string) time.Duration {
 	return time.Duration(float64(o.fastestFirstTask) * delayFactor)
 }
 
+// lockLocalMachine takes the lock of the global config's local host, or
+// returns nil when there's no local host or locking is off.
+func (o *Orchestrator) lockLocalMachine() (*lock.Lock, error) {
+	if o.resolved == nil || o.resolved.Global == nil {
+		return nil, nil
+	}
+	conn := host.LocalMachineConnection(o.resolved.Global.Hosts)
+	if conn == nil {
+		return nil, nil
+	}
+	lockCfg := config.DefaultConfig().Lock
+	if o.resolved.Project != nil {
+		lockCfg = o.resolved.Project.Lock
+	}
+	if !lockCfg.Enabled {
+		return nil, nil
+	}
+	var opts []lock.AcquireOption
+	if onWarn := o.config.OnLockWarn; onWarn != nil {
+		opts = append(opts, lock.WithWarnFunc(func(msg string) { onWarn(conn.Name, msg) }))
+	}
+	machineLock, err := lock.Acquire(conn, lockCfg, "parallel tasks (local)", opts...)
+	if err != nil {
+		return nil, err
+	}
+	machineLock.StartHeartbeat()
+	return machineLock, nil
+}
+
 // GetOutputManager returns the output manager for external access.
 func (o *Orchestrator) GetOutputManager() *OutputManager {
 	return o.outputMgr
 }
 
-// runLocal executes tasks locally (sequentially) when no remote hosts are configured.
+// runLocal executes tasks locally (sequentially) when no remote hosts are
+// configured. When the global config has a local host, it holds that host's
+// lock for the run, so it can't run beside a job on it.
 func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
+	machineLock, err := o.lockLocalMachine()
+	if err != nil {
+		return nil, err
+	}
+	if machineLock != nil {
+		defer machineLock.Release() //nolint:errcheck // Lock release errors are non-fatal
+	}
+
 	// Determine TTY status for output manager
 	isTTY := isTerminal()
 

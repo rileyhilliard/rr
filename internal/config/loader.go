@@ -414,10 +414,27 @@ func ResolveHosts(resolved *ResolvedConfig, preferred string) ([]string, map[str
 				"Host '"+name+"' not found in global config",
 				"Available hosts: "+util.JoinOrNone(available)+". Check ~/.rr/config.yaml.")
 		}
+		if host.Local {
+			host.Dir = localHostDir(resolved)
+		}
 		hosts[name] = host
 	}
 
 	return hostNames, hosts, nil
+}
+
+// localHostDir is where a local host runs: the project root, or the current
+// directory when there's no project config (the same choice the workflow
+// makes for its sync root). Commands cd into it like a remote host's dir.
+func localHostDir(resolved *ResolvedConfig) string {
+	if resolved.ProjectRoot != "" {
+		return resolved.ProjectRoot
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
 }
 
 // ProjectLocalMode reports whether the project runs locally by design: the

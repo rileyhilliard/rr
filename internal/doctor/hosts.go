@@ -54,6 +54,16 @@ func (c *HostConnectivityCheck) Run() CheckResult {
 
 // probe checks every alias and grades this host on its own.
 func (c *HostConnectivityCheck) probe() CheckResult {
+	if c.HostConfig.Local {
+		// Nothing to dial: a local host is the machine doctor runs on.
+		c.Results = []host.ProbeResult{{SSHAlias: host.LocalAlias, Success: true}}
+		return CheckResult{
+			Name:    c.Name(),
+			Status:  StatusPass,
+			Message: fmt.Sprintf("%s (local: this machine)", c.HostName),
+		}
+	}
+
 	if len(c.HostConfig.SSH) == 0 {
 		return CheckResult{
 			Name:       c.Name(),

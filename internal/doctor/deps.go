@@ -149,6 +149,9 @@ func NewDepsChecks() []Check {
 
 // NewRemoteDepsChecks creates dependency checks for a specific remote host.
 func NewRemoteDepsChecks(hostName string, conn *host.Connection) []Check {
+	if conn != nil && conn.Host.Local {
+		return nil // nothing is synced to a local host, so it doesn't need rsync
+	}
 	return []Check{
 		&RsyncRemoteCheck{
 			HostName: hostName,

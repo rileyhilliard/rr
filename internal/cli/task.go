@@ -124,7 +124,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// execution cds into the remote project dir, so relative paths resolve
 	// there. Remaining local-only paths get a warning.
 	taskArgs := opts.Args
-	if !wf.Conn.IsLocal && len(taskArgs) > 0 && config.ResolveRewritePaths(wf.Resolved) {
+	if !wf.Conn.InPlace() && len(taskArgs) > 0 && config.ResolveRewritePaths(wf.Resolved) {
 		rewritten, n := RewriteArgsToRelative(taskArgs, wf.WorkDir)
 		if n > 0 {
 			taskArgs = rewritten
@@ -201,7 +201,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Post-failure hint: detect local-machine assumptions (paths that only
 	// exist here, git commands against the synced snapshot).
 	failureHint := ""
-	if result.ExitCode != 0 && !wf.Conn.IsLocal {
+	if result.ExitCode != 0 && !wf.Conn.InPlace() {
 		failureHint = buildFailureHint(command, streamHandler.GetStderrCapture(), wf.WorkDir, remoteDir, wf.Conn.Name)
 		if failureHint != "" {
 			wf.AddResultDetail("hint", failureHint)

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Local host (`local: true`)** - A host entry can now be the machine rr runs on, in rotation with the remote hosts instead of only as a fallback. Give it `local: true` and no `ssh` or `dir`. It's tried in host order, takes the same lock as any host (at `<lock.dir>/rr.lock` on this machine), gets a worker in parallel tasks, and works with `--host`, `--tag`, `rr status` (JSON lists it under `project.in_place_hosts`), `rr doctor` (including `--path` and `--requirements`), `rr monitor`, `rr unlock`, and `rr provision`. Commands get its `setup_commands`, `shell`, and `require` checks like a remote host, and tasks also get its `env`. Commands start in the home directory like an SSH session, and don't re-source `~/.bashrc`/`~/.zshrc`, so an activated virtualenv or `nvm use` stays in effect. It runs in place in the local project directory: nothing is synced or path-rewritten, the sync phase is skipped with `reason: in_place`, `rr prune` reports it skipped, and output files land in the checkout. `pull:` and `--pull` copy from the project directory to the destination, or report the pull skipped (`reason: same_dir`) when the destination is the project directory. `rr sync` and `rr pull` never pick it, and naming it with `--host` is a config error. Only one host can be local, and `local: true` with `ssh` or `dir` fails validation. A project with no `hosts:` list uses every global host, so adding a local host puts this machine in the rotation of every such project.
+- **Runs on this machine take the local host's lock** - With a local host configured, `--local`, local mode, `local_fallback` runs, and parallel tasks run with `--local` take its lock, waiting up to `lock.timeout`, so they can't run beside a job on it. When every host is locked and the local host is busy, rr waits for a host and then fails instead of falling back locally, even with `local_fallback: always`, including when `hosts:` or `--tag` left the local host out of the run.
+
+### Changed
+
+- **Pulls after local runs copy the files** - `pull:` and `--pull` used to do nothing after a `--local` or `local_fallback` run. They now copy from the project directory to the destination, the same as after a run on a local host, and report the pull phase skipped (`reason: same_dir`) when the destination is the project directory. Parallel subtasks run with `--local` get their own `<dest>/<name>_<index>/` copy.
+
+### Fixed
+
+- **`rr monitor` on a Mac took seconds per host** - `netstat -ib` resolved every interface address to a host name, which took about 5 seconds per call on some networks, and a snapshot calls it twice. The metrics command now uses `netstat -ibn`. The parsed counters are unchanged.
+
 ## [0.28.0] - 2026-09-28
 
 ### Changed

@@ -6,6 +6,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -633,4 +634,27 @@ func (h *recordingStepHandler) OnStepStart(int, int, config.TaskStep) {}
 
 func (h *recordingStepHandler) OnStepComplete(_, _ int, _ config.TaskStep, _ time.Duration, exitCode int) {
 	h.completed = append(h.completed, exitCode)
+}
+
+// A local host runs in rr's own environment, which already has whatever the
+// user's shell set up (an activated venv, `nvm use`). Sourcing rc files again
+// would undo that, so a local host's command doesn't.
+func TestBuildRemoteCommand_LocalHostKeepsEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell")
+	}
+	home := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export RR_TEST_TOOL=from-rc\n"), 0o600))
+	t.Setenv("HOME", home)
+	t.Setenv("RR_TEST_TOOL", "from-session")
+
+	run := func(h *config.Host) string {
+		out, err := osexec.Command("sh", "-c", BuildRemoteCommand(`echo "$RR_TEST_TOOL"`, h)).Output()
+		require.NoError(t, err)
+		return strings.TrimSpace(string(out))
+	}
+
+	assert.Equal(t, "from-session", run(&config.Host{Local: true, Shell: "sh"}))
+	assert.Equal(t, "from-rc", run(&config.Host{SSH: []string{"box"}, Shell: "sh"}),
+		"a remote host still sources rc files, since sshd doesn't")
 }

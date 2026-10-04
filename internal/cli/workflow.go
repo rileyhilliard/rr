@@ -423,6 +423,11 @@ func syncPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		reporter.PhaseSkipped("sync", "local")
 		return nil
 	}
+	if ctx.Conn.InPlace() {
+		// A local host: it runs in the project dir, so there's nothing to sync.
+		reporter.PhaseSkipped("sync", "in_place")
+		return nil
+	}
 	if opts.SkipSync {
 		reporter.PhaseSkipped("sync", "skipped")
 		return nil
@@ -577,15 +582,30 @@ func syncQuiet(ctx *WorkflowContext, syncStart time.Time) error {
 	return nil
 }
 
-// lockPhase handles the lock acquisition phase of the workflow.
+// lockPhase handles the lock acquisition phase of the workflow. A run that
+// executes on this machine without a host (--local, local mode, a local
+// fallback) takes the lock of the global config's local host when there is
+// one, so it can't run beside a job on that host; with no local host it
+// takes no lock.
 func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	lockCfg := config.DefaultConfig().Lock
 	if ctx.Resolved.Project != nil {
 		lockCfg = ctx.Resolved.Project.Lock
 	}
 
-	if !lockCfg.Enabled || opts.SkipLock || ctx.Conn.IsLocal {
+	if !lockCfg.Enabled || opts.SkipLock {
 		return nil
+	}
+
+	lockConn := ctx.Conn
+	if ctx.Conn.IsLocal {
+		if ctx.Resolved.Global == nil {
+			return nil
+		}
+		lockConn = host.LocalMachineConnection(ctx.Resolved.Global.Hosts)
+		if lockConn == nil {
+			return nil
+		}
 	}
 
 	lockStart := time.Now()
@@ -595,7 +615,7 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 		lockSpinner.Start()
 
 		var err error
-		ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(ctx.Conn.Name)))
+		ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(lockConn.Name)))
 		if err != nil {
 			lockSpinner.Fail()
 			return err
@@ -611,22 +631,23 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter.PhaseStart("lock")
 
 	var err error
-	ctx.Lock, err = lock.Acquire(ctx.Conn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(ctx.Conn.Name)))
+	ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(lockConn.Name)))
 	if err != nil {
 		reporter.PhaseFailed("lock", err)
 		return err
 	}
 
 	ctx.Lock.StartHeartbeat()
-	reporter.PhaseComplete("lock", ctx.Conn.Name, time.Since(lockStart))
+	reporter.PhaseComplete("lock", lockConn.Name, time.Since(lockStart))
 	return nil
 }
 
 // SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
 // Returns a WorkflowContext that the caller uses for execution, and must Close() when done.
 //
-// A local target (--local or local mode) dials nothing, takes no lock, and
-// skips sync.
+// A local target (--local or local mode) dials nothing and skips sync. It
+// takes the lock of the global config's local host, if there is one, as a
+// local fallback does.
 // When multiple hosts are configured, this function implements load balancing
 // (see findAvailableHost):
 //  1. Try each host with non-blocking lock acquisition
@@ -662,6 +683,10 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
+		if err := lockPhase(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 	} else if err := connectRemote(ctx, opts); err != nil {
 		ctx.Close()
 		return nil, err
@@ -689,7 +714,14 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 	setupHostSelector(ctx, opts)
 
 	if ctx.selector.HostCount() > 1 && opts.Host == "" && opts.Tag == "" {
-		return setupWorkflowLoadBalanced(ctx, opts)
+		if err := setupWorkflowLoadBalanced(ctx, opts); err != nil {
+			return err
+		}
+		// A fallback runs on this machine; take its local host's lock.
+		if ctx.Conn.IsLocal {
+			return lockPhase(ctx, opts)
+		}
+		return nil
 	}
 
 	// Phase 1: Connect
@@ -703,8 +735,12 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 // ExecutePullPhase downloads files from remote after command execution.
 // Pull happens regardless of command exit code - often you want test artifacts on failure.
 // Errors are logged but don't fail the overall workflow.
+//
+// A run that ran in place (a local host, --local, a fallback) left its files
+// in the project dir; they're copied from there to the dest, and the phase
+// is reported skipped when the dest is the project dir itself.
 func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest string) {
-	if len(pullItems) == 0 || wf.Conn == nil || wf.Conn.IsLocal {
+	if len(pullItems) == 0 || wf.Conn == nil {
 		return
 	}
 
@@ -713,9 +749,48 @@ func ExecutePullPhase(wf *WorkflowContext, pullItems []config.PullItem, dest str
 		Patterns:    pullItems,
 		DefaultDest: dest,
 	}
-	if pullAndReport(wf.Conn, pullOpts, rrsync.Pull, "") && PrettyMode() {
+	pull := rrsync.Pull
+	if wf.Conn.InPlace() {
+		if !rrsync.InPlaceCopyNeeded(wf.WorkDir, pullOpts) {
+			reportPullSkipped(wf.Conn, "")
+			return
+		}
+		pull = inPlacePull(wf.WorkDir)
+	}
+	if pullAndReport(wf.Conn, pullOpts, pull, "") && PrettyMode() {
 		wf.PhaseDisplay.RenderSuccess("Files pulled", time.Since(pullStart))
 	}
+}
+
+// inPlacePull returns a pullFunc that copies from srcDir on this machine,
+// for a command that ran in place there.
+func inPlacePull(srcDir string) pullFunc {
+	return func(_ *host.Connection, opts rrsync.PullOptions, progress io.Writer) error {
+		_, err := rrsync.PullInPlace(srcDir, opts, progress)
+		return err
+	}
+}
+
+// pullSkippedReason is the reason a pull phase that copied nothing reports:
+// the command ran in place and the dest is the dir it ran in.
+const pullSkippedReason = "same_dir"
+
+// reportPullSkipped reports a pull phase with nothing to copy. task names
+// the parallel subtask, empty for a single run.
+func reportPullSkipped(conn *host.Connection, task string) {
+	if PrettyMode() {
+		label := "pull"
+		if task != "" {
+			label = fmt.Sprintf("pull %s (%s)", task, conn.Name)
+		}
+		ui.NewPhaseDisplay(os.Stdout).RenderSkipped(label, "files are already in the project dir")
+		return
+	}
+	details := map[string]interface{}{"reason": pullSkippedReason}
+	if task != "" {
+		details["task"] = task
+	}
+	WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "pull", Status: "skipped", Host: conn.Name, Details: details})
 }
 
 // pullFunc matches rrsync.Pull; tests swap in a fake.

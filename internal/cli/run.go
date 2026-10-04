@@ -151,7 +151,7 @@ func Run(opts RunOptions) (int, error) {
 	failureHint := ""
 	if exitCode != 0 {
 		stderr := streamHandler.GetStderrCapture()
-		if !wf.Conn.IsLocal {
+		if !wf.Conn.InPlace() {
 			failureHint = buildFailureHint(opts.Command, stderr, wf.WorkDir, remoteProjectDir, wf.Conn.Name)
 		}
 		// A relative path that resolves from the caller's directory but not
@@ -194,7 +194,7 @@ func Run(opts RunOptions) (int, error) {
 	if failureHint != "" {
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(ui.ColorMuted).Render(failureHint))
 	} else if exitCode != 0 && !failureExplained {
-		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name)
+		renderFailureHelp(exitCode, opts.Command, wf.Conn.Name, wf.Conn.Host.Local)
 	}
 
 	printLogTail(logPath, opts.Tail)
@@ -212,7 +212,7 @@ func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *outp
 	}
 
 	var sshClient exec.SSHExecer
-	if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+	if !wf.Conn.InPlace() && wf.Conn.Client != nil {
 		sshClient = wf.Conn.Client
 	}
 
@@ -222,7 +222,7 @@ func explainRunFailure(wf *WorkflowContext, opts RunOptions, streamHandler *outp
 		fmt.Printf("%s %s\n\n", ui.SymbolFail, missingTool.Error())
 		fmt.Println(missingTool.Suggestion)
 
-		if !wf.Conn.IsLocal && wf.Conn.Client != nil {
+		if !wf.Conn.InPlace() && wf.Conn.Client != nil {
 			configPath, _ := config.Find(Config())
 			if configPath != "" {
 				fixResult, _ := HandleMissingTool(missingTool, wf.Conn.Client, configPath)
@@ -245,8 +245,9 @@ func buildRemoteRunCommand(wf *WorkflowContext, opts RunOptions, remoteProjectDi
 	cmd := opts.Command
 
 	// Rewrite local absolute paths to their remote equivalents so commands
-	// authored against the local checkout work on the mirror.
-	if config.ResolveRewritePaths(wf.Resolved) {
+	// authored against the local checkout work on the mirror. A local host
+	// runs in the checkout itself, so its paths are already right.
+	if config.ResolveRewritePaths(wf.Resolved) && !wf.Conn.InPlace() {
 		rewritten, n := RewriteLocalPaths(cmd, wf.WorkDir, remoteProjectDir)
 		if n > 0 {
 			cmd = rewritten
@@ -451,7 +452,8 @@ func renderFinalStatus(_ *ui.PhaseDisplay, exitCode int, totalTime, execTime tim
 
 // renderFailureHelp displays contextual help for command failures.
 // This is shown when the failure wasn't already explained (e.g., missing tool).
-func renderFailureHelp(exitCode int, command, host string) {
+// localHost is true for a host with local: true, which has no SSH to suggest.
+func renderFailureHelp(exitCode int, command, host string, localHost bool) {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 
 	var hint string
@@ -488,7 +490,9 @@ func renderFailureHelp(exitCode int, command, host string) {
 	// Always show recovery suggestions for non-trivial failures
 	if exitCode != 130 && exitCode != 143 { // Skip for user interrupts
 		fmt.Printf("\n%s\n", mutedStyle.Render("Troubleshooting:"))
-		fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
+		if !localHost {
+			fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
+		}
 		fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))
 		fmt.Printf("%s\n", mutedStyle.Render("  - Run 'rr doctor' to verify configuration"))
 	}

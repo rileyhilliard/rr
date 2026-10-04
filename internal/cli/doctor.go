@@ -220,6 +220,10 @@ func connectDoctorHosts(hostNames []string, hosts map[string]config.Host, dial h
 		go func(i int, name string) {
 			defer wg.Done()
 			hostCfg := hosts[name]
+			if hostCfg.Local {
+				conns[i] = host.NewLocalHostConnection(name, hostCfg)
+				return
+			}
 			result, err := host.DialAliases(name, hostCfg.SSH, host.DialOptions{Dial: dial})
 			if err != nil {
 				errs[i] = err

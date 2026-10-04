@@ -1071,7 +1071,7 @@ Locking happens before sync so a run never rewrites files under another run's co
 
 ### Host Selection Flow
 
-The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`):
+The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`). A host with `local: true` skips the dial: its connection carries a `LocalClient` (`internal/host/local.go`), which implements `sshutil.SSHClient` by running commands under the local shell, so the lock, requirement checks, command building and parallel workers treat it like any remote host. `Connection.InPlace()` (a local host or a local fallback) is what sync, prune and path rewriting check to skip themselves, and what switches pulls to a local copy; `config.ResolveHosts` sets a local host's `dir` to the project root. Runs that execute here without the local host (`--local`, local mode, a fallback) take its lock through `host.LocalMachineConnection`, and `findAvailableHost` won't fall back while it's locked.
 
 ```mermaid
 flowchart TB
@@ -1173,7 +1173,7 @@ stateDiagram-v2
 
 **Worktree isolation** (`internal/config/expand.go`): in a linked git worktree, `${PROJECT}` expands to `<repo>@<worktree>` so each worktree syncs to its own remote dir instead of clobbering the main checkout. `sync.worktree_isolation: false` turns this off. `rr status` shows the remote dir per host, `rr doctor` warns when a worktree shares the main checkout's dir, and `rr prune [--dry-run] [--host]` cleans hosts that haven't been synced to since a worktree was removed.
 
-**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run. In a parallel run, `pullSubtaskFiles` (`internal/cli/parallel.go`) pulls each subtask's files after the whole run finishes, one subtask at a time, from the host and alias the subtask used, into `<dest>/<stem>/`, where `<stem>` is the subtask's log file name without `.log` (`logs.TaskLogPath`), so every pull directory is unique. It emits `pull` phase events with `details.task`, and skips local subtasks and Ctrl+C.
+**Pull** (`internal/sync/pull.go`): `rr pull <patterns>`, `--pull` on run/exec, and a task's `pull:` list rsync files back from the remote project dir. Globs expand on the remote. Pulls after a command run whether it passed or failed, and a pull failure is reported without failing the run. In a parallel run, `pullSubtaskFiles` (`internal/cli/parallel.go`) pulls each subtask's files after the whole run finishes, one subtask at a time, from the host and alias the subtask used, into `<dest>/<stem>/`, where `<stem>` is the subtask's log file name without `.log` (`logs.TaskLogPath`), so every pull directory is unique. It emits `pull` phase events with `details.task`, and skips Ctrl+C. A run or subtask that ran in place (a local host, `--local`, a fallback) has its files on this machine already: `PullInPlace` (`internal/sync/pull_inplace.go`) copies them from the project dir with a local rsync, and a pull whose dest is the project dir is reported `skipped` with `reason: same_dir`.
 
 ### Tasks and Dependencies
 
@@ -1682,7 +1682,7 @@ flowchart TB
 
 The design problem is that CPU percent, per-core usage, disk I/O and network throughput are all *rates*, computed from the delta between two counter readings. The dashboard gets its second reading for free on the next tick. A one-shot run has no next tick, so a naive snapshot reports zeros.
 
-`BuildSnapshotCommand` solves this without a second round trip: it emits a priming read of the delta sources, sleeps 1s on the remote, then emits exactly the sections `BuildMetricsCommand` produces. The parsers apply unchanged after dropping the prime prefix. Linux primes `/proc/stat`, `/proc/net/dev` and `/proc/diskstats`; macOS only primes `netstat -ib`, since `top -l 1` is not delta-based. Snapshot mode uses the same two-session shape as a tick (latency probe plus the batched command); the remote sleep is what buys the second sample, so the per-host timeout is extended by it.
+`BuildSnapshotCommand` solves this without a second round trip: it emits a priming read of the delta sources, sleeps 1s on the remote, then emits exactly the sections `BuildMetricsCommand` produces. The parsers apply unchanged after dropping the prime prefix. Linux primes `/proc/stat`, `/proc/net/dev` and `/proc/diskstats`; macOS only primes `netstat -ibn`, since `top -l 1` is not delta-based. Snapshot mode uses the same two-session shape as a tick (latency probe plus the batched command); the remote sleep is what buys the second sample, so the per-host timeout is extended by it.
 
 Output is a human-readable table by default (HOST, STATUS, CPU, RAM, GPU, DISK, LATENCY, LOCK) and a snake_case JSON document with `--json`. The command exits non-zero only when *every* host failed: a partially reachable fleet is still a useful answer.
 
@@ -1749,7 +1749,7 @@ The severity ramp is deliberately *not* the CLI's green/amber/red. Success/warni
 | CPU cores | `/proc/stat` cpu lines | `sysctl -n hw.ncpu` | |
 | RAM used/total | `/proc/meminfo` | `vm_stat` + `sysctl hw.memsize` | |
 | GPU | `nvidia-smi --query-gpu=...` | `ioreg -r -c AGXAccelerator` | Absent GPU tooling fails silently; the section is skipped |
-| Network throughput | `/proc/net/dev` delta | `netstat -ib` delta | Aggregated across non-loopback interfaces |
+| Network throughput | `/proc/net/dev` delta | `netstat -ibn` delta | Aggregated across non-loopback interfaces |
 | Disk usage | `df -P -k /` | `df -P -k /` | Root filesystem only |
 | Disk I/O rates | `/proc/diskstats` delta | not collected | |
 | Processes | `ps aux --sort=-%cpu` | `ps aux -r` | Top 16 collected; cards show 1-3, detail shows 10 |

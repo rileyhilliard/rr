@@ -52,7 +52,7 @@ func buildSSHCmd() string {
 // Sync transfers files from localDir to the remote host using rsync.
 // Progress output is streamed to the progress writer if provided.
 //
-// If conn.IsLocal is true, sync is skipped entirely since we're already local.
+// If conn.InPlace() (local fallback or a local host), sync is skipped entirely.
 //
 // The rsync command follows the pattern from proof-of-concept.sh:
 // - Base flags: -az --delete --force
@@ -71,8 +71,9 @@ func Sync(conn *host.Connection, localDir string, cfg config.SyncConfig, progres
 // the callbacks on opts; see SyncOptions for the nil defaults and for what
 // DryRun skips.
 func SyncWithOptions(conn *host.Connection, localDir string, cfg config.SyncConfig, progress io.Writer, opts *SyncOptions) error {
-	// Skip sync for local connections - we're already working with local files
-	if conn != nil && conn.IsLocal {
+	// Skip sync for connections that run in the local project dir (local
+	// fallback or a local host) - we're already working with local files
+	if conn.InPlace() {
 		return nil
 	}
 	if opts == nil {
@@ -632,7 +633,7 @@ type InvalidationNotifyFunc func(dir, lockfile string)
 //
 // SyncWithOptions calls this before rsync.
 func invalidateStaleDirectories(conn *host.Connection, localDir string, invalidations []config.LockfileInvalidation, notify InvalidationNotifyFunc, dryRun bool) error {
-	if conn == nil || conn.IsLocal || conn.Client == nil || len(invalidations) == 0 {
+	if conn == nil || conn.InPlace() || conn.Client == nil || len(invalidations) == 0 {
 		return nil
 	}
 

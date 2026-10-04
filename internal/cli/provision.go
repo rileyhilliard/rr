@@ -13,6 +13,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/require"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
@@ -166,6 +167,9 @@ func checkHosts(hostNames []string, hosts map[string]config.Host, projectReqs []
 		// Try to connect
 		var client sshutil.SSHClient
 		var connErr error
+		if hostCfg.Local {
+			client = host.NewLocalClient()
+		}
 		for _, sshAlias := range hostCfg.SSH {
 			client, connErr = sshutil.Dial(sshAlias, 10*time.Second)
 			if connErr == nil {
