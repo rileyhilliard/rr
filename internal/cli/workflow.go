@@ -608,19 +608,27 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	}
 
 	lockStart := time.Now()
+	acquireOpts := []lock.AcquireOption{
+		lock.WithContext(ctx.Context()),
+		lock.WithWarnFunc(lockWarn(lockConn.Name)),
+	}
 
 	if PrettyMode() {
 		lockSpinner := ui.NewSpinner("Acquiring lock")
 		lockSpinner.Start()
 
 		var err error
-		ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(lockConn.Name)))
+		ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, append(acquireOpts,
+			lock.WithWaitFunc(func(holder *lock.LockInfo) {
+				lockSpinner.SetLabel(lockWaitMessage(lockConn.Name, holder, lockCfg.Timeout))
+			}))...)
 		if err != nil {
 			lockSpinner.Fail()
 			return err
 		}
 
 		ctx.Lock.StartHeartbeat()
+		recordLocalJob(ctx, lockConn)
 		lockSpinner.Success()
 		ctx.PhaseDisplay.RenderSuccess("Lock acquired", time.Since(lockStart))
 		return nil
@@ -630,15 +638,57 @@ func lockPhase(ctx *WorkflowContext, opts WorkflowOptions) error {
 	reporter.PhaseStart("lock")
 
 	var err error
-	ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, lock.WithWarnFunc(lockWarn(lockConn.Name)))
+	ctx.Lock, err = lock.Acquire(lockConn, lockCfg, opts.Command, append(acquireOpts,
+		lock.WithWaitFunc(func(holder *lock.LockInfo) {
+			WritePhaseEvent(PhaseEvent{
+				Type:   "phase",
+				Phase:  "lock",
+				Status: "waiting",
+				Host:   lockConn.Name,
+				Details: map[string]interface{}{
+					"message":        lockWaitMessage(lockConn.Name, holder, lockCfg.Timeout),
+					"holders":        holderDetails([]hostAttempt{{hostName: lockConn.Name, lockInfo: holder}}),
+					"wait_timeout_s": lockCfg.Timeout.Seconds(),
+				},
+			})
+		}))...)
 	if err != nil {
 		reporter.PhaseFailed("lock", err)
 		return err
 	}
 
 	ctx.Lock.StartHeartbeat()
+	recordLocalJob(ctx, lockConn)
 	reporter.PhaseComplete("lock", lockConn.Name, time.Since(lockStart))
 	return nil
+}
+
+// lockWaitMessage says whose lock on hostName a run is waiting for, and for
+// how long it will wait.
+func lockWaitMessage(hostName string, holder *lock.LockInfo, timeout time.Duration) string {
+	desc := "holder unknown"
+	if holder != nil {
+		desc = holder.Describe()
+	}
+	return fmt.Sprintf("Waiting up to %s for the lock on %s: %s", timeout, hostName, desc)
+}
+
+// recordLocalJob makes a local host record the process group of the job it
+// starts in the lock just taken. The job runs in its own session, so if rr is
+// killed it keeps running; with its group in the lock, the next run waits for
+// it instead of taking the lock from the dead rr. Remote hosts, and runs that
+// only borrow the local host's lock (--local, a fallback), don't need it.
+func recordLocalJob(ctx *WorkflowContext, lockConn *host.Connection) {
+	client, ok := ctx.Conn.Client.(*host.LocalClient)
+	if !ok || lockConn != ctx.Conn || ctx.Lock == nil {
+		return
+	}
+	lck, warn := ctx.Lock, lockWarn(lockConn.Name)
+	client.SetOnStart(func(pgid int) {
+		if err := lck.SetJobPGID(pgid); err != nil {
+			warn(fmt.Sprintf("Warning: couldn't record the job in the lock on %s (%v); if rr is killed, another run may start before the job stops", lockConn.Name, err))
+		}
+	})
 }
 
 // SetupWorkflow performs the common workflow phases: load config, connect, lock, and sync.
@@ -720,6 +770,7 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 		if ctx.Conn.IsLocal {
 			return lockPhase(ctx, opts)
 		}
+		recordLocalJob(ctx, ctx.Conn)
 		return nil
 	}
 

@@ -198,7 +198,7 @@ func (w *hostWorker) ensureConnection(_ context.Context) error {
 // ensureSync syncs files to the host and acquires a lock if not already done.
 // The lock is held for the lifetime of the worker to prevent conflicts with
 // other rr processes while parallel tasks are running on this host.
-func (w *hostWorker) ensureSync(_ context.Context) error {
+func (w *hostWorker) ensureSync(ctx context.Context) error {
 	// Check if already synced (and locked)
 	if w.orchestrator.markHostSynced(w.hostName) {
 		return nil
@@ -229,7 +229,7 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 
 	if lockCfg.Enabled && w.conn != nil {
 		// Acquire lock with placeholder - UpdateCommand is called per-task with actual task name
-		var lockOpts []lock.AcquireOption
+		lockOpts := []lock.AcquireOption{lock.WithContext(ctx)}
 		if onWarn := w.orchestrator.config.OnLockWarn; onWarn != nil {
 			lockOpts = append(lockOpts, lock.WithWarnFunc(func(msg string) { onWarn(w.hostName, msg) }))
 		}
@@ -239,6 +239,7 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 		}
 		hostLock.StartHeartbeat()
 		w.hostLock = hostLock
+		w.recordLocalJobs(hostLock)
 	}
 
 	// Get sync config
@@ -251,6 +252,22 @@ func (w *hostWorker) ensureSync(_ context.Context) error {
 	// and prune callbacks, so a parallel sync reports the same notices as a
 	// single run.
 	return rrsync.SyncWithOptions(w.conn, workDir, syncCfg, nil, w.syncOptions())
+}
+
+// recordLocalJobs makes a local host record the process group of each task it
+// starts in hostLock, so a task left running by a killed rr keeps the host
+// locked until it stops (see lock.LockInfo.IsDeadLocalHolder).
+func (w *hostWorker) recordLocalJobs(hostLock *lock.Lock) {
+	client, ok := w.conn.Client.(*host.LocalClient)
+	if !ok {
+		return
+	}
+	onWarn := w.orchestrator.config.OnLockWarn
+	client.SetOnStart(func(pgid int) {
+		if err := hostLock.SetJobPGID(pgid); err != nil && onWarn != nil {
+			onWarn(w.hostName, fmt.Sprintf("Warning: couldn't record the task in the lock on %s (%v); if rr is killed, another run may start before the task stops", w.hostName, err))
+		}
+	})
 }
 
 // syncOptions returns the caller-supplied sync options for this host, or nil

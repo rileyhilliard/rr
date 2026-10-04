@@ -733,7 +733,7 @@ func (o *Orchestrator) getSlowHostDelay(hostName string) time.Duration {
 
 // lockLocalMachine takes the lock of the global config's local host, or
 // returns nil when there's no local host or locking is off.
-func (o *Orchestrator) lockLocalMachine() (*lock.Lock, error) {
+func (o *Orchestrator) lockLocalMachine(ctx context.Context) (*lock.Lock, error) {
 	if o.resolved == nil || o.resolved.Global == nil {
 		return nil, nil
 	}
@@ -748,7 +748,7 @@ func (o *Orchestrator) lockLocalMachine() (*lock.Lock, error) {
 	if !lockCfg.Enabled {
 		return nil, nil
 	}
-	var opts []lock.AcquireOption
+	opts := []lock.AcquireOption{lock.WithContext(ctx)}
 	if onWarn := o.config.OnLockWarn; onWarn != nil {
 		opts = append(opts, lock.WithWarnFunc(func(msg string) { onWarn(conn.Name, msg) }))
 	}
@@ -769,7 +769,7 @@ func (o *Orchestrator) GetOutputManager() *OutputManager {
 // configured. When the global config has a local host, it holds that host's
 // lock for the run, so it can't run beside a job on it.
 func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
-	machineLock, err := o.lockLocalMachine()
+	machineLock, err := o.lockLocalMachine(ctx)
 	if err != nil {
 		return nil, err
 	}
