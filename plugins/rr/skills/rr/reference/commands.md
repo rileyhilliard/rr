@@ -181,6 +181,8 @@ rr monitor --once          # One snapshot as a table, no TUI
 rr monitor --once --json   # One snapshot as JSON (for scripts and agents)
 ```
 
+Without `--hosts` it shows the project's hosts. `--hosts` can name any configured host, including one the project's `hosts:` list leaves out (often the local host), and an unknown name fails with `HOST_NOT_FOUND`.
+
 **Keyboard shortcuts:**
 - `q` / `Ctrl+C` - Quit
 - `r` - Force refresh

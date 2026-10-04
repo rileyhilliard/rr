@@ -1203,7 +1203,7 @@ monitor:
     - staging-server
 ```
 
-Excluded hosts stay fully usable for `rr run`, `rr exec` and `rr sync`. Exclusion applies after `--hosts` filtering, and `--hosts` wins, so you can still pull up an excluded host on demand:
+Excluded hosts stay fully usable for `rr run`, `rr exec` and `rr sync`. Exclusion applies after `--hosts` filtering, and `--hosts` wins, so you can still pull up an excluded host on demand. `--hosts` can also name a global host the project's `hosts:` list leaves out, such as the local host:
 
 ```bash
 rr monitor                          # staging-server hidden
