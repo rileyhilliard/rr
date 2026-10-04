@@ -194,7 +194,10 @@ func parseGlobalConfig(raw map[string]interface{}, path string) (*GlobalConfig, 
 // 2. .rr.yaml in current directory
 // 3. .rr.yaml in parent directories (stops at git root or home)
 //
-// Returns the path to the config file, or empty string if not found.
+// Returns the path to the config file, or empty string if not found. When
+// the search stops at the git top level and a .rr.yaml exists above it,
+// that file belongs to another checkout, and Find returns an
+// ErrConfigNotFound error naming it instead of an empty path.
 // Note: Global config (~/.rr/config.yaml) is loaded separately via LoadGlobal().
 func Find(explicit string) (string, error) {
 	// 1. Explicit path takes precedence
@@ -225,10 +228,14 @@ func Find(explicit string) (string, error) {
 		return localConfig, nil
 	}
 
-	// 3. Walk up to parent directories
+	// 3. Walk up to parent directories, stopping at the git top level
+	// (a .git dir, or the .git file of a linked worktree or submodule).
 	home, _ := os.UserHomeDir()
 	dir := cwd
 	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return "", configAboveCheckout(dir, home)
+		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			// Reached filesystem root
@@ -240,20 +247,38 @@ func Find(explicit string) (string, error) {
 		}
 		dir = parent
 
-		// Check for .rr.yaml
 		configPath := filepath.Join(dir, ConfigFileName)
 		if _, err := os.Stat(configPath); err == nil {
 			return configPath, nil
 		}
-
-		// Stop at git root (but only after checking for .rr.yaml in this directory)
-		gitPath := filepath.Join(dir, ".git")
-		if _, err := os.Stat(gitPath); err == nil {
-			break
-		}
 	}
 
 	return "", nil
+}
+
+// configAboveCheckout is called when the search for .rr.yaml stops at the
+// git top level topLevel without finding one. A .rr.yaml further up
+// belongs to another checkout (typically the main checkout around a
+// worktree created inside it); using it would make that checkout the
+// project root, so a local host would run its code and a remote host would
+// sync it. That is reported as not found, naming the skipped file, rather
+// than silently loaded or silently ignored. Returns nil when there's no
+// .rr.yaml above.
+func configAboveCheckout(topLevel, home string) error {
+	dir := topLevel
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir || (home != "" && parent == home) {
+			return nil
+		}
+		dir = parent
+		above := filepath.Join(dir, ConfigFileName)
+		if _, err := os.Stat(above); err == nil {
+			return errors.New(errors.ErrConfigNotFound,
+				fmt.Sprintf("No .rr.yaml in this checkout (%s). Found %s above it, but didn't use it: it belongs to another checkout, and rr would run that checkout's code instead of this one's.", topLevel, above),
+				fmt.Sprintf("Commit .rr.yaml to this branch, or copy it into this checkout: cp %s %s/", above, topLevel))
+		}
+	}
 }
 
 // LoadOrDefault loads config from the found path, or returns defaults if not found.
