@@ -661,8 +661,10 @@ func (l *Lock) UpdateCommand(command string) error {
 // SetJobPGID records the process group of the job running under this lock,
 // and the current time as the job's start, so the lock stays held while that
 // job runs even if this rr process is killed (see LockInfo.IsDeadLocalHolder).
-// A local host calls it as soon as the job has started: a start time more
-// than a couple of seconds off makes the running job look like a reused id.
+// A local host calls it once the job has started. JobStarted must not be
+// earlier than the job's real start: jobGroupAlive takes a leader that
+// started more than jobStartTolerance after JobStarted for a reused pid.
+// Recording it late only errs toward keeping the lock.
 func (l *Lock) SetJobPGID(pgid int) error {
 	if l == nil || l.conn == nil || l.conn.Client == nil || l.Info == nil {
 		return nil

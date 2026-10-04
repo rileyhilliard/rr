@@ -275,6 +275,12 @@ tasks:
 	assert.Equal(t, "Task 'pinned' can't run on host 'box'", rrErr.Message)
 	assert.Contains(t, rrErr.Suggestion, "--host dev")
 	assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
+
+	// A mistyped --host is a host that doesn't exist, not one the pin
+	// refuses: agents branch on HOST_NOT_FOUND.
+	_, err = runTaskQuietly(t, TaskOptions{TaskName: "pinned", Host: "bxo"})
+	assert.True(t, errors.IsCode(err, errors.ErrHostNotFound), "got %v", err)
+	assert.NoFileExists(t, filepath.Join(projectDir, "ran.out"))
 }
 
 // --local is an explicit "run it here", so it overrides a task's hosts:

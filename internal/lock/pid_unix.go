@@ -35,10 +35,13 @@ func processGroupAlive(pgid int) bool {
 }
 
 // jobStartTolerance is how much later than the recorded JobStarted the start
-// time ps gives a job group's leader may be and still be the same process. ps
-// reports elapsed time in whole seconds, and JobStarted is taken just after
-// the job starts.
-const jobStartTolerance = 2 * time.Second
+// time ps gives a job group's leader may be and still be the same process.
+// It's wide because the two clocks differ: JobStarted is wall-clock time, but
+// Linux's etime counts from boot, so an NTP or WSL clock step moves one and
+// not the other. A real reuse needs the job to exit, rr to die and the pid
+// space to wrap, which takes far longer; one sooner than this keeps the lock
+// until rr unlock, as before JobStarted existed.
+const jobStartTolerance = time.Minute
 
 // jobGroupAlive reports whether the job recorded as process group pgid,
 // started at started, is still running.

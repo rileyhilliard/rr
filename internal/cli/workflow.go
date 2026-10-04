@@ -870,6 +870,9 @@ func checkTaskHostFlag(ctx *WorkflowContext, opts WorkflowOptions) error {
 	if !ok || config.IsTaskHostAllowed(&task, opts.Host) {
 		return nil
 	}
+	if _, known := ctx.Resolved.Global.Hosts[opts.Host]; !known {
+		return nil // host selection reports it as HOST_NOT_FOUND
+	}
 	return taskHostError(opts.TaskName, &task, opts.Host)
 }
 

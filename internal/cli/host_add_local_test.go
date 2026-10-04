@@ -206,8 +206,9 @@ func TestFindLocalHost(t *testing.T) {
 	assert.Equal(t, "z", findLocalHost(cfg))
 }
 
-// The local-host name prompt rejects what addLocalHost would, so a bad name
-// is retyped instead of aborting rr init or rr host add after the prompt.
+// The host name prompts (local and remote) reject names the saved config
+// can't have (taken, or the reserved 'local'), so a bad name is retyped
+// instead of aborting rr init or rr host add after the prompt.
 func TestNewHostNameValidator(t *testing.T) {
 	existing := map[string]config.Host{"box": {SSH: []string{"box.local"}, Dir: "~/rr"}}
 	tests := []struct {
