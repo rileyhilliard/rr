@@ -295,7 +295,7 @@ tasks:
 | `--max-parallel N` | Limit concurrent tasks |
 | `--no-logs` | Don't save output to log files |
 | `--dry-run` | Show plan without executing |
-| `--local` | Force local execution |
+| `--local` | Force local execution. With a `local: true` host, it's the one worker (subtasks pinned to other hosts then fail the host check); without one, subtasks run here one after another |
 | `--host` / `--tag` | Restrict the host pool |
 
 ### Output Modes
@@ -311,7 +311,7 @@ These apply to `--pretty` mode. In the default structured mode, a parallel task 
 ```bash
 rr test-all --stream    # See all output in real-time
 rr test-all --dry-run   # Preview what would run
-rr test-all --local     # Run locally without remote hosts
+rr test-all --local     # Run on this machine (the local host, if configured)
 ```
 
 ### Work-Stealing Distribution

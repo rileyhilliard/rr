@@ -31,7 +31,7 @@ Checks are graded by whether a run would fail:
 
 - Inside a project, host checks cover only the project's hosts. Outside one, they cover every global host.
 - An unreachable host is a warning while another host in scope is reachable, or when `local_fallback` would run the command locally. It's a failure only when nothing can take the run.
-- A missing SSH agent, a missing default key file, or no `.rr.yaml` is a warning, since agentless setups, custom keys, and global-only use all work.
+- A missing SSH agent, a missing default key file, or no `.rr.yaml` is a warning, since agentless setups, custom keys, and global-only use all work. When every host in scope is a local host, the SSH agent and key checks are skipped.
 - With `--requirements`, a missing required tool or a missing remote rsync is a failure, because `rr run` fails on it too. The suggestion points to `rr provision`.
 - `--path` and `--requirements` connect the way `rr run` does, racing every SSH alias. A host that can't be reached is reported once, on its host check, and its remote checks are skipped.
 
@@ -361,7 +361,7 @@ rr exec "ls -la \${HOME}/projects/"
 - `Lock timeout after 5m0s - another run is using m4-mini` (single host, `lock.timeout`)
 - `All hosts are locked - timed out after 1m0s` (several hosts, `lock.wait_timeout`)
 
-The error names the holder: user, hostname, pid, command, and how long it has held the lock.
+The error names the holder: user, hostname, pid, command, and how long it has held the lock. You don't have to wait for the timeout to find out: as soon as rr starts waiting it emits a `lock` `waiting` event (one host) or a `connect` `waiting` event (several hosts) with the same holder details, and `--pretty` shows them in the spinner.
 
 **How locking works:** there's one lock per host, a directory at `<lock.dir>/rr.lock` (default `/tmp/rr-locks/rr.lock`). It isn't per project, so a run from another project on the same host blocks you too. The holder refreshes the lock every 30 seconds. A lock that hasn't been refreshed for `lock.stale` (default 90s) is taken over automatically, and a lock left by a dead rr process on your own machine is cleared right away with a warning.
 
@@ -369,6 +369,13 @@ The error names the holder: user, hostname, pid, command, and how long it has he
 
 1. **Another `rr` run is using the host** - Wait for it, or add more hosts so rr can pick a free one
 2. **A holder hung without exiting** - Its heartbeat keeps the lock fresh; release it by hand
+3. **A killed rr's job is still running on a local host** - If rr was SIGKILLed during a run on a `local: true` host, the job it started keeps running, and its lock stays held until the job exits, even though rr's pid is dead and the heartbeat stopped. The group is `job_pgid` in `<lock.dir>/rr.lock/info.json`: list it with `pgrep -l -g <job_pgid>` and stop it with `kill -- -<job_pgid>`, or wait for it
+
+### "Stopped waiting for the lock on X"
+
+**Symptom:** rr exits 130 with `INTERRUPTED` and "Stopped waiting for the lock on dev" (or a list of hosts).
+
+You, or whatever ran rr, stopped it with Ctrl+C or SIGTERM while it waited for a lock. Nothing ran on any host. Run the command again when you want it. An agent should treat this as the user's decision and not retry on its own.
 
 **Release a stuck lock:**
 
@@ -403,7 +410,13 @@ lock:
 rr init
 ```
 
-The error code is `CONFIG_NOT_FOUND`. `rr doctor` reports a `config_file` warning, "No project config (.rr.yaml) found; using global hosts only", when there's no `.rr.yaml` in the current directory or any parent. If you passed `--config`, check that path.
+The error code is `CONFIG_NOT_FOUND`. `rr doctor` reports a `config_file` warning, "No project config (.rr.yaml) found; using global hosts only", when there's no `.rr.yaml` in the current directory or any parent up to the git top level. If you passed `--config`, check that path.
+
+### "No .rr.yaml in this checkout ... Found ... above it, but didn't use it"
+
+**Symptom:** `CONFIG_NOT_FOUND` from inside a git worktree or checkout that sits inside another one, typically a worktree under the main checkout (`.claude/worktrees/<name>`).
+
+rr looks for `.rr.yaml` only up to the top of the checkout you're in. The file it found belongs to the outer checkout, and using it would make that checkout the project root: a local host would run the outer checkout's code, and a remote host would sync it. Commit `.rr.yaml` so the worktree's branch has it, or copy it in with the `cp` command from the suggestion. `rr doctor` fails its `config_file` check with the same message.
 
 ### "No hosts configured"
 

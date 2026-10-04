@@ -56,9 +56,9 @@ hosts:
 
 It's selected in host order, takes the same lock (on this machine, so two rr runs don't pile onto it), gets a worker in parallel tasks, and works with `--host dev`, `--tag`, `rr status`, `rr doctor`, `rr monitor`, and `rr unlock dev`. Commands get its `setup_commands`, `shell`, and `require` checks like a remote host, and tasks also get its `env` (`rr run` doesn't apply host `env` on any host). Commands start in your home dir like an SSH session, and don't re-source `~/.bashrc`/`~/.zshrc`, so an activated venv or `nvm use` stays in effect.
 
-It runs **in place** in the local project dir: no sync, no path rewriting, and output files land in your checkout. `pull:`/`--pull` copy from the project dir to the dest (skipped, `reason: same_dir`, when the dest is the project dir), and parallel subtasks get their own `<dest>/<name>_<index>/` copy. `rr sync` and `rr pull` never default to it, and `--host dev` with them is a config error. Only one host can be local.
+It runs **in place** in the local project dir: no sync, no path rewriting, and output files land in your checkout. `pull:`/`--pull` copy from the project dir to the dest (skipped, `reason: same_dir`, when the dest is the project dir), and parallel subtasks get their own `<dest>/<name>_<index>/` copy. `rr sync` and `rr pull` never default to it, and `--host dev` with them is a config error. Only one host can be local, it can't be named `local` (reserved for bare local runs), and `local: true` fails validation on Windows.
 
-Locking: as the only candidate (sole host, or picked by `--host`/`--tag`) a busy local host makes rr wait up to `lock.timeout` (5m); among several busy hosts rr cycles for up to `lock.wait_timeout` (1m), then fails. `--local`, local mode, and `local_fallback` runs go through the local host when one is configured, as `--host` would: its lock, setup, shell, `require` and (for tasks) env, no TTY, tasks at the project root, and output naming the host (`local_reason`/`fallback` still say why). When the local host is busy (even if `hosts:` or `--tag` left it out of the run), rr never falls back locally, even with `local_fallback: always`.
+Locking: as the only candidate (sole host, or picked by `--host`/`--tag`) a busy local host makes rr wait up to `lock.timeout` (5m); among several busy hosts rr cycles for up to `lock.wait_timeout` (1m), then fails. `--local`, local mode, and `local_fallback` runs go through the local host when one is configured, as `--host` would: its lock, setup, shell, `require` and (for tasks) env, no TTY, tasks at the project root, and output naming the host (`local_reason`/`fallback` still say why). When the local host is busy (even if `hosts:` or `--tag` left it out of the run), rr never falls back locally, even with `local_fallback: always`. If rr is killed mid-run, its job keeps running in the checkout, and the lock (which records the job's process group as `job_pgid`) stays held until the job exits. Projects only share this lock when they use the same `lock.dir`.
 
 Add one with `rr host add --local --name dev [--tag fast] [--env K=V]` (not combined with `--ssh`/`--dir`); interactive `rr host add` and `rr init` offer "This machine" when no host is local yet.
 
@@ -188,7 +188,11 @@ When `respect_gitignore` is true, rr reads the repo-root `.gitignore` (nested `.
 | `stale` | `90s` | Time without a heartbeat before a lock is considered dead |
 | `dir` | `/tmp/rr-locks` | Remote directory holding the lock (`<dir>/rr.lock/`) |
 
-There is one lock per host, shared by every project that uses the same `lock.dir`. The holder refreshes it every 30 seconds. A lock without a heartbeat for the `stale` duration is reclaimed automatically, and a lock held by a dead rr process on your own machine is reclaimed immediately.
+There is one lock per host, shared by every project that uses the same `lock.dir`. The holder refreshes it every 30 seconds. A lock without a heartbeat for the `stale` duration is reclaimed automatically, and a lock held by a dead rr process on your own machine is reclaimed immediately (unless the job it started on a local host is still running). A waiting run emits a `lock` `waiting` event (one host) or `connect` `waiting` event (several hosts) naming the holder, retries every 2 seconds, and stops with `INTERRUPTED` (exit 130) on Ctrl+C. Waiters don't queue in order, so one can keep losing the race until its timeout.
+
+## Where `.rr.yaml` Is Found
+
+rr uses `--config`, else `.rr.yaml` in the current directory, else the nearest one in a parent directory, but it never looks above the git top level (the directory holding `.git`). A worktree nested inside the main checkout with no `.rr.yaml` of its own fails with `CONFIG_NOT_FOUND`, naming the main checkout's file, rather than running the main checkout's code. Commit `.rr.yaml` so every worktree has it.
 
 ## Config Warnings and Reserved Names
 

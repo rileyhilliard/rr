@@ -304,6 +304,8 @@ hosts:
         require: [go, node]      # tools that must exist on this host
 ```
 
+Your own machine can be a host too. `rr host add --local --name dev` adds a host with `local: true`: it runs commands in place in your checkout, with no SSH or sync, and takes the same lock as a remote, so concurrent agents on this machine queue instead of running their suites on top of each other. Once it exists, `--local` and `local_fallback` runs go through it as well. See [Local host](docs/configuration.md#local-host).
+
 The project config is shared with your team:
 
 ```yaml
@@ -346,7 +348,7 @@ hosts:
 
 Sync is rsync with defaults that skip `.git` and dependency folders and keep remote-only directories (like a `.venv` built on the remote) in place. Each sync writes a `.rr-source` marker recording which machine and directory the tree came from. If you sync over a mirror owned by a different checkout, rr warns you before overwriting it.
 
-Before running a command, rr takes a lock on the host by atomically creating a directory under `/tmp` on the remote. If the host is locked, rr tries the next one. If every host is locked, it cycles through them until one frees up. The holder refreshes the lock every 30 seconds. A lock that stops being refreshed goes stale after 90 seconds (`lock.stale`), and one left by a killed rr process on your own machine is cleared right away. `rr unlock` clears one by hand. [ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the internals.
+Before running a command, rr takes a lock on the host by atomically creating a directory under `/tmp` on the remote. If the host is locked, rr tries the next one. If every host is locked, it cycles through them until one frees up, reporting who holds each lock while it waits. The holder refreshes the lock every 30 seconds. A lock that stops being refreshed goes stale after 90 seconds (`lock.stale`), and one left by a killed rr process on your own machine is cleared right away. `rr unlock` clears one by hand. [ARCHITECTURE.md](docs/ARCHITECTURE.md) covers the internals.
 
 rr recognizes pytest, Jest, and Go test output from the command and parses the counts and failures into the result event. Parallel runs report the same per task.
 

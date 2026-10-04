@@ -27,6 +27,16 @@ After the command finishes:
 
 `--no-phases` suppresses the `phase` events; the `result` event is always emitted.
 
+### Waiting for a lock
+
+When the host's lock is held, rr emits one `waiting` event before it waits, naming the holder:
+
+```json
+{"type":"phase","phase":"lock","status":"waiting","host":"dev","details":{"message":"Waiting up to 5m0s for the lock on dev: 'make test' held by me@laptop (pid 4242, started 1m0s ago, this machine)","holders":[{"host":"dev","user":"me","pid":4242,"command":"make test","age_s":60,"same_machine":true}],"wait_timeout_s":300}}
+```
+
+That's a single host (the only candidate, or picked with `--host`/`--tag`), which waits up to `lock.timeout`. With several hosts all locked, the same details come on a `connect` `waiting` event with no `host`, and rr cycles through the hosts for up to `lock.wait_timeout`. Either wait ends with the lock, a `LOCK_HELD` error on timeout, or `INTERRUPTED` (exit 130) if rr is stopped with Ctrl+C or SIGTERM. Waiters poll every 2 seconds rather than queueing, so the order they get the lock in isn't guaranteed.
+
 The `exec` event's `details.command` is the command that actually ran, after `{args}` substitution, appended task args, and path rewriting.
 
 ### Where the command runs
@@ -44,7 +54,7 @@ The result of a `--local` or local-mode run carries the same value in `details.l
 
 Which `host` these runs report depends on whether the global config has a local host (`local: true`):
 
-- **With a local host** (say `dev`), all four run on it, as `--host dev` would. The connect events and the result say `host: "dev"`, a `lock` phase runs on `dev`, and the sync phase is skipped with `reason: in_place`. `details.reason`, `details.local_reason` and `details.fallback` still say why the run is here, so branch on those, not on `host == "local"`.
+- **With a local host** (say `dev`), all four run on it, as `--host dev` would. The connect events (the fallback `warn` included) and the result say `host: "dev"`, a `lock` phase runs on `dev` (and can emit `lock` `waiting`), and the sync phase is skipped with `reason: in_place`. The run also gets `dev`'s `require:` checks, so it can fail with `DEPENDENCY_MISSING`. `details.reason`, `details.local_reason` and `details.fallback` still say why the run is here, so branch on those, not on `host == "local"`. A host can't be named `local`, so `host: "local"` always means the case below.
 - **Without one**, they report `host: "local"`, take no lock, and skip sync with `reason: local`.
 
 In a parallel run, a host that becomes unavailable is dropped for the rest of the run, and the subtask its worker had picked up moves to another host. That emits one connect `warn` event with the `host`, `details.task`, `details.error` (`{code, message, suggestion}`), and `details.reason`: `connection_lost` when the connection died mid-run, `connect_failed` when the host was never reached. A subtask that was running when its connection dropped isn't moved, since it may have partly run. It fails with `Lost the connection before the command finished`. For a single `rr run` or task, that same error shows up as `details.error` on a failed result with `exit_code: -1`, and `log_file` still points at the partial output (tasks with `depends` don't write a run log, so they have no `log_file`).
@@ -65,8 +75,8 @@ They cover unknown keys (usually typos), the removed `output:` section, the remo
 |-------|------|-------------|
 | `type` | string | `"phase"` or `"result"` |
 | `phase` | string | `"config"`, `"connect"`, `"sync"`, `"lock"`, `"exec"`, `"pull"` |
-| `status` | string | Phase: `"started"`, `"complete"`, `"failed"`, `"skipped"`, `"warn"` (plus `"pruned"`/`"invalidated"` for sync). Result: `"success"`, `"failed"` |
-| `host` | string | Host name (on complete/failed; on sync notices during parallel runs, the host that synced) |
+| `status` | string | Phase: `"started"`, `"complete"`, `"failed"`, `"skipped"`, `"warn"`, `"waiting"` (lock and connect), plus `"pruned"`/`"invalidated"` for sync. Result: `"success"`, `"failed"` |
+| `host` | string | Host name (on complete/failed, lock `waiting`, and connect `warn`; on sync notices during parallel runs, the host that synced) |
 | `duration_s` | float | Duration in seconds (on complete) |
 | `exit_code` | int | Process exit code (on result) |
 | `error` | string | Error message (on failed) |
@@ -86,6 +96,7 @@ The `details` object on the result event can include:
 | `no_tests` | `true` when the runner reported collecting zero tests |
 | `piped_exit_code` | `true` when zero tests ran and the command has a pipe, so the exit code may come from a later stage |
 | `hint` | Explanation for a failure that looks like a local-vs-remote path mistake |
+| `local_reason` | `local_flag` or `local_mode` on a `--local` or local-mode run |
 | `fallback` | `{reason}` when rr ran locally because no host was reachable (`hosts_unreachable`), or `{reason, waited_s, holders}` when every host was locked (`all_hosts_locked`) |
 | `path_rewrites` | Count of local absolute paths rewritten to remote paths |
 | `remote_cwd` | Subdirectory (relative to the project root) the command ran in |
@@ -123,7 +134,7 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 
 | Code | Meaning | Action |
 |------|---------|--------|
-| `CONFIG_NOT_FOUND` | No `.rr.yaml`, or the `--config` file doesn't exist | Run `rr init` |
+| `CONFIG_NOT_FOUND` | No `.rr.yaml`, or the `--config` file doesn't exist. Also a checkout nested in another one (a worktree under the main checkout) with no `.rr.yaml` of its own: the message names the outer `.rr.yaml` rr skipped | Run `rr init`, or for a nested checkout commit or copy `.rr.yaml` into it (see `suggestion`) |
 | `CONFIG_INVALID` | Config or flag error (bad value, reserved task name, extra flags on a parallel task without `forward_args`) | Fix config, or follow `suggestion` |
 | `HOST_NOT_FOUND` | A host name (`--host`, `rr unlock`, `rr provision`, `rr host remove`, `rr monitor`, or the project's `hosts:`) doesn't match a configured host | Check `rr host list` |
 | `SSH_TIMEOUT` | Connection timed out | Check network/VPN |
@@ -134,14 +145,14 @@ Commands like `doctor`, `status`, `tasks`, `host list` emit a JSON envelope to s
 | `LOCK_HELD` | Another process has lock | Run `rr unlock` |
 | `COMMAND_FAILED` | Remote command failed | Check command output |
 | `DEPENDENCY_MISSING` | A required tool is missing: local or remote `rsync`, `ssh-copy-id` (for `rr setup`), or a `require:` tool (`Missing required tools: ...`) | `rr provision`, or install it |
-| `INTERRUPTED` | rr was stopped (Ctrl+C, SIGTERM) while it waited for a lock; nothing ran | Don't retry on your own; the user stopped it |
+| `INTERRUPTED` | rr was stopped (Ctrl+C, SIGTERM) while it waited for a lock, on one host or across several; nothing ran. rr exits 130 | Don't retry on your own; the user stopped it |
 | `UNKNOWN` | Unclassified error | Read `message` |
 
 Codes are set where the error is created, never guessed from the message. Transition note: rr binaries older than v0.27.0 report missing required tools as `COMMAND_FAILED` with a message starting `Missing required tools`, and an unknown host as `CONFIG_NOT_FOUND` or `CONFIG_INVALID`. Treat `COMMAND_FAILED` + `Missing required tools` the same as `DEPENDENCY_MISSING`. Always read `message` and `suggestion`.
 
 ## Exit Code Contract
 
-When the command runs, rr's exit code is the command's exit code (a parallel task exits 1 if any subtask failed). A command cut off by a dropped connection has `exit_code: -1` and `details.error`, and rr exits 255. When rr fails before the command runs (config, SSH, lock, sync, requirements), it exits 1 and writes an error envelope to stderr instead of a result event. Check for a `"type":"result"` line to tell the two apart.
+When the command runs, rr's exit code is the command's exit code (a parallel task exits 1 if any subtask failed). A command cut off by a dropped connection has `exit_code: -1` and `details.error`, and rr exits 255. When rr fails before the command runs (config, SSH, lock, sync, requirements), it exits 1 and writes an error envelope to stderr instead of a result event. The exception is `INTERRUPTED`: stopped while waiting for a lock, rr exits 130, the same as Ctrl+C during the command. Check for a `"type":"result"` line to tell the two apart.
 
 `rr doctor` is the exception: it exits 1 when any check fails and 0 when there are only warnings, but its envelope still says `success: true`, because doctor itself ran. `data.summary.fail` counts failures; `data.summary.all_clear` is true only when nothing failed or warned.
 
@@ -157,6 +168,9 @@ rr host add --name dev-box \
   --tag fast \
   --env "DEBUG=1" --env "PATH=/custom/bin:$PATH" \
   --skip-probe
+
+# Add this machine as a local host (runs in place, no SSH or sync)
+rr host add --local --name dev --tag fast
 
 # Initialize project without prompts
 rr init --non-interactive --host dev-box
@@ -188,10 +202,17 @@ rr init --non-interactive --host dev-box
    SSH_HOST_KEY:
      -> Run: ssh -o StrictHostKeyChecking=accept-new <hostname> exit
 
+   CONFIG_NOT_FOUND naming a .rr.yaml above this checkout:
+     -> This is a nested worktree without its own .rr.yaml
+     -> Copy or commit .rr.yaml into it (the suggestion has the cp command)
+
    LOCK_HELD:
      -> Message names the holder; wait if it's a live run
      -> Run: rr unlock <host>  (or rr unlock --all)
      -> Retry original command
+
+   INTERRUPTED:
+     -> The user stopped rr while it waited for a lock; don't retry
 
    DEPENDENCY_MISSING (or COMMAND_FAILED with "Missing required tools" on older rr):
      -> Run: rr provision --yes

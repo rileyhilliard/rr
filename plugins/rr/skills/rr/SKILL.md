@@ -85,7 +85,7 @@ rr ships default sync excludes (`.git`, `.venv`, `node_modules`, caches, agent d
 
 - `--host <name>` - Target specific host
 - `--tag <tag>` - Select host by tag
-- `--local` - Force local execution
+- `--local` - Run on this machine: through the `local: true` host (its lock, setup and `require`) if there is one, otherwise directly in your terminal
 - `--cwd <dir>` - (`run`/`exec`) Directory to run in, relative to the project root
 - `--tail N` - (`run`/`exec`/single-command tasks) Reprint the last N log lines after the result
 - `--skip-requirements` - (`run`/`exec` only) Skip requirement checks
@@ -189,9 +189,10 @@ Output is structured by default. No flags needed.
 
 - **stderr**: JSON phase events, one per line (`connect`, `lock`, `sync`, `exec`), then a final `{"type":"result",...}` line. Config warnings (unknown keys, removed settings) come first as `config` events with `status: warn`; fix what they name.
 - **stdout/stderr**: the command's own output, passed through raw.
-- **Exit code**: the remote command's exit code. If rr itself fails before the command runs (config, SSH, lock, sync, missing tools), it exits 1 and writes a JSON error envelope (`{"success":false,"error":{"code":...,"message":...,"suggestion":...}}`) to stderr instead of a result event. `rr doctor` exits 1 when a check fails.
-- **Where it ran**: the `connect` event's `host` and `details.reason`. `local_flag` (`--local`) and `local_mode` are deliberate local runs; a `warn` with `hosts_unreachable` or `all_hosts_locked` is a fallback. Older rr binaries report `--local` as `hosts_unreachable`; treat that as `local_flag`.
-- **Error codes**: branch on `error.code`. Missing required tools is `DEPENDENCY_MISSING` (older rr: `COMMAND_FAILED` with a message starting `Missing required tools`, so accept both); a mistyped host is `HOST_NOT_FOUND`; no `.rr.yaml` is `CONFIG_NOT_FOUND`.
+- **Exit code**: the remote command's exit code. If rr itself fails before the command runs (config, SSH, lock, sync, missing tools), it exits 1 and writes a JSON error envelope (`{"success":false,"error":{"code":...,"message":...,"suggestion":...}}`) to stderr instead of a result event. Stopped with Ctrl+C or SIGTERM while waiting for a lock, it exits 130 with `INTERRUPTED`; nothing ran, so don't retry on your own. `rr doctor` exits 1 when a check fails.
+- **Where it ran**: the `connect` event's `host` and `details.reason`. `local_flag` (`--local`) and `local_mode` are deliberate local runs; a `warn` with `hosts_unreachable` or `all_hosts_locked` is a fallback. With a `local: true` host configured, those runs report its name (e.g. `dev`) as `host`, not `local`, so branch on `details.reason`, never on `host == "local"`. Older rr binaries report `--local` as `hosts_unreachable`; treat that as `local_flag`.
+- **Waiting on a lock**: a `lock` `waiting` event (one host) or `connect` `waiting` event (several hosts) names the holder in `details.holders` as soon as rr starts waiting.
+- **Error codes**: branch on `error.code`. Missing required tools is `DEPENDENCY_MISSING` (older rr: `COMMAND_FAILED` with a message starting `Missing required tools`, so accept both); a mistyped host is `HOST_NOT_FOUND`; no `.rr.yaml` is `CONFIG_NOT_FOUND`, including in a worktree nested in the main checkout that lacks its own `.rr.yaml` (the message names the outer file rr skipped; copy or commit it in).
 
 ```json
 {"type":"result","status":"failed","exit_code":1,"host":"mini","duration_s":14.2,"details":{"exec_duration_s":11.8,"log_file":"/home/me/.rr/logs/test-20260101-120000/output.log","summary":{"passed":41,"failed":1,"skipped":0,"errors":0},"failures":[{"name":"test_login","file":"tests/test_auth.py:42","message":"AssertionError: ..."}]}}
@@ -227,7 +228,7 @@ rr test --tail 50            # reprint the last 50 log lines after the result
 - **Zero tests isn't success.** Check `details.no_tests` after narrowing with `-k`, `-run`, or paths.
 - **Locks are per host, shared across projects.** A run from another project on the same host blocks you. With several hosts, rr tries the next free one. If all are locked it waits up to `lock.wait_timeout` (1m) for one to free up, then fails, or runs locally when `local_fallback: always` (never while a `local: true` host is locked). With one host it waits up to `lock.timeout` (5m).
 - **`rr unlock` with no host only works when one host is configured.** With several, the host picker only appears in `--pretty` mode; otherwise pass a name (`rr unlock mini`) or `--all`.
-- **A `local: true` host runs in your checkout.** It's a host in rotation (locked, selected in order), but it doesn't sync: the run sees your working tree as it is, and its output files land there. `--local` and fallback runs take its lock too. Projects with no `hosts:` list include it automatically.
+- **A `local: true` host runs in your checkout.** It's a host in rotation (locked, selected in order), but it doesn't sync: the run sees your working tree as it is, and its output files land there. `--local`, local mode and fallback runs go through it too, with its lock, setup and `require` checks. Projects with no `hosts:` list include it automatically. If rr is killed, the job it started keeps the lock until it exits.
 - **Parallel subtasks on the same host share one remote directory.** Have each write reports to its own path (`reports/unit.xml`, not `reports/junit.xml` for all). Pulled files land locally in `<dest>/<subtask>_<index>/`, named like the subtask's log file (`test:unit` first in the list lands in `test-unit_0/`).
 - **Custom `sync.exclude` replaces the defaults.** Include `.git`, `node_modules`, `.venv` yourself.
 - **Relative paths follow your cwd** for `run`/`exec` (see Where Commands Run). If a path fails, read `details.hint`.
@@ -285,7 +286,7 @@ Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task
 
 ## How It Works
 
-1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred). A `local: true` host is this machine and needs no SSH. `--local` skips this and needs no hosts configured
+1. **Host selection**: Tries hosts in order; for each host, races its SSH aliases (earlier aliases preferred). A `local: true` host is this machine and needs no SSH. `--local` skips this and needs no hosts configured; it uses the local host when there is one
 2. **Locking**: Takes a lock on the host; if it's locked, tries the next host
 3. **Requirements**: Verifies required tools exist (if configured)
 4. **File sync**: rsync with exclude/preserve patterns (skipped for a `local: true` host, which runs in the project dir)
@@ -308,7 +309,7 @@ Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task
 ## Quick Setup
 
 ```bash
-# 1. Add a host
+# 1. Add a host (or this machine: rr host add --local --name dev)
 rr host add
 
 # 2. Initialize project

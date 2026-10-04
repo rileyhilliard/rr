@@ -36,7 +36,7 @@ rr run --pull "coverage.xml" "pytest --cov --cov-report=xml"
 - `--host <name>` - Target specific host
 - `--tag <tag>` - Select host by tag
 - `--probe-timeout <duration>` - SSH probe timeout (e.g., `5s`)
-- `--local` - Force local execution
+- `--local` - Force local execution (on the `local: true` host, with its lock and setup, when one is configured)
 - `--cwd <dir>` - Directory to run in, relative to the project root (can't escape it)
 - `--skip-requirements` - Skip requirement checks
 - `--repeat <N>` - Run command N times in parallel across available hosts (flake detection)
@@ -117,7 +117,7 @@ rr host list --json
 
 ### `rr host add`
 
-Add a new host interactively.
+Add a new host interactively. While no host is local, the wizard first asks whether the host is this machine or a remote one.
 
 ```bash
 rr host add
@@ -131,7 +131,12 @@ rr host add --name dev-box \
   --dir '~/projects/${PROJECT}' \
   --tag fast \
   --env "DEBUG=1"
+
+# This machine as a local host (runs in place, no SSH or sync)
+rr host add --local --name dev --tag fast
 ```
+
+`--local` needs `--name`, takes `--tag` and `--env`, and can't be combined with `--ssh` or `--dir` (`CONFIG_INVALID`). A second local host is refused with the name of the existing one. The host can't be named `local`.
 
 ### `rr host remove`
 
@@ -160,7 +165,8 @@ Doctor grades each check by whether a run would fail, and exits 1 if any check f
 
 - Inside a project, host checks cover only the project's hosts; outside a project, every global host.
 - An unreachable host is a warning while another host is reachable or `local_fallback` would take over, and a failure otherwise. It's reported once, on its `host_<name>` check, even with `--path`/`--requirements`.
-- A missing SSH agent (`ssh_agent`), missing default key (`ssh_key`), or missing `.rr.yaml` (`config_file`) is a warning.
+- A missing SSH agent (`ssh_agent`), missing default key (`ssh_key`), or missing `.rr.yaml` (`config_file`) is a warning. The SSH agent and key checks are skipped when every host in scope is local.
+- In a worktree nested inside another checkout with no `.rr.yaml` of its own, `config_file` fails and names the outer `.rr.yaml` rr skipped (see `CONFIG_NOT_FOUND` in [machine-interface.md](machine-interface.md)).
 - `--requirements` checks each host's `require:` tools (`requirements_<host>`, a failure when any are missing; the suggestion points to `rr provision` when rr can install them) and remote rsync (`rsync_remote_<host>`).
 
 ### `rr monitor`
@@ -208,6 +214,8 @@ rr init --force
 rr init --non-interactive --host user@server
 ```
 
+`--host` also takes the name of a host already in the global config, a local host included (`rr init --non-interactive --host dev`). The interactive host list offers "This machine (local, run in place)" while no host is local.
+
 **Flags:**
 - `--host <host>` - SSH host
 - `--remote-dir <path>` - Remote directory
@@ -237,9 +245,11 @@ rr setup myserver
 rr setup user@192.168.1.100
 ```
 
+A local host has no SSH to set up: `rr setup dev` fails with `CONFIG_INVALID`.
+
 ### `rr unlock`
 
-Force-release the lock on a remote host. The holder refreshes its lock every 30 seconds; a lock that stops being refreshed goes stale after `lock.stale` and is reclaimed automatically. Locks held by a dead rr process on your own machine are reclaimed right away.
+Force-release the lock on a remote host. The holder refreshes its lock every 30 seconds; a lock that stops being refreshed goes stale after `lock.stale` and is reclaimed automatically. Locks held by a dead rr process on your own machine are reclaimed right away, unless it was running a job on a local host that is still running: that lock holds until the job exits.
 
 ```bash
 rr unlock              # Only host (with several hosts: picker in --pretty mode, error otherwise)

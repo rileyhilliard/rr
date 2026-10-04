@@ -169,7 +169,7 @@ The split lives in `internal/cli/phase_reporter.go`: `NewPhaseReporter` returns 
 {"type":"result","status":"failed","exit_code":1,"host":"mini","duration_s":4.8,"details":{"exec_duration_s":3.3,"log_file":"~/.rr/logs/run-20260101-120000/output.log","summary":{"passed":45,"failed":2,"skipped":0,"errors":0},"failures":[...]},"ts":"..."}
 ```
 
-Keys that can appear in the result `details` include `log_file`, `summary`, `failures`, `no_tests`, `piped_exit_code`, `hint`, `path_rewrites`, `remote_cwd`, `fallback`, and `broken_pipe`. Sync can also emit `warn` (provenance mismatch), `invalidated` (lockfile-triggered directory removal) and `pruned` (stale worktree dir) events; parallel runs emit the same events with a top-level `host`, since they sync several hosts. Lock can emit `warn` (with `host` and `details.message`) when it steals a stale or dead-holder lock. A local run's connect event carries `details.reason`: `local_flag` or `local_mode` on a `complete` event, or `hosts_unreachable` or `all_hosts_locked` on a `warn` event when rr fell back. In a parallel run, a subtask moved off a host that became unavailable emits a connect `warn` event with `details.task`, `details.error`, and `details.reason`: `connection_lost` (the connection died mid-run) or `connect_failed` (the host was never reached). A command cut off by a dropped connection gets `details.error` on its result. Config problems (unknown keys, the removed `output:` section, the deprecated `--verbose`) are `config` phase events with `status: "warn"`, emitted once before anything else.
+Keys that can appear in the result `details` include `log_file`, `summary`, `failures`, `no_tests`, `piped_exit_code`, `hint`, `path_rewrites`, `remote_cwd`, `fallback`, and `broken_pipe`. Sync can also emit `warn` (provenance mismatch), `invalidated` (lockfile-triggered directory removal) and `pruned` (stale worktree dir) events; parallel runs emit the same events with a top-level `host`, since they sync several hosts. Lock can emit `warn` (with `host` and `details.message`) when it steals a stale or dead-holder lock, and `waiting` (with `host` and `details.message`, `holders`, `wait_timeout_s`) once when it finds the lock held; the load-balanced wait across hosts emits the same details on a `connect` `waiting` event. A local run's connect event carries `details.reason`: `local_flag` or `local_mode` on a `complete` event, or `hosts_unreachable` or `all_hosts_locked` on a `warn` event when rr fell back. Its `host` is the global config's local host when there is one (the run goes through it), and `local` otherwise. In a parallel run, a subtask moved off a host that became unavailable emits a connect `warn` event with `details.task`, `details.error`, and `details.reason`: `connection_lost` (the connection died mid-run) or `connect_failed` (the host was never reached). A command cut off by a dropped connection gets `details.error` on its result. Config problems (unknown keys, the removed `output:` section, the deprecated `--verbose`) are `config` phase events with `status: "warn"`, emitted once before anything else.
 
 ### State Indicators
 
@@ -468,7 +468,7 @@ Project config is loaded from (first match wins):
 
 1. `--config` flag
 2. `.rr.yaml` in current directory
-3. `.rr.yaml` in parent directories (stops at git root or home)
+3. `.rr.yaml` in parent directories, stopping at the git top level (a `.git` dir or file) or home. If the search stops at the top level and a `.rr.yaml` exists further up, it belongs to another checkout (a worktree nested in the main checkout), and `config.Find` returns `CONFIG_NOT_FOUND` naming it instead of loading it
 
 **Design decision**: Use `.rr.yaml` not `.road-runner.yaml`. It's shorter, matches the command name, and follows the pattern of `.npmrc`, `.nvmrc`, etc.
 
@@ -889,12 +889,12 @@ flowchart TB
 **Transport Layer**
 
 - **SSH Client** (`pkg/sshutil`): Dial using `~/.ssh/config` settings (including ProxyCommand), agent and key-file auth, exec/stream/PTY/interactive/shell modes
-- **Local Executor**: os/exec wrapper for `--local` and local fallback
+- **Local Executor**: os/exec wrapper for bare local execution (`--local`, local mode and fallback with no local host); stops the command on cancel with SIGINT, then SIGKILL after 3s
 
 **Setup & Diagnostics**
 
 - **SSH Key Manager**: Check for keys, generate if needed, run ssh-copy-id
-- **Doctor Checks**: Validate config, test connectivity to the project's hosts, check local rsync, check `require:` tools and remote rsync (`--requirements`), compare shell PATHs (`--path`), flag worktrees that share a remote dir. Checks are graded by whether a run would fail, and doctor exits 1 only on a failure
+- **Doctor Checks**: Validate config, test connectivity to the project's hosts, check local rsync, check `require:` tools and remote rsync (`--requirements`), compare shell PATHs (`--path`), flag worktrees that share a remote dir. SSH key and agent checks are skipped when every host in scope is local. Checks are graded by whether a run would fail, and doctor exits 1 only on a failure
 - **Requirements and provisioning**: `internal/require` checks `require:` tools on the remote (cached per host) before sync; `rr provision` installs missing ones with the installers in `internal/exec/provision.go`
 
 ### Package Dependencies
@@ -1053,7 +1053,7 @@ sequenceDiagram
 ```
 
 **Phase summary:**
-1. **Load Config** - Find and parse `.rr.yaml` (walking up from the cwd) and `~/.rr/config.yaml`, then decide the execution target once (`resolveExecTarget` in `internal/cli/target.go`). `--local` and local mode skip host selection, locking and sync, and report a connect `complete` event with `details.reason` `local_flag` or `local_mode`; they need no hosts configured
+1. **Load Config** - Find and parse `.rr.yaml` (walking up from the cwd) and `~/.rr/config.yaml`, then decide the execution target once (`resolveExecTarget` in `internal/cli/target.go`). `--local` and local mode skip host selection and report a connect `complete` event with `details.reason` `local_flag` or `local_mode`; they need no hosts configured. With a local host in the global config they run on its connection (`host.LocalRunConnection`), so they lock it and skip sync as `in_place`; without one they run bare, with no lock and sync skipped as `local`
 2. **Select Host** - Dial the host's SSH aliases in parallel, keep the preferred winner
 3. **Acquire Lock** - Take the per-host lock and start the 30s heartbeat
 4. **Check Requirements** - Verify `require:` tools exist on the remote; fail with `DEPENDENCY_MISSING` and a pointer to `rr provision`
@@ -1061,7 +1061,7 @@ sequenceDiagram
 6. **Execute** - Rewrite local paths, `cd` into the matching subdirectory, run the command, stream output, capture exit code
 7. **Cleanup** - Release lock, pull files if requested, extract test results from the run log, emit the result
 
-Locking happens before sync so a run never rewrites files under another run's command. With more than one host and no `--host`/`--tag`, phases 2 and 3 are merged into `setupWorkflowLoadBalanced` (`internal/cli/loadbalance.go`): each host is connected and `lock.TryAcquire`d in priority order, the first free one wins, and only that host is synced. When every host is locked, the `local_fallback` mode decides: `always` runs locally (after waiting `lock.wait_timeout` if a holder is on this machine), otherwise rr cycles through the locked hosts until `lock.wait_timeout` and then errors. When no host can be reached at all, a `local_fallback` other than `never` runs locally with reason `hosts_unreachable`. A local fallback is reported loudly (a connect `warn` event, `details.fallback` in the result, repeated warning in pretty mode).
+Locking happens before sync so a run never rewrites files under another run's command. With more than one host and no `--host`/`--tag`, phases 2 and 3 are merged into `setupWorkflowLoadBalanced` (`internal/cli/loadbalance.go`): each host is connected and `lock.TryAcquire`d in priority order, the first free one wins, and only that host is synced. When every host is locked, the `local_fallback` mode decides: `always` runs locally (after waiting `lock.wait_timeout` if a holder is on this machine), otherwise rr cycles through the locked hosts until `lock.wait_timeout` and then errors. When no host can be reached at all, a `local_fallback` other than `never` runs locally with reason `hosts_unreachable`. A local fallback is reported loudly (a connect `warn` event, `details.fallback` in the result, repeated warning in pretty mode), and then locked by `lockPhase` like any run on the local host. Both waits take the workflow's context: Ctrl+C or SIGTERM ends them with an `ErrInterrupted` error (`INTERRUPTED`, exit 130 via `errorExitCode` in `internal/cli/root.go`), and an interrupted wait never falls back.
 
 **Path rewriting** (`internal/cli/pathrewrite.go`): unless `rewrite_paths: false`, absolute paths under the local project root in an ad-hoc command are replaced with the remote project dir (`RewriteLocalPaths`, boundary-aware, symlink-aware, tilde dirs become `$HOME` form). Task args are rewritten to `./`-relative form instead (`RewriteArgsToRelative`) because each host may use a different remote dir. Rewrites are reported in `details.path_rewrites`. `checkForeignPaths` warns about remaining `/Users/` or `/home/` paths outside the project, and rejects a command whose leading `cd` targets one of them that exists locally.
 
@@ -1071,7 +1071,7 @@ Locking happens before sync so a run never rewrites files under another run's co
 
 ### Host Selection Flow
 
-The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`). A host with `local: true` skips the dial: its connection carries a `LocalClient` (`internal/host/local.go`), which implements `sshutil.SSHClient` by running commands under the local shell, so the lock, requirement checks, command building and parallel workers treat it like any remote host. `Connection.InPlace()` (a local host or a local fallback) is what sync, prune and path rewriting check to skip themselves, and what switches pulls to a local copy; `config.ResolveHosts` sets a local host's `dir` to the project root. Runs that execute here without the local host (`--local`, local mode, a fallback) take its lock through `host.LocalMachineConnection`, and `findAvailableHost` won't fall back while it's locked.
+The host selector (`internal/host/selector.go`) resolves a host, then races that host's SSH aliases through `DialAliases` (`internal/host/dial.go`). A host with `local: true` skips the dial: its connection carries a `LocalClient` (`internal/host/local.go`), which implements `sshutil.SSHClient` by running commands under the local shell, so the lock, requirement checks, command building and parallel workers treat it like any remote host. `Connection.InPlace()` (a local host or bare local execution) is what sync, prune and path rewriting check to skip themselves, and what switches pulls to a local copy; `config.ResolveHosts` sets a local host's `dir` to the project root. Runs rr puts on this machine by itself (`--local`, local mode, a fallback) get their connection from `host.LocalRunConnection`: the local host's connection when `config.LocalHost` finds one, with `LocalReason` set so the reason still reaches the output, or a bare `IsLocal` connection named `local` with no host config, client or lock. The selector gets the local host through `SetLocalHost`, so a fallback from an unreachable remote never carries that remote's config. `findAvailableHost` won't fall back while the local host is locked (`machineBusy`, through `host.LocalMachineConnection`).
 
 ```mermaid
 flowchart TB
@@ -1138,11 +1138,13 @@ stateDiagram-v2
 
     Wait --> CheckDeadHolder: 2s elapsed
     Wait --> Timeout: lock.timeout exceeded
+    Wait --> Interrupted: context cancelled (Ctrl+C, SIGTERM)
 
     LockAcquired --> Heartbeat: StartHeartbeat()
     Heartbeat --> Heartbeat: touch info.json every 30s
     Heartbeat --> [*]: Release() stops heartbeat, rm -rf lock dir
     Timeout --> [*]: Error names the holder and suggests rr unlock
+    Interrupted --> [*]: ErrInterrupted, nothing ran
 
     style LockAcquired fill:#dcfce7,stroke:#10b981,stroke-width:2px
     style Timeout fill:#fee2e2,stroke:#ef4444,stroke-width:2px
@@ -1152,13 +1154,16 @@ stateDiagram-v2
 
 ```
 /tmp/rr-locks/rr.lock/     # <lock.dir>/rr.lock, lock.dir defaults to /tmp/rr-locks
-└── info.json              # {"user", "hostname", "started", "pid", "command", "machine_token"}
+└── info.json              # {"user", "hostname", "started", "pid", "command", "machine_token", "job_pgid"}
 ```
 
 - **Staleness** is judged by `info.json`'s mtime, falling back to its `started` field when `stat` fails. The holder's heartbeat touches the file every 30s and stops after 3 consecutive SSH failures, so a lock only goes stale (default 90s) when the holder is gone.
 - **Dead-holder reclaim**: when `info.json` shows the lock came from this machine (matched by a per-machine token, not hostname alone) and its PID is no longer running, the lock is removed immediately instead of waiting for the stale threshold. The info file is re-read just before removal to avoid deleting a lock that changed hands.
+- **Local jobs**: a local host's command runs in its own session, so it outlives a SIGKILLed rr. Once it starts, `LocalClient.SetOnStart` reports its pid (which is its process group) and `Lock.SetJobPGID` writes it to `info.json` as `job_pgid`. While that group is alive the holder counts as alive (`IsDeadLocalHolder`) and the lock is never stale (`HasLiveLocalJob`), however old the heartbeat. `rr monitor` applies the same rule.
+- **Waiting**: `Acquire` polls every 2s (`retryInterval`). `WithWaitFunc` reports the holder once, on the first failed attempt, which the workflow turns into the `lock` `waiting` event or the spinner label. `WithContext` makes the wait return `InterruptedError` (`ErrInterrupted`) when the context is done. Waiters don't queue, so the next owner is whoever polls first.
+- **Release**: `Release` runs once. Runs release when the command finishes and again when the workflow closes; a second `rm -rf` could delete a lock another run took in between, and later `UpdateCommand`/`SetJobPGID` writes are skipped for the same reason.
 - **Non-blocking variant**: `lock.TryAcquire` returns `lock.ErrLocked` at once. The load-balanced workflow uses it to move to the next host.
-- **Parallel runs**: each host worker takes the lock with the blocking `Acquire` before its first sync, holds it for the whole run, and calls `UpdateCommand` as each subtask starts, so `rr monitor` and lock errors show the current subtask.
+- **Parallel runs**: each host worker takes the lock with the blocking `Acquire` before its first sync, holds it for the whole run, and calls `UpdateCommand` as each subtask starts, so `rr monitor` and lock errors show the current subtask. Later subtasks on that worker get the first one's lock-and-sync outcome, so a worker whose lock wait failed never runs anything on that host.
 - **Manual release**: `rr unlock [host]` (or `--all`) calls `lock.ForceRelease`.
 
 ### Sync Details
@@ -1192,7 +1197,7 @@ Tasks from `.rr.yaml` are registered as Cobra commands at startup (`registerTask
 - **Subtask commands**: each subtask gets the single-task env and setup merge (`config.MergedTaskEnv`, `config.GetMergedSetupCommands`): host `env` < `defaults.env` < task `env`, with host `setup_commands` and `defaults.setup` run after the quoted `cd` into the project dir. Subtasks on the same host share that dir.
 - **Host pins**: a subtask with `hosts:` only runs on those hosts. `pickWorkerHosts` adds a worker for a pinned host even when it falls outside the first `max_parallel` hosts; workers that can't run a pinned subtask put it back on the queue; if none of its hosts is available it fails with the restriction named. `--host`/`--tag` that excludes every allowed host fails before the run starts.
 - **Failover**: a host whose connection fails is marked unavailable and its task is requeued for another host. The run fails only when no host can take the remaining work. `fail_fast` cancels the rest on the first failure.
-- **No hosts**: with a local target (`--local` or local mode) subtasks run locally, one after another.
+- **Local target**: with `--local` or local mode, `resolveTargetHosts` gives the orchestrator the local host as its one host, so subtasks run on it with its lock, as with `--host`. With no local host there are no hosts, and `runLocal` runs subtasks here one after another, with no lock.
 - **Output and logs**: `OutputManager` renders progress, stream, verbose or quiet modes. Each subtask's output is saved to `~/.rr/logs/<task>-<timestamp>/<subtask>_<index>.log` with a `summary.json`, and the structured result carries per-subtask failures, plus `no_tests: true` and a `no_tests_tasks` list when subtasks collected nothing.
 
 `rr run --repeat N` and `rr <task> --repeat N` use the same orchestrator to run one command N times across hosts for flake hunting.
@@ -2066,7 +2071,7 @@ STATUS COMMANDS
 
 HOST MANAGEMENT
   host list           List configured hosts (alias: ls)
-  host add            Add a new host interactively
+  host add            Add a new host interactively (--local --name <n> for this machine)
   host remove <name>  Remove a host (alias: rm)
 
 MAINTENANCE
@@ -2089,7 +2094,7 @@ GLOBAL FLAGS
 RUN/EXEC FLAGS
       --host string            Target host name
       --tag string             Select host by tag
-      --local                  Force local execution
+      --local                  Force local execution (through the local host if one is configured)
       --cwd string             Remote subdirectory to run in (relative to project root)
       --probe-timeout string   SSH probe timeout
       --pull stringArray       Pull files from remote after the command
