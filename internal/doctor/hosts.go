@@ -241,6 +241,21 @@ func ScopeHosts(projectCfg *config.Config, globalCfg *config.GlobalConfig) ([]st
 	}, "")
 }
 
+// AllLocal reports whether the hosts in scope are all local (local: true), so
+// nothing in the run needs SSH. An empty scope is not all-local: with no hosts
+// to go by, the SSH checks still apply.
+func AllLocal(names []string, hosts map[string]config.Host) bool {
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if !hosts[name].Local {
+			return false
+		}
+	}
+	return true
+}
+
 // HostResolutionCheck reports that the project's host list can't be resolved
 // (for example, it names a host missing from the global config). rr run
 // fails the same way, so this is a failure.

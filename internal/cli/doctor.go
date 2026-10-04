@@ -306,8 +306,11 @@ func collectChecks(cfgPath string, projectCfg *config.Config, globalCfg *config.
 		checks = append(checks, &doctor.HostResolutionCheck{Err: err})
 	}
 
-	// SSH checks (always run)
-	checks = append(checks, doctor.NewSSHChecks()...)
+	// SSH checks run unless every host in scope is local: a local host has no
+	// SSH, so a missing key or agent isn't a problem worth a warning.
+	if !doctor.AllLocal(hostNames, hosts) {
+		checks = append(checks, doctor.NewSSHChecks()...)
+	}
 
 	// Host connectivity checks for the hosts in scope
 	if len(hostNames) > 0 {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/setup"
@@ -24,6 +25,17 @@ func Setup(opts SetupOptions) error {
 		return errors.New(errors.ErrConfig,
 			"Which host should I set up?",
 			"Usage: rr setup <host>  (e.g., rr setup user@myserver)")
+	}
+
+	// A local host runs on this machine, so there's no SSH to set up. An
+	// unreadable global config isn't an error here: the argument may be a
+	// user@host that isn't configured at all.
+	if globalCfg, err := config.LoadGlobal(); err == nil {
+		if h, ok := globalCfg.Hosts[opts.Host]; ok && h.Local {
+			return errors.New(errors.ErrConfig,
+				fmt.Sprintf("'%s' is a local host; there's no SSH to set up", opts.Host),
+				"It runs on this machine already. Run 'rr doctor' to check it, or name a remote host.")
+		}
 	}
 
 	fmt.Printf("Setting up SSH for '%s'\n\n", opts.Host)

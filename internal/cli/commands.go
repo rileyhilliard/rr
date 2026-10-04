@@ -240,9 +240,9 @@ Examples:
 // monitorCmd starts the TUI monitoring dashboard
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
-	Short: "Real-time system metrics dashboard for remote hosts",
+	Short: "Real-time system metrics dashboard for hosts",
 	Long: `Start an interactive TUI dashboard showing real-time system metrics
-for all configured remote hosts.
+for all configured hosts.
 
 Displays CPU, RAM, GPU (if available), and network metrics with
 color-coded status indicators and responsive layout.

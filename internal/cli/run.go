@@ -493,7 +493,11 @@ func renderFailureHelp(exitCode int, command, host string, localHost bool) {
 		if !localHost {
 			fmt.Printf("%s\n", mutedStyle.Render(fmt.Sprintf("  - Run the command directly: ssh %s %q", host, command)))
 		}
-		fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))
+		if localHost {
+			fmt.Printf("%s\n", mutedStyle.Render("  - Check the command output above and your local environment"))
+		} else {
+			fmt.Printf("%s\n", mutedStyle.Render("  - Check remote logs or environment"))
+		}
 		fmt.Printf("%s\n", mutedStyle.Render("  - Run 'rr doctor' to verify configuration"))
 	}
 }
