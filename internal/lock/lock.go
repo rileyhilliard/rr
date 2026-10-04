@@ -94,7 +94,8 @@ type Lock struct {
 	heartbeatDone chan struct{}
 	heartbeatMu   sync.Mutex
 
-	infoMu sync.Mutex // serializes Info updates and their writes
+	infoMu   sync.Mutex // serializes Info updates, their writes, and Release
+	released bool       // set by Release; later calls leave the lock dir alone
 }
 
 // Acquire attempts to acquire a distributed lock on the remote host.
@@ -588,6 +589,16 @@ func (l *Lock) Release() error {
 	}
 
 	l.StopHeartbeat()
+
+	// Release runs once. A run releases early, when its command finishes,
+	// and again when its workflow closes; by then another run may hold the
+	// lock, and removing the dir again would delete that run's lock.
+	l.infoMu.Lock()
+	defer l.infoMu.Unlock()
+	if l.released {
+		return nil
+	}
+	l.released = true
 	return forceRemove(l.conn.Client, l.Dir)
 }
 
@@ -599,6 +610,9 @@ func (l *Lock) UpdateCommand(command string) error {
 	}
 	l.infoMu.Lock()
 	defer l.infoMu.Unlock()
+	if l.released {
+		return nil // the dir may belong to another run now
+	}
 
 	// Update the in-memory info
 	l.Info.Command = command
@@ -615,6 +629,9 @@ func (l *Lock) SetJobPGID(pgid int) error {
 	}
 	l.infoMu.Lock()
 	defer l.infoMu.Unlock()
+	if l.released {
+		return nil // the dir may belong to another run now
+	}
 
 	l.Info.JobPGID = pgid
 	return l.writeInfo()
