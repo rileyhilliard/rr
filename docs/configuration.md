@@ -589,6 +589,7 @@ When multiple hosts are configured, `rr` distributes work automatically:
    - `always`: runs locally right away with a loud warning (and `details.fallback` in structured output). If any lock holder is on this same machine (likely your own other run), it first waits up to `wait_timeout` for a host to free up.
    - `never` / `on-unreachable`: waits up to `wait_timeout`, cycling through the hosts, then fails with the lock holders listed. The wait emits a `connect` `waiting` event naming the holders, and Ctrl+C stops it with `INTERRUPTED` (exit 130) without falling back
    - If this machine's [local host](#local-host) is locked, whether or not it's one of the hosts tried, `rr` waits and fails as with `never`, whatever `local_fallback` says
+   - A [host-restricted task](#host-restricted-tasks) whose `hosts:` list leaves out this machine also waits and fails as with `never`
 
 ```yaml
 lock:
@@ -1020,7 +1021,14 @@ This task only runs on the `server` host, regardless of the default. rr picks
 among the task's hosts (in the project's `hosts:` order), so a busy or
 unreachable host outside the list is never tried. `--host` must name one of
 them, or the task is refused with `CONFIG_INVALID` before rr waits on that
-host's lock.
+host's lock. `--tag` picks among them too; a tag that only hosts outside the
+list carry is refused up front with `CONFIG_INVALID`, naming the task's hosts.
+
+`local_fallback` doesn't apply to a restricted task unless its list names
+your local host: when its hosts are unreachable the run fails with
+`SSH_CONNECTION_FAILED` naming them, and when they're all locked it waits for them as
+with `local_fallback: never`. It never falls back to this machine just to be
+refused there.
 
 The restriction holds inside parallel groups too: a restricted subtask is
 scheduled only on a host it allows, and the run fails up front if `--host` or
