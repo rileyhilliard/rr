@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/lock"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
 )
 
@@ -51,6 +52,12 @@ type Config struct {
 	// dead-holder lock was stolen) so the CLI can report them. The lock
 	// package doesn't print them itself.
 	OnLockWarn func(hostName, msg string)
+
+	// OnLockWait, if set, is called once per host when its worker finds the
+	// host's lock held and starts waiting, with the holder (nil when its
+	// info can't be read), so the CLI can say who the run is waiting on.
+	// Workers call it concurrently.
+	OnLockWait func(hostName string, holder *lock.LockInfo)
 }
 
 // DefaultConfig returns a Config with sensible defaults.

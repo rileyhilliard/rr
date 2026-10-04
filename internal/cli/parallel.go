@@ -15,6 +15,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/output/formatters"
 	"github.com/rileyhilliard/rr/internal/parallel"
 	"github.com/rileyhilliard/rr/internal/parallel/logs"
@@ -123,10 +124,7 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 		Setup:       task.Setup,
 		SyncOptions: syncNotices.optionsFor,
 	}
-	if !PrettyMode() {
-		parallelCfg.OnRequeue = requeuedEvent
-	}
-	parallelCfg.OnLockWarn = func(hostName, msg string) { lockWarn(hostName)(msg) }
+	setParallelEventHooks(&parallelCfg, resolved.Project.Lock.Timeout)
 
 	// Apply CLI overrides
 	if opts.FailFast {
@@ -196,6 +194,12 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	if stopErr := interruptedBeforeRunning(ctx, result); stopErr != nil {
+		if logWriter != nil {
+			writeTaskLogs(logWriter, result, opts.TaskName)
+		}
+		return 130, stopErr
+	}
 
 	// Pull every subtask's files, pass or fail: a failed shard's junit and
 	// coverage files are what you need to debug it. Skipped on Ctrl+C.
@@ -204,6 +208,39 @@ func RunParallelTask(opts ParallelTaskOptions) (int, error) {
 	}
 
 	return renderParallelResult(result, logWriter, opts.TaskName, target.reason), nil
+}
+
+// setParallelEventHooks makes workers report re-queues, lock waits and lock
+// warnings the way a single run does. Re-queues and lock waits are events
+// in structured mode only: pretty mode shows a re-queued or waiting subtask
+// in the live display, which has no line for the holder. lockTimeout is how
+// long a worker waits for a host's lock.
+func setParallelEventHooks(cfg *parallel.Config, lockTimeout time.Duration) {
+	if !PrettyMode() {
+		cfg.OnRequeue = requeuedEvent
+		cfg.OnLockWait = func(hostName string, holder *lock.LockInfo) {
+			lockWaitingEvent(hostName, holder, lockTimeout)
+		}
+	}
+	cfg.OnLockWarn = func(hostName, msg string) { lockWarn(hostName)(msg) }
+}
+
+// interruptedBeforeRunning returns the lock wait's INTERRUPTED error when
+// the user stopped the run (ctx cancelled) while every subtask was still
+// waiting for its host's lock, so none ran: the run then fails the way a
+// single run's interrupted wait does, exit 130, rather than as failed
+// subtasks an agent would retry. It returns nil when any subtask ended
+// another way (ran, failed to connect), and the result is reported as usual.
+func interruptedBeforeRunning(ctx context.Context, result *parallel.Result) error {
+	if ctx.Err() == nil || len(result.TaskResults) == 0 {
+		return nil
+	}
+	for i := range result.TaskResults {
+		if !errors.IsCode(result.TaskResults[i].Error, errors.ErrInterrupted) {
+			return nil
+		}
+	}
+	return result.TaskResults[0].Error
 }
 
 // renderParallelResult writes the logs and reports the run's result.

@@ -242,6 +242,9 @@ func (w *hostWorker) lockAndSync(ctx context.Context) error {
 		if onWarn := w.orchestrator.config.OnLockWarn; onWarn != nil {
 			lockOpts = append(lockOpts, lock.WithWarnFunc(func(msg string) { onWarn(w.hostName, msg) }))
 		}
+		if onWait := w.orchestrator.config.OnLockWait; onWait != nil {
+			lockOpts = append(lockOpts, lock.WithWaitFunc(func(holder *lock.LockInfo) { onWait(w.hostName, holder) }))
+		}
 		hostLock, err := lock.Acquire(w.conn, lockCfg, "starting...", lockOpts...)
 		if err != nil {
 			return err
