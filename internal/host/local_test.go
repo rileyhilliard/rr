@@ -146,3 +146,24 @@ func TestSelector_HostInfoLocal(t *testing.T) {
 	assert.Equal(t, []string{"local"}, info[0].SSH)
 	assert.Equal(t, "/work/proj", info[0].Dir)
 }
+
+// A local host connection made without a dir (the lock and fallback paths
+// build one from the global config) gets the project root, so a command
+// built for it never runs in the home directory it starts in.
+func TestNewLocalHostConnection_DefaultsDirToProjectRoot(t *testing.T) {
+	project := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(project, ".rr.yaml"), []byte("version: 1\n"), 0o644))
+	sub := filepath.Join(project, "pkg")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	t.Chdir(sub)
+
+	conn := NewLocalHostConnection("dev", config.Host{Local: true})
+	got, err := filepath.EvalSymlinks(conn.Host.Dir)
+	require.NoError(t, err)
+	want, err := filepath.EvalSymlinks(project)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	set := NewLocalHostConnection("dev", config.Host{Local: true, Dir: "/elsewhere"})
+	assert.Equal(t, "/elsewhere", set.Host.Dir, "a dir that's set is kept")
+}

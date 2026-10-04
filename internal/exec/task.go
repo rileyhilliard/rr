@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -268,6 +269,16 @@ const DefaultShell = "${SHELL:-/bin/bash}"
 // The trailing semicolon ensures this is always a successful command that can be followed by &&.
 const rcSourceCommand = `[ -f ~/.bashrc ] && . ~/.bashrc || true; [ -f ~/.zshrc ] && . ~/.zshrc || true;`
 
+// posixShell reports whether shell (a path, as in $SHELL) is unset or a shell
+// that runs the sh syntax BuildRemoteCommand produces.
+func posixShell(shell string) bool {
+	switch filepath.Base(shell) {
+	case ".", "sh", "bash", "zsh", "dash", "ksh":
+		return true
+	}
+	return false
+}
+
 // BuildRemoteCommand builds the command `rr run` sends to a host: rc files
 // sourced (except on a local host, which already runs in the user's session
 // environment), then the host's setup commands, a cd into the host dir, and cmd,
@@ -307,6 +318,11 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	shell := host.Shell
 	if shell == "" {
 		shell = DefaultShell
+		// A local host runs under the user's own $SHELL, which may be one
+		// (fish, nu) that can't run this sh syntax.
+		if host.Local && !posixShell(os.Getenv("SHELL")) {
+			shell = "/bin/bash"
+		}
 	}
 
 	// Escape special characters so they're evaluated inside the shell -c, not by the outer shell.

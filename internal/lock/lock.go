@@ -394,6 +394,17 @@ func IsLocked(conn *host.Connection, cfg config.LockConfig) bool {
 	return true
 }
 
+// IsHeld is IsLocked, except that a lock held by a process on this machine
+// that is no longer running counts as free: Acquire would steal it at once
+// (see stealDeadHolderLock), so it isn't holding anything up. It only reads.
+func IsHeld(conn *host.Connection, cfg config.LockConfig) bool {
+	if !IsLocked(conn, cfg) {
+		return false
+	}
+	info := GetLockInfo(conn, cfg)
+	return info == nil || !info.IsDeadLocalHolder()
+}
+
 // GetLockHolder returns information about the current lock holder, if any.
 // Returns empty string if no lock is held.
 func GetLockHolder(conn *host.Connection, cfg config.LockConfig) string {

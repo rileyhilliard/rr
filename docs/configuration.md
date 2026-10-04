@@ -158,6 +158,8 @@ What's different:
 
 - **It runs in place**, in the local project directory (the directory holding `.rr.yaml`, or the current directory without one), with no rsync. So `ssh` and `dir` aren't allowed, and local paths in commands aren't rewritten. A run sees your working tree as it is, including edits you make while it runs, and anything it writes (build output, coverage files) lands in your checkout. Subtasks of a parallel task that land on it share that directory, the same as subtasks on one remote host share its `dir`.
 - **It keeps your environment.** A remote command sources `~/.bashrc` and `~/.zshrc` first, because SSH sessions don't. A local host's command skips that and inherits `rr`'s environment, so an activated virtualenv or `nvm use` stays in effect.
+- **Its shell is `$SHELL`**, the way a remote runs your login shell, unless `$SHELL` isn't a POSIX shell (fish, nu): then it's `/bin/bash`. Set `shell` to pick another.
+- **It has no terminal**, like an SSH command without a pty: a command that reads `/dev/tty` (a password prompt) fails at once instead of hanging. Ctrl+C stops the command and anything it started in the background before the lock is released; a second Ctrl+C kills them and quits.
 - **Sync and pull.** `rr sync` and `rr pull` never pick it: with no `--host` they use the first remote host, and `--host dev` is a config error, since there's nothing to sync to or pull from. A run's `pull:` or `--pull` copies the files from the project directory to the destination with a local rsync. When the destination is the project directory itself, nothing is copied and the pull phase is reported as skipped (`reason: same_dir`). Parallel subtasks get their own `<dest>/<name>_<index>/` copy, as on a remote host. `rr prune` reports it as skipped.
 
 Only one host can be `local`.
@@ -351,7 +353,7 @@ Env values are double-quoted, so the shell expands some things and leaves the re
 
 One edge case follows from the quoting: a literal backslash can't sit directly before an expanded variable, because `\$` always means a literal `$`.
 
-Names must be valid shell variable names: letters, digits, and underscores, not starting with a digit. A value with an unclosed `${` or `$(`, or an unclosed quote inside `$(...)`, is rejected when the config loads, with an error naming the key. Commands run in the remote user's login shell (or `$SHELL` locally), which must be POSIX-compatible; fish is not supported.
+Names must be valid shell variable names: letters, digits, and underscores, not starting with a digit. A value with an unclosed `${` or `$(`, or an unclosed quote inside `$(...)`, is rejected when the config loads, with an error naming the key. Commands run in the remote user's login shell (or `$SHELL` locally), which must be POSIX-compatible; fish is not supported (a `local: true` host uses `/bin/bash` in place of a non-POSIX `$SHELL`).
 
 ## Host resolution order
 

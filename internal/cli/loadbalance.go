@@ -326,7 +326,8 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 
 // machineBusy reports whether this machine's local host is locked: it's
 // among the locked attempts, or it's in the global config (outside the pool
-// this run tried, because of hosts: or --tag) and another run holds its lock.
+// this run tried, because of hosts: or --tag) and another live run holds its
+// lock. A lock left by a dead process on this machine doesn't count.
 func machineBusy(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config.LockConfig) bool {
 	for _, a := range lockedHosts {
 		if a.conn != nil && a.conn.Host.Local {
@@ -337,7 +338,7 @@ func machineBusy(ctx *WorkflowContext, lockedHosts []hostAttempt, lockCfg config
 		return false
 	}
 	conn := host.LocalMachineConnection(ctx.Resolved.Global.Hosts)
-	return conn != nil && lock.IsLocked(conn, lockCfg)
+	return conn != nil && lock.IsHeld(conn, lockCfg)
 }
 
 // fallBackLocally reports a local fallback (warning event plus

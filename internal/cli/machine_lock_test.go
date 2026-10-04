@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -185,4 +186,33 @@ func TestMachineBusy_LocalHostOutsidePool(t *testing.T) {
 
 	ctx.Resolved.Global.Hosts = map[string]config.Host{"box": {SSH: []string{"box"}}}
 	assert.False(t, machineBusy(ctx, lockedRemote, lockCfg), "no local host, nothing to protect")
+}
+
+// A lock on the local host left by a dead rr process on this machine doesn't
+// make the machine busy: the next Acquire steals it at once.
+func TestMachineBusy_DeadLocalHolderIsFree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("dead-pid detection is Unix-only")
+	}
+	lockCfg := config.LockConfig{Enabled: true, Timeout: time.Second, Stale: time.Minute, Dir: filepath.Join(t.TempDir(), "locks")}
+	ctx := &WorkflowContext{Resolved: &config.ResolvedConfig{Global: &config.GlobalConfig{Hosts: map[string]config.Host{
+		"dev": {Local: true},
+		"box": {SSH: []string{"box"}},
+	}}}}
+	lockedRemote := []hostAttempt{{hostName: "box", conn: &host.Connection{Name: "box", Host: config.Host{SSH: []string{"box"}}}}}
+
+	gone := exec.Command("true")
+	require.NoError(t, gone.Run())
+	info, err := lock.NewLockInfo("rr test (killed)")
+	require.NoError(t, err)
+	info.PID = gone.Process.Pid
+	data, err := info.Marshal()
+	require.NoError(t, err)
+	lockDir := filepath.Join(lockCfg.Dir, "rr.lock")
+	require.NoError(t, os.MkdirAll(lockDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(lockDir, "info.json"), data, 0o644))
+
+	assert.False(t, machineBusy(ctx, lockedRemote, lockCfg))
+	_, statErr := os.Stat(lockDir)
+	assert.NoError(t, statErr, "the check only reads; the lock is left for Acquire to steal")
 }
