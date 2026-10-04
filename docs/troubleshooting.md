@@ -229,15 +229,29 @@ fi
        dir: ~/projects/${PROJECT}
    ```
 
-### "uses ProxyJump which is not yet supported"
+### "Couldn't reach '...' through jump host '...'"
 
-rr reads `HostName`, `Port`, `User`, `IdentityFile`, `IdentityAgent`, and `ProxyCommand` from `~/.ssh/config`, but not `ProxyJump`. Replace it with the equivalent `ProxyCommand`:
+The host's `ProxyJump` failed: rr connects through the jump host as OpenSSH does, by running `ssh -W` to it, and that leg didn't get through. The line under the message is what `ssh` printed, such as `Could not resolve hostname bastion` or `connect failed: No route to host`. `rr status` shows the same failure as, for example, "hostname not found via jump host 'bastion'".
 
+Check each leg in turn:
+
+1. The jump host on its own: `ssh bastion`. If that fails, fix it first. It's resolved through `~/.ssh/config` like any other host.
+2. The target from the jump host: the `HostName` and `Port` in the error are where the jump host was asked to connect. If they're a LAN address, the jump host has to be on that network.
+
+"Timed out reaching '...' through jump host '...'" means nothing answered within the probe timeout (`probe_timeout`, 2s by default). That can be either leg: a jump host that's slow to connect, or a target it can't reach. Two SSH handshakes, one per leg, can take longer than 2s over a VPN or a chain of jump hosts. If `ssh <target>` works but is slow, raise the timeout in `~/.rr/config.yaml`:
+
+```yaml
+defaults:
+  probe_timeout: 5s
 ```
-Host myserver
-    HostName 10.0.0.5
-    ProxyCommand ssh -W %h:%p bastion
-```
+
+rr runs the jump `ssh` in batch mode and detached from the terminal, so no jump host can stop to ask for a password, a passphrase, or whether to trust a new host key. Anything that would prompt fails right away, with `ssh`'s reason. Connect with `ssh <jump-host>` once to answer those prompts.
+
+"Couldn't run ssh to reach '...' through jump host '...'" means the `ssh` client isn't on `PATH`. rr needs it for `ProxyJump`.
+
+When the jump host works but the target refuses the handshake, such as an unknown host key or a rejected key, the error is the target's ("SSH handshake with '...' didn't go through"), not the jump host's. So is "'...' closed the connection before the SSH handshake": the jump host reached the target's SSH server, which hung up. The target's key is checked under its `HostName`, which you may never have connected to directly, so connect once with `ssh <target>` to record it.
+
+A failing `ProxyCommand` gives the same errors, naming the `ProxyCommand` instead of a jump host. `none` turns either off. When a host gets both, rr uses the `ProxyCommand`; OpenSSH uses whichever appears first in the file, so keep only one per host.
 
 ### "command not found" on remote
 

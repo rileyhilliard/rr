@@ -1,6 +1,7 @@
 package host
 
 import (
+	stderrors "errors"
 	"fmt"
 	"net"
 	"strings"
@@ -15,6 +16,22 @@ type ProbeError struct {
 	SSHAlias string
 	Reason   ProbeFailReason
 	Cause    error
+	// Via names the proxy the connection went through when the failure was
+	// in it ("jump host 'bastion'" or "ProxyCommand"), so the reason isn't
+	// read as being about the alias itself. Empty for a direct connection.
+	Via string
+}
+
+// Summary is the reason for display, naming the proxy when the failure was
+// in it: "hostname not found via jump host 'bastion'".
+func (e *ProbeError) Summary() string {
+	if e.Via == "" {
+		return e.Reason.String()
+	}
+	if e.Reason == ProbeFailUnknown {
+		return "failed via " + e.Via
+	}
+	return e.Reason.String() + " via " + e.Via
 }
 
 // ProbeFailReason categorizes why a probe failed.
@@ -54,10 +71,18 @@ func (r ProbeFailReason) String() string {
 }
 
 func (e *ProbeError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("probe %s failed: %s (%v)", e.SSHAlias, e.Reason, e.Cause)
+	if e.Cause == nil {
+		return fmt.Sprintf("probe %s failed: %s", e.SSHAlias, e.Summary())
 	}
-	return fmt.Sprintf("probe %s failed: %s", e.SSHAlias, e.Reason)
+	// The cause is usually the dial's formatted error, with its message and
+	// advice; its own cause (what the network or the proxy said) is the part
+	// worth showing on one line.
+	detail := e.Cause
+	var rrErr *errors.Error
+	if stderrors.As(e.Cause, &rrErr) && rrErr.Cause != nil {
+		detail = rrErr.Cause
+	}
+	return fmt.Sprintf("probe %s failed: %s (%v)", e.SSHAlias, e.Summary(), detail)
 }
 
 func (e *ProbeError) Unwrap() error {
@@ -174,10 +199,21 @@ func categorizeProbeError(sshAlias string, err error) *ProbeError {
 		return nil
 	}
 
+	var proxyErr *sshutil.ProxyError
+	if stderrors.As(err, &proxyErr) {
+		if proxyErr.JumpHost != "" {
+			probeErr.Via = fmt.Sprintf("jump host '%s'", proxyErr.JumpHost)
+		} else {
+			probeErr.Via = proxyErr.Directive
+		}
+	}
+
 	errStr := strings.ToLower(err.Error())
 
-	// Check for DNS/hostname resolution failure
+	// Check for DNS/hostname resolution failure ("could not resolve
+	// hostname" is ssh's wording, from a jump host or ProxyCommand)
 	if strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "could not resolve hostname") ||
 		strings.Contains(errStr, "lookup") && strings.Contains(errStr, "failed") ||
 		strings.Contains(errStr, "nodename nor servname provided") ||
 		strings.Contains(errStr, "name or service not known") {
@@ -186,7 +222,7 @@ func categorizeProbeError(sshAlias string, err error) *ProbeError {
 	}
 
 	// Check for timeout
-	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "i/o timeout") {
+	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "timed out") {
 		probeErr.Reason = ProbeFailTimeout
 		return probeErr
 	}
@@ -222,7 +258,7 @@ func categorizeProbeError(sshAlias string, err error) *ProbeError {
 	}
 
 	// Check for host key issues
-	if strings.Contains(errStr, "host key") {
+	if strings.Contains(errStr, "host key") || strings.Contains(errStr, "knownhosts:") {
 		probeErr.Reason = ProbeFailHostKey
 		return probeErr
 	}

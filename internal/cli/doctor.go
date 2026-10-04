@@ -660,8 +660,9 @@ func formatProbeError(err error) string {
 		return "Connection failed"
 	}
 
-	// For known error types, return the friendly description
-	return capitalizeFirst(probeErr.Reason.String())
+	// For known error types, return the friendly description, naming the
+	// jump host or ProxyCommand when the failure was there
+	return capitalizeFirst(probeErr.Summary())
 }
 
 // getSSHErrorSuggestion returns an actionable suggestion for an SSH error.
@@ -675,6 +676,12 @@ func getSSHErrorSuggestion(err error, alias string) string {
 	probeErr, ok := err.(*host.ProbeError)
 	if !ok {
 		return fmt.Sprintf("Try connecting directly: ssh %s", alias)
+	}
+
+	// The reason is about the jump host or ProxyCommand, not the alias, so
+	// the advice below would point at the wrong machine
+	if probeErr.Via != "" {
+		return fmt.Sprintf("The failure was in its %s. Check that first, then try: ssh -v %s", probeErr.Via, alias)
 	}
 
 	switch probeErr.Reason {

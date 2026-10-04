@@ -183,14 +183,14 @@ This will:
 
 ## How rr uses your SSH config
 
-rr doesn't shell out to `ssh`. It uses its own SSH client, which reads `~/.ssh/config` but only understands part of it:
+rr runs commands over its own SSH client, not `ssh` (sync uses rsync, which does use `ssh`). That client reads `~/.ssh/config` but only understands part of it:
 
 | Option | Supported |
 |--------|-----------|
 | `HostName`, `Port`, `User`, `IdentityFile` | Yes |
 | `IdentityAgent` (1Password, Secretive, YubiKey agents) | Yes |
 | `ProxyCommand` | Yes |
-| `ProxyJump` | No. rr warns; use `ProxyCommand ssh -W %h:%p <jump-host>` instead |
+| `ProxyJump` | Yes. rr runs `ssh -W` to the jump host, as OpenSSH does, so the jump host is resolved through your config and your `ssh`. Chains (`a,b`) and `ProxyJump none` work. A `ProxyCommand` on the same host wins, where OpenSSH takes whichever comes first |
 | `Match` blocks | No. Host entries after the first `Match` line aren't seen, so put the hosts rr uses above it |
 
 For authentication, rr tries the SSH agent first, then the `IdentityFile` from your config, then `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, and `~/.ssh/id_ecdsa`. It can't prompt for a passphrase, so passphrase-protected keys have to be loaded in the agent.

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ProxyJump` in `~/.ssh/config`. rr connects through the jump host as OpenSSH does, by running `ssh -W` to it, including chains (`a,b`), `user@host:port`, `[v6]:port` and `ssh://` jump hosts, and `ProxyJump none`. rr starts that `ssh` without a shell, in batch mode and detached from the terminal, so a prompt from any jump host fails with `ssh`'s reason instead of waiting on an answer rr can't give. A `ProxyCommand` on the same host wins (OpenSSH uses whichever appears first in the file), and `ProxyCommand none` now turns a proxy off rather than being run as a command. rr used to warn that `ProxyJump` was unsupported (once per probe, so `rr monitor` repeated it on every refresh) and dial the target directly, which fails when the jump host is the only way in.
+
+### Fixed
+
+- A failure in a jump host or `ProxyCommand` was reported as the target's: "SSH handshake ... didn't go through. Try: ssh <host>" when the proxy failed after the first 100ms, or "Check the remote host is running SSH" when it timed out. It now says "Couldn't reach 'X' through jump host 'J'" (or "through its ProxyCommand"), with what `ssh` printed as the cause and advice to check the jump host, then the target from it. `rr status`, `rr doctor` and the connect progress show it as, for example, "hostname not found via jump host 'bastion'". When the jump host gets through and the target refuses the handshake or hangs up, the error is the target's.
+- SSH suggestions printed a literal `<host>` or `<hostname>` placeholder; they now name the host.
+- A target's host key missing from `~/.ssh/known_hosts` (`knownhosts: key is unknown`) was an unknown failure with "Something went wrong during SSH setup". It's now `SSH_HOST_KEY`, with the `ssh -o StrictHostKeyChecking=accept-new <host> exit` command to accept it.
+- "host key mismatch ... server sent ecdsa-sha2-nistp256 key" for a host that `known_hosts` knows by another key type. `ssh` records only the key it negotiated (usually ed25519), and rr asked for ecdsa first, so a host accepted with `ssh -o StrictHostKeyChecking=accept-new <host> exit` failed in rr. rr now asks for the key types `known_hosts` has for the host, as OpenSSH does.
+- With several project hosts, "Couldn't connect to any host" dropped each host's failure. It now keeps them as the cause, so the error says why each alias failed.
+
 ## [0.29.1] - 2026-10-04
 
 ### Added
