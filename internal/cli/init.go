@@ -206,7 +206,7 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 		machine.name = hostname
 	}
 
-	if err := promptMachineName(&machine.name); err != nil {
+	if err := promptMachineName(&machine.name, validateMachineName); err != nil {
 		return nil, false, err
 	}
 
@@ -237,7 +237,7 @@ func collectMachineConfig(excludeSSHHosts []string, skipProbe bool) (*machineCon
 }
 
 // promptMachineName prompts for a friendly name for the machine.
-func promptMachineName(name *string) error {
+func promptMachineName(name *string, validate func(string) error) error {
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -245,21 +245,24 @@ func promptMachineName(name *string) error {
 				Description("A friendly name to identify this machine in your config").
 				Placeholder("gpu-box").
 				Value(name).
-				Validate(func(s string) error {
-					if strings.TrimSpace(s) == "" {
-						return fmt.Errorf("machine name is required")
-					}
-					if strings.ContainsAny(s, " \t\n") {
-						return fmt.Errorf("machine name cannot contain whitespace")
-					}
-					return nil
-				}),
+				Validate(validate),
 		),
 	)
 	if err := form.Run(); err != nil {
 		return errors.WrapWithCode(err, errors.ErrConfig,
 			"Couldn't get your input",
 			"Your terminal might not support the prompts. Try --non-interactive mode instead.")
+	}
+	return nil
+}
+
+// validateMachineName checks a machine name typed at the name prompt.
+func validateMachineName(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return fmt.Errorf("machine name is required")
+	}
+	if strings.ContainsAny(s, " \t\n") {
+		return fmt.Errorf("machine name cannot contain whitespace")
 	}
 	return nil
 }
