@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.3] - 2026-10-05
+
+### Fixed
+
+- `brew upgrade` and `brew cleanup` on Homebrew 7 warned "Calling `postflight` is deprecated! Use `postflight_steps` instead" and asked you to report it to the tap. The cask now removes the macOS quarantine attribute in a `postflight_steps` block. The rr binary is unchanged; the warning stops once you upgrade to this release.
+
 ## [0.29.2] - 2026-10-04
 
 ### Added
