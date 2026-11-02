@@ -97,7 +97,7 @@ Claude Code reads `CLAUDE.md`, which imports this file. Hooks in `.claude/` bloc
 
 ## Deploy
 
-Cloudflare Pages project `rr`, production at rr.steamfield.io, deployed by Cloudflare's Git integration: root directory `site`, build command `make build`, output `dist`, bun as the package manager, build watch paths matching `.github/workflows/site.yml`. `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` are Pages build variables. `make deploy-check` verifies headers and URLs locally; `make deploy-preview BRANCH=…` and `make deploy` upload from a machine with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Headers live in `public/_headers`; add `public/_redirects` only for moved pages. `.github/workflows/site.yml` runs the checks (not a required check).
+Cloudflare Pages project `rr` (`rr-aqz.pages.dev`), production at rr.steamfield.io through a proxied CNAME in the steamfield.io zone, deployed by Cloudflare's Git integration from `main`, with a preview for every branch: root directory `site`, build command `bun install --frozen-lockfile && make build`, output `dist`, `BUN_VERSION` and `NODE_VERSION` build variables matching `package.json` and `.node-version`. Build watch paths are `site/*`, `docs/*`, `CHANGELOG.md` and `README.md`, the inputs that change the built pages; the Go paths in `.github/workflows/site.yml` only feed drift tests. `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` are Pages build variables. `make deploy-check` verifies headers and URLs locally; `make deploy-preview BRANCH=…` and `make deploy` upload from a machine with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Headers live in `public/_headers`; add `public/_redirects` only for moved pages. `.github/workflows/site.yml` runs the checks (not a required check).
 
 ## Build workarounds
 
@@ -117,7 +117,6 @@ Things in the tree that exist to get a build through, not because they are right
 
 ## Pending user actions
 
-- Create the Cloudflare Pages project with Git integration (settings under Deploy) and attach rr.steamfield.io.
 - Create a PostHog project, set `PUBLIC_POSTHOG_KEY` (and host) as Pages build variables, and enable cookieless tracking in its settings, or its events are ignored.
 - Review the scrub summary and fixture diffs before committing recordings.
 
