@@ -1,0 +1,26 @@
+?   	github.com/rileyhilliard/rr/cmd/rr	[no test files]
+ok  	github.com/rileyhilliard/rr/internal/cli	17.243s
+ok  	github.com/rileyhilliard/rr/internal/config	2.161s
+ok  	github.com/rileyhilliard/rr/internal/deps	0.129s
+ok  	github.com/rileyhilliard/rr/internal/doctor	0.237s
+ok  	github.com/rileyhilliard/rr/internal/errors	0.140s
+ok  	github.com/rileyhilliard/rr/internal/exec	2.333s
+ok  	github.com/rileyhilliard/rr/internal/host	4.091s
+ok  	github.com/rileyhilliard/rr/internal/host/testing	0.146s
+ok  	github.com/rileyhilliard/rr/internal/lock	14.318s
+ok  	github.com/rileyhilliard/rr/internal/lock/testing	0.324s
+ok  	github.com/rileyhilliard/rr/internal/logger	0.081s
+ok  	github.com/rileyhilliard/rr/internal/monitor	0.349s
+ok  	github.com/rileyhilliard/rr/internal/output	0.217s
+ok  	github.com/rileyhilliard/rr/internal/output/formatters	0.093s
+ok  	github.com/rileyhilliard/rr/internal/parallel	0.495s
+ok  	github.com/rileyhilliard/rr/internal/parallel/logs	0.104s
+ok  	github.com/rileyhilliard/rr/internal/require	0.134s
+ok  	github.com/rileyhilliard/rr/internal/setup	2.046s
+ok  	github.com/rileyhilliard/rr/internal/sync	0.952s
+ok  	github.com/rileyhilliard/rr/internal/sync/testing	0.078s
+ok  	github.com/rileyhilliard/rr/internal/ui	1.739s
+ok  	github.com/rileyhilliard/rr/internal/util	0.149s
+ok  	github.com/rileyhilliard/rr/pkg/sshutil	5.244s
+ok  	github.com/rileyhilliard/rr/pkg/sshutil/testing	0.080s
+ok  	github.com/rileyhilliard/rr/tests/integration	0.723s

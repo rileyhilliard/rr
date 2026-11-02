@@ -1,0 +1,43 @@
+
+────────────────────────────────────────────────────────────
+
+Parallel Execution Summary
+
+  ✕ test-backend-api on mbp (3m29.9s)
+    failed
+    ... (217 lines omitted)
+      service=opendata
+      user_agent=python-httpx/0.28.1
+      request_id=feed236c-cba0-47f9-8f53-4b0a59b80ce9
+    =========================== short test summary info ============================
+    FAILED tests/api/test_rate_limit_analytics.py::TestRateLimitHitAnalytics::test_signup_gate_403_fires_rate_limit_hit
+    FAILED tests/api/test_rate_limit_analytics.py::TestRateLimitHitAnalytics::test_429_fires_rate_limit_hit
+    FAILED tests/api/test_rate_limit_analytics.py::TestRateLimitHitAnalytics::test_no_event_when_analytics_unconfigured
+    FAILED tests/api/test_rate_limit_analytics.py::TestRateLimitHitCallerProperties::test_429_carries_caller_properties_and_no_raw_ip_or_ua
+    FAILED tests/api/test_rate_limit_analytics.py::TestOtherRateLimitHitSources::test_anonymous_deep_pagination_fires_rate_limit_hit
+    5 failed, 1680 passed in 200.99s (0:03:20)
+  ◉ test-backend-infra on m4-mini (4m24.1s)
+  ◉ test-backend-services on mbp (2m48.9s)
+  ✕ test-blog-fast on m1-mini (8.0s)
+    failed
+    src/data/articles/aisd-takeover-houston-playbook.test.ts (src/data/articles/aisd-takeover-houston-playbook.test.ts)
+      Error: Failed to resolve import "../../../../talks/aisd-takeover/data/05-acco...
+    src/components/aisd-takeover-charts/campus-data.test.ts (src/components/aisd-takeover-charts/campus-data.test.ts)
+      Error: Failed to resolve import "../../../../talks/aisd-takeover/data/campuse...
+    article chart-spec JSON modules > ./staar-sat-gap.charts.json > complete spec "bigCityCampusPoverty" passes validateSpec (src/data/articles/charts-json.test.ts:74)
+      Error: ./staar-sat-gap.charts.json#bigCityCampusPoverty failed validateSpec: ...
+  ◉ test-e2e-fast on m4-mini (2m17.4s)
+  ◉ test-frontend-fast on m1-mini (1m43.6s)
+  ◉ test-mcp-fast on m1-mini (6.4s)
+  ◉ test-opendata on m4-mini (1m55.1s)
+
+  ◉ 6 passed  ✕ 2 failed  ● 8 total  (8m48.2s)
+  Hosts: m1-mini, m4-mini, mbp
+  Logs: ~/.rr/logs/test-20261102-111320
+
+Retry Failed Tasks:
+
+  $ rr test-backend-api
+  $ rr test-blog-fast
+
+────────────────────────────────────────────────────────────

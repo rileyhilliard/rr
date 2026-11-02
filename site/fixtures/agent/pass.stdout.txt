@@ -1,0 +1,2 @@
+ok  	github.com/rileyhilliard/rr/internal/lock	0.155s
+ok  	github.com/rileyhilliard/rr/internal/lock/testing	(cached) [no tests to run]

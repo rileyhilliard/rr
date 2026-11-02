@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>rr</title>
+  <style>
+    circle { animation: gap 640ms steps(1, end) infinite; }
+    @keyframes gap { 0% { opacity: .12; } 12.5%, 100% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { circle { animation: none; } }
+  </style>
+  <rect width="32" height="32" rx="7" fill="#0A0A0F"/>
+  <rect x=".5" y=".5" width="31" height="31" rx="6.5" fill="none" stroke="#2A2A4A"/>
+  <circle cx="12.5" cy="7" r="2.5" fill="#FFFFFF" opacity=".12" style="animation-delay: -640ms"/>
+  <circle cx="12.5" cy="12.67" r="2.5" fill="#39FF14" style="animation-delay: -560ms"/>
+  <circle cx="12.5" cy="18.33" r="2.5" fill="#1DFF8A" style="animation-delay: -480ms"/>
+  <circle cx="12.5" cy="24" r="2.5" fill="#00FFFF" style="animation-delay: -400ms"/>
+  <circle cx="19.5" cy="24" r="2.5" fill="#60A0FF" style="animation-delay: -320ms"/>
+  <circle cx="19.5" cy="18.33" r="2.5" fill="#BF40FF" style="animation-delay: -240ms"/>
+  <circle cx="19.5" cy="12.67" r="2.5" fill="#DF37CB" style="animation-delay: -160ms"/>
+  <circle cx="19.5" cy="7" r="2.5" fill="#FF2E97" style="animation-delay: -80ms"/>
+</svg>

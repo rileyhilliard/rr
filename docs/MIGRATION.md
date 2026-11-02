@@ -1,3 +1,10 @@
+---
+title: Migration guide
+description: Breaking changes between rr versions and how to upgrade your config.
+group: guides
+order: 20
+---
+
 # Migration guide
 
 This document covers breaking changes and upgrade instructions between versions.

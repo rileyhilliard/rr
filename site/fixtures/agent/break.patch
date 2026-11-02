@@ -1,0 +1,12 @@
+--- a/internal/lock/info.go
++++ b/internal/lock/info.go
+@@ -144,9 +144,6 @@ func itoa(n int) string {
+ 	if n == 0 {
+ 		return "0"
+ 	}
+-	if n < 0 {
+-		return "-" + itoa(-n)
+-	}
+ 	var buf [20]byte
+ 	i := len(buf)
+ 	for n > 0 {

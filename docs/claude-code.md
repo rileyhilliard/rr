@@ -1,3 +1,10 @@
+---
+title: Claude Code plugin
+description: Install the rr plugin so Claude Code knows rr commands, config and troubleshooting.
+group: guides
+order: 10
+---
+
 # Claude Code Plugin
 
 The rr plugin teaches [Claude Code](https://claude.ai/code) how to use the rr CLI, including commands, configuration, and troubleshooting.

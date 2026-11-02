@@ -1,0 +1,11 @@
+# Cloudflare Pages response headers. The build copies this file to dist/_headers;
+# tests/deploy.test.mjs serves dist/ through `wrangler pages dev` and checks it.
+# HTML, feeds, text exports and the sitemaps keep Pages' default revalidating cache.
+
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY

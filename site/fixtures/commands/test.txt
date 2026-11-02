@@ -1,0 +1,16 @@
+⚠ remote ~/rr/rr was last synced from ~/Projects/rr on branch fix/vitest-failures; now syncing from ~/Projects/rr - the previous tree's changes there will be replaced
+Pruned stale worktree dir ~/rr/rr@agent-a6e50e551cd4824f4
+Pruned stale worktree dir ~/rr/rr@local-host-audit
+
+────────────────────────────────────────────────────────────
+
+Parallel Execution Summary
+
+  ◉ test on m1-linux (23.7s)
+  ◉ test-integration on m4-mini (3.5s)
+
+  ◉ 2 passed  ✕ 0 failed  ● 2 total  (27.2s)
+  Hosts: m1-linux, m4-mini
+  Logs: ~/.rr/logs/test-all-20261102-111015
+
+────────────────────────────────────────────────────────────

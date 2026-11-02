@@ -1,0 +1,299 @@
+---
+import { Code } from "astro:components";
+import CopyLine from "../components/CopyLine.astro";
+import { CommandTabs } from "../components/landing/CommandTabs";
+import { FlowDiagram } from "../components/landing/FlowDiagram";
+import { InstallTabs } from "../components/landing/InstallTabs";
+import { MonitorStage } from "../components/landing/MonitorStage";
+import { QueueBoard } from "../components/landing/QueueBoard";
+import {
+  BeforeAfter,
+  CommandList,
+  DataTable,
+  Hero,
+  ReleaseBanner,
+  Requirements,
+  Section,
+  TaskChart,
+  Transcript,
+} from "../components/landing/sections";
+import { TerminalPlayer } from "../components/landing/TerminalPlayer";
+import { site } from "../config";
+import { agentSteps, loadAgentRecording } from "../data/agent-session";
+import { loadCommands } from "../data/commands";
+import { loadHeroRun } from "../data/hero-run";
+import { packTimeline } from "../lib/monitor/timeline";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { Events } from "../lib/events";
+
+const hero = loadHeroRun();
+const commands = loadCommands();
+const agent = agentSteps(loadAgentRecording());
+const [brew] = site.install;
+const codeThemes = { light: "github-light", dark: "github-dark-default" } as const;
+---
+
+<BaseLayout title={site.tagline} path="/">
+  <ReleaseBanner slot="banner" announcement={site.announcement} />
+
+  <section aria-labelledby="hero-title" class="relative overflow-hidden">
+    <div aria-hidden="true" class="dot-field pointer-events-none absolute inset-0"></div>
+    <div class="relative mx-auto flex max-w-[1200px] flex-col gap-12 px-4 pt-16 pb-20 sm:px-8 sm:pt-24 sm:pb-28">
+      <div class="grid items-end gap-10 lg:grid-cols-[minmax(0,1fr)_27rem] lg:gap-16">
+        <div id="hero-title">
+          <Hero tagline={site.tagline} description={site.description} />
+        </div>
+        <div class="flex flex-col gap-4">
+          {brew && (
+            <div class="hero-in" data-motion="lift-sm" style="--motion-delay: 320ms">
+              <CopyLine
+                command={brew.command}
+                track={Events.installCopied}
+                trackMethod={brew.label}
+              />
+            </div>
+          )}
+          <div class="flex flex-wrap items-center gap-3">
+            <a
+              href="#install"
+              data-motion="lift-sm"
+              style="--motion-delay: 390ms"
+              class="hero-in lift bg-accent text-canvas rounded-control inline-flex h-11 items-center px-5 font-medium no-underline hover:no-underline"
+            >
+              Install rr
+            </a>
+            <a
+              href="/docs/"
+              data-motion="lift-sm"
+              style="--motion-delay: 460ms"
+              class="hero-in lift border-line-strong text-ink rounded-control inline-flex h-11 items-center border px-5 font-medium no-underline hover:no-underline"
+            >
+              Read the docs
+            </a>
+            <a
+              href={site.repo}
+              data-motion="lift-sm"
+              style="--motion-delay: 530ms"
+              class="hero-in text-ink-2 hover:text-ink px-2 text-sm"
+            >
+              GitHub
+            </a>
+          </div>
+        </div>
+      </div>
+      <div class="hero-in" data-motion="scale-in-media" style="--motion-delay: 420ms">
+        <MonitorStage client:visible {...hero} timeline={packTimeline(hero.timeline)} />
+      </div>
+    </div>
+  </section>
+
+  <Section
+    band
+    id="why"
+    title="Testing on your laptop and on spare machines"
+    lede="An agent working test-first runs the suite after every change. rr sends those runs to machines that do nothing else, such as a couple of spare mini PCs or an old workstation in the closet."
+  >
+    <BeforeAfter before={site.why.before} after={site.why.after} />
+  </Section>
+
+  <Section
+    track
+    id="how"
+    title="How runs share hosts"
+    lede="Each rr call is a separate process on your laptop, and the processes coordinate only through a lock on each host. A run takes an unlocked host or waits on your laptop until one frees up, and a parallel task can lock every host at once."
+  >
+    <div data-motion="scale-in-media">
+      <FlowDiagram client:visible />
+    </div>
+  </Section>
+
+  <Section
+    band
+    track
+    id="queue"
+    title="Host locks"
+    lede="Each run locks the host it lands on, and the next run takes the next free host in your `hosts:` order. When every host is busy, the run waits and prints which run holds the lock."
+  >
+    <div data-motion="scale-in-media">
+      <QueueBoard client:visible hosts={["m4-mini", "m1-linux", "m1-mini"]} />
+    </div>
+  </Section>
+
+  <Section
+    id="faster"
+    title="Parallel tasks"
+    lede="A parallel task pools your hosts: it lists other tasks, and rr starts each one on its own host at the same time, as if every host's cores were plugged into your laptop. With shards of similar size, two hosts finish in about half the time and three in about a third."
+  >
+    <div
+      data-stagger
+      style="--stagger-gap: 160ms"
+      class="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-16"
+    >
+      <div class="flex flex-col gap-6">
+        <TaskChart tasks={site.parallel.tasks} />
+        <p class="text-ink-2 max-w-xl text-sm leading-relaxed">
+          rr hands tasks out in the order you list them, and each host takes the next one as soon as
+          it's free. List the long ones first, and keep shards similar in size. One command still
+          runs on one host, so the pooling comes from how you split the work.
+        </p>
+      </div>
+      <Transcript command={site.parallel.command} lines={site.parallel.output} />
+    </div>
+  </Section>
+
+  <Section
+    band
+    id="fallback"
+    title="SSH routes and fallback"
+    lede="Each host can list several SSH routes, such as a LAN address and a Tailscale name. rr dials them all at once and prefers the ones higher in the list, so an unreachable route doesn't hold up the connection."
+  >
+    <div data-stagger style="--stagger-gap: 140ms" class="grid gap-6 lg:grid-cols-2">
+      <figure data-motion="lift-card" class="code-frame">
+        <figcaption>~/.rr/config.yaml</figcaption>
+        <Code code={site.fallback.config} lang="yaml" themes={codeThemes} defaultColor={false} />
+      </figure>
+      <DataTable
+        caption="Which route rr uses, by where you are"
+        head={["Where you are", "What happens"]}
+        rows={site.fallback.rows}
+      />
+    </div>
+  </Section>
+
+  <Section
+    track
+    id="commands"
+    title="Commands"
+    lede="Real output from rr's own repository and hosts, recorded with `--pretty`. Without the flag, commands print JSON events."
+  >
+    <div data-motion="scale-in-media">
+      <CommandTabs client:visible commands={commands} />
+    </div>
+  </Section>
+
+  <Section
+    band
+    track
+    id="agent"
+    title="How an agent uses it"
+    lede="rr prints JSON by default. Here an agent runs the one failing test, reads the test's name from the result event and the line number from the test output, fixes the code, and then runs the full suite. The rr output is real; the conversation is written for this page."
+  >
+    <div
+      data-stagger
+      style="--stagger-gap: 160ms"
+      class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]"
+    >
+      <!-- min-w-0: a grid item, or the transcript's long lines widen the track. -->
+      <div data-motion="scale-in-media" class="min-w-0">
+        <TerminalPlayer
+          client:visible
+          title="Claude Code in the rr repository"
+          steps={agent}
+          heightClass="h-[32rem]"
+          label="An agent fixing a failing test with rr"
+        />
+      </div>
+      <div class="flex flex-col gap-8">
+        <div>
+          <h3 class="text-ink mb-3 font-semibold">Error codes</h3>
+          <DataTable
+            caption="rr error codes"
+            head={["Code", "Means"]}
+            rows={site.errorCodes}
+            mono={1}
+          />
+        </div>
+        <div>
+          <h3 class="text-ink mb-3 font-semibold">With Claude Code</h3>
+          <p class="text-ink-2 mb-3 text-sm leading-relaxed">
+            After installing rr, the plugin teaches Claude its commands and config, and
+            <code>/rr:setup</code> writes the configs and checks every host.
+          </p>
+          <div class="flex flex-col gap-2">
+            {site.plugin.map((command) => (
+              <CopyLine command={command} prompt="" track={Events.pluginCopied} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  </Section>
+
+  <Section
+    id="setup"
+    title="Configuration"
+    lede="Your machines live in a global config that stays out of the repo. The project config, with tasks and sync rules, is shared with your team."
+  >
+    <div data-stagger style="--stagger-gap: 140ms" class="grid gap-6 lg:grid-cols-2">
+      <figure data-motion="lift-card" class="code-frame lift">
+        <figcaption>~/.rr/config.yaml</figcaption>
+        <Code code={site.setup.global} lang="yaml" themes={codeThemes} defaultColor={false} />
+      </figure>
+      <figure data-motion="lift-card" class="code-frame lift">
+        <figcaption>.rr.yaml</figcaption>
+        <Code code={site.setup.project} lang="yaml" themes={codeThemes} defaultColor={false} />
+      </figure>
+    </div>
+    <p
+      data-motion="lift-md"
+      style="--motion-delay: 420ms"
+      class="text-ink-2 mt-8 max-w-3xl leading-relaxed"
+    >
+      <a href="https://tryopendata.ai">OpenData</a> runs about 14,000 tests across Python, FastAPI
+      and TypeScript packages through one <code>rr test</code>, including the run at the top of this
+      page. <a href="/docs/configuration/">Every setting is in the configuration reference.</a>
+    </p>
+    <p
+      data-motion="lift-md"
+      style="--motion-delay: 500ms"
+      class="text-ink-2 mt-4 max-w-3xl leading-relaxed"
+    >
+      Tests are what rr is built around, but a task can be any shell command. Builds are the next
+      best fit: a <code>hosts:</code> list keeps the task on your most powerful machine, and
+      <code>pull:</code> copies the artifacts back to your laptop when it finishes. rr's own
+      <code>.rr.yaml</code> also lints and runs benchmarks on its hosts, and{" "}
+      <code>rr verify-all</code>
+      runs the linter and both test suites at once.
+    </p>
+  </Section>
+
+  <Section band id="compare" title="Other tools">
+    <DataTable
+      caption="How other tools compare for running tests on other machines"
+      head={["Tool", "Where it falls short for this"]}
+      rows={site.compare}
+    />
+  </Section>
+
+  <div class="brand-rule" aria-hidden="true"></div>
+  <Section band track id="install" title="Install">
+    <div
+      data-stagger
+      style="--stagger-gap: 160ms"
+      class="grid gap-10 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-16"
+    >
+      <div class="flex flex-col gap-6">
+        <InstallTabs client:visible options={site.install} />
+        <CommandList
+          title="Then, in your project"
+          commands={[
+            "rr init      # writes .rr.yaml",
+            "rr doctor    # checks SSH, rsync and each host",
+            'rr --pretty run "make test"',
+          ]}
+        />
+        <p class="text-ink-2 text-sm leading-relaxed">
+          Without a spare machine, <code>rr host add --local</code> makes your laptop a host, so
+          agents on it take turns through its lock.
+        </p>
+      </div>
+      <div class="flex flex-col gap-6">
+        <Requirements items={site.requirements} />
+        <p class="text-ink-2 text-sm leading-relaxed">
+          For key-based SSH, follow the <a href="/docs/ssh-setup/">SSH setup guide</a> or run{" "}
+          <code>rr setup &lt;host&gt;</code>.
+        </p>
+      </div>
+    </div>
+  </Section>
+</BaseLayout>

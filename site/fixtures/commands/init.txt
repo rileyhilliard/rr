@@ -1,0 +1,6 @@
+◉ Created .rr.yaml
+
+Next steps:
+  rr sync       - Sync files to remote
+  rr run <cmd>  - Sync and run a command
+  rr doctor     - Check configuration

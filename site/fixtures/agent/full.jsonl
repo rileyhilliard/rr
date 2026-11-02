@@ -1,0 +1,6 @@
+{"type":"phase","phase":"connect","status":"started","ts":"2026-11-02T17:10:49Z"}
+{"type":"phase","phase":"connect","status":"complete","host":"m4-mini","duration_s":0.431715209,"ts":"2026-11-02T17:10:49Z"}
+{"type":"phase","phase":"sync","status":"started","ts":"2026-11-02T17:10:49Z"}
+{"type":"phase","phase":"sync","status":"complete","host":"m4-mini","duration_s":0.429809209,"ts":"2026-11-02T17:10:50Z"}
+{"type":"phase","phase":"exec","status":"started","details":{"command":"go test ./..."},"ts":"2026-11-02T17:10:50Z"}
+{"type":"result","status":"success","host":"m4-mini","duration_s":20.810343666,"exit_code":0,"details":{"exec_duration_s":19.886152209,"log_file":"~/.rr/logs/test-20261102-111050/output.log"},"ts":"2026-11-02T17:11:10Z"}
