@@ -17,9 +17,8 @@ type GoTestResult struct {
 	Package  string
 	Status   string // "PASS", "FAIL", "SKIP"
 	Duration string
-	Message  string   // Error message for failures
-	Location string   // file:line for failures
-	Output   []string // Additional output lines
+	Message  string // Error message for failures
+	Location string // file:line for failures
 }
 
 // GoPackageResult holds information about a package test run.
@@ -39,11 +38,17 @@ type GoTestFormatter struct {
 	packageStyle lipgloss.Style
 
 	// State tracking
-	tests        []GoTestResult
-	packages     []GoPackageResult
-	currentTest  string
-	currentPkg   string
-	failureLines []string
+	tests       []GoTestResult
+	packages    []GoPackageResult
+	currentTest string
+	currentPkg  string
+	// First file:line seen while currentTest runs (go test -v prints a
+	// test's log lines before its --- FAIL line).
+	pendingLocation string
+	pendingMessage  string
+	// Index in tests of the last failure still missing a location (without
+	// -v, the log lines follow the --- FAIL line). -1 when none.
+	locateFail int
 }
 
 // NewGoTestFormatter creates a new go test output formatter.
@@ -56,7 +61,7 @@ func NewGoTestFormatter() *GoTestFormatter {
 		packageStyle: lipgloss.NewStyle().Foreground(ui.ColorSecondary),
 		tests:        make([]GoTestResult, 0),
 		packages:     make([]GoPackageResult, 0),
-		failureLines: make([]string, 0),
+		locateFail:   -1,
 	}
 }
 
@@ -120,6 +125,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 	// === RUN TestName
 	if matches := runPattern.FindStringSubmatch(line); matches != nil {
 		f.currentTest = matches[1]
+		f.clearPendingLocation()
 		return f.mutedStyle.Render(line)
 	}
 
@@ -133,6 +139,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentTest = ""
+		f.clearPendingLocation()
 		return f.passStyle.Render(line)
 	}
 
@@ -144,11 +151,15 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Name:     testName,
 			Status:   "FAIL",
 			Duration: duration,
-			Output:   append([]string{}, f.failureLines...),
+			Location: f.pendingLocation,
+			Message:  f.pendingMessage,
 		}
 		f.tests = append(f.tests, result)
-		f.failureLines = nil
+		if result.Location == "" {
+			f.locateFail = len(f.tests) - 1
+		}
 		f.currentTest = ""
+		f.pendingLocation, f.pendingMessage = "", ""
 		return f.failStyle.Render(line)
 	}
 
@@ -162,6 +173,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentTest = ""
+		f.clearPendingLocation()
 		return f.skipStyle.Render(line)
 	}
 
@@ -175,6 +187,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentPkg = ""
+		f.clearPendingLocation()
 		return f.passStyle.Render(line)
 	}
 
@@ -188,6 +201,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentPkg = ""
+		f.clearPendingLocation()
 		return f.failStyle.Render(line)
 	}
 
@@ -214,21 +228,22 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 	}
 
 	// Error location (file:line: message)
+	// Only the first one per test is kept: it's the earliest assertion.
 	if matches := errorLocationPattern.FindStringSubmatch(line); matches != nil {
-		f.failureLines = append(f.failureLines, line)
-		// Update the last failed test's location if we have one pending
-		if f.currentTest != "" {
-			location := matches[1]
-			message := matches[2]
-			// Store for when the test result comes in
-			f.failureLines = append(f.failureLines, fmt.Sprintf("%s: %s", location, message))
+		location, message := matches[1], matches[2]
+		switch {
+		case f.locateFail >= 0:
+			f.tests[f.locateFail].Location = location
+			f.tests[f.locateFail].Message = message
+			f.locateFail = -1
+		case f.currentTest != "" && f.pendingLocation == "":
+			f.pendingLocation, f.pendingMessage = location, message
 		}
 		return f.failStyle.Render(line)
 	}
 
 	// If we're in a test and the line looks like test output, collect it
 	if f.currentTest != "" && strings.HasPrefix(line, "    ") {
-		f.failureLines = append(f.failureLines, line)
 		// Check if it looks like an error
 		if strings.Contains(strings.ToLower(line), "error") ||
 			strings.Contains(line, "expected") ||
@@ -346,7 +361,14 @@ func (f *GoTestFormatter) Reset() {
 	f.packages = make([]GoPackageResult, 0)
 	f.currentTest = ""
 	f.currentPkg = ""
-	f.failureLines = make([]string, 0)
+	f.clearPendingLocation()
+}
+
+// clearPendingLocation drops location state once a test or package
+// result ends the block it belonged to.
+func (f *GoTestFormatter) clearPendingLocation() {
+	f.pendingLocation, f.pendingMessage = "", ""
+	f.locateFail = -1
 }
 
 // RanNothing implements output.NoTestsReporter.
@@ -386,19 +408,11 @@ func (f *GoTestFormatter) GetTestFailures() []output.TestFailure {
 				}
 			}
 
-			// Build message from output lines
-			var message string
-			if len(t.Output) > 0 {
-				message = strings.Join(t.Output, "\n")
-			} else if t.Message != "" {
-				message = t.Message
-			}
-
 			failures = append(failures, output.TestFailure{
 				TestName: t.Name,
 				File:     file,
 				Line:     line,
-				Message:  message,
+				Message:  t.Message,
 			})
 		}
 	}
