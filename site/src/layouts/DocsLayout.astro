@@ -1,0 +1,124 @@
+---
+import type { MarkdownHeading } from "astro";
+import { docHref, type NavGroup, type NavItem } from "../lib/docs";
+import BaseLayout from "./BaseLayout.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+  image?: string;
+  markdown?: string;
+  nav: NavGroup[];
+  /** The page's doc id; omitted on the docs home. */
+  current?: string;
+  headings?: MarkdownHeading[];
+  prev?: NavItem | undefined;
+  next?: NavItem | undefined;
+}
+const { nav, current, headings = [], prev, next, ...page } = Astro.props;
+const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
+---
+
+<BaseLayout {...page}>
+  <div class="mx-auto grid max-w-6xl gap-10 px-6 py-10 lg:grid-cols-[14rem_1fr] xl:grid-cols-[14rem_1fr_12rem]">
+    <!-- Mobile: a <details> menu that opens without JavaScript. -->
+    <details class="border-line rounded-lg border lg:hidden">
+      <summary class="cursor-pointer px-4 py-2 font-medium">Docs menu</summary>
+      <nav aria-label="Docs menu" class="px-4 pb-4">
+        {nav.map((group) => (
+          <div class="mt-4">
+            <p class="text-muted text-xs font-semibold uppercase">{group.label}</p>
+            <ul class="mt-2 space-y-1">
+              {group.items.map((item) => (
+                <li>
+                  <a
+                    href={docHref(item.id)}
+                    aria-current={item.id === current ? "page" : undefined}
+                    class="aria-[current=page]:text-accent block"
+                  >
+                    {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </nav>
+    </details>
+    <nav aria-label="Docs" class="hidden text-sm lg:block">
+      {nav.map((group) => (
+        <div class="mb-6">
+          <p class="text-muted text-xs font-semibold uppercase">{group.label}</p>
+          <ul class="mt-2 space-y-1">
+            {group.items.map((item) => (
+              <li>
+                <a
+                  href={docHref(item.id)}
+                  aria-current={item.id === current ? "page" : undefined}
+                  class="aria-[current=page]:text-accent aria-[current=page]:font-medium block"
+                >
+                  {item.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </nav>
+    <article class="min-w-0">
+      <div class="prose max-w-none">
+        <h1>{page.title}</h1>
+        <slot />
+      </div>
+      {page.markdown && (
+        <p class="text-muted mt-10 flex gap-4 text-sm">
+          <a href={page.markdown}>View as Markdown</a>
+          <button
+            type="button"
+            data-copy-page={page.markdown}
+            hidden
+            class="underline-offset-4 hover:underline"
+          >
+            Copy page
+          </button>
+        </p>
+      )}
+      {(prev || next) && (
+        <nav
+          aria-label="Pagination"
+          class="border-line mt-10 flex justify-between gap-4 border-t pt-6"
+        >
+          {prev ? (
+            <a href={docHref(prev.id)} rel="prev">
+              <span class="text-muted block text-xs">Previous</span>
+              {prev.label}
+            </a>
+          ) : (
+            <span />
+          )}
+          {next && (
+            <a href={docHref(next.id)} rel="next" class="text-right">
+              <span class="text-muted block text-xs">Next</span>
+              {next.label}
+            </a>
+          )}
+        </nav>
+      )}
+    </article>
+    {toc.length > 0 && (
+      <nav aria-label="On this page" data-toc class="hidden text-sm xl:block">
+        <p class="text-muted text-xs font-semibold uppercase">On this page</p>
+        <ul class="mt-2 space-y-1">
+          {toc.map((heading) => (
+            <li class={heading.depth === 3 ? "pl-3" : ""}>
+              <a href={`#${heading.slug}`} class="aria-[current=location]:text-accent">
+                {heading.text}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    )}
+  </div>
+</BaseLayout>

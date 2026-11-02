@@ -1,3 +1,10 @@
+---
+title: SSH setup
+description: Set up passwordless SSH from your machine to a remote host so rr can sync and run there.
+group: getting-started
+order: 10
+---
+
 # SSH setup
 
 Before using rr, you need passwordless SSH access to your remote machine. This guide walks through setting that up.
@@ -15,7 +22,7 @@ If you already have SSH keys and just need to copy them to a new machine:
 ssh-copy-id user@your-remote-machine
 ```
 
-Done. Skip to [Verify it works](#verify-it-works).
+Done. Skip to [Verify it works](#4-verify-it-works).
 
 ## Full walkthrough
 
@@ -25,7 +32,7 @@ Done. Skip to [Verify it works](#verify-it-works).
 ls ~/.ssh/id_*.pub
 ```
 
-If you see files like `id_ed25519.pub` or `id_rsa.pub`, you already have keys. Skip to [Copy your key to the remote](#2-copy-your-key-to-the-remote).
+If you see files like `id_ed25519.pub` or `id_rsa.pub`, you already have keys. Skip to [Copy your key to the remote](#3-copy-your-key-to-the-remote).
 
 If you get "No such file or directory", continue to generate new keys.
 

@@ -1,0 +1,17 @@
+  ● m4-local                                          0.3s
+● Connected to m4-mini via m4-local 0.4s
+Pruned stale worktree dir ~/rr/rr@agent-a6e50e551cd4824f4
+Pruned stale worktree dir ~/rr/rr@local-host-audit
+● Syncing files (2.2MB) 0.9s
+● Files synced 0.9s
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+$ go test ./internal/lock/...
+
+ok  	github.com/rileyhilliard/rr/internal/lock	14.469s
+ok  	github.com/rileyhilliard/rr/internal/lock/testing	0.509s
+
+────────────────────────────────────────────────────────────────
+
+◉ Completed on m4-mini (17.6s total, 16.3s exec)

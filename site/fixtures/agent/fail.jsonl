@@ -1,0 +1,6 @@
+{"type":"phase","phase":"connect","status":"started","ts":"2026-11-02T17:10:44Z"}
+{"type":"phase","phase":"connect","status":"complete","host":"m4-mini","duration_s":0.422061125,"ts":"2026-11-02T17:10:44Z"}
+{"type":"phase","phase":"sync","status":"started","ts":"2026-11-02T17:10:44Z"}
+{"type":"phase","phase":"sync","status":"complete","host":"m4-mini","duration_s":0.79198775,"ts":"2026-11-02T17:10:45Z"}
+{"type":"phase","phase":"exec","status":"started","details":{"command":"go test ./internal/lock/... -run TestItoa"},"ts":"2026-11-02T17:10:45Z"}
+{"type":"result","status":"failed","host":"m4-mini","duration_s":2.015458584,"exit_code":1,"details":{"exec_duration_s":0.746158625,"failures":[{"name":"TestItoa"}],"log_file":"~/.rr/logs/run-20261102-111045/output.log","summary":{"passed":0,"failed":1,"skipped":0,"errors":0}},"ts":"2026-11-02T17:10:46Z"}

@@ -1,0 +1,15 @@
+  STATUS   HOST             ALIAS                            LATENCY
+────────────────────────────────────────────────────────────────────
+  ●        m4-mini *        m4-local                         309ms
+  ●        m4-mini          m4-tailscale                     210ms
+  ●        m1-linux         linux-local                      169ms
+  ●        m1-linux         linux-tailscale                  53ms
+  ●        m1-mini          m1-local                         250ms
+  ●        m1-mini          m1-tailscale                     162ms
+
+Selected: m4-mini (via m4-local)
+Hosts from .rr.yaml, in the order runs try them. A run skips a locked host.
+
+This tree syncs to: m1-linux:~/rr/rr
+This tree syncs to: m1-mini:~/rr/rr
+This tree syncs to: m4-mini:~/rr/rr

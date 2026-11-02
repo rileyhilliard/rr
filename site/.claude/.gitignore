@@ -1,0 +1,6 @@
+# Machine-specific Claude Code overrides.
+settings.local.json
+
+# Git worktrees Claude Code checks out under .claude/. Tools that discover nested
+# configs (biome, eslint) may also need `.claude/worktrees/` in the root .gitignore.
+worktrees/

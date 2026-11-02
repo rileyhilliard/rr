@@ -1,3 +1,10 @@
+---
+title: Troubleshooting
+description: Fixes for SSH failures, rsync problems, lock contention, config errors and platform quirks.
+group: reference
+order: 20
+---
+
 # Troubleshooting
 
 This guide covers common issues and their solutions.

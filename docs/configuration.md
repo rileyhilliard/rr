@@ -1,3 +1,10 @@
+---
+title: Configuration reference
+description: Every setting in the global config (~/.rr/config.yaml) and the project config (.rr.yaml), with defaults and examples.
+group: reference
+order: 10
+---
+
 # Configuration reference
 
 `rr` uses two configuration files: a **global config** for your personal host definitions and a **project config** for shareable project settings.

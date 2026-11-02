@@ -1,0 +1,1023 @@
+Recent Run Logs
+
+  test-all-20261102-111015  20.8 KB  just now
+    ~/.rr/logs/test-all-20261102-111015
+  run-20261102-110958  117 B  just now
+    ~/.rr/logs/run-20261102-110958
+  test-20261102-110026  528.1 KB  1 minute ago
+    ~/.rr/logs/test-20261102-110026
+  test-20261102-104856  0 B  21 minutes ago
+    ~/.rr/logs/test-20261102-104856
+  test-20261102-104112  539.6 KB  21 minutes ago
+    ~/.rr/logs/test-20261102-104112
+  test-opendata-20261102-095954  29.3 KB  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095954
+  test-opendata-20261102-095742  3.9 KB  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095742
+  test-opendata-20261102-095640  4.6 KB  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095640
+  test-opendata-20261102-095456  20.2 KB  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095456
+  test-opendata-20261102-095438  17.8 KB  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095438
+  test-opendata-20261102-095411  629 B  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095411
+  test-opendata-20261102-095120  131.2 KB  1 hour ago
+    ~/.rr/logs/test-opendata-20261102-095120
+  check-20261101-213728  159.3 KB  13 hours ago
+    ~/.rr/logs/check-20261101-213728
+  check-20261101-213352  169.0 KB  13 hours ago
+    ~/.rr/logs/check-20261101-213352
+  check-20261101-204642  160.9 KB  14 hours ago
+    ~/.rr/logs/check-20261101-204642
+  check-20261101-204430  32.3 KB  14 hours ago
+    ~/.rr/logs/check-20261101-204430
+  check-20261101-202607  160.2 KB  14 hours ago
+    ~/.rr/logs/check-20261101-202607
+  check-20261101-200301  167.4 KB  15 hours ago
+    ~/.rr/logs/check-20261101-200301
+  check-20261101-200017  29.3 KB  15 hours ago
+    ~/.rr/logs/check-20261101-200017
+  check-20261101-192129  28.5 KB  15 hours ago
+    ~/.rr/logs/check-20261101-192129
+  check-20261101-190033  156.6 KB  16 hours ago
+    ~/.rr/logs/check-20261101-190033
+  test-cli-20261101-185230  140.6 KB  16 hours ago
+    ~/.rr/logs/test-cli-20261101-185230
+  test-cli-20261101-185016  1.4 KB  16 hours ago
+    ~/.rr/logs/test-cli-20261101-185016
+  check-20261101-184720  32.0 KB  16 hours ago
+    ~/.rr/logs/check-20261101-184720
+  test-cli-20261101-182123  4.3 KB  16 hours ago
+    ~/.rr/logs/test-cli-20261101-182123
+  check-serial-20261101-181253  6.3 KB  16 hours ago
+    ~/.rr/logs/check-serial-20261101-181253
+  run-20261101-165022  44 B  18 hours ago
+    ~/.rr/logs/run-20261101-165022
+  run-20261101-164951  8.9 KB  18 hours ago
+    ~/.rr/logs/run-20261101-164951
+  run-20261101-163931  379 B  18 hours ago
+    ~/.rr/logs/run-20261101-163931
+  run-20261031-054802  2.3 KB  2 days ago
+    ~/.rr/logs/run-20261031-054802
+  run-20261031-054753  2.4 KB  2 days ago
+    ~/.rr/logs/run-20261031-054753
+  e2e-20261031-054516  2.1 KB  2 days ago
+    ~/.rr/logs/e2e-20261031-054516
+  run-20261031-054431  2.4 KB  2 days ago
+    ~/.rr/logs/run-20261031-054431
+  run-20261031-054417  2.3 KB  2 days ago
+    ~/.rr/logs/run-20261031-054417
+  run-20261031-054349  2.4 KB  2 days ago
+    ~/.rr/logs/run-20261031-054349
+  e2e-20261031-052651  950 B  2 days ago
+    ~/.rr/logs/e2e-20261031-052651
+  e2e-20261031-052546  2.6 KB  2 days ago
+    ~/.rr/logs/e2e-20261031-052546
+  e2e-20261031-052448  2.1 KB  2 days ago
+    ~/.rr/logs/e2e-20261031-052448
+  e2e-20261031-052412  2.1 KB  2 days ago
+    ~/.rr/logs/e2e-20261031-052412
+  e2e-20261031-025223  953 B  2 days ago
+    ~/.rr/logs/e2e-20261031-025223
+  e2e-20261031-023801  1.8 KB  2 days ago
+    ~/.rr/logs/e2e-20261031-023801
+  e2e-20261031-020915  9.9 KB  2 days ago
+    ~/.rr/logs/e2e-20261031-020915
+  e2e-20261031-015347  952 B  2 days ago
+    ~/.rr/logs/e2e-20261031-015347
+  test-hooks-20261031-005517  382 B  2 days ago
+    ~/.rr/logs/test-hooks-20261031-005517
+  run-20261031-000215  22.0 KB  2 days ago
+    ~/.rr/logs/run-20261031-000215
+  repeat-20261031-000206  2.3 KB  2 days ago
+    ~/.rr/logs/repeat-20261031-000206
+  repeat-20261031-000153  1.2 KB  2 days ago
+    ~/.rr/logs/repeat-20261031-000153
+  test-cli-20261031-000136  1.5 KB  2 days ago
+    ~/.rr/logs/test-cli-20261031-000136
+  check-e2e-20261030-112816  5.7 KB  3 days ago
+    ~/.rr/logs/check-e2e-20261030-112816
+  e2e-20261030-110056  955 B  3 days ago
+    ~/.rr/logs/e2e-20261030-110056
+  test-cli-20261030-003024  1.3 KB  3 days ago
+    ~/.rr/logs/test-cli-20261030-003024
+  test-cli-20261030-000957  623 B  3 days ago
+    ~/.rr/logs/test-cli-20261030-000957
+  test-cli-20261029-075527  438 B  4 days ago
+    ~/.rr/logs/test-cli-20261029-075527
+  test-cli-20261029-041027  593 B  4 days ago
+    ~/.rr/logs/test-cli-20261029-041027
+  test-cli-20261029-041003  1.4 KB  4 days ago
+    ~/.rr/logs/test-cli-20261029-041003
+  test-cli-20261029-034151  551 B  4 days ago
+    ~/.rr/logs/test-cli-20261029-034151
+  test-20261028-171911  349 B  4 days ago
+    ~/.rr/logs/test-20261028-171911
+  test-20261028-171412  20.9 KB  4 days ago
+    ~/.rr/logs/test-20261028-171412
+  check-coverage-20261028-164511  9.3 KB  4 days ago
+    ~/.rr/logs/check-coverage-20261028-164511
+  test-20261028-151620  921 B  4 days ago
+    ~/.rr/logs/test-20261028-151620
+  check-coverage-20261028-144935  68.7 KB  4 days ago
+    ~/.rr/logs/check-coverage-20261028-144935
+  test-20261028-144836  921 B  4 days ago
+    ~/.rr/logs/test-20261028-144836
+  test-20261028-094507  128.3 KB  5 days ago
+    ~/.rr/logs/test-20261028-094507
+  test-20261028-094327  1.7 KB  5 days ago
+    ~/.rr/logs/test-20261028-094327
+  test-api-20261028-085746  34.2 KB  5 days ago
+    ~/.rr/logs/test-api-20261028-085746
+  check-cli-20261028-085654  89.5 KB  5 days ago
+    ~/.rr/logs/check-cli-20261028-085654
+  test-api-20261028-085448  28.3 KB  5 days ago
+    ~/.rr/logs/test-api-20261028-085448
+  check-format-20261028-084539  2.0 KB  5 days ago
+    ~/.rr/logs/check-format-20261028-084539
+  test-20261028-080911  47.6 KB  5 days ago
+    ~/.rr/logs/test-20261028-080911
+  test-hooks-20261028-075912  372 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-075912
+  test-hooks-20261028-075622  386 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-075622
+  test-hooks-20261028-064427  417 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-064427
+  test-hooks-20261028-060105  414 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-060105
+  test-hooks-20261028-030048  415 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-030048
+  test-hooks-20261028-022724  419 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-022724
+  test-hooks-20261028-020200  418 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-020200
+  check-cli-20261028-015026  80.1 KB  5 days ago
+    ~/.rr/logs/check-cli-20261028-015026
+  test-hooks-20261028-014642  411 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-014642
+  test-hooks-20261028-011030  411 B  5 days ago
+    ~/.rr/logs/test-hooks-20261028-011030
+  check-cli-20261028-010703  62.2 KB  5 days ago
+    ~/.rr/logs/check-cli-20261028-010703
+  check-cli-20261028-003316  65.8 KB  5 days ago
+    ~/.rr/logs/check-cli-20261028-003316
+  exec-20261027-191031  25 B  5 days ago
+    ~/.rr/logs/exec-20261027-191031
+  test-root-20261027-172130  3.5 KB  5 days ago
+    ~/.rr/logs/test-root-20261027-172130
+  test-root-20261027-164340  77 B  5 days ago
+    ~/.rr/logs/test-root-20261027-164340
+  test-root-20261027-164250  9.3 KB  5 days ago
+    ~/.rr/logs/test-root-20261027-164250
+  exec-20261027-045705  108 B  6 days ago
+    ~/.rr/logs/exec-20261027-045705
+  exec-20261027-045703  72 B  6 days ago
+    ~/.rr/logs/exec-20261027-045703
+  exec-20261027-044030  0 B  6 days ago
+    ~/.rr/logs/exec-20261027-044030
+  exec-20261027-044027  0 B  6 days ago
+    ~/.rr/logs/exec-20261027-044027
+  exec-20261027-044011  19 B  6 days ago
+    ~/.rr/logs/exec-20261027-044011
+  exec-20261027-044006  36 B  6 days ago
+    ~/.rr/logs/exec-20261027-044006
+  mutants-20261025-121623  855 B  7 days ago
+    ~/.rr/logs/mutants-20261025-121623
+  mutants-20261025-121238  864 B  7 days ago
+    ~/.rr/logs/mutants-20261025-121238
+  mutants-20261025-115129  863 B  8 days ago
+    ~/.rr/logs/mutants-20261025-115129
+  mutants-20261025-114737  866 B  8 days ago
+    ~/.rr/logs/mutants-20261025-114737
+  mutants-20261025-114646  862 B  8 days ago
+    ~/.rr/logs/mutants-20261025-114646
+  mutants-20261025-114247  866 B  8 days ago
+    ~/.rr/logs/mutants-20261025-114247
+  mutants-20261025-114152  860 B  8 days ago
+    ~/.rr/logs/mutants-20261025-114152
+  mutants-20261025-113703  867 B  8 days ago
+    ~/.rr/logs/mutants-20261025-113703
+  mutants-20261024-123657  849 B  8 days ago
+    ~/.rr/logs/mutants-20261024-123657
+  mutants-20261024-122306  839 B  8 days ago
+    ~/.rr/logs/mutants-20261024-122306
+  test-opendata-20261020-164744  2.3 KB  12 days ago
+    ~/.rr/logs/test-opendata-20261020-164744
+  test-opendata-20261020-164600  3.0 KB  12 days ago
+    ~/.rr/logs/test-opendata-20261020-164600
+  test-opendata-20261020-164540  62 B  12 days ago
+    ~/.rr/logs/test-opendata-20261020-164540
+  sleepy-20261019-110027  0 B  14 days ago
+    ~/.rr/logs/sleepy-20261019-110027
+  sleepy-20261019-093839  6 B  14 days ago
+    ~/.rr/logs/sleepy-20261019-093839
+  exec-20261015-140004  9.6 KB  17 days ago
+    ~/.rr/logs/exec-20261015-140004
+  exec-20261015-135053  2.5 KB  17 days ago
+    ~/.rr/logs/exec-20261015-135053
+  exec-20261015-134710  9.2 KB  17 days ago
+    ~/.rr/logs/exec-20261015-134710
+  test-backend-api-20261006-112256  63 B  27 days ago
+    ~/.rr/logs/test-backend-api-20261006-112256
+  test-backend-infra-20261006-112158  63 B  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-112158
+  test-backend-infra-20261006-111724  5.7 KB  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-111724
+  test-backend-infra-20261006-111649  60 B  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-111649
+  test-backend-infra-20261006-111603  994 B  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-111603
+  test-backend-infra-20261006-111501  3.9 KB  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-111501
+  test-backend-api-20261006-103404  63 B  27 days ago
+    ~/.rr/logs/test-backend-api-20261006-103404
+  test-backend-infra-20261006-102853  5.1 KB  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-102853
+  test-backend-infra-20261006-102801  63 B  27 days ago
+    ~/.rr/logs/test-backend-infra-20261006-102801
+  test-frontend-fast-20261005-171502  223 B  27 days ago
+    ~/.rr/logs/test-frontend-fast-20261005-171502
+  test-blog-20261005-164601  53.6 KB  27 days ago
+    ~/.rr/logs/test-blog-20261005-164601
+  test-backend-infra-20261005-164400  73 B  27 days ago
+    ~/.rr/logs/test-backend-infra-20261005-164400
+  test-backend-infra-20261005-164157  73 B  27 days ago
+    ~/.rr/logs/test-backend-infra-20261005-164157
+  test-backend-infra-20261005-164116  12.7 KB  27 days ago
+    ~/.rr/logs/test-backend-infra-20261005-164116
+  test-frontend-scoped-20261005-090242  1.8 KB  28 days ago
+    ~/.rr/logs/test-frontend-scoped-20261005-090242
+  test-frontend-scoped-20261005-090233  233 B  28 days ago
+    ~/.rr/logs/test-frontend-scoped-20261005-090233
+  test-frontend-scoped-20261005-085308  1.4 KB  28 days ago
+    ~/.rr/logs/test-frontend-scoped-20261005-085308
+  test-frontend-scoped-20261005-085301  229 B  28 days ago
+    ~/.rr/logs/test-frontend-scoped-20261005-085301
+  echo-args-20261004-154438.2  10 B  28 days ago
+    ~/.rr/logs/echo-args-20261004-154438.2
+  echo-args-20261004-154438  10 B  28 days ago
+    ~/.rr/logs/echo-args-20261004-154438
+  multi-step-20261004-154438  29 B  28 days ago
+    ~/.rr/logs/multi-step-20261004-154438
+  step2-20261004-154437.2  13 B  28 days ago
+    ~/.rr/logs/step2-20261004-154437.2
+  step2-20261004-154437  13 B  28 days ago
+    ~/.rr/logs/step2-20261004-154437
+  local-test-20261004-154437  18 B  28 days ago
+    ~/.rr/logs/local-test-20261004-154437
+  a-20261004-141942  2 B  28 days ago
+    ~/.rr/logs/a-20261004-141942
+  lint-opendata-fast-20261004-140744  19 B  28 days ago
+    ~/.rr/logs/lint-opendata-fast-20261004-140744
+  echo-args-20261004-120534.2  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-120534.2
+  echo-args-20261004-120534  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-120534
+  multi-step-20261004-120534  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-120534
+  step2-20261004-120534.2  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-120534.2
+  step2-20261004-120534  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-120534
+  parallel-test-20261004-120534  806 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-120534
+  parallel-test-20261004-120533.3  808 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-120533.3
+  parallel-test-20261004-120533.2  809 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-120533.2
+  parallel-test-20261004-120533  809 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-120533
+  quick-check-20261004-120530  864 B  29 days ago
+    ~/.rr/logs/quick-check-20261004-120530
+  lint-20261004-120507  58 B  29 days ago
+    ~/.rr/logs/lint-20261004-120507
+  vet-20261004-120506  0 B  29 days ago
+    ~/.rr/logs/vet-20261004-120506
+  local-test-20261004-120501  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-120501
+  echo-args-20261004-115619.2  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-115619.2
+  echo-args-20261004-115619  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-115619
+  multi-step-20261004-115619  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-115619
+  step2-20261004-115619.2  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-115619.2
+  step2-20261004-115619  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-115619
+  parallel-test-20261004-115619.4  810 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-115619.4
+  parallel-test-20261004-115619.3  810 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-115619.3
+  parallel-test-20261004-115619.2  810 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-115619.2
+  parallel-test-20261004-115619  808 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-115619
+  quick-check-20261004-115614  866 B  29 days ago
+    ~/.rr/logs/quick-check-20261004-115614
+  lint-20261004-115550  58 B  29 days ago
+    ~/.rr/logs/lint-20261004-115550
+  vet-20261004-115548  0 B  29 days ago
+    ~/.rr/logs/vet-20261004-115548
+  local-test-20261004-115543  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-115543
+  echo-args-20261004-113616.2  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-113616.2
+  echo-args-20261004-113616  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-113616
+  multi-step-20261004-113616  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-113616
+  step2-20261004-113615.2  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-113615.2
+  step2-20261004-113615  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-113615
+  parallel-test-20261004-113615.4  807 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-113615.4
+  parallel-test-20261004-113615.3  809 B  29 days ago
+    ~/.rr/logs/parallel-test-20261004-113615.3
+  quick-check-20261004-113604  851 B  29 days ago
+    ~/.rr/logs/quick-check-20261004-113604
+  lint-20261004-113547  58 B  29 days ago
+    ~/.rr/logs/lint-20261004-113547
+  vet-20261004-113546  0 B  29 days ago
+    ~/.rr/logs/vet-20261004-113546
+  local-test-20261004-113541  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-113541
+  echo-args-20261004-113303.2  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-113303.2
+  echo-args-20261004-113303  10 B  29 days ago
+    ~/.rr/logs/echo-args-20261004-113303
+  multi-step-20261004-113303  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-113303
+  step2-20261004-113302.2  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-113302.2
+  step2-20261004-113302  13 B  29 days ago
+    ~/.rr/logs/step2-20261004-113302
+  quick-check-20261004-113300  865 B  29 days ago
+    ~/.rr/logs/quick-check-20261004-113300
+  lint-20261004-113255  58 B  29 days ago
+    ~/.rr/logs/lint-20261004-113255
+  vet-20261004-113254  0 B  29 days ago
+    ~/.rr/logs/vet-20261004-113254
+  local-test-20261004-113249  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-113249
+  multi-step-20261004-113231  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-113231
+  quick-check-20261004-113225  866 B  29 days ago
+    ~/.rr/logs/quick-check-20261004-113225
+  lint-20261004-113201  58 B  29 days ago
+    ~/.rr/logs/lint-20261004-113201
+  vet-20261004-113159  0 B  29 days ago
+    ~/.rr/logs/vet-20261004-113159
+  local-test-20261004-113154  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-113154
+  multi-step-20261004-110839  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-110839
+  quick-check-20261004-110826  849 B  29 days ago
+    ~/.rr/logs/quick-check-20261004-110826
+  lint-20261004-110800  58 B  29 days ago
+    ~/.rr/logs/lint-20261004-110800
+  vet-20261004-110756  0 B  29 days ago
+    ~/.rr/logs/vet-20261004-110756
+  local-test-20261004-110751  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-110751
+  multi-step-20261004-110729  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-110729
+  local-test-20261004-110729  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-110729
+  multi-step-20261004-110621  29 B  29 days ago
+    ~/.rr/logs/multi-step-20261004-110621
+  local-test-20261004-110621  18 B  29 days ago
+    ~/.rr/logs/local-test-20261004-110621
+  test-backend-api-20261003-191951  75 B  29 days ago
+    ~/.rr/logs/test-backend-api-20261003-191951
+  test-backend-20261003-191139  1.5 KB  29 days ago
+    ~/.rr/logs/test-backend-20261003-191139
+  test-backend-20261003-191122  1.3 KB  29 days ago
+    ~/.rr/logs/test-backend-20261003-191122
+  test-backend-20261003-183045  1.3 KB  29 days ago
+    ~/.rr/logs/test-backend-20261003-183045
+  test-frontend-fast-20261003-182924  100.8 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20261003-182924
+  check-parallel-20260928-090247  9.4 KB  29 days ago
+    ~/.rr/logs/check-parallel-20260928-090247
+  test-frontend-fast-20260923-034352  136.5 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20260923-034352
+  test-blog-20260928-051057  52.8 KB  29 days ago
+    ~/.rr/logs/test-blog-20260928-051057
+  test-frontend-scoped-20261002-100751  13.6 KB  29 days ago
+    ~/.rr/logs/test-frontend-scoped-20261002-100751
+  test-frontend-20261002-105349  99.3 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-105349
+  coverage-20260928-132417  49.1 KB  29 days ago
+    ~/.rr/logs/coverage-20260928-132417
+  test-e2e-20261002-133202  78.2 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-133202
+  test-frontend-fast-20260923-011618  134.1 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20260923-011618
+  test-blog-20260922-214519  51.0 KB  29 days ago
+    ~/.rr/logs/test-blog-20260922-214519
+  verify-all-20260928-150011  21.2 KB  29 days ago
+    ~/.rr/logs/verify-all-20260928-150011
+  test-frontend-20261002-101604  94.5 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-101604
+  tui-20260928-122854  2.6 KB  29 days ago
+    ~/.rr/logs/tui-20260928-122854
+  test-frontend-20261002-091223  141.7 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-091223
+  test-mcp-20260929-084730  94.8 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260929-084730
+  quick-check-20260923-154548  854 B  29 days ago
+    ~/.rr/logs/quick-check-20260923-154548
+  unit-20260928-123510  461 B  29 days ago
+    ~/.rr/logs/unit-20260928-123510
+  frontend-flake-20260126-225749  6.8 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260126-225749
+  typecheck-blog-20260918-202456  1.3 KB  29 days ago
+    ~/.rr/logs/typecheck-blog-20260918-202456
+  unit-20260928-123526  2.2 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123526
+  backend-flake-20260121-003508  34.1 KB  29 days ago
+    ~/.rr/logs/backend-flake-20260121-003508
+  tui-20260928-123710  1.3 KB  29 days ago
+    ~/.rr/logs/tui-20260928-123710
+  test-e2e-20261002-115622  12.5 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-115622
+  check-parallel-20260928-091825  7.8 KB  29 days ago
+    ~/.rr/logs/check-parallel-20260928-091825
+  test-frontend-scoped-20260927-003559  2.1 KB  29 days ago
+    ~/.rr/logs/test-frontend-scoped-20260927-003559
+  test-frontend-fast-20261001-232329  141.4 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20261001-232329
+  test-backend-api-20260928-063944  2.6 KB  29 days ago
+    ~/.rr/logs/test-backend-api-20260928-063944
+  lint-20260928-151111  50 B  29 days ago
+    ~/.rr/logs/lint-20260928-151111
+  test-mcp-20260924-104533  82.8 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260924-104533
+  test-blog-fast-20260928-051117  1.9 KB  29 days ago
+    ~/.rr/logs/test-blog-fast-20260928-051117
+  opendata-flake-20260131-222448  10.1 KB  29 days ago
+    ~/.rr/logs/opendata-flake-20260131-222448
+  test-backend-services-20261002-123254  2.1 KB  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-123254
+  opendata-flake-20260126-114920  12.7 KB  29 days ago
+    ~/.rr/logs/opendata-flake-20260126-114920
+  frontend-flake-20260124-071601  202.1 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260124-071601
+  test-e2e-20261002-115206  16.2 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-115206
+  test-frontend-scoped-20260926-223242  2.1 KB  29 days ago
+    ~/.rr/logs/test-frontend-scoped-20260926-223242
+  test-backend-api-20260927-051106  5.5 MB  29 days ago
+    ~/.rr/logs/test-backend-api-20260927-051106
+  unit-20260928-123535  4.2 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123535
+  test-blog-fast-20260812-115747  4.3 KB  29 days ago
+    ~/.rr/logs/test-blog-fast-20260812-115747
+  verify-all-20260928-144807  25.6 KB  29 days ago
+    ~/.rr/logs/verify-all-20260928-144807
+  frontend-flake-20260121-003600  81.4 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260121-003600
+  frontend-flake-20260126-224826  6.8 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260126-224826
+  unit-20260928-123448  6.0 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123448
+  test-backend-20260917-101611  11.2 KB  29 days ago
+    ~/.rr/logs/test-backend-20260917-101611
+  test-frontend-fast-20260922-221103  128.5 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20260922-221103
+  test-backend-services-20261002-124504  740 B  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-124504
+  frontend-flake-20260121-010104  73.8 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260121-010104
+  verify-all-20260928-151034  21.2 KB  29 days ago
+    ~/.rr/logs/verify-all-20260928-151034
+  unit-20260928-123627  382 B  29 days ago
+    ~/.rr/logs/unit-20260928-123627
+  test-e2e-20261002-124206  90.7 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-124206
+  test-blog-fast-20260921-044935  50.8 KB  29 days ago
+    ~/.rr/logs/test-blog-fast-20260921-044935
+  test-e2e-20261002-115321  12.9 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-115321
+  test-python-20260812-095626  49.6 KB  29 days ago
+    ~/.rr/logs/test-python-20260812-095626
+  unit-20260928-123447  1.8 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123447
+  test-frontend-fast-20260926-234851  138.2 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20260926-234851
+  test-backend-services-20261002-130930  10.0 KB  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-130930
+  test-frontend-scoped-20261002-100548  20.7 KB  29 days ago
+    ~/.rr/logs/test-frontend-scoped-20261002-100548
+  test-frontend-scoped-20260926-234744  1.4 KB  29 days ago
+    ~/.rr/logs/test-frontend-scoped-20260926-234744
+  test-frontend-20261002-102320  146.7 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-102320
+  unit-20260928-123425  1.9 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123425
+  test-e2e-20261002-133049  106.3 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-133049
+  test-mcp-20260929-081153  96.2 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260929-081153
+  frontend-flake-20260124-072327  80.1 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260124-072327
+  test-backend-20261002-084414  3.7 KB  29 days ago
+    ~/.rr/logs/test-backend-20261002-084414
+  test-mcp-20260927-052248  94.8 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260927-052248
+  test-frontend-20261002-100231  142.1 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-100231
+  test-backend-services-20261002-124742  253.9 KB  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-124742
+  frontend-flake-20260127-000822  60.1 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260127-000822
+  test-repeat-20260928-093853  1.9 KB  29 days ago
+    ~/.rr/logs/test-repeat-20260928-093853
+  typecheck-blog-20261002-120653  1.5 KB  29 days ago
+    ~/.rr/logs/typecheck-blog-20261002-120653
+  lint-20260928-144934  50 B  29 days ago
+    ~/.rr/logs/lint-20260928-144934
+  frontend-flake-20260126-225838  4.0 MB  29 days ago
+    ~/.rr/logs/frontend-flake-20260126-225838
+  test-frontend-fast-20260922-223048  129.0 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20260922-223048
+  test-backend-services-20261002-131310  10.5 KB  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-131310
+  test-backend-services-20261002-124600  9.1 KB  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-124600
+  quick-check-20260923-172841  857 B  29 days ago
+    ~/.rr/logs/quick-check-20260923-172841
+  unit-20260928-123548  1.2 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123548
+  test-e2e-20261002-135023  239.0 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-135023
+  test-backend-20260923-095245  625.1 KB  29 days ago
+    ~/.rr/logs/test-backend-20260923-095245
+  test-backend-api-20260927-225131  3.0 KB  29 days ago
+    ~/.rr/logs/test-backend-api-20260927-225131
+  test-blog-20260918-202425  52.1 KB  29 days ago
+    ~/.rr/logs/test-blog-20260918-202425
+  check-parallel-20260928-092402  6.9 KB  29 days ago
+    ~/.rr/logs/check-parallel-20260928-092402
+  test-frontend-20261002-081816  142.3 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-081816
+  tui-20260928-123922  4.9 KB  29 days ago
+    ~/.rr/logs/tui-20260928-123922
+  test-mcp-20260924-104311  239 B  29 days ago
+    ~/.rr/logs/test-mcp-20260924-104311
+  test-frontend-scoped-20260926-223254  2.1 KB  29 days ago
+    ~/.rr/logs/test-frontend-scoped-20260926-223254
+  test-frontend-20261002-095643  3.2 MB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-095643
+  lint-20260928-145959  252 B  29 days ago
+    ~/.rr/logs/lint-20260928-145959
+  test-frontend-fast-20261001-232937  141.5 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20261001-232937
+  check-parallel-20260928-091817  7.7 KB  29 days ago
+    ~/.rr/logs/check-parallel-20260928-091817
+  test-mcp-20260928-051237  94.8 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260928-051237
+  lint-20260928-150042  50 B  29 days ago
+    ~/.rr/logs/lint-20260928-150042
+  opendata-flake-20260126-112255  33.3 KB  29 days ago
+    ~/.rr/logs/opendata-flake-20260126-112255
+  test-mcp-20260929-081207  94.8 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260929-081207
+  opendata-flake-20260126-114142  11.3 KB  29 days ago
+    ~/.rr/logs/opendata-flake-20260126-114142
+  test-blog-20261002-104928  52.9 KB  29 days ago
+    ~/.rr/logs/test-blog-20261002-104928
+  install-20260928-085142  7.7 KB  29 days ago
+    ~/.rr/logs/install-20260928-085142
+  quick-check-20260928-151122  856 B  29 days ago
+    ~/.rr/logs/quick-check-20260928-151122
+  test-blog-fast-20260928-051122  719 B  29 days ago
+    ~/.rr/logs/test-blog-fast-20260928-051122
+  quick-check-20260928-150004  1.0 KB  29 days ago
+    ~/.rr/logs/quick-check-20260928-150004
+  check-parallel-20260928-092411  7.2 KB  29 days ago
+    ~/.rr/logs/check-parallel-20260928-092411
+  unit-20260928-123537  288 B  29 days ago
+    ~/.rr/logs/unit-20260928-123537
+  test-python-20260812-054008  6.6 KB  29 days ago
+    ~/.rr/logs/test-python-20260812-054008
+  test-e2e-20261002-115542  49.9 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-115542
+  frontend-flake-20260126-225641  6.8 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260126-225641
+  frontend-flake-20260121-004139  80.5 KB  29 days ago
+    ~/.rr/logs/frontend-flake-20260121-004139
+  check-parallel-20260928-092350  6.9 KB  29 days ago
+    ~/.rr/logs/check-parallel-20260928-092350
+  test-e2e-20261002-131922  104.5 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-131922
+  test-frontend-20261002-104443  99.2 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261002-104443
+  test-frontend-20261001-232015  146.3 KB  29 days ago
+    ~/.rr/logs/test-frontend-20261001-232015
+  unit-20260928-123613  1.9 KB  29 days ago
+    ~/.rr/logs/unit-20260928-123613
+  test-frontend-fast-20260926-233643  137.9 KB  29 days ago
+    ~/.rr/logs/test-frontend-fast-20260926-233643
+  test-e2e-20261002-120603  78.2 KB  29 days ago
+    ~/.rr/logs/test-e2e-20261002-120603
+  test-mcp-20260927-002329  94.2 KB  29 days ago
+    ~/.rr/logs/test-mcp-20260927-002329
+  test-backend-services-20261002-131223  23.1 KB  29 days ago
+    ~/.rr/logs/test-backend-services-20261002-131223
+  test-repeat-20260928-094031  16.2 KB  29 days ago
+    ~/.rr/logs/test-repeat-20260928-094031
+  typecheck-frontend-20261002-171116  284 B  30 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-171116
+  test-backend-api-20261002-164116  62 B  30 days ago
+    ~/.rr/logs/test-backend-api-20261002-164116
+  typecheck-frontend-20261002-133031  747 B  30 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-133031
+  lint-frontend-20261002-132923  239 B  30 days ago
+    ~/.rr/logs/lint-frontend-20261002-132923
+  typecheck-backend-20261002-132820  107 B  30 days ago
+    ~/.rr/logs/typecheck-backend-20261002-132820
+  lint-backend-20261002-132819  19 B  30 days ago
+    ~/.rr/logs/lint-backend-20261002-132819
+  typecheck-backend-20261002-132458  107 B  30 days ago
+    ~/.rr/logs/typecheck-backend-20261002-132458
+  lint-backend-20261002-132456  19 B  30 days ago
+    ~/.rr/logs/lint-backend-20261002-132456
+  lint-frontend-20261002-131829  239 B  30 days ago
+    ~/.rr/logs/lint-frontend-20261002-131829
+  typecheck-backend-20261002-131716  107 B  30 days ago
+    ~/.rr/logs/typecheck-backend-20261002-131716
+  lint-backend-20261002-131714  19 B  30 days ago
+    ~/.rr/logs/lint-backend-20261002-131714
+  test-backend-services-20261002-131057  42 B  30 days ago
+    ~/.rr/logs/test-backend-services-20261002-131057
+  test-backend-services-20261002-124942  42 B  30 days ago
+    ~/.rr/logs/test-backend-services-20261002-124942
+  lint-backend-20261002-124654  19 B  30 days ago
+    ~/.rr/logs/lint-backend-20261002-124654
+  typecheck-backend-20261002-124644  107 B  30 days ago
+    ~/.rr/logs/typecheck-backend-20261002-124644
+  lint-backend-20261002-124643  850 B  30 days ago
+    ~/.rr/logs/lint-backend-20261002-124643
+  test-backend-services-20261002-123210  63 B  30 days ago
+    ~/.rr/logs/test-backend-services-20261002-123210
+  lint-frontend-20261002-121227  239 B  30 days ago
+    ~/.rr/logs/lint-frontend-20261002-121227
+  typecheck-frontend-20261002-120946  853 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-120946
+  lint-frontend-20261002-120730  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-120730
+  typecheck-frontend-20261002-120713  747 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-120713
+  lint-frontend-20261002-120407  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-120407
+  typecheck-frontend-20261002-120330  747 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-120330
+  lint-frontend-20261002-115803  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-115803
+  typecheck-frontend-20261002-115745  747 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-115745
+  lint-frontend-20261002-110305  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-110305
+  typecheck-frontend-20261002-110247  747 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-110247
+  lint-frontend-20261002-105211  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-105211
+  typecheck-frontend-20261002-105152  747 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-105152
+  lint-frontend-20261002-104135  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-104135
+  typecheck-frontend-20261002-104117  938 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-104117
+  lint-frontend-20261002-103939  239 B  31 days ago
+    ~/.rr/logs/lint-frontend-20261002-103939
+  typecheck-frontend-20261002-103920  747 B  31 days ago
+    ~/.rr/logs/typecheck-frontend-20261002-103920
+  lint-opendata-fast-20261002-103654  19 B  31 days ago
+    ~/.rr/logs/lint-opendata-fast-20261002-103654
+  typecheck-opendata-20261002-103651  117 B  31 days ago
+    ~/.rr/logs/typecheck-opendata-20261002-103651
+  test-backend-20261002-082158  0 B  31 days ago
+    ~/.rr/logs/test-backend-20261002-082158
+  test-backend-20261001-022549  2.1 KB  32 days ago
+    ~/.rr/logs/test-backend-20261001-022549
+  multi-step-20260928-151124  29 B  34 days ago
+    ~/.rr/logs/multi-step-20260928-151124
+  vet-20260928-151109  0 B  34 days ago
+    ~/.rr/logs/vet-20260928-151109
+  local-test-20260928-151104  18 B  34 days ago
+    ~/.rr/logs/local-test-20260928-151104
+  vet-20260928-150041  0 B  34 days ago
+    ~/.rr/logs/vet-20260928-150041
+  vet-20260928-145958  0 B  34 days ago
+    ~/.rr/logs/vet-20260928-145958
+  vet-20260928-145927  0 B  34 days ago
+    ~/.rr/logs/vet-20260928-145927
+  verify-all-20260928-145902  21.5 KB  34 days ago
+    ~/.rr/logs/verify-all-20260928-145902
+  typecheck-20260928-132402  6.8 KB  34 days ago
+    ~/.rr/logs/typecheck-20260928-132402
+  tui-20260928-123938  5.4 KB  34 days ago
+    ~/.rr/logs/tui-20260928-123938
+  tui-20260928-123829  5.0 KB  34 days ago
+    ~/.rr/logs/tui-20260928-123829
+  tui-20260928-123824  623 B  34 days ago
+    ~/.rr/logs/tui-20260928-123824
+  tui-20260928-123822  623 B  34 days ago
+    ~/.rr/logs/tui-20260928-123822
+  tui-20260928-123343  4.7 KB  34 days ago
+    ~/.rr/logs/tui-20260928-123343
+  tui-20260928-122921  5.2 KB  34 days ago
+    ~/.rr/logs/tui-20260928-122921
+  tui-20260928-122811  1.1 KB  34 days ago
+    ~/.rr/logs/tui-20260928-122811
+  typecheck-20260928-093604  239 B  35 days ago
+    ~/.rr/logs/typecheck-20260928-093604
+  typecheck-20260928-091406  401 B  35 days ago
+    ~/.rr/logs/typecheck-20260928-091406
+  test-frontend-20260928-085625  92 B  35 days ago
+    ~/.rr/logs/test-frontend-20260928-085625
+  typecheck-20260928-085216  239 B  35 days ago
+    ~/.rr/logs/typecheck-20260928-085216
+  test-mcp-20260928-084836  96.9 KB  35 days ago
+    ~/.rr/logs/test-mcp-20260928-084836
+  test-backend-api-20260928-074622  75 B  35 days ago
+    ~/.rr/logs/test-backend-api-20260928-074622
+  test-backend-20260928-065622  0 B  35 days ago
+    ~/.rr/logs/test-backend-20260928-065622
+  test-backend-api-20260928-064214  62 B  35 days ago
+    ~/.rr/logs/test-backend-api-20260928-064214
+  test-blog-fast-20260928-051050  192 B  35 days ago
+    ~/.rr/logs/test-blog-fast-20260928-051050
+  test-blog-fast-20260927-230705  297 B  35 days ago
+    ~/.rr/logs/test-blog-fast-20260927-230705
+  test-backend-api-20260927-225227  62 B  35 days ago
+    ~/.rr/logs/test-backend-api-20260927-225227
+  typecheck-backend-20260927-002952  107 B  36 days ago
+    ~/.rr/logs/typecheck-backend-20260927-002952
+  typecheck-opendata-20260927-002925  117 B  36 days ago
+    ~/.rr/logs/typecheck-opendata-20260927-002925
+  lint-opendata-20260927-002923  19 B  36 days ago
+    ~/.rr/logs/lint-opendata-20260927-002923
+  typecheck-backend-20260927-002921  184 B  36 days ago
+    ~/.rr/logs/typecheck-backend-20260927-002921
+  lint-backend-20260927-002919  19 B  36 days ago
+    ~/.rr/logs/lint-backend-20260927-002919
+  typecheck-mcp-20260927-002916  152 B  36 days ago
+    ~/.rr/logs/typecheck-mcp-20260927-002916
+  lint-frontend-fast-20260927-002020  122 B  36 days ago
+    ~/.rr/logs/lint-frontend-fast-20260927-002020
+  lint-frontend-fast-20260926-234829  141 B  36 days ago
+    ~/.rr/logs/lint-frontend-fast-20260926-234829
+  test-backend-20260926-223513  1.4 KB  36 days ago
+    ~/.rr/logs/test-backend-20260926-223513
+  typecheck-mcp-20260926-223428  151 B  36 days ago
+    ~/.rr/logs/typecheck-mcp-20260926-223428
+  test-mcp-20260926-223408  94.6 KB  36 days ago
+    ~/.rr/logs/test-mcp-20260926-223408
+  test-backend-coverage-20260926-204245  489 B  36 days ago
+    ~/.rr/logs/test-backend-coverage-20260926-204245
+  test-backend-coverage-20260926-192146  489 B  36 days ago
+    ~/.rr/logs/test-backend-coverage-20260926-192146
+  test-tmr-20260926-191006  99 B  36 days ago
+    ~/.rr/logs/test-tmr-20260926-191006
+  test-mcp-fast-20260926-182706  92.3 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182706
+  test-mcp-fast-20260926-182651  11.0 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182651
+  test-mcp-fast-20260926-182612  3.1 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182612
+  test-mcp-fast-20260926-182516  3.0 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182516
+  test-mcp-fast-20260926-182442  10.9 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182442
+  test-mcp-fast-20260926-182438  10.9 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182438
+  test-mcp-fast-20260926-182348  12.2 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182348
+  test-mcp-fast-20260926-182219  8.5 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182219
+  test-mcp-fast-20260926-182209  7.2 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-182209
+  test-mcp-fast-20260926-181917  10.6 KB  36 days ago
+    ~/.rr/logs/test-mcp-fast-20260926-181917
+  test-blog-20260926-181844  112 B  36 days ago
+    ~/.rr/logs/test-blog-20260926-181844
+  test-blog-fast-20260926-181836  200 B  36 days ago
+    ~/.rr/logs/test-blog-fast-20260926-181836
+  slow-20260923-192238  0 B  39 days ago
+    ~/.rr/logs/slow-20260923-192238
+  all-20260923-185336  1.5 KB  39 days ago
+    ~/.rr/logs/all-20260923-185336
+  steps-20260923-185328  17 B  39 days ago
+    ~/.rr/logs/steps-20260923-185328
+  hi-20260923-185306  0 B  39 days ago
+    ~/.rr/logs/hi-20260923-185306
+  hi-20260923-185259  0 B  39 days ago
+    ~/.rr/logs/hi-20260923-185259
+  all-20260923-172746  1.5 KB  39 days ago
+    ~/.rr/logs/all-20260923-172746
+  cut-20260923-172652  8 B  39 days ago
+    ~/.rr/logs/cut-20260923-172652
+  cut-20260923-172642  8 B  39 days ago
+    ~/.rr/logs/cut-20260923-172642
+  all-20260923-171157  1.5 KB  39 days ago
+    ~/.rr/logs/all-20260923-171157
+  all-20260923-171120  1.5 KB  39 days ago
+    ~/.rr/logs/all-20260923-171120
+  all-20260923-170806  1.5 KB  39 days ago
+    ~/.rr/logs/all-20260923-170806
+  all-20260923-170753  1.5 KB  39 days ago
+    ~/.rr/logs/all-20260923-170753
+  env-check-20260923-161544  153 B  39 days ago
+    ~/.rr/logs/env-check-20260923-161544
+  par-20260923-161357  840 B  39 days ago
+    ~/.rr/logs/par-20260923-161357
+  semi-20260923-161229  23 B  39 days ago
+    ~/.rr/logs/semi-20260923-161229
+  casetask-20260923-161131  6 B  39 days ago
+    ~/.rr/logs/casetask-20260923-161131
+  CaseTask-20260923-161130  6 B  39 days ago
+    ~/.rr/logs/CaseTask-20260923-161130
+  args-20260923-161129  13 B  39 days ago
+    ~/.rr/logs/args-20260923-161129
+  fail-then-20260923-161129  15 B  39 days ago
+    ~/.rr/logs/fail-then-20260923-161129
+  env-check-20260923-161121  51 B  39 days ago
+    ~/.rr/logs/env-check-20260923-161121
+  env-check-20260923-161113  27 B  39 days ago
+    ~/.rr/logs/env-check-20260923-161113
+  hi-20260923-135740  16 B  39 days ago
+    ~/.rr/logs/hi-20260923-135740
+  hi-20260923-135740.2  16 B  39 days ago
+    ~/.rr/logs/hi-20260923-135740.2
+  hi-20260923-135734  16 B  39 days ago
+    ~/.rr/logs/hi-20260923-135734
+  Hello.World-20260923-135734  27 B  39 days ago
+    ~/.rr/logs/Hello.World-20260923-135734
+  hi-20260923-135401  16 B  39 days ago
+    ~/.rr/logs/hi-20260923-135401
+  t-20260923-134739  33 B  39 days ago
+    ~/.rr/logs/t-20260923-134739
+  hi-20260923-134634  19 B  39 days ago
+    ~/.rr/logs/hi-20260923-134634
+  hi-20260923-134610.2  11 B  39 days ago
+    ~/.rr/logs/hi-20260923-134610.2
+  hi-20260923-134610  11 B  39 days ago
+    ~/.rr/logs/hi-20260923-134610
+  hi-20260923-134605.2  6 B  39 days ago
+    ~/.rr/logs/hi-20260923-134605.2
+  par-20260923-134556  516 B  39 days ago
+    ~/.rr/logs/par-20260923-134556
+  par-20260923-134550  517 B  39 days ago
+    ~/.rr/logs/par-20260923-134550
+  par-20260923-134543  520 B  39 days ago
+    ~/.rr/logs/par-20260923-134543
+  test-python-20260923-101254  7.6 KB  40 days ago
+    ~/.rr/logs/test-python-20260923-101254
+  test-python-20260923-095212  5.4 KB  40 days ago
+    ~/.rr/logs/test-python-20260923-095212
+  test-tmr-20260918-145431  3.3 KB  44 days ago
+    ~/.rr/logs/test-tmr-20260918-145431
+  test-tmr-20260918-145010  3.3 KB  44 days ago
+    ~/.rr/logs/test-tmr-20260918-145010
+  test-tmr-20260918-144956  108 B  44 days ago
+    ~/.rr/logs/test-tmr-20260918-144956
+  test-tmr-20260915-172549  3.3 KB  47 days ago
+    ~/.rr/logs/test-tmr-20260915-172549
+  test-tmr-20260915-163438  3.3 KB  47 days ago
+    ~/.rr/logs/test-tmr-20260915-163438
+  test-tmr-20260915-160331  3.3 KB  47 days ago
+    ~/.rr/logs/test-tmr-20260915-160331
+  test-tmr-20260915-152953  3.3 KB  47 days ago
+    ~/.rr/logs/test-tmr-20260915-152953
+  test-tmr-20260915-152233  99 B  47 days ago
+    ~/.rr/logs/test-tmr-20260915-152233
+  test-tmr-20260915-151313  99 B  47 days ago
+    ~/.rr/logs/test-tmr-20260915-151313
+  lint-backend-20260908-105934  19 B  55 days ago
+    ~/.rr/logs/lint-backend-20260908-105934
+  lint-backend-20260908-093811  19 B  55 days ago
+    ~/.rr/logs/lint-backend-20260908-093811
+  lint-backend-20260908-093754  19 B  55 days ago
+    ~/.rr/logs/lint-backend-20260908-093754
+  test-e2e-fast-20260905-232658  0 B  57 days ago
+    ~/.rr/logs/test-e2e-fast-20260905-232658
+  pin-m4-20260905-215716  137 B  57 days ago
+    ~/.rr/logs/pin-m4-20260905-215716
+  both-20260905-215702  1.0 KB  57 days ago
+    ~/.rr/logs/both-20260905-215702
+  typecheck-opendata-20260828-010203  117 B  66 days ago
+    ~/.rr/logs/typecheck-opendata-20260828-010203
+  typecheck-20260828-010144  1.4 KB  66 days ago
+    ~/.rr/logs/typecheck-20260828-010144
+  test-blog-fast-20260824-114353  143 B  70 days ago
+    ~/.rr/logs/test-blog-fast-20260824-114353
+  test-python-20260814-222523  5.0 KB  79 days ago
+    ~/.rr/logs/test-python-20260814-222523
+  test-python-20260812-101934  5.0 KB  82 days ago
+    ~/.rr/logs/test-python-20260812-101934
+  test-python-20260811-024547  5.0 KB  83 days ago
+    ~/.rr/logs/test-python-20260811-024547
+  test-python-20260811-021430  5.6 KB  83 days ago
+    ~/.rr/logs/test-python-20260811-021430
+  test-python-20260811-020157  5.5 KB  83 days ago
+    ~/.rr/logs/test-python-20260811-020157
+  test-python-20260810-224111  12.3 KB  83 days ago
+    ~/.rr/logs/test-python-20260810-224111
+  lint-backend-20260730-142518  19 B  94 days ago
+    ~/.rr/logs/lint-backend-20260730-142518
+  test-all-20260729-223531  18.9 KB  95 days ago
+    ~/.rr/logs/test-all-20260729-223531
+  test-all-20260729-200539  19.6 KB  95 days ago
+    ~/.rr/logs/test-all-20260729-200539
+  typecheck-20260624-115450  1.1 KB  131 days ago
+    ~/.rr/logs/typecheck-20260624-115450
+  backend-flake-20260513-084618  6.2 KB  173 days ago
+    ~/.rr/logs/backend-flake-20260513-084618
+  typecheck-20260507-193201  1.1 KB  178 days ago
+    ~/.rr/logs/typecheck-20260507-193201
+  typecheck-20260505-141759  1.2 KB  180 days ago
+    ~/.rr/logs/typecheck-20260505-141759
+  typecheck-20260502-230437  1.1 KB  183 days ago
+    ~/.rr/logs/typecheck-20260502-230437
+  typecheck-all-20260501-154550  1.5 KB  184 days ago
+    ~/.rr/logs/typecheck-all-20260501-154550
+  typecheck-20260501-112323  1.1 KB  185 days ago
+    ~/.rr/logs/typecheck-20260501-112323
+  typecheck-all-20260430-211652  1.5 KB  185 days ago
+    ~/.rr/logs/typecheck-all-20260430-211652
+  typecheck-all-20260426-185245  1.5 KB  189 days ago
+    ~/.rr/logs/typecheck-all-20260426-185245
+  typecheck-all-20260424-213529  1.5 KB  191 days ago
+    ~/.rr/logs/typecheck-all-20260424-213529
+  typecheck-all-20260416-154900  1.5 KB  199 days ago
+    ~/.rr/logs/typecheck-all-20260416-154900
+  typecheck-all-20260328-200737  1.9 KB  218 days ago
+    ~/.rr/logs/typecheck-all-20260328-200737
+  test-all-20260213-152642  18.9 KB  261 days ago
+    ~/.rr/logs/test-all-20260213-152642
+  test-all-20260204-181854  19.0 KB  270 days ago
+    ~/.rr/logs/test-all-20260204-181854
+  test-all-20260204-174946  19.1 KB  270 days ago
+    ~/.rr/logs/test-all-20260204-174946
+  test-all-20260204-174942  19.1 KB  270 days ago
+    ~/.rr/logs/test-all-20260204-174942
+  test-all-20260204-174928  19.1 KB  270 days ago
+    ~/.rr/logs/test-all-20260204-174928
+  test-all-20260204-174849  19.1 KB  270 days ago
+    ~/.rr/logs/test-all-20260204-174849
+  test-all-20260204-174805  19.1 KB  270 days ago
+    ~/.rr/logs/test-all-20260204-174805
+  opendata-flake-20260131-223508  9.9 KB  274 days ago
+    ~/.rr/logs/opendata-flake-20260131-223508
+  test-6-20260126-162914  7.0 KB  279 days ago
+    ~/.rr/logs/test-6-20260126-162914
+  test-6-20260126-162749  5.7 KB  279 days ago
+    ~/.rr/logs/test-6-20260126-162749
+  test-6-20260126-162629  5.6 KB  279 days ago
+    ~/.rr/logs/test-6-20260126-162629
+  test-6-20260126-162511  2.3 KB  279 days ago
+    ~/.rr/logs/test-6-20260126-162511
+  test-6-20260126-161831  2.3 KB  279 days ago
+    ~/.rr/logs/test-6-20260126-161831
+  work-steal-test-20260126-161026  2.0 KB  279 days ago
+    ~/.rr/logs/work-steal-test-20260126-161026
+  work-steal-test-20260126-161003  2.1 KB  279 days ago
+    ~/.rr/logs/work-steal-test-20260126-161003
+  test-setup-fail-20260126-155920  1.2 KB  279 days ago
+    ~/.rr/logs/test-setup-fail-20260126-155920
+  test-parallel-20260126-154719  586 B  279 days ago
+    ~/.rr/logs/test-parallel-20260126-154719
+  test-parallel-20260126-154705  835 B  279 days ago
+    ~/.rr/logs/test-parallel-20260126-154705
+  opendata-flake-20260126-114512  9.8 KB  279 days ago
+    ~/.rr/logs/opendata-flake-20260126-114512
+  opendata-flake-20260126-113737  9.8 KB  279 days ago
+    ~/.rr/logs/opendata-flake-20260126-113737
+  opendata-flake-20260126-113558  9.8 KB  279 days ago
+    ~/.rr/logs/opendata-flake-20260126-113558
+  opendata-flake-20260126-112336  9.8 KB  279 days ago
+    ~/.rr/logs/opendata-flake-20260126-112336
+  opendata-flake-20260124-094846  77.8 KB  282 days ago
+    ~/.rr/logs/opendata-flake-20260124-094846
+  backend-flake-20260121-002339  28.2 KB  285 days ago
+    ~/.rr/logs/backend-flake-20260121-002339
+  backend-flake-20260116-064721  33.1 KB  290 days ago
+    ~/.rr/logs/backend-flake-20260116-064721
+  verify-all-20260114-015549  28.8 KB  292 days ago
+    ~/.rr/logs/verify-all-20260114-015549
+  backend-flake-20260114-010027  27.0 KB  292 days ago
+    ~/.rr/logs/backend-flake-20260114-010027
+
+Total: 506 directories, 22.7 MB
+
+Retention settings (from ~/.rr/config.yaml):
+  keep_runs: 10
+
+Commands:
+  rr logs clean        Run retention cleanup
+  rr logs clean --all  Delete all logs

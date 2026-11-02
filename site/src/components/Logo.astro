@@ -1,0 +1,38 @@
+---
+// The rr mark: ⣾, the braille spinner frame a host card shows while it runs. The gap
+// sits top left and the rest follow the TUI gradient in the order the gap travels
+// (internal/ui/spinner.go: down the left column, up the right). The in-between colors
+// are 50/50 mixes of the neighbouring tokens, which is what the brand SVGs use.
+// Decorative next to the "rr" wordmark, which carries the name. public/brand/ holds the
+// standalone files and `make brand` renders their WebP sizes.
+interface Props {
+  class?: string;
+}
+const { class: className } = Astro.props;
+---
+
+<svg aria-hidden="true" viewBox="10 4.5 12 22" class={className}>
+  <circle cx="12.5" cy="7" r="2.5" class="fill-line"></circle>
+  <circle cx="19.5" cy="7" r="2.5" class="fill-accent"></circle>
+  <circle
+    cx="19.5"
+    cy="12.67"
+    r="2.5"
+    class="fill-[color-mix(in_srgb,var(--color-accent),var(--color-sync))]"
+  ></circle>
+  <circle cx="19.5" cy="18.33" r="2.5" class="fill-sync"></circle>
+  <circle
+    cx="19.5"
+    cy="24"
+    r="2.5"
+    class="fill-[color-mix(in_srgb,var(--color-sync),var(--color-info))]"
+  ></circle>
+  <circle cx="12.5" cy="24" r="2.5" class="fill-info"></circle>
+  <circle
+    cx="12.5"
+    cy="18.33"
+    r="2.5"
+    class="fill-[color-mix(in_srgb,var(--color-info),var(--color-success))]"
+  ></circle>
+  <circle cx="12.5" cy="12.67" r="2.5" class="fill-success"></circle>
+</svg>

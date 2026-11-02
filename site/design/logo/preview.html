@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Logo Options</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; padding: 40px 40px 120px; background: #f8f9fa; }
+  h1 { margin-bottom: 8px; font-size: 24px; }
+  .sub { color: #666; margin-bottom: 32px; }
+  .section { margin-bottom: 48px; }
+  .section h2 { font-size: 16px; color: #888; text-transform: uppercase; letter-spacing: 0.05em;
+    margin-bottom: 16px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 24px; }
+  .card { background: white; border-radius: 12px; padding: 12px; border: 1px solid #e5e7eb;
+    cursor: pointer; transition: outline 0.15s; }
+  .card h3 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .card p { font-size: 11px; color: #9ca3af; margin-bottom: 12px; line-height: 1.4;
+    min-height: 2.5em; }
+  .sizes { display: flex; align-items: flex-end; gap: 16px;
+    background: white; border-radius: 8px; padding: 12px; }
+  .size-label { font-size: 10px; color: #9ca3af; text-align: center; }
+  .size-label img { display: block; margin: 0 auto 4px; }
+  .dark-row { background: #0d1117; padding: 12px; border-radius: 8px; margin-top: 8px;
+    display: flex; align-items: flex-end; gap: 16px; }
+  .dark-row .size-label { color: #666; }
+  .nav-preview { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+    padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fafafa; }
+  .nav-preview img { width: 28px; height: 28px; }
+  .nav-preview span { font-size: 16px; font-weight: 700; }
+  .nav-dark { background: #0d1117; border-color: #30363d; }
+  .nav-dark span { color: #f0f6fc; }
+  .favicon-strip { display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    padding: 6px 10px; background: #dee1e6; border-radius: 8px 8px 0 0; }
+  .favicon-strip .tab { display: flex; align-items: center; gap: 6px; background: white;
+    border-radius: 8px 8px 0 0; padding: 6px 12px; font-size: 11px; color: #374151; }
+  .favicon-strip .tab img { width: 16px; height: 16px; }
+  #compare-bar { position: fixed; bottom: 0; left: 0; right: 0; background: white;
+    border-top: 2px solid #e5e7eb; padding: 16px 40px; display: flex; gap: 24px;
+    align-items: center; z-index: 10; min-height: 80px; }
+</style>
+</head>
+<body>
+<h1 id="title">Logo Options</h1>
+<p class="sub">Click any card to pin it to the comparison bar</p>
+<div id="content"></div>
+<div id="compare-bar">
+  <span style="font-size:12px;color:#9ca3af;white-space:nowrap;">Click cards to compare</span>
+</div>
+
+<!--
+  Load variant data from variants.js.
+  Expected shape of window.VARIANTS:
+  {
+    projectName: string,
+    brandName: string,
+    concepts: [{
+      name: string,
+      variants: [{
+        id: string,
+        name: string,
+        description: string,
+        light: string,        // path to light SVG
+        dark: string|undefined // path to dark SVG (omit for monochrome)
+      }]
+    }]
+  }
+-->
+<script src="variants.js"></script>
+<script>
+(function () {
+  var lastDataStr = '';
+
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function sizeRamp(src, invert) {
+    var sizes = [16, 32, 64];
+    var filter = invert ? ' style="filter:brightness(0) invert(1)"' : '';
+    return sizes.map(function (s) {
+      return '<div class="size-label"><img src="' + src + '" width="' + s + '" height="' + s + '"' + filter + '>' + s + '</div>';
+    }).join('');
+  }
+
+  function renderCard(v, brandName) {
+    var lightSrc = v.light || '';
+    var darkSrc = v.dark || '';
+    var useDarkSrc = darkSrc || lightSrc;
+    var invert = !darkSrc;
+    var invertStyle = invert ? ' style="filter:brightness(0) invert(1)"' : '';
+
+    return '<div class="card" data-id="' + esc(v.id) + '">' +
+      '<h3>' + esc(v.id + ' - ' + v.name) + '</h3>' +
+      '<p>' + esc(v.description || '') + '</p>' +
+      '<div class="sizes">' + sizeRamp(lightSrc, false) + '</div>' +
+      '<div class="dark-row">' + sizeRamp(useDarkSrc, invert) + '</div>' +
+      '<div class="favicon-strip"><div class="tab"><img src="' + lightSrc + '">' + esc(brandName) + '</div></div>' +
+      '<div class="nav-preview"><img src="' + lightSrc + '"><span>' + esc(brandName) + '</span></div>' +
+      '<div class="nav-preview nav-dark"><img src="' + useDarkSrc + '"' + invertStyle + '><span>' + esc(brandName) + '</span></div>' +
+    '</div>';
+  }
+
+  function render() {
+    var data = window.VARIANTS;
+    if (!data) return;
+
+    var dataStr = JSON.stringify(data);
+    if (dataStr === lastDataStr) return;
+    lastDataStr = dataStr;
+
+    document.getElementById('title').textContent = data.projectName + ' Logo Options';
+    document.title = data.projectName + ' Logo Options';
+
+    var html = '';
+    (data.concepts || []).forEach(function (concept) {
+      html += '<div class="section"><h2>' + esc(concept.name) + '</h2><div class="grid">';
+      (concept.variants || []).forEach(function (v) {
+        html += renderCard(v, data.brandName || data.projectName);
+      });
+      html += '</div></div>';
+    });
+
+    document.getElementById('content').innerHTML = html;
+  }
+
+  // Click-to-compare via event delegation
+  document.getElementById('content').addEventListener('click', function (e) {
+    var card = e.target.closest('.card');
+    if (!card) return;
+    var bar = document.getElementById('compare-bar');
+    var id = card.dataset.id;
+    var existing = bar.querySelector('[data-compare-id="' + id + '"]');
+    if (existing) { existing.remove(); card.style.outline = ''; return; }
+    if (bar.querySelectorAll('.compare-item').length >= 4) return;
+    var imgSrc = card.querySelector('.sizes img');
+    if (!imgSrc) return;
+    var item = document.createElement('div');
+    item.className = 'compare-item';
+    item.dataset.compareId = id;
+    item.style.cssText = 'text-align:center;';
+    var thumb = document.createElement('img');
+    thumb.src = imgSrc.src; thumb.width = 48; thumb.height = 48;
+    thumb.style.cssText = 'display:block;margin:0 auto 4px;';
+    var label = document.createElement('div');
+    label.style.cssText = 'font-size:11px;color:#374151;';
+    label.textContent = card.querySelector('h3').textContent;
+    item.append(thumb, label);
+    bar.appendChild(item);
+    card.style.outline = '3px solid #3B82F6';
+    card.style.outlineOffset = '-3px';
+  });
+
+  // Initial render
+  render();
+
+  // Live reload: cache-bust SVG images + reload variants.js every 3s
+  setInterval(function () {
+    var t = Date.now();
+    // Cache-bust SVG images
+    document.querySelectorAll('img[src*=".svg"]').forEach(function (img) {
+      var base = img.src.split('?')[0];
+      img.src = base + '?t=' + t;
+    });
+    // Reload variants.js via script injection, re-render if data changed
+    var s = document.createElement('script');
+    s.src = 'variants.js?t=' + t;
+    s.onload = function () { render(); s.remove(); };
+    s.onerror = function () { s.remove(); };
+    document.head.appendChild(s);
+  }, 3000);
+})();
+</script>
+</body>
+</html>

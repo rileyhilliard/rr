@@ -1,0 +1,161 @@
+---
+import Logo from "../components/Logo.astro";
+import Wordmark from "../components/Wordmark.astro";
+import { site } from "../config";
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+  description?: string;
+  /** Route path with its trailing slash, e.g. "/docs/" (never Astro.url, which a host can rewrite). */
+  path: string;
+  /** Social card path under /og/. */
+  image?: string;
+  /** This page's Markdown export, linked as rel="alternate". */
+  markdown?: string;
+  noindex?: boolean;
+}
+const {
+  title,
+  description = site.description,
+  path,
+  image = "/og/index.webp",
+  markdown,
+  noindex = false,
+} = Astro.props;
+const canonical = new URL(path, site.url);
+const ogImage = new URL(image, site.url);
+const pageTitle = path === "/" ? `${site.name}: ${title}` : `${title} | ${site.name}`;
+const onHome = path === "/";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/brand/rr-icon-180.webp" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+    {markdown && <link rel="alternate" type="text/markdown" href={markdown} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={site.name} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/webp" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    {noindex && <meta name="robots" content="noindex, nofollow" />}
+    <script>
+      import { initAnalytics } from "../lib/analytics";
+      import "../scripts/site";
+
+      initAnalytics({
+        key: import.meta.env.PUBLIC_POSTHOG_KEY,
+        host: import.meta.env.PUBLIC_POSTHOG_HOST,
+      });
+    </script>
+  </head>
+  <body class="flex min-h-screen flex-col">
+    <a
+      href="#main"
+      class="bg-canvas sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:p-2"
+    >
+      Skip to content
+    </a>
+    <slot name="banner" />
+    <header class="border-line bg-canvas/95 sticky top-0 z-40 border-b backdrop-blur">
+      <div class="mx-auto flex h-14 max-w-[1200px] items-center gap-4 px-4 sm:px-8">
+        <a href="/" class="group flex items-center gap-2 no-underline hover:no-underline">
+          <Logo class="h-[1.4rem] w-auto" />
+          <span class="flex flex-col gap-1">
+            <Wordmark class="text-ink h-[1.2rem] w-auto" />
+            <span class="sr-only">rr home</span>
+            <span
+              aria-hidden="true"
+              class="brand-rule w-full origin-left transition-transform duration-300 group-hover:scale-x-125"
+            ></span>
+          </span>
+        </a>
+        {site.version && (
+          <a
+            href={site.releasesUrl}
+            class="text-muted border-line rounded-chip border px-1.5 py-0.5 font-mono text-[11px] no-underline"
+          >
+            v{site.version}
+          </a>
+        )}
+        <nav aria-label="Main" class="ml-auto flex items-center gap-5 text-sm">
+          <a href="/docs/" class="text-ink-2 hover:text-ink">
+            Docs
+          </a>
+          {site.social.map((link) => (
+            <a href={link.href} class="text-ink-2 hover:text-ink">
+              {link.label}
+            </a>
+          ))}
+          <a
+            href={onHome ? "#install" : "/#install"}
+            class="lift bg-accent text-canvas rounded-control px-3 py-1.5 font-medium no-underline hover:no-underline"
+          >
+            Install
+          </a>
+        </nav>
+        <!-- Search goes here: a search fragment fills this slot. -->
+        <slot name="search" />
+      </div>
+    </header>
+    <main id="main" class="flex-1">
+      <slot />
+    </main>
+    <footer class="border-line text-ink-2 border-t text-sm">
+      <div class="mx-auto grid max-w-[1200px] gap-10 px-4 pt-14 pb-10 sm:px-8 md:grid-cols-[1fr_auto_auto_auto] md:gap-16">
+        <div class="flex max-w-xs flex-col gap-3">
+          <span class="flex w-fit items-center gap-2.5">
+            <Logo class="h-7 w-auto" />
+            <span class="flex flex-col gap-1">
+              <Wordmark class="text-ink h-[1.5rem] w-auto" />
+              <span class="sr-only">rr</span>
+              <span aria-hidden="true" class="brand-rule w-full"></span>
+            </span>
+          </span>
+          <p class="text-muted leading-relaxed">{site.tagline}</p>
+        </div>
+        <nav aria-label="Product links" class="flex flex-col gap-2">
+          <span class="text-ink font-medium">Product</span>
+          <a href={onHome ? "#install" : "/#install"}>Install</a>
+          <a href={site.releasesUrl}>Releases</a>
+          <a href={`${site.repo}/blob/main/CHANGELOG.md`}>Changelog</a>
+        </nav>
+        <nav aria-label="Documentation links" class="flex flex-col gap-2">
+          <span class="text-ink font-medium">Docs</span>
+          <a href="/docs/">Documentation</a>
+          <a href="/docs/configuration/">Configuration</a>
+          <a href="/llms.txt">llms.txt</a>
+        </nav>
+        <nav aria-label="Community links" class="flex flex-col gap-2">
+          <span class="text-ink font-medium">Community</span>
+          {site.social.map((link) => (
+            <a href={link.href}>{link.label}</a>
+          ))}
+          <a href={`${site.repo}/issues`}>Issues</a>
+        </nav>
+      </div>
+      <div class="border-line border-t">
+        <p class="text-muted mx-auto max-w-[1200px] px-4 py-5 text-xs sm:px-8">
+          Released under the {site.license} license. A{" "}
+          <a href="https://steamfield.io">Steamfield</a> project.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

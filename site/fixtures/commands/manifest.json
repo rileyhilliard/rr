@@ -1,0 +1,32 @@
+[
+  {
+    "name": "init",
+    "command": "rr init --non-interactive --skip-probe --host m4-mini",
+    "exit_code": 0
+  },
+  {
+    "name": "doctor",
+    "command": "rr doctor",
+    "exit_code": 0
+  },
+  {
+    "name": "status",
+    "command": "rr status",
+    "exit_code": 0
+  },
+  {
+    "name": "run",
+    "command": "rr run \"go test ./internal/lock/...\"",
+    "exit_code": 0
+  },
+  {
+    "name": "test",
+    "command": "rr test-all",
+    "exit_code": 0
+  },
+  {
+    "name": "logs",
+    "command": "rr logs",
+    "exit_code": 0
+  }
+]
