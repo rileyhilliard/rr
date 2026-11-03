@@ -1,0 +1,171 @@
+// Characterization of the page script: copy buttons, analytics hooks, scroll reveals and the
+// TOC highlight. site.ts sets everything up when it is imported, so each test builds the DOM
+// first and then imports a fresh copy of the module.
+import { act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const track = vi.fn();
+vi.mock("../lib/analytics", () => ({ track: (...args: unknown[]) => track(...args) }));
+
+type Observed = { callback: IntersectionObserverCallback; targets: Set<Element> };
+let observers: Observed[] = [];
+
+class FakeObserver {
+  readonly entry: Observed;
+  constructor(callback: IntersectionObserverCallback) {
+    this.entry = { callback, targets: new Set() };
+    observers.push(this.entry);
+  }
+  observe(target: Element) {
+    this.entry.targets.add(target);
+  }
+  unobserve(target: Element) {
+    this.entry.targets.delete(target);
+  }
+  disconnect() {
+    this.entry.targets.clear();
+  }
+  takeRecords() {
+    return [];
+  }
+}
+
+/** Reports `target` as intersecting (or not) to every observer watching it. */
+function intersect(target: Element, isIntersecting = true) {
+  for (const observer of observers) {
+    if (!observer.targets.has(target)) continue;
+    observer.callback(
+      [{ target, isIntersecting } as IntersectionObserverEntry],
+      observer as unknown as IntersectionObserver,
+    );
+  }
+}
+
+/** The reveal marker: html.js plus .is-visible before the migration, data-revealed after it. */
+const motionGate = () =>
+  document.documentElement.classList.contains("js") ||
+  document.documentElement.hasAttribute("data-motion-ready");
+const revealed = (el: Element) =>
+  el.classList.contains("is-visible") || el.hasAttribute("data-revealed");
+
+async function load(html: string) {
+  document.body.innerHTML = html;
+  vi.resetModules();
+  await import("./site");
+}
+
+beforeEach(() => {
+  observers = [];
+  track.mockClear();
+  vi.stubGlobal("IntersectionObserver", FakeObserver);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+  document.documentElement.className = "";
+  for (const name of [...document.documentElement.getAttributeNames()]) {
+    if (name.startsWith("data-")) document.documentElement.removeAttribute(name);
+  }
+});
+
+const copyLine = (command: string, extra = "") => `
+  <div>
+    <span aria-hidden="true">$</span>
+    <code>${command}</code>
+    <button type="button" hidden data-copy="${command}" ${extra} aria-label="Copy ${command}">Copy</button>
+  </div>`;
+
+describe("copy lines (CopyLine.astro)", () => {
+  it("shows the hidden button and copies the command, then resets the label", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await load(copyLine("brew install rr"));
+    const button = document.querySelector("button") as HTMLButtonElement;
+    expect(button.hidden).toBe(false);
+    await user.click(button);
+    expect(await navigator.clipboard.readText()).toBe("brew install rr");
+    expect(button).toHaveTextContent("Copied");
+    await act(() => vi.advanceTimersByTimeAsync(1600));
+    expect(button).toHaveTextContent("Copy");
+    expect(button).not.toHaveTextContent("Copied");
+  });
+
+  it("tracks catalogued events with their method, and ignores unknown ones", async () => {
+    const user = userEvent.setup();
+    await load(
+      copyLine("brew install rr", 'data-track="install_copied" data-track-method="Homebrew"') +
+        copyLine("/rr:setup", 'data-track="plugin_copied"') +
+        copyLine("rr doctor", 'data-track="not_an_event"'),
+    );
+    const buttons = [...document.querySelectorAll("button")];
+    for (const button of buttons) await user.click(button);
+    expect(track.mock.calls).toEqual([
+      ["install_copied", { method: "Homebrew" }],
+      ["plugin_copied", undefined],
+    ]);
+  });
+});
+
+describe("code frames", () => {
+  it("get a copy button that copies the code", async () => {
+    const user = userEvent.setup();
+    await load(
+      '<figure class="code-frame"><figcaption>.rr.yaml</figcaption><pre><code>hosts: [m4]</code></pre></figure>',
+    );
+    const button = document.querySelector(".code-frame button") as HTMLButtonElement;
+    expect(button).toHaveClass("code-copy");
+    expect(button).toHaveTextContent("Copy");
+    expect(button.hidden).toBe(false);
+    await user.click(button);
+    expect(await navigator.clipboard.readText()).toBe("hosts: [m4]");
+    expect(button).toHaveTextContent("Copied");
+  });
+});
+
+describe("analytics hooks", () => {
+  it("tracks command tab switches announced by the island", async () => {
+    await load("");
+    window.dispatchEvent(new CustomEvent("rr:command-tab", { detail: { name: "doctor" } }));
+    expect(track).toHaveBeenCalledWith("command_tab_opened", { name: "doctor" });
+  });
+
+  it("tracks a section view once", async () => {
+    await load('<section id="agent" data-track-view></section>');
+    const section = document.getElementById("agent") as HTMLElement;
+    intersect(section);
+    intersect(section);
+    expect(track.mock.calls).toEqual([["section_viewed", { id: "agent" }]]);
+  });
+});
+
+describe("scroll reveals", () => {
+  it("gate the page for motion and reveal a section once it scrolls in", async () => {
+    await load('<section id="a" data-reveal><p data-motion="lift-md">Hi</p></section>');
+    const section = document.getElementById("a") as HTMLElement;
+    expect(motionGate()).toBe(true);
+    expect(revealed(section)).toBe(false);
+    intersect(section);
+    expect(revealed(section)).toBe(true);
+  });
+
+  it("leave everything visible without IntersectionObserver", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    await load('<section id="a" data-reveal><p data-motion="lift-md">Hi</p></section>');
+    expect(motionGate()).toBe(false);
+  });
+});
+
+describe("table of contents", () => {
+  it("marks the link of the heading being read", async () => {
+    await load(`
+      <nav data-toc><a href="#one">One</a><a href="#two">Two</a></nav>
+      <h2 id="one">One</h2><h2 id="two">Two</h2>`);
+    const [one, two] = [...document.querySelectorAll("[data-toc] a")];
+    intersect(document.getElementById("two") as HTMLElement);
+    expect(two).toHaveAttribute("aria-current", "location");
+    expect(one).not.toHaveAttribute("aria-current");
+  });
+});
