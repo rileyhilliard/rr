@@ -133,7 +133,11 @@ describe("CommandTabs", () => {
   });
 
   it("plays the selected command's output with its tones", () => {
-    render(<CommandTabs commands={[{ ...commands[0], lines: ["✓ ok", "✕ broke"] }]} />);
+    render(
+      <CommandTabs
+        commands={[{ name: "doctor", command: "rr doctor", caption: "", lines: ["✓ ok"] }]}
+      />,
+    );
     const panel = screen.getByRole("tabpanel");
     expect(within(panel).getByRole("region", { name: "Output of rr doctor" })).toBeInTheDocument();
   });
