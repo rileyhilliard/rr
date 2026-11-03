@@ -74,8 +74,8 @@ afterEach(() => {
 const copyLine = (command: string, extra = "") => `
   <div>
     <span aria-hidden="true">$</span>
-    <code>${command}</code>
-    <button type="button" hidden data-copy="${command}" ${extra} aria-label="Copy ${command}">Copy</button>
+    <code id="c-${command.replace(/[^a-z0-9]+/gi, "-")}">${command}</code>
+    <button type="button" hidden data-copy-command aria-controls="c-${command.replace(/[^a-z0-9]+/gi, "-")}" ${extra} aria-label="Copy ${command}"><span data-copy-label>Copy</span></button><span data-copy-result data-part="copy-result" role="status" aria-live="polite"></span>
   </div>`;
 
 describe("copy lines (CopyLine.astro)", () => {

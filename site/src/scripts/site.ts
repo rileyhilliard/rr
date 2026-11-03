@@ -1,33 +1,58 @@
+import { copyText, enhanceCopyButtons } from "@steamfield/ui/copy";
+import { spyToc } from "@steamfield/ui/docs";
+import { initReveal } from "@steamfield/ui/reveal";
 import { track } from "../lib/analytics";
 import { type EventName, Events } from "../lib/events";
 
 // The one module script every page loads. It isn't an island: docs pages ship no
 // hydrated component, so copy buttons, section tracking and the TOC highlight
-// are plain DOM code. Each part does nothing on a page without its markup.
+// are plain DOM code on @steamfield/ui's copy, docs and reveal cores. Each part does
+// nothing on a page without its markup.
+
+/** How long a copy button says "Copied". */
+const COPIED_MS = 1500;
 
 async function copyWithFeedback(button: HTMLButtonElement, read: () => Promise<string> | string) {
   const label = button.textContent;
+  let ok = false;
   try {
-    await navigator.clipboard.writeText(await read());
-    button.textContent = "Copied";
+    ok = await copyText(await read());
   } catch {
-    button.textContent = "Copy failed";
+    // The Markdown fetch failed; the button says so below.
   }
+  button.textContent = ok ? "Copied" : "Copy failed";
   setTimeout(() => {
     button.textContent = label;
-  }, 1500);
+  }, COPIED_MS);
 }
 
+/**
+ * Adds a copy button to each code frame, in the markup enhanceCopyButtons wires: the
+ * button names its code with aria-controls, and a status region beside it reports
+ * the result.
+ */
 function setupCodeCopy() {
+  let count = 0;
   for (const frame of document.querySelectorAll<HTMLElement>(".code-frame")) {
     const code = frame.querySelector("code");
     if (!code) continue;
+    count += 1;
+    code.id ||= `code-frame-${count}`;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "code-copy";
-    button.textContent = "Copy";
-    button.addEventListener("click", () => copyWithFeedback(button, () => code.textContent ?? ""));
-    frame.append(button);
+    button.dataset.copyCommand = "";
+    button.setAttribute("aria-controls", code.id);
+    const label = document.createElement("span");
+    label.dataset.copyLabel = "";
+    label.textContent = "Copy";
+    button.append(label);
+    const result = document.createElement("span");
+    result.dataset.copyResult = "";
+    result.dataset.part = "copy-result";
+    result.setAttribute("role", "status");
+    result.setAttribute("aria-live", "polite");
+    frame.append(button, result);
   }
 }
 
@@ -42,41 +67,29 @@ function setupCopyPage() {
 }
 
 function setupTocHighlight() {
-  const links = [...document.querySelectorAll<HTMLAnchorElement>("[data-toc] a[href^='#']")];
-  const byId = new Map(links.map((link) => [decodeURIComponent(link.hash.slice(1)), link]));
-  const headings = [...byId.keys()]
-    .map((id) => document.getElementById(id))
-    .filter((heading) => heading !== null);
-  if (headings.length === 0) return;
-  const observer = new IntersectionObserver(
-    (entries) => {
-      const visible = entries.find((entry) => entry.isIntersecting);
-      if (!visible) return;
-      for (const link of links) link.removeAttribute("aria-current");
-      byId.get(visible.target.id)?.setAttribute("aria-current", "location");
-    },
-    { rootMargin: "0px 0px -70% 0px" },
-  );
-  for (const heading of headings) observer.observe(heading);
+  spyToc(document, { linkSelector: "[data-toc] a[href^='#']" });
 }
 
 /**
- * Copy buttons beside command lines (CopyLine.astro): hidden until JavaScript runs.
- * data-track names the event from the catalog; data-track-method is its method.
+ * Copy buttons beside command lines (CopyLine.astro) and code frames: hidden until
+ * JavaScript runs. A CopyLine's data-track names the event from the catalog, sent after
+ * every attempt; data-track-method is its method.
  */
-function setupCopyLines() {
+function setupCopyButtons() {
   const tracked = new Set<string>(Object.values(Events));
-  for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-copy]")) {
-    button.hidden = false;
-    button.addEventListener("click", async () => {
-      await copyWithFeedback(button, () => button.dataset.copy ?? "");
-      const event = button.dataset.track;
-      if (event && tracked.has(event)) {
+  enhanceCopyButtons(document, {
+    copiedMs: COPIED_MS,
+    onCopy: ({ id }) => {
+      const button = document.querySelector<HTMLElement>(
+        `[data-copy-command][aria-controls="${id}"]`,
+      );
+      const name = button?.dataset.track;
+      if (name && tracked.has(name)) {
         const method = button.dataset.trackMethod;
-        track(event as EventName, method ? { method } : undefined);
+        track(name as EventName, method ? { method } : undefined);
       }
-    });
-  }
+    },
+  });
 }
 
 /** Sends section_viewed once per [data-track-view] section that scrolls into view. */
@@ -105,18 +118,13 @@ function setupCommandTabTracking() {
 }
 
 /**
- * Reveals each [data-reveal] section once, as its top passes three quarters of the
- * way down the viewport, and marks it settled when its entrance transitions end so
- * hover transitions lose the reveal delays. The CSS only hides content under html.js
- * with motion allowed, so without this script nothing is hidden; a section that
- * takes focus is revealed at once.
+ * Reveals each [data-reveal] section once (initReveal), as its top passes three
+ * quarters of the way down the viewport. Without IntersectionObserver or with reduced
+ * motion nothing is hidden. A revealed section is marked settled once its entrance
+ * transitions end, so .lift surfaces get their own hover transition back.
  */
 function setupReveals() {
-  const blocks = [...document.querySelectorAll<HTMLElement>("[data-reveal]")];
-  if (blocks.length === 0) return;
-  const show = (el: Element) => {
-    if (el.classList.contains("is-visible")) return;
-    el.classList.add("is-visible");
+  const settle = (el: Element) => {
     // getAnimations flushes styles, so the entrance transitions exist by now.
     const entrances = el
       .getAnimations({ subtree: true })
@@ -125,30 +133,15 @@ function setupReveals() {
       el.classList.add("is-settled"),
     );
   };
-  if (typeof IntersectionObserver === "undefined") {
-    blocks.forEach(show);
-    return;
-  }
-  document.documentElement.classList.add("js");
-  const observer = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        show(entry.target);
-        observer.unobserve(entry.target);
-      }
-    },
-    { rootMargin: "0px 0px -25% 0px" },
-  );
-  for (const block of blocks) {
-    observer.observe(block);
-    block.addEventListener("focusin", () => show(block), { once: true });
-  }
+  new MutationObserver((records) => {
+    for (const record of records) settle(record.target as Element);
+  }).observe(document.body, { subtree: true, attributeFilter: ["data-revealed"] });
+  initReveal({ rootMargin: "0px 0px -25% 0px" });
 }
 
 setupReveals();
 setupCodeCopy();
-setupCopyLines();
+setupCopyButtons();
 setupSectionViews();
 setupCommandTabTracking();
 setupCopyPage();

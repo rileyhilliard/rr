@@ -1,5 +1,8 @@
 // Pure docs rules: ordering, URLs, the pager and the agent-readable exports.
 // Pages pass in the collection from collection.ts, so tests need no Astro runtime.
+// Each page's Markdown export is @steamfield/ui/docs' pageMarkdown with rr's link
+// rewriting; the sidebar, llms.txt and llms-full.txt keep rr's own shapes.
+import { type DocsConfig, pageMarkdown } from "@steamfield/ui/docs";
 import type { DocData } from "../content/schema";
 import { docId, isSitePage, repoBlob } from "./docs-source";
 
@@ -58,6 +61,19 @@ export function rewriteDocsLink(href: string): string {
   return `${repoBlob}/docs/${clean}${anchor}`;
 }
 
+/** Each docs file opens with its own `# Title` for GitHub; the site renders it from frontmatter. */
+const dropTitle = (body: string) => body.replace(/^\s*# .*\n+/, "");
+
+/** What pageMarkdown reads from the config: only the link rewriting (no page is the docs home). */
+const exportConfig: DocsConfig = {
+  name: "rr",
+  summary: "",
+  groups: [],
+  trailingSlash: "always",
+  optionalLinks: [],
+  rewriteLink: (href) => rewriteDocsLink(href),
+};
+
 /** The page body as the site serves it: the file's own `# Title` dropped, relative links rewritten. */
 export function siteMarkdown(body: string): string {
   return body
@@ -67,7 +83,7 @@ export function siteMarkdown(body: string): string {
 
 /** The Markdown served beside each page at /docs/<id>.md. */
 export function toMarkdownExport(entry: DocEntry): string {
-  return `# ${entry.data.title}\n\n> ${entry.data.description}\n\n${siteMarkdown(entry.body).trim()}\n`;
+  return pageMarkdown(exportConfig, { ...entry, body: dropTitle(entry.body) }, [], "");
 }
 
 /** llms.txt: the product summary, then every page by group with its description. */

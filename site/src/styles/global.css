@@ -1,4 +1,8 @@
+/* sf sits after base, so preflight never strips library styles, and before
+   components and utilities, so site classes win (src/styles/sf-theme.css). */
+@layer theme, base, sf, components, utilities;
 @import "tailwindcss";
+@import "./sf-theme.css";
 @import "@fontsource-variable/instrument-sans";
 @import "@fontsource-variable/martian-mono/wdth.css";
 @plugin "@tailwindcss/typography";
@@ -232,34 +236,21 @@
   @apply overflow-auto whitespace-pre;
 }
 
-/*
- * Command tabs without JavaScript: every panel is in the HTML; show the first, or
- * the one the URL targets. Hydrated, the island adds .cmds-live and sets `hidden`.
- */
-.cmds:not(.cmds-live) .cmd-panel {
-  display: none;
-}
-
-.cmds:not(.cmds-live) .cmd-panel:first-child,
-.cmds:not(.cmds-live) .cmd-panel:target {
-  display: block;
-}
-
-.cmds:not(.cmds-live):has(.cmd-panel:target) .cmd-panel:first-child:not(:target) {
-  display: none;
-}
-
 /* Motion is opt-in: the finished state is the default CSS. Scroll reveals apply only
-   once src/scripts/site.ts has marked the page (html.js), so content never waits on it.
+   once src/scripts/site.ts has set the gate (html[data-motion-ready], from
+   @steamfield/ui/reveal), so content never waits on it.
 
    The vocabulary follows OpenData's landing page. A [data-motion] role names how an
    element enters (its start offset, duration and curve), and --motion-delay places it
    in its section's sequence. Children of [data-stagger] take their delay from their
    position: --stagger-from plus --stagger times --stagger-gap. Custom properties
    inherit, so a nested [data-stagger] sets its own gap and start. Scroll reveals are
-   section-triggered: setupReveals marks a [data-reveal] section .is-visible once, every
-   [data-motion] inside moves from one shared moment, and .is-settled drops the reveal
-   transitions afterwards so hover transitions aren't delayed. The hero runs the same
+   section-triggered: initReveal marks a [data-reveal] section data-revealed once, and
+   every [data-motion] inside moves from one shared moment. The roles' start states and
+   durations are the library's (reveal/styles.css, the same values); what's rr's own is
+   below: delays from --motion-delay, stagger children without a role, and .lift
+   surfaces, whose entrance wins over their hover transition until site.ts marks the
+   section .is-settled. The hero runs the same
    roles as keyframes on load (.hero-in), which needs no script. */
 @media (prefers-reduced-motion: no-preference) {
   .fade-in {
@@ -301,66 +292,37 @@
     --stagger: 9;
   }
 
-  .js [data-reveal]:not(.is-settled) :is([data-motion], [data-stagger] > *) {
+  html[data-motion-ready] [data-reveal] :is([data-motion], [data-stagger] > *) {
+    --sf-reveal-delay: var(--motion-delay, 0ms);
+  }
+
+  /* A stagger child without a role enters as lift-md. */
+  html[data-motion-ready]
+    [data-reveal]:not(.is-settled)
+    :is([data-stagger] > :not([data-motion]), .lift[data-motion]) {
     transition-property: opacity, transform, filter;
     transition-duration: 420ms;
     transition-timing-function: var(--ease-organic);
     transition-delay: var(--motion-delay, 0ms);
   }
-
-  /* Start states. A stagger child without a role enters as lift-md. */
-  .js [data-reveal]:not(.is-visible) [data-motion="lift-sm"] {
-    opacity: 0;
-    transform: translateY(8px);
+  html[data-motion-ready]
+    [data-reveal]:not(.is-settled)
+    .lift:is([data-motion="lift-lg"], [data-motion="lift-card"]) {
+    transition-duration: 520ms;
   }
-  .js
-    [data-reveal]:not(.is-visible)
-    :is([data-motion="lift-md"], [data-stagger] > :not([data-motion])) {
+  html[data-motion-ready] [data-reveal]:not([data-revealed]) [data-stagger] > :not([data-motion]) {
     opacity: 0;
     transform: translateY(10px);
   }
-  .js [data-reveal]:not(.is-visible) [data-motion="lift-lg"] {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  .js [data-reveal]:not(.is-visible) [data-motion="lift-card"] {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  .js [data-reveal]:not(.is-visible) [data-motion="blur-in-soft"] {
-    opacity: 0;
-    filter: blur(6px);
-    transform: translateY(12px);
-  }
-  /* The scale is almost imperceptible; more reads as a zoom on wide media. */
-  .js [data-reveal]:not(.is-visible) [data-motion="scale-in-media"] {
-    opacity: 0;
-    transform: translateY(10px) scale(0.995);
-  }
-
-  /* Durations and curves by role: small things are quicker and settle sooner. */
-  .js [data-reveal]:not(.is-settled) [data-motion="lift-sm"] {
-    transition-duration: 360ms;
-    transition-timing-function: var(--ease-organic-mid);
-  }
-  .js [data-reveal]:not(.is-settled) :is([data-motion="lift-lg"], [data-motion="lift-card"]) {
-    transition-duration: 520ms;
-  }
-  .js [data-reveal]:not(.is-settled) [data-motion="blur-in-soft"] {
-    transition-duration: 620ms;
-  }
-  .js [data-reveal]:not(.is-settled) [data-motion="scale-in-media"] {
-    transition-duration: 640ms;
-  }
 
   /* Chart bars grow from the left once their section is in view. */
-  .js [data-reveal] .grow-x {
+  html[data-motion-ready] [data-reveal] .grow-x {
     transform-origin: left center;
     transition: transform 1100ms var(--ease-organic);
     transition-delay: calc(var(--stagger-from, 0ms) + var(--stagger, 0) * 120ms + 250ms);
   }
 
-  .js [data-reveal]:not(.is-visible) .grow-x {
+  html[data-motion-ready] [data-reveal]:not([data-revealed]) .grow-x {
     transform: scaleX(0);
   }
 
