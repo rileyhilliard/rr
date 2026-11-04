@@ -69,7 +69,7 @@ function firstPageview(live: PostHogPipeline = pipeline) {
 // The next page in the same tab: the first page unloads (keeping its storage), then a
 // fresh module loads with the same key. On a sibling *.steamfield.io site the
 // .steamfield.io cookies come along, but the other origin's web storage doesn't.
-async function nextPage(consent: ConsentStore, { siblingSite = false } = {}) {
+async function nextPage(consent: ConsentStore | undefined, { siblingSite = false } = {}) {
   pipeline.leavePage();
   if (siblingSite) {
     localStorage.clear();
@@ -276,6 +276,18 @@ describe("a choice stored from an earlier visit", () => {
     next.shutdown();
   });
 
+  it("without a store, a grant made on a sibling site is honored", async () => {
+    // Nothing reconciles PostHog with sf-consent here, so its shared consent cookie decides.
+    // BaseLayout always passes a store, which is what keeps sf-consent in charge.
+    await start({ consent: consentStore("granted") });
+    await firstPageview();
+    const next = await nextPage(undefined, { siblingSite: true });
+    const pageview = await firstPageview(next);
+    expect(pageview.properties).toMatchObject({ site: "rr" });
+    expect(pageview.properties.$cookieless_mode).not.toBe(true);
+    next.shutdown();
+  });
+
   it("a window id left by a tab withdrawn elsewhere is cleared on load", async () => {
     // Consent withdrawn in another tab: PostHog's records are gone, this tab's window id isn't.
     sessionStorage.setItem(`ph_${key}_window_id`, JSON.stringify("window-from-before"));
@@ -316,15 +328,48 @@ describe("init", () => {
       disable_conversations: true,
       disable_product_tours: true,
       opt_out_capturing_persistence_type: "cookie",
+      advanced_disable_flags: true,
+      disable_external_dependency_loading: true,
     };
     expect(pipeline.initConfig()).toMatchObject(expected);
   });
 
-  it("leaves the harness's offline settings to the harness", async () => {
+  it("leaves only the test DOM's user-agent setting to the harness", async () => {
     await start();
-    for (const name of Object.keys(OFFLINE_OVERRIDES)) {
-      expect(pipeline.initConfig()).not.toHaveProperty(name);
-    }
+    // Production sets the harness's network keys itself (see the init options test).
+    const harnessOnly = Object.keys(OFFLINE_OVERRIDES).filter(
+      (name) => !["advanced_disable_flags", "disable_external_dependency_loading"].includes(name),
+    );
+    expect(harnessOnly).toEqual(["opt_out_useragent_filter"]);
+    expect(pipeline.initConfig()).not.toHaveProperty("opt_out_useragent_filter");
+  });
+
+  it("requests no flags or remote config and loads no script from PostHog", async () => {
+    // The SDK's own transport: every request it makes goes through _send_request.
+    const sdk: PostHog = Object.getPrototypeOf(posthog);
+    const requested: string[] = [];
+    vi.spyOn(sdk, "_send_request").mockImplementation((options) => {
+      requested.push(options.url);
+    });
+    const scriptsBefore = document.scripts.length;
+    const live = createPostHogPipeline(posthog, { network: "as-configured" });
+    await analytics.initAnalytics(
+      {
+        key,
+        host: "http://127.0.0.1:9",
+        site: "rr",
+        consent: consentStore(),
+      },
+      live.load,
+    );
+    const pageview = await firstPageview(live);
+    expect(pageview.properties).toMatchObject({
+      site: "rr",
+      $cookieless_mode: true,
+    });
+    expect(requested.filter((url) => /\/flags|\/config/.test(url))).toEqual([]);
+    expect(document.scripts.length).toBe(scriptsBefore);
+    live.shutdown();
   });
 
   it("initializes once across repeated calls", async () => {

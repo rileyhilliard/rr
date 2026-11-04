@@ -19,8 +19,10 @@ import type { CaptureResult, PostHog, PostHogConfig } from "posthog-js";
  *   letting the event reach the transport, and a real fetch per capture leaves
  *   requests in flight when vitest tears the happy-dom window down.
  * - It sets the OFFLINE_OVERRIDES keys below, overriding whatever the module passed
- *   for them. `initConfig()` returns the module's config before both changes, so a
- *   test can check that production doesn't set those keys itself.
+ *   for them. analytics.ts sets the two network keys itself, so for those the override
+ *   changes nothing; `{ network: "as-configured" }` leaves them to the module, so a test
+ *   can see what production requests. `initConfig()` returns the module's config before
+ *   the wrapper changed it.
  */
 
 /** A fully enriched event as `before_send` sees it. */
@@ -30,15 +32,18 @@ type InitConfig = Partial<PostHogConfig>;
 type PostHogModule = Pick<PostHog, "init">;
 type BeforeSend = PostHogConfig["before_send"];
 type BeforeSendFn = Exclude<BeforeSend, unknown[] | undefined>;
+type Network = "offline" | "as-configured";
+
+/** happy-dom reports an automated user agent; without this every event drops. */
+const TEST_DOM_OVERRIDES = { opt_out_useragent_filter: true } as const;
 
 /** Config that keeps the real SDK offline and synchronous. */
 export const OFFLINE_OVERRIDES = {
   /** No remote-config or recorder script fetches. */
   disable_external_dependency_loading: true,
-  /** No `/flags` round trip on init. */
+  /** No `/flags` or remote-config round trip on init. */
   advanced_disable_flags: true,
-  /** happy-dom reports an automated user agent; without this everything drops. */
-  opt_out_useragent_filter: true,
+  ...TEST_DOM_OVERRIDES,
 } as const;
 
 export type PostHogPipeline = {
@@ -84,7 +89,12 @@ function runBeforeSend(hook: BeforeSend, event: CaptureResult | null) {
  * stored consent are keyed by the token, so give each test its own key unless it
  * means to share them.
  */
-export function createPostHogPipeline(posthog: PostHogModule): PostHogPipeline {
+export function createPostHogPipeline(
+  posthog: PostHogModule,
+  { network = "offline" }: { network?: Network } = {},
+): PostHogPipeline {
+  const offline = network === "offline";
+  const overrides = offline ? OFFLINE_OVERRIDES : TEST_DOM_OVERRIDES;
   const name = `pipeline_test_${++instanceCounter}`;
   const captured: CapturedEvent[] = [];
   let recording = true;
@@ -104,7 +114,7 @@ export function createPostHogPipeline(posthog: PostHogModule): PostHogPipeline {
             // Never send. See the note on network teardown above.
             return null;
           },
-          ...OFFLINE_OVERRIDES,
+          ...overrides,
         },
         name,
       );

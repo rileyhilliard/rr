@@ -25,7 +25,10 @@ export type AnalyticsConfig = {
   host?: string | undefined;
   // Added as `site` to every event, so one PostHog project can tell the sites apart.
   site: string;
-  // Without a store the visitor stays undecided, so PostHog stays cookieless.
+  // Without a store nothing reconciles PostHog with sf-consent, so PostHog's own consent
+  // record decides: cookieless, unless a grant made on a sibling steamfield.io site is in
+  // the shared .steamfield.io cookie, which it honors. BaseLayout always passes a store
+  // when there's a key, so on the site the visitor's sf-consent choice is what applies.
   consent?: ConsentStore | undefined;
 };
 type Loader = () => Promise<{ default: Pick<PostHog, "init"> }>;
@@ -44,6 +47,8 @@ let warned = false;
 function send(call: Call) {
   if (client) return call(client);
   if (!queue) return; // Not initialized, or no key: a silent no-op.
+  // Past the limit, calls are dropped, with one warning: unlike stacks, these sites
+  // allow the console.
   if (queue.length >= QUEUE_LIMIT) {
     if (!warned) console.warn("analytics: queue full, dropping calls");
     warned = true;
@@ -150,6 +155,11 @@ export async function initAnalytics(
     disable_surveys: true,
     disable_conversations: true,
     disable_product_tours: true,
+    // No feature flags or remote config on these sites, so no /flags request, no remote
+    // config script or JSON on each page, and no script loaded from PostHog's CDN.
+    // Cookieless counting and pageviews don't depend on either.
+    advanced_disable_flags: true,
+    disable_external_dependency_loading: true,
     before_send: stampSite(config.site),
     loaded: (instance) => onLoaded(instance, key, config.consent),
   });
