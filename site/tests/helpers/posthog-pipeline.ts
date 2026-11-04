@@ -58,6 +58,12 @@ export type PostHogPipeline = {
   only(name: string): CapturedEvent;
   /** Drop everything recorded so far. */
   clear(): void;
+  /**
+   * Leave the page the way a browser does: stop recording and fire `pagehide` and
+   * `beforeunload`, which make posthog-js write its pending persistence and drop its
+   * primary-window marker. Storage stays, so the next page can read it.
+   */
+  leavePage(): void;
   /** Clear persistence and stop recording. Call in `afterEach`. */
   shutdown(): void;
 };
@@ -133,6 +139,11 @@ export function createPostHogPipeline(posthog: PostHogModule): PostHogPipeline {
     },
     clear: () => {
       captured.length = 0;
+    },
+    leavePage: () => {
+      recording = false;
+      window.dispatchEvent(new Event("pagehide"));
+      window.dispatchEvent(new Event("beforeunload"));
     },
     shutdown: () => {
       recording = false;

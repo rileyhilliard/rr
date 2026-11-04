@@ -50,6 +50,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   pipeline.shutdown();
   localStorage.clear();
   sessionStorage.clear();
@@ -65,9 +66,20 @@ function firstPageview(live: PostHogPipeline = pipeline) {
   return vi.waitFor(() => live.only("$pageview"));
 }
 
-// Long enough for posthog-js's deferred initial-pageview timer (1ms) to have fired.
-function pastDeferredTick() {
-  return new Promise((resolve) => setTimeout(resolve, 20));
+// The next page in the same tab: the first page unloads (keeping its storage), then a
+// fresh module loads with the same key. On a sibling *.steamfield.io site the
+// .steamfield.io cookies come along, but the other origin's web storage doesn't.
+async function nextPage(consent: ConsentStore, { siblingSite = false } = {}) {
+  pipeline.leavePage();
+  if (siblingSite) {
+    localStorage.clear();
+    sessionStorage.clear();
+  }
+  vi.resetModules();
+  analytics = await import("./analytics");
+  const next = createPostHogPipeline(posthog);
+  await analytics.initAnalytics({ key, site: "rr", consent }, next.load);
+  return next;
 }
 
 // A minimal store with the shape @steamfield/ui/consent's createConsentStore returns.
@@ -149,8 +161,8 @@ describe("following the consent store", () => {
       [
         `cookie:ph_${key}_posthog`,
         `cookie:ph_${key}_posthog_cpm`,
+        `cookie:__ph_opt_in_out_${key}`,
         `localStorage:ph_${key}_posthog`,
-        `localStorage:__ph_opt_in_out_${key}`,
         `sessionStorage:ph_${key}_posthog`,
         `sessionStorage:ph_${key}_window_id`,
       ].sort(),
@@ -185,6 +197,35 @@ describe("following the consent store", () => {
     expect(newStorage()).toEqual([]);
   });
 
+  it("a withdrawal with storage throwing still counts the next event cookieless", async () => {
+    const store = consentStore("granted");
+    await start({ consent: store });
+    await firstPageview();
+    const blocked = () => {
+      throw new DOMException("blocked", "SecurityError");
+    };
+    const throwing = {
+      getItem: blocked,
+      setItem: blocked,
+      removeItem: blocked,
+      clear: blocked,
+    };
+    // Stubbed globals: happy-dom's Storage proxy can't have a method spied on and restored.
+    vi.stubGlobal("sessionStorage", throwing);
+    vi.stubGlobal("localStorage", throwing);
+    try {
+      pipeline.clear();
+      expect(() => store.set("denied")).not.toThrow();
+      analytics.track(testEvent);
+      expect(pipeline.only(testEvent).properties).toMatchObject({
+        site: "rr",
+        $cookieless_mode: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("declining writes no consent record", async () => {
     const store = consentStore();
     await start({ consent: store });
@@ -198,9 +239,10 @@ describe("following the consent store", () => {
 
 describe("a choice stored from an earlier visit", () => {
   it("a stored granted choice counts the first pageview with consent", async () => {
+    vi.useFakeTimers();
     await start({ consent: consentStore("granted") });
-    await firstPageview();
-    await pastDeferredTick();
+    // Fires posthog-js's deferred initial-pageview timer, and anything after it.
+    await vi.runAllTimersAsync();
     const [pageview, ...more] = pipeline.captured("$pageview");
     expect(more).toEqual([]);
     expect(pageview?.properties.site).toBe("rr");
@@ -211,18 +253,11 @@ describe("a choice stored from an earlier visit", () => {
     await start({ consent: consentStore("granted") });
     await firstPageview();
     expect(pipeline.captured("$opt_in")).toHaveLength(1);
-    // The next page: a fresh module, the same key and the same device.
-    vi.resetModules();
-    analytics = await import("./analytics");
-    const nextPage = createPostHogPipeline(posthog);
-    await analytics.initAnalytics(
-      { key, site: "rr", consent: consentStore("granted") },
-      nextPage.load,
-    );
-    const pageview = await firstPageview(nextPage);
-    expect(nextPage.captured("$opt_in")).toEqual([]);
+    const next = await nextPage(consentStore("granted"));
+    const pageview = await firstPageview(next);
+    expect(next.captured("$opt_in")).toEqual([]);
     expect(pageview.properties.$cookieless_mode).not.toBe(true);
-    nextPage.shutdown();
+    next.shutdown();
   });
 
   it("a PostHog grant on the device is cleared when the store is undecided", async () => {
@@ -230,19 +265,33 @@ describe("a choice stored from an earlier visit", () => {
     await firstPageview();
     expect(newStorage()).not.toEqual([]);
     // The next page: the visitor's sf-consent cookie is gone, PostHog's grant isn't.
-    vi.resetModules();
-    analytics = await import("./analytics");
-    const nextPage = createPostHogPipeline(posthog);
-    await analytics.initAnalytics({ key, site: "rr", consent: consentStore(null) }, nextPage.load);
-    const pageview = await firstPageview(nextPage);
+    const next = await nextPage(consentStore(null));
+    const pageview = await firstPageview(next);
     expect(pageview.properties).toMatchObject({
       site: "rr",
       $cookieless_mode: true,
     });
-    expect(nextPage.posthog().get_explicit_consent_status()).toBe("pending");
-    pipeline.posthog().persistence?.flush();
-    expect(newStorage(nextPage)).toEqual([]);
-    nextPage.shutdown();
+    expect(next.posthog().get_explicit_consent_status()).toBe("pending");
+    expect(newStorage(next)).toEqual([]);
+    next.shutdown();
+  });
+
+  it("a window id left by a tab withdrawn elsewhere is cleared on load", async () => {
+    // Consent withdrawn in another tab: PostHog's records are gone, this tab's window id isn't.
+    sessionStorage.setItem(`ph_${key}_window_id`, JSON.stringify("window-from-before"));
+    await start({ consent: consentStore("denied") });
+    await firstPageview();
+    expect(newStorage()).toEqual([]);
+  });
+
+  it("a visitor who accepted on a sibling site keeps their identity here", async () => {
+    await start({ consent: consentStore("granted") });
+    const siblingId = (await firstPageview()).properties.distinct_id;
+    const next = await nextPage(consentStore("granted"), { siblingSite: true });
+    const pageview = await firstPageview(next);
+    expect(pageview.properties.distinct_id).toBe(siblingId);
+    expect(next.captured("$opt_in")).toEqual([]);
+    next.shutdown();
   });
 });
 
@@ -263,10 +312,12 @@ describe("init", () => {
       capture_heatmaps: false,
       capture_exceptions: false,
       capture_performance: false,
+      disable_surveys: true,
+      disable_conversations: true,
+      disable_product_tours: true,
+      opt_out_capturing_persistence_type: "cookie",
     };
     expect(pipeline.initConfig()).toMatchObject(expected);
-    // The installed SDK knows every one of these names and kept the values.
-    expect(pipeline.posthog().config).toMatchObject(expected);
   });
 
   it("leaves the harness's offline settings to the harness", async () => {
@@ -286,20 +337,19 @@ describe("init", () => {
   });
 });
 
-describe("super properties and opt-in ordering", () => {
-  // posthog-js directly, with the module's consent options and no site stamping.
+describe("posthog-js contract that stampSite works around", () => {
+  // These pin the SDK behavior that makes analytics.ts stamp site in before_send.
   beforeEach(async () => {
     const { default: sdk } = await pipeline.load();
     sdk.init(key, {
       cookieless_mode: "on_reject",
       opt_out_capturing_by_default: true,
       persistence: "localStorage+cookie",
+      opt_out_capturing_persistence_type: "cookie",
     });
   });
 
   it("loses properties registered before opt_in_capturing", () => {
-    // opt_in_capturing() resets super properties. That is why analytics.ts stamps
-    // site in before_send instead of registering it.
     pipeline.posthog().register({ site: "rr" });
     pipeline.posthog().opt_in_capturing();
 

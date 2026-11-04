@@ -11,7 +11,9 @@ import type { EventName, EventProps } from "./events";
 export type Consent = "granted" | "denied" | null;
 
 // The shape of @steamfield/ui/consent's store, typed here so this module doesn't
-// import the UI package. subscribe calls the listener after every change.
+// import the UI package. subscribe calls the listener after every change in this tab.
+// The store isn't expected to sync across tabs: a choice made in another tab reaches
+// this one on its next page load, which also clears what this tab's PostHog left behind.
 export type ConsentStore = {
   getState(): Consent;
   subscribe(listener: () => void): () => void;
@@ -32,6 +34,8 @@ type Status = "get_explicit_consent_status";
 type Client = Pick<PostHog, "capture" | Consenting | Status>;
 type Call = (client: Client) => void;
 
+// Calls made before the SDK loads wait here. stacks only sends pageviews, but rr, decks
+// and statglass share this module and call track() early.
 const QUEUE_LIMIT = 50;
 let client: Client | undefined;
 let queue: Call[] | undefined;
@@ -58,10 +62,12 @@ function applyConsent(c: Client, consent: Consent, key: string) {
   const status = c.get_explicit_consent_status();
   if (consent === "granted") {
     if (status !== "granted") c.opt_in_capturing();
-  } else if (status !== "pending") {
-    c.clear_opt_in_out_capturing();
-    forgetWindow(key);
+    return;
   }
+  if (status !== "pending") c.clear_opt_in_out_capturing();
+  // Even when PostHog is already pending: consent withdrawn in another tab leaves
+  // this tab's window id behind until a page here loads.
+  forgetWindow(key);
 }
 
 // posthog-js 1.445 keeps the tab's window id in sessionStorage after consent is
@@ -128,6 +134,11 @@ export async function initAnalytics(
     opt_out_capturing_by_default: true,
     persistence: "localStorage+cookie",
     cross_subdomain_cookie: true,
+    // PostHog's consent record goes in a cookie on .steamfield.io beside the identity
+    // cookie. In per-origin localStorage, a visitor who accepted on a sibling site would
+    // be opted in again here, and opting in resets them to a new distinct_id. Every
+    // site on this key needs the same setting.
+    opt_out_capturing_persistence_type: "cookie",
     // Pageviews and catalog events only. These are off here rather than left to the
     // project's remote config, so turning one on is a code change.
     autocapture: false,
@@ -136,6 +147,9 @@ export async function initAnalytics(
     capture_heatmaps: false,
     capture_exceptions: false,
     capture_performance: false,
+    disable_surveys: true,
+    disable_conversations: true,
+    disable_product_tours: true,
     before_send: stampSite(config.site),
     loaded: (instance) => onLoaded(instance, key, config.consent),
   });

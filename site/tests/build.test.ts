@@ -354,26 +354,59 @@ describe("adding a docs page", () => {
 // banner, when the build has a key, so a keyless build (dev, CI, previews) bundles
 // none of it. The banner's stylesheet ships either way, with the other library CSS.
 describe("analytics in the build", () => {
-  const assetsIn = (dir: string, extension: string) =>
-    readdirSync(join(dir, "_astro"))
-      .filter((f) => f.endsWith(extension))
-      .map((f) => read(join(dir, "_astro"), f));
-  const isAnalytics = (source: string) => source.includes("cookieless_mode");
-  const isConsent = (source: string) => source.includes("sf-consent");
-  const isConsentStyle = (source: string) => /\[data-part=["']?consent["']?\]/.test(source);
+  // Every JavaScript file a page loads or may load: its script tags and island
+  // components and renderers, then the imports (static, and dynamic with any quote
+  // style) of each file they reach. Ported from stacks-api's analytics build test.
+  function scriptsReachedFrom(root: string, page: string): Map<string, string> {
+    const html = read(root, page);
+    const entries = /(?:<script[^>]*\ssrc|\scomponent-url|\srenderer-url)="\/([^"]+\.js)"/g;
+    const pending = Array.from(html.matchAll(entries), (m) => m[1] ?? "");
+    const reached = new Map<string, string>();
+    for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+      if (reached.has(path)) continue;
+      const source = read(root, path);
+      reached.set(path, source);
+      const folder = path.slice(0, path.lastIndexOf("/") + 1);
+      for (const m of source.matchAll(/["'`](\.\/|\/)([^"'`]+\.js)["'`]/g)) {
+        const target = m[2] ?? "";
+        // A template such as posthog-js's `/static/${version}/${name}.js` is a URL
+        // built at run time for its CDN scripts, not a file in the build.
+        if (target.includes("${")) continue;
+        pending.push(m[1] === "/" ? target : folder + target);
+      }
+    }
+    return reached;
+  }
 
-  it("ships no analytics or consent code without a PostHog key", () => {
-    const scripts = assetsIn("dist", ".js");
+  // The paths, not the contents, so a failure prints something readable.
+  const filesContaining = (reached: Map<string, string>, text: string) =>
+    [...reached].filter(([, source]) => source.includes(text)).map(([path]) => path);
+
+  // The default ingest host: in the analytics module and in posthog-js, nowhere else.
+  const analyticsMarker = "us.i.posthog.com";
+  // posthog-js's consent record prefix: in the SDK only, so finding it means the
+  // scanner followed the module's dynamic import of posthog-js.
+  const sdkMarker = "__ph_opt_in_out_";
+  // The consent store's cookie name: in @steamfield/ui/consent only.
+  const consentMarker = "sf-consent";
+  const isConsentStyle = (source: string) => /\[data-part=["']?consent["']?\]/.test(source);
+  const stylesIn = (root: string) =>
+    readdirSync(join(root, "_astro"))
+      .filter((f) => f.endsWith(".css"))
+      .map((f) => read(join(root, "_astro"), f));
+
+  it("loads no analytics or consent code without a PostHog key", () => {
+    const reached = scriptsReachedFrom("dist", "index.html");
+    expect(reached.size).toBeGreaterThan(0);
     if (process.env.PUBLIC_POSTHOG_KEY) {
-      expect(scripts.filter(isAnalytics)).not.toEqual([]);
-      expect(scripts.filter(isConsent)).not.toEqual([]);
+      expect(filesContaining(reached, analyticsMarker)).not.toEqual([]);
     } else {
-      expect(scripts.filter(isAnalytics)).toEqual([]);
-      expect(scripts.filter(isConsent)).toEqual([]);
+      expect(filesContaining(reached, analyticsMarker)).toEqual([]);
+      expect(filesContaining(reached, consentMarker)).toEqual([]);
     }
   });
 
-  it("carries the key once, the consent banner and its styles when the build has a key", () => {
+  it("loads the key once, posthog-js, the banner and its styles when the build has a key", () => {
     // Not a credential: any non-empty value turns analytics on for the build.
     const key = "rr-build-test-key";
     const out = mkdtempSync(join(tmpdir(), "rr-analytics-"));
@@ -384,11 +417,11 @@ describe("analytics in the build", () => {
         env: { ...process.env, PUBLIC_POSTHOG_KEY: key },
       });
       expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
-      const scripts = assetsIn(out, ".js");
-      expect(scripts.filter((s) => s.includes(key))).toHaveLength(1);
-      expect(scripts.filter(isAnalytics)).not.toEqual([]);
-      expect(scripts.filter(isConsent)).not.toEqual([]);
-      expect(assetsIn(out, ".css").filter(isConsentStyle)).not.toEqual([]);
+      const reached = scriptsReachedFrom(out, "index.html");
+      expect(filesContaining(reached, key)).toHaveLength(1);
+      expect(filesContaining(reached, sdkMarker)).toHaveLength(1);
+      expect(filesContaining(reached, consentMarker)).not.toEqual([]);
+      expect(stylesIn(out).filter(isConsentStyle)).not.toEqual([]);
     } finally {
       rmSync(out, { recursive: true, force: true });
     }

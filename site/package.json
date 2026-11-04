@@ -32,7 +32,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "astro": "^7.4.5",
     "github-slugger": "^2.0.0",
-    "posthog-js": "^1.444.3",
+    "posthog-js": "1.445.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "satori": "^0.63.2",
