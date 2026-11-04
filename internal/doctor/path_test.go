@@ -14,7 +14,7 @@ func TestToHomeRelative(t *testing.T) {
 	}{
 		{
 			name:  "macOS home path",
-			input: "/Users/rileyhilliard/.local/bin",
+			input: "/Users/user/.local/bin",
 			want:  "$HOME/.local/bin",
 		},
 		{
