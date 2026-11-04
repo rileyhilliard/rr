@@ -1119,7 +1119,7 @@ The same `DialAliases` path backs the monitor's connection pool, so failover beh
 
 ### Lock Management
 
-Locking prevents concurrent runs on shared remotes. The lock is a directory on the remote host (atomic mkdir) containing metadata about the lock holder. There is one lock per host, not per project: only one rr command runs on a host at a time, since rr jobs usually saturate the machine.
+Locking prevents concurrent runs on shared remotes. The lock is a directory on the remote host (atomic mkdir) containing metadata about the lock holder. Some `mkdir` implementations (uutils coreutils, Ubuntu 26's default) can tell two racing runs they both created the directory, so a run holds the lock only once it has also created `info.json` with the shell's noclobber redirect (`set -C`), which the shell does as an exclusive create. A run whose `mkdir` succeeded but finds another run's `info.json` waits like any other. There is one lock per host, not per project: only one rr command runs on a host at a time, since rr jobs usually saturate the machine.
 
 ```mermaid
 stateDiagram-v2

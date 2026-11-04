@@ -171,6 +171,15 @@ func (m *MockClient) parseAndExecute(cmd string) (stdout, stderr []byte, exitCod
 		return m.handleMkdir(cmd)
 	}
 
+	// Handle an exclusive write (set -C makes the shell refuse an existing file)
+	if rest, ok := strings.CutPrefix(cmd, "set -C; "); ok && strings.HasPrefix(rest, "cat >") {
+		target, _, _ := strings.Cut(strings.TrimPrefix(rest, "cat >"), "<<")
+		if path := extractPath(strings.TrimSpace(target)); m.fs.IsFile(path) {
+			return nil, []byte(path + ": cannot overwrite existing file"), 1, nil
+		}
+		return m.handleCatWrite(rest)
+	}
+
 	// Handle cat with heredoc (write)
 	if strings.HasPrefix(cmd, "cat >") || strings.HasPrefix(cmd, "cat > ") {
 		return m.handleCatWrite(cmd)
