@@ -152,7 +152,7 @@ describe("InstallTabs", () => {
     const visibleButtons = [...root.querySelectorAll("button")].filter(
       (button) => !button.hidden && button.getAttribute("role") !== "tab",
     );
-    expect(visibleButtons.map((button) => button.textContent)).not.toContain("Copied");
+    expect(visibleButtons).toHaveLength(0);
   });
 
   it("tracks a successful copy with the tab's label", async () => {

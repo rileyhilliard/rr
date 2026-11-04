@@ -145,6 +145,9 @@ func TestRun_LocalHostQueueSerializesWaiters(t *testing.T) {
 	lockCfg := writeQueueProject(t, projectDir, lockDir)
 	held := holdLocalHostLock(t, lockCfg)
 
+	// The waiters log their lock decisions, so a failure shows why both ran.
+	t.Setenv("RR_DEBUG", "1")
+
 	logFile := filepath.Join(projectDir, "order.log")
 	waiter := func(id string) []string {
 		// The sleep keeps each command running long enough that an
@@ -178,7 +181,7 @@ func TestRun_LocalHostQueueSerializesWaiters(t *testing.T) {
 	second := map[string]string{"a": "b", "b": "a"}[first]
 	require.NotEmpty(t, second, "the log starts with a start marker: %q", lines)
 	assert.Equal(t, []string{"start-" + first, "end-" + first, "start-" + second, "end-" + second}, lines,
-		"each run finishes before the next starts")
+		"each run finishes before the next starts\nrr a events:\n%s\nrr b events:\n%s", a.stderr.String(), b.stderr.String())
 
 	_, statErr = os.Stat(lockDir)
 	assert.True(t, os.IsNotExist(statErr), "the last run releases the lock")
