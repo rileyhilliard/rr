@@ -121,7 +121,7 @@ Things in the tree that exist to get a build through, not because they are right
 
 ## Pending user actions
 
-- Publish `@steamfield/ui` 0.4.0 (the release that adds the `consent` subpath; 0.3.0 on npm doesn't have it) and bump the dependency to `~0.4.0`. Until then this branch doesn't build from a clean install.
+- Deploy steamfield.io with its `/privacy` page before deploying this site with a PostHog key: the consent banner and the footer link to https://steamfield.io/privacy.
 - In the shared Steamfield PostHog project, set `PUBLIC_POSTHOG_KEY` (and host) as Pages build variables for the Production environment only, and enable "Cookieless server hash mode" and "Discard client IP data" in its settings, or cookieless events are ignored.
 - Review the scrub summary and fixture diffs before committing recordings.
 
