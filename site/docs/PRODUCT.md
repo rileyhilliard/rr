@@ -123,7 +123,7 @@ Treat the first two weeks as the baseline. The targets are starting guesses.
 | Risk | Mitigation |
 |---|---|
 | Page copy drifts from the CLI | Drift tests against README, `internal/cli/json.go` and `loadbalance.go`; transcripts from captures |
-| PostHog silently drops events | Turn on cookieless tracking in the PostHog project (the fragment defaults to `cookieless_mode: "always"`). Expect an ad-blocker undercount; use the fragment's reverse proxy if the numbers look empty. |
+| PostHog silently drops events | Turn on "Cookieless server hash mode" in the PostHog project: the site runs `cookieless_mode: "on_reject"`, so every visitor who hasn't accepted the consent banner is counted cookieless. Expect an ad-blocker undercount; use the fragment's reverse proxy if the numbers look empty. |
 | Neon fails contrast | Token contrast test (below) |
 | Frontmatter added to `docs/*.md` looks odd on GitHub | Keep it to `title` and `group`. GitHub renders that as a two-row table. |
 

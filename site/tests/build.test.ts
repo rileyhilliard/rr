@@ -350,22 +350,30 @@ describe("adding a docs page", () => {
   });
 });
 
-// The layout only calls initAnalytics when the build has a key, so a keyless build
-// (dev, CI, previews) bundles neither the module's init nor posthog-js.
+// The layout only calls initAnalytics, and only creates the consent store and
+// banner, when the build has a key, so a keyless build (dev, CI, previews) bundles
+// none of it. The banner's stylesheet ships either way, with the other library CSS.
 describe("analytics in the build", () => {
-  const scriptsIn = (dir: string) =>
+  const assetsIn = (dir: string, extension: string) =>
     readdirSync(join(dir, "_astro"))
-      .filter((f) => f.endsWith(".js"))
+      .filter((f) => f.endsWith(extension))
       .map((f) => read(join(dir, "_astro"), f));
   const isAnalytics = (source: string) => source.includes("cookieless_mode");
+  const isConsent = (source: string) => source.includes("sf-consent");
+  const isConsentStyle = (source: string) => /\[data-part=["']?consent["']?\]/.test(source);
 
-  it("ships no analytics code without a PostHog key", () => {
-    const analytics = scriptsIn("dist").filter(isAnalytics);
-    if (process.env.PUBLIC_POSTHOG_KEY) expect(analytics).not.toEqual([]);
-    else expect(analytics).toEqual([]);
+  it("ships no analytics or consent code without a PostHog key", () => {
+    const scripts = assetsIn("dist", ".js");
+    if (process.env.PUBLIC_POSTHOG_KEY) {
+      expect(scripts.filter(isAnalytics)).not.toEqual([]);
+      expect(scripts.filter(isConsent)).not.toEqual([]);
+    } else {
+      expect(scripts.filter(isAnalytics)).toEqual([]);
+      expect(scripts.filter(isConsent)).toEqual([]);
+    }
   });
 
-  it("puts the key in exactly one script when the build has one", () => {
+  it("carries the key once, the consent banner and its styles when the build has a key", () => {
     // Not a credential: any non-empty value turns analytics on for the build.
     const key = "rr-build-test-key";
     const out = mkdtempSync(join(tmpdir(), "rr-analytics-"));
@@ -376,11 +384,19 @@ describe("analytics in the build", () => {
         env: { ...process.env, PUBLIC_POSTHOG_KEY: key },
       });
       expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
-      const scripts = scriptsIn(out);
+      const scripts = assetsIn(out, ".js");
       expect(scripts.filter((s) => s.includes(key))).toHaveLength(1);
       expect(scripts.filter(isAnalytics)).not.toEqual([]);
+      expect(scripts.filter(isConsent)).not.toEqual([]);
+      expect(assetsIn(out, ".css").filter(isConsentStyle)).not.toEqual([]);
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
   }, 150_000);
+
+  it("links the shared privacy page from the footer", () => {
+    expect(
+      page("dist", "index.html").querySelector('footer a[href="https://steamfield.io/privacy"]'),
+    ).not.toBeNull();
+  });
 });

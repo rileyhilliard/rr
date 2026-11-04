@@ -69,17 +69,22 @@ const websiteJsonLd = JSON.stringify({
     />
     {onHome && <script is:inline type="application/ld+json" set:html={websiteJsonLd} />}
     <script>
+      import { createConsentStore, mountConsentBanner } from "@steamfield/ui/consent";
       import { initAnalytics } from "../lib/analytics";
       import "../scripts/site";
 
-      // A build without a key ships no analytics code: this branch is dropped.
+      // A build without a key ships no analytics or consent code: this branch is
+      // dropped. One sf-consent cookie on .steamfield.io covers every Steamfield site.
       const key = import.meta.env.PUBLIC_POSTHOG_KEY;
       if (key) {
+        const consent = createConsentStore({ domain: "steamfield.io" });
         initAnalytics({
           key,
           host: import.meta.env.PUBLIC_POSTHOG_HOST,
           site: "rr",
+          consent,
         });
+        mountConsentBanner(consent, { privacyHref: "https://steamfield.io/privacy" });
       }
     </script>
   </head>
@@ -171,7 +176,8 @@ const websiteJsonLd = JSON.stringify({
       <div class="border-line border-t">
         <p class="text-muted mx-auto max-w-[1200px] px-4 py-5 text-xs sm:px-8">
           Released under the {site.license} license. A{" "}
-          <a href="https://steamfield.io">Steamfield</a> project.
+          <a href="https://steamfield.io">Steamfield</a> project.{" "}
+          <a href="https://steamfield.io/privacy">Privacy</a>
         </p>
       </div>
     </footer>
