@@ -395,32 +395,46 @@ describe("analytics in the build", () => {
       .filter((f) => f.endsWith(".css"))
       .map((f) => read(join(root, "_astro"), f));
 
+  // A production build into a temporary directory with this PostHog key, so the
+  // result doesn't depend on the environment `make build` ran in.
+  function buildWithKey(key: string) {
+    const out = mkdtempSync(join(tmpdir(), "rr-analytics-"));
+    const built = spawnSync("bunx", ["--no-install", "astro", "build", "--outDir", out], {
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, PUBLIC_POSTHOG_KEY: key },
+    });
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    return out;
+  }
+
+  // The site value the layout passes to initAnalytics, as the minifier writes it.
+  const siteValue = /site:\s*["'`]rr["'`]/;
+
   it("loads no analytics or consent code without a PostHog key", () => {
-    const reached = scriptsReachedFrom("dist", "index.html");
-    expect(reached.size).toBeGreaterThan(0);
-    if (process.env.PUBLIC_POSTHOG_KEY) {
-      expect(filesContaining(reached, analyticsMarker)).not.toEqual([]);
-    } else {
+    const out = buildWithKey("");
+    try {
+      const reached = scriptsReachedFrom(out, "index.html");
+      expect(reached.size).toBeGreaterThan(0);
       expect(filesContaining(reached, analyticsMarker)).toEqual([]);
       expect(filesContaining(reached, consentMarker)).toEqual([]);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
     }
-  });
+  }, 150_000);
 
   it("loads the key once, posthog-js, the banner and its styles when the build has a key", () => {
     // Not a credential: any non-empty value turns analytics on for the build.
     const key = "rr-build-test-key";
-    const out = mkdtempSync(join(tmpdir(), "rr-analytics-"));
+    const out = buildWithKey(key);
     try {
-      const built = spawnSync("bunx", ["--no-install", "astro", "build", "--outDir", out], {
-        encoding: "utf8",
-        timeout: 120_000,
-        env: { ...process.env, PUBLIC_POSTHOG_KEY: key },
-      });
-      expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
       const reached = scriptsReachedFrom(out, "index.html");
       expect(filesContaining(reached, key)).toHaveLength(1);
       expect(filesContaining(reached, sdkMarker)).toHaveLength(1);
       expect(filesContaining(reached, consentMarker)).not.toEqual([]);
+      const sources = [...reached.values()];
+      expect(sources.some((source) => siteValue.test(source))).toBe(true);
+      expect(sources.some((source) => source.includes("steamfield.io"))).toBe(true);
       expect(stylesIn(out).filter(isConsentStyle)).not.toEqual([]);
     } finally {
       rmSync(out, { recursive: true, force: true });
