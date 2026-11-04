@@ -583,6 +583,48 @@ func TestParseRunOutcome_GoTestFailureLocation(t *testing.T) {
 			},
 		},
 		{
+			// Real go test -v output: TestB's first line follows
+			// `=== CONT TestB` with no `=== NAME TestB` before it.
+			name: "verbose parallel: interleaved output goes to the test that printed it",
+			log: "=== RUN   TestA\n" +
+				"=== PAUSE TestA\n" +
+				"=== RUN   TestB\n" +
+				"=== PAUSE TestB\n" +
+				"=== CONT  TestA\n" +
+				"=== CONT  TestB\n" +
+				"    x_test.go:4: b broke\n" +
+				"=== NAME  TestA\n" +
+				"    x_test.go:3: a broke\n" +
+				"--- FAIL: TestA (0.03s)\n" +
+				"=== NAME  TestB\n" +
+				"    x_test.go:4: b again\n" +
+				"--- FAIL: TestB (0.05s)\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.178s\n",
+			want: []output.TestFailure{
+				{TestName: "TestA", File: "x_test.go", Line: 3, Message: "a broke"},
+				{TestName: "TestB", File: "x_test.go", Line: 4, Message: "b broke"},
+			},
+		},
+		{
+			// testify leaves the location line's message empty and prints
+			// the details on the more-indented lines under it.
+			name: "multi-line message under the location line",
+			log: "--- FAIL: TestT (0.00s)\n" +
+				"    x_test.go:5: \n" +
+				"        \tError Trace:\tx_test.go:5\n" +
+				"        \tError:      \tNot equal: \n" +
+				"        \t            \texpected: 1\n" +
+				"        \t            \tactual  : 2\n" +
+				"    x_test.go:6: second assertion\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestT", File: "x_test.go", Line: 5, Message: "Error Trace:\tx_test.go:5\n" +
+					"Error:      \tNot equal:\nexpected: 1\nactual  : 2"},
+			},
+		},
+		{
 			name: "no location line",
 			log: "--- FAIL: TestPanics (0.00s)\n" +
 				"panic: boom [recovered]\n" +
