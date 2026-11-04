@@ -1,5 +1,5 @@
 ---
-import { Code } from "astro:components";
+import CodeFrame from "../components/CodeFrame.astro";
 import CopyLine from "../components/CopyLine.astro";
 import { CommandTabs } from "../components/landing/CommandTabs";
 import { FlowDiagram } from "../components/landing/FlowDiagram";
@@ -148,10 +148,14 @@ const codeThemes = { light: "github-light", dark: "github-dark-default" } as con
     lede="Each host can list several SSH routes, such as a LAN address and a Tailscale name. rr dials them all at once and prefers the ones higher in the list, so an unreachable route doesn't hold up the connection."
   >
     <div data-stagger style="--stagger-gap: 140ms" class="grid gap-6 lg:grid-cols-2">
-      <figure data-motion="lift-card" class="code-frame">
-        <figcaption>~/.rr/config.yaml</figcaption>
-        <Code code={site.fallback.config} lang="yaml" themes={codeThemes} defaultColor={false} />
-      </figure>
+      <CodeFrame
+        data-motion="lift-card"
+        id="code-fallback-config"
+        title="~/.rr/config.yaml"
+        code={site.fallback.config}
+        lang="yaml"
+        themes={codeThemes}
+      />
       <DataTable
         caption="Which route rr uses, by where you are"
         head={["Where you are", "What happens"]}
@@ -225,14 +229,24 @@ const codeThemes = { light: "github-light", dark: "github-dark-default" } as con
     lede="Your machines live in a global config that stays out of the repo. The project config, with tasks and sync rules, is shared with your team."
   >
     <div data-stagger style="--stagger-gap: 140ms" class="grid gap-6 lg:grid-cols-2">
-      <figure data-motion="lift-card" class="code-frame lift">
-        <figcaption>~/.rr/config.yaml</figcaption>
-        <Code code={site.setup.global} lang="yaml" themes={codeThemes} defaultColor={false} />
-      </figure>
-      <figure data-motion="lift-card" class="code-frame lift">
-        <figcaption>.rr.yaml</figcaption>
-        <Code code={site.setup.project} lang="yaml" themes={codeThemes} defaultColor={false} />
-      </figure>
+      <CodeFrame
+        data-motion="lift-card"
+        class="lift"
+        id="code-setup-global"
+        title="~/.rr/config.yaml"
+        code={site.setup.global}
+        lang="yaml"
+        themes={codeThemes}
+      />
+      <CodeFrame
+        data-motion="lift-card"
+        class="lift"
+        id="code-setup-project"
+        title=".rr.yaml"
+        code={site.setup.project}
+        lang="yaml"
+        themes={codeThemes}
+      />
     </div>
     <p
       data-motion="lift-md"

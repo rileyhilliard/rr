@@ -1,0 +1,27 @@
+---
+// A titled code frame on the landing page, in the same markup @steamfield/ui/markdown's
+// codeBlocks emits for the docs (src/lib/markdown.ts), so one set of global.css rules
+// styles both. The copy button stays hidden until src/scripts/site.ts wires it
+// (enhanceCopyButtons); without JavaScript the code is plain selectable text.
+import type { ComponentProps, HTMLAttributes } from "astro/types";
+import { Code } from "astro:components";
+
+type Props = HTMLAttributes<"figure"> &
+  Pick<ComponentProps<typeof Code>, "code" | "lang" | "themes"> & {
+    title: string;
+    /** The <pre>'s id, which the copy button names; unique on the page. */
+    id: string;
+  };
+const { title, code, lang, themes, id, ...rest } = Astro.props;
+---
+
+<figure data-code-block {...rest}>
+  <figcaption data-code-title>{title}</figcaption>
+  <Code id={id} code={code} lang={lang} themes={themes} defaultColor={false} />
+  <span data-code-copy data-copy-root>
+    <button type="button" hidden data-copy-command aria-label="Copy" aria-controls={id}>
+      <span data-copy-label>Copy</span>
+    </button>
+    <span data-copy-result role="status" aria-live="polite"></span>
+  </span>
+</figure>

@@ -1,7 +1,7 @@
 // Characterization of the page script: copy buttons, analytics hooks, scroll reveals and the
 // TOC highlight. site.ts sets everything up when it is imported, so each test builds the DOM
 // first and then imports a fresh copy of the module.
-import { act } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -112,11 +112,14 @@ describe("copy lines (CopyLine.astro)", () => {
 describe("code frames", () => {
   it("get a copy button that copies the code", async () => {
     const user = userEvent.setup();
+    // codeBlocks' build-time markup (src/lib/markdown.ts), as the docs pages ship it.
     await load(
-      '<figure class="code-frame"><figcaption>.rr.yaml</figcaption><pre><code>hosts: [m4]</code></pre></figure>',
+      '<figure data-code-block><pre id="code-1"><code>hosts: [m4]</code></pre><figcaption data-code-title>.rr.yaml</figcaption>' +
+        '<span data-code-copy data-copy-root><button type="button" hidden data-copy-command aria-label="Copy" aria-controls="code-1">' +
+        '<svg aria-hidden="true"></svg><span data-copy-label>Copy</span></button>' +
+        '<span data-copy-result role="status" aria-live="polite"></span></span></figure>',
     );
-    const button = document.querySelector(".code-frame button") as HTMLButtonElement;
-    expect(button).toHaveClass("code-copy");
+    const button = screen.getByRole("button", { name: "Copy" }) as HTMLButtonElement;
     expect(button).toHaveTextContent("Copy");
     expect(button.hidden).toBe(false);
     await user.click(button);

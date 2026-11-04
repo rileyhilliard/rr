@@ -126,55 +126,87 @@
   background-color: transparent;
 }
 
-.code-frame {
-  @apply border-line rounded-panel relative overflow-hidden border;
+/* Docs Markdown: @steamfield/ui/markdown's plugins emit these data-* hooks (src/lib/markdown.ts).
+   A code frame's caption comes after the <pre> in the markup; order puts it on top. */
+[data-code-block] {
+  @apply border-line rounded-panel relative flex flex-col overflow-hidden border;
 }
 
-.code-frame figcaption {
-  @apply border-line bg-panel text-muted border-b px-4 py-2 font-mono text-xs;
+[data-code-block] figcaption {
+  @apply border-line bg-panel text-muted order-first border-b px-4 py-2 font-mono text-xs;
 }
 
-.code-frame pre {
+[data-code-block] pre {
   @apply m-0 overflow-x-auto rounded-none px-4 py-3 text-[13px] leading-relaxed;
 }
 
-/* Added to each code frame by src/scripts/site.ts. */
-.code-copy {
-  @apply border-line-strong bg-canvas text-ink-2 rounded-control absolute top-2 right-2 border px-2 py-0.5 text-xs;
+/* The copy button's wrapper sits in the frame's corner; the button is text only. */
+[data-code-copy] {
+  @apply absolute top-2 right-2;
 }
 
-.callout {
+[data-code-copy] button {
+  @apply border-line-strong bg-canvas text-ink-2 rounded-control block border px-2 py-0.5 text-xs;
+}
+
+[data-code-copy] button[hidden] {
+  display: none;
+}
+
+[data-code-copy] svg {
+  display: none;
+}
+
+/* A blockquote underneath, so prose's quote styling is undone. */
+.prose [data-callout] {
   @apply border-line bg-panel rounded-panel my-6 border border-l-4 px-4 py-1;
+  color: var(--tw-prose-body);
+  font-style: normal;
+  font-weight: inherit;
+  quotes: none;
 }
 
-.callout-title {
+.prose [data-callout] p::before,
+.prose [data-callout] p::after {
+  content: none;
+}
+
+.prose [data-callout] code {
+  color: var(--tw-prose-code);
+}
+
+.prose [data-callout] strong {
+  color: var(--tw-prose-bold);
+}
+
+[data-callout-title] {
   @apply text-ink font-semibold;
 }
 
-.callout-note,
-.callout-tip,
-.callout-important {
+.prose [data-callout="note"],
+.prose [data-callout="tip"],
+.prose [data-callout="important"] {
   border-left-color: var(--color-info);
 }
 
-.callout-warning,
-.callout-caution {
+.prose [data-callout="warning"],
+.prose [data-callout="caution"] {
   border-left-color: var(--color-waiting);
 }
 
-.heading-anchor {
+[data-heading-anchor] {
   @apply text-muted ml-2 no-underline opacity-0 focus:opacity-100;
 }
 
-.heading-anchor::after {
+[data-heading-anchor]::after {
   content: "#";
 }
 
-.prose :where(h2, h3):hover .heading-anchor {
+.prose :where(h2, h3):hover [data-heading-anchor] {
   opacity: 1;
 }
 
-.table-scroll {
+[data-table-scroll] {
   @apply overflow-x-auto;
 }
 

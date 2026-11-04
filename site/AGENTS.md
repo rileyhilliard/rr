@@ -44,7 +44,7 @@ The parent repository's Go test `internal/monitor/site_golden_test.go` pins `fix
 | `src/lib/queue.ts` | The Queue board's model of rr's host choice and wait message |
 | `src/lib/flow.ts` | The How it works diagram's simulated timeline (same lock rules, labeled illustrative) |
 | `src/lib/use-playback.ts` | Clock for the Monitor stage (visibility, reduced motion, pause/replay, 50ms ticks) |
-| `@steamfield/ui` | Shared library: the terminal player's clock (`useAgentDemo`), the flow diagram's clock (`usePlayback`), command and install tabs, copy buttons, scroll reveals, the TOC highlight and the `.md` exports; `src/styles/sf-theme.css` maps rr's tokens onto its `--sf-*` variables |
+| `@steamfield/ui` | Shared library: the terminal player's clock (`useAgentDemo`), the flow diagram's clock (`usePlayback`), command and install tabs, copy buttons, scroll reveals, the TOC highlight, the docs Markdown plugins and the `.md` exports; `src/styles/sf-theme.css` maps rr's tokens onto its `--sf-*` variables |
 | `src/data/` | Build-time loaders from `fixtures/` to island props |
 | `src/components/Logo.astro`, `public/brand/`, `scripts/brand.ts` | The mark (⣾, rr's spinner frame) in header and footer. `public/brand/` holds the source SVGs (icon tile, marks, horizontal and stacked lockups, light and dark); `make brand` renders their WebP sizes, the social cards and `public/site.webmanifest`. `public/favicon.svg` is a copy of `rr-icon.svg`. `design/logo/` keeps the concept exploration and its `preview.html` |
 | `fixtures/` | Scrubbed real rr recordings and the monitor golden file; `fixtures/raw/` is gitignored |

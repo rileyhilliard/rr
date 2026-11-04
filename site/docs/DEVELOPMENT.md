@@ -11,7 +11,7 @@
 | `src/lib/monitor/` | A port of `rr monitor`'s rendering (`render.ts`) and the snapshot timeline (`timeline.ts`) |
 | `src/lib/docs.ts` | Pure docs rules: sidebar order, pager, URLs, the Markdown export and both llms files |
 | `src/lib/collection.ts` | The only `astro:content` import outside routes |
-| `src/lib/markdown.ts` | Docs Markdown conventions as Sätteri hast plugins plus one Shiki transformer |
+| `src/lib/markdown.ts` | Docs Markdown conventions: `@steamfield/ui/markdown`'s hast plugins and Shiki transformer, plus rr's link rewrite and h1 drop |
 | `src/lib/og.ts` | The social card layout and its fonts |
 | `src/components/landing/` | Landing sections (static React) and the islands: `MonitorStage`, `QueueBoard`, `CommandTabs`, `TerminalPlayer`, `InstallTabs` |
 | `src/scripts/site.ts` | Copy buttons, section-view and command-tab analytics, copy page and the TOC highlight |
@@ -36,7 +36,7 @@ In the docs, link between pages the GitHub way (`configuration.md#lock`); the pl
 
 ## Markdown processing
 
-Astro's default processor is Sätteri, which doesn't run remark or rehype plugins. The plugins in `src/lib/markdown.ts` use Sätteri's own API (`@astrojs/markdown-satteri`): objects with a tag `filter` and a `visit(node, ctx)` function. Shiki highlights code before hast plugins run and drops the fence's info string, so `codeTitle` (a Shiki transformer) copies `title="..."` onto the `<pre>` as `data-title`, and `codeFrames` turns it into a caption. `markdown.test.ts` renders through the same processor.
+Astro's default processor is Sätteri, which doesn't run remark or rehype plugins. The plugins in `src/lib/markdown.ts` use Sätteri's own API (`@astrojs/markdown-satteri`): objects with a tag `filter` and a `visit(node, ctx)` function. Callouts, heading anchors, table scroll regions and code frames (with their copy buttons) are `@steamfield/ui/markdown`'s `callouts`, `headingAnchors`, `tables` and `codeBlocks`, which emit `data-*` hooks that `global.css` styles; `docsLinks` and `dropTitle` are rr's. Shiki highlights code before hast plugins run and drops the fence's info string, so the library's `codeMeta` (a Shiki transformer) copies `title="..."` onto the `<pre>` as `data-title`, and `codeBlocks` turns it into a caption. The site keeps its own dual Shiki themes rather than the library's `createShikiConfig`. The landing page's code frames (`src/components/CodeFrame.astro`) write the same markup. `markdown.test.ts` renders through the same processor.
 
 ## Islands and scripts
 

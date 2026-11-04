@@ -26,36 +26,6 @@ async function copyWithFeedback(button: HTMLButtonElement, read: () => Promise<s
   }, COPIED_MS);
 }
 
-/**
- * Adds a copy button to each code frame, in the markup enhanceCopyButtons wires: the
- * button names its code with aria-controls, and a status region beside it reports
- * the result.
- */
-function setupCodeCopy() {
-  let count = 0;
-  for (const frame of document.querySelectorAll<HTMLElement>(".code-frame")) {
-    const code = frame.querySelector("code");
-    if (!code) continue;
-    count += 1;
-    code.id ||= `code-frame-${count}`;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "code-copy";
-    button.dataset.copyCommand = "";
-    button.setAttribute("aria-controls", code.id);
-    const label = document.createElement("span");
-    label.dataset.copyLabel = "";
-    label.textContent = "Copy";
-    button.append(label);
-    const result = document.createElement("span");
-    result.dataset.copyResult = "";
-    result.dataset.part = "copy-result";
-    result.setAttribute("role", "status");
-    result.setAttribute("aria-live", "polite");
-    frame.append(button, result);
-  }
-}
-
 function setupCopyPage() {
   const button = document.querySelector<HTMLButtonElement>("[data-copy-page]");
   const href = button?.dataset.copyPage;
@@ -71,8 +41,8 @@ function setupTocHighlight() {
 }
 
 /**
- * Copy buttons beside command lines (CopyLine.astro) and code frames: hidden until
- * JavaScript runs. A CopyLine's data-track names the event from the catalog, sent after
+ * Copy buttons beside command lines (CopyLine.astro) and in code frames (emitted at build
+ * time by @steamfield/ui/markdown's codeBlocks): hidden until JavaScript runs. A CopyLine's data-track names the event from the catalog, sent after
  * every attempt; data-track-method is its method.
  */
 function setupCopyButtons() {
@@ -140,7 +110,6 @@ function setupReveals() {
 }
 
 setupReveals();
-setupCodeCopy();
 setupCopyButtons();
 setupSectionViews();
 setupCommandTabTracking();

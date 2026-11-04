@@ -89,11 +89,13 @@ describe("docs pages", () => {
     const html = docs.map(({ id }) => read("dist", pagePath(id))).join("\n");
     const source = docs.map((doc) => doc.source).join("\n");
     // Callouts and titled fences are checked where a page uses them; markdown.test.ts covers both.
-    if (/^> \[!NOTE\]/m.test(source)) expect(html).toMatch(/<aside class="callout callout-note">/);
+    if (/^> \[!NOTE\]/m.test(source))
+      expect(html).toMatch(/<blockquote role="note" data-callout="note">/);
     const fenceTitle = /^```\w*[^\n]*title="([^"]+)"/m.exec(source)?.[1];
-    if (fenceTitle) expect(html).toContain(`<figcaption>${fenceTitle}</figcaption>`);
-    expect(html).toMatch(/<div class="table-scroll" tabindex="0" role="region"/);
-    expect(html).toMatch(/<a class="heading-anchor" href="#[\w-]+"/);
+    if (fenceTitle)
+      expect(html).toContain(`<figcaption data-code-title="">${fenceTitle}</figcaption>`);
+    expect(html).toMatch(/<div data-table-scroll="" tabindex="0" role="region"/);
+    expect(html).toMatch(/<a href="#[\w-]+" data-heading-anchor=""/);
     expect(html).toMatch(/--shiki-dark:/);
   });
 
