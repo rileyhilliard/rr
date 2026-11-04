@@ -4,43 +4,12 @@
 import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubIntersectionObserver } from "../../tests/helpers/dom";
 
 const track = vi.fn();
 vi.mock("../lib/analytics", () => ({ track: (...args: unknown[]) => track(...args) }));
 
-type Observed = { callback: IntersectionObserverCallback; targets: Set<Element> };
-let observers: Observed[] = [];
-
-class FakeObserver {
-  readonly entry: Observed;
-  constructor(callback: IntersectionObserverCallback) {
-    this.entry = { callback, targets: new Set() };
-    observers.push(this.entry);
-  }
-  observe(target: Element) {
-    this.entry.targets.add(target);
-  }
-  unobserve(target: Element) {
-    this.entry.targets.delete(target);
-  }
-  disconnect() {
-    this.entry.targets.clear();
-  }
-  takeRecords() {
-    return [];
-  }
-}
-
-/** Reports `target` as intersecting (or not) to every observer watching it. */
-function intersect(target: Element, isIntersecting = true) {
-  for (const observer of observers) {
-    if (!observer.targets.has(target)) continue;
-    observer.callback(
-      [{ target, isIntersecting } as IntersectionObserverEntry],
-      observer as unknown as IntersectionObserver,
-    );
-  }
-}
+let intersect: ReturnType<typeof stubIntersectionObserver>["intersect"];
 
 /** The reveal marker: html.js plus .is-visible before the migration, data-revealed after it. */
 const motionGate = () =>
@@ -56,9 +25,8 @@ async function load(html: string) {
 }
 
 beforeEach(() => {
-  observers = [];
   track.mockClear();
-  vi.stubGlobal("IntersectionObserver", FakeObserver);
+  ({ intersect } = stubIntersectionObserver());
 });
 
 afterEach(() => {
