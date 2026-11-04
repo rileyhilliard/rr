@@ -14,7 +14,7 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 **Requirements:**
 
-- Go 1.26.8 or later (the `go` directive in `go.mod`)
+- Go 1.26.10 or later (the `go` directive in `go.mod`)
 - lefthook (for git hooks)
 - golangci-lint, pinned in `.golangci-version` (`make setup` installs it)
 - shellcheck (optional, for shell script linting)
