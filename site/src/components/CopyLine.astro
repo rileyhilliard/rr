@@ -1,6 +1,7 @@
 ---
 // A command on one line with a copy button. The button stays hidden until
-// src/scripts/site.ts runs; without JavaScript the command is plain selectable text.
+// src/scripts/site.ts wires it (enhanceCopyButtons from @steamfield/ui/copy); without
+// JavaScript the command is plain selectable text.
 import type { EventName } from "../lib/events";
 
 interface Props {
@@ -11,6 +12,8 @@ interface Props {
   trackMethod?: string;
 }
 const { command, prompt = "$", track, trackMethod } = Astro.props;
+// The button copies this element's text; commands are unique on a page.
+const id = `copy-${command.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}`;
 ---
 
 <div class="border-line-strong bg-panel rounded-control flex items-center gap-3 border py-2 pr-2 pl-3 font-mono text-[13px]">
@@ -19,18 +22,23 @@ const { command, prompt = "$", track, trackMethod } = Astro.props;
       {prompt}
     </span>
   )}
-  <code class="text-ink min-w-0 flex-1 text-[12px] [overflow-wrap:anywhere] whitespace-pre-wrap">
+  <code
+    id={id}
+    class="text-ink min-w-0 flex-1 text-[12px] [overflow-wrap:anywhere] whitespace-pre-wrap"
+  >
     {command}
   </code>
   <button
     type="button"
     hidden
-    data-copy={command}
+    data-copy-command
+    aria-controls={id}
     data-track={track}
     data-track-method={trackMethod}
     aria-label={`Copy ${command}`}
     class="border-line-strong text-ink-2 hover:text-ink rounded-control shrink-0 border px-2 py-0.5 font-sans text-xs"
   >
-    Copy
+    <span data-copy-label>Copy</span>
   </button>
+  <span data-copy-result data-part="copy-result" role="status" aria-live="polite"></span>
 </div>

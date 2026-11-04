@@ -11,6 +11,7 @@
         "@fontsource-variable/instrument-sans": "^5.3.0",
         "@fontsource-variable/martian-mono": "^5.3.0",
         "@fontsource/instrument-sans": "^5.3.0",
+        "@steamfield/ui": "~0.2.0",
         "@tailwindcss/typography": "^0.5.20",
         "@tailwindcss/vite": "^4.3.3",
         "astro": "^7.4.5",
@@ -384,6 +385,8 @@
     "@sindresorhus/is": ["@sindresorhus/is@7.2.0", "", {}, "sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw=="],
 
     "@speed-highlight/core": ["@speed-highlight/core@1.2.24", "", {}, "sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw=="],
+
+    "@steamfield/ui": ["@steamfield/ui@0.2.0", "", { "peerDependencies": { "@types/react": "^19.2", "github-slugger": "^2.0.0", "react": "^19.2", "react-dom": "^19.2", "satteri": "^0.10.5", "shiki": "^4.5.0", "vue": "^3.5" }, "optionalPeers": ["@types/react", "github-slugger", "react", "react-dom", "satteri", "shiki", "vue"] }, "sha512-379OV9Os7g9R1hrVEAbj6W1szqmPCA34a8GftGL1HH3l7zMh0a26fLQCeMv5F4FP1trbhROfe5jCAISeDWaI9g=="],
 
     "@tailwindcss/node": ["@tailwindcss/node@4.3.3", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "enhanced-resolve": "^5.24.1", "jiti": "^2.7.0", "lightningcss": "1.32.0", "magic-string": "^0.30.21", "source-map-js": "^1.2.1", "tailwindcss": "4.3.3" } }, "sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg=="],
 
