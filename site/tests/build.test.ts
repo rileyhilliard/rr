@@ -349,3 +349,38 @@ describe("adding a docs page", () => {
     }
   });
 });
+
+// The layout only calls initAnalytics when the build has a key, so a keyless build
+// (dev, CI, previews) bundles neither the module's init nor posthog-js.
+describe("analytics in the build", () => {
+  const scriptsIn = (dir: string) =>
+    readdirSync(join(dir, "_astro"))
+      .filter((f) => f.endsWith(".js"))
+      .map((f) => read(join(dir, "_astro"), f));
+  const isAnalytics = (source: string) => source.includes("cookieless_mode");
+
+  it("ships no analytics code without a PostHog key", () => {
+    const analytics = scriptsIn("dist").filter(isAnalytics);
+    if (process.env.PUBLIC_POSTHOG_KEY) expect(analytics).not.toEqual([]);
+    else expect(analytics).toEqual([]);
+  });
+
+  it("puts the key in exactly one script when the build has one", () => {
+    // Not a credential: any non-empty value turns analytics on for the build.
+    const key = "rr-build-test-key";
+    const out = mkdtempSync(join(tmpdir(), "rr-analytics-"));
+    try {
+      const built = spawnSync("bunx", ["--no-install", "astro", "build", "--outDir", out], {
+        encoding: "utf8",
+        timeout: 120_000,
+        env: { ...process.env, PUBLIC_POSTHOG_KEY: key },
+      });
+      expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+      const scripts = scriptsIn(out);
+      expect(scripts.filter((s) => s.includes(key))).toHaveLength(1);
+      expect(scripts.filter(isAnalytics)).not.toEqual([]);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  }, 150_000);
+});

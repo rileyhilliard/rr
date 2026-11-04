@@ -94,7 +94,7 @@ Claude Code reads `CLAUDE.md`, which imports this file. Hooks in `.claude/` bloc
 
 ## Analytics
 
-`src/lib/analytics.ts` is the only `posthog-js` import; it does nothing while `PUBLIC_POSTHOG_KEY` is empty (dev, tests, CI). Events live in `src/lib/events.ts` (`install_copied {method}`, `plugin_copied`, `section_viewed {id}`, `command_tab_opened {name}`), named `object_verb` in the past tense with flat scalar properties; track from islands or `src/scripts/site.ts`, never docs. Consent: cookieless (`cookieless_mode: "always"`), no banner. Never send typed text, emails or tokens.
+`src/lib/analytics.ts` is the only `posthog-js` import; it does nothing while `PUBLIC_POSTHOG_KEY` is empty (dev, tests, CI). Events live in `src/lib/events.ts` (`install_copied {method}`, `plugin_copied`, `section_viewed {id}`, `command_tab_opened {name}`), named `object_verb` in the past tense with flat scalar properties; track from islands or `src/scripts/site.ts`, never docs. All five Steamfield sites send to one shared Steamfield PostHog project; every event carries a `site` property (stamped in `before_send`, since opting in resets super properties), `"rr"` here. Consent: PostHog runs cookieless (`cookieless_mode: "on_reject"`, opted out by default) until the visitor accepts, then uses `localStorage+cookie` across subdomains; the decision lives in the `sf-consent` cookie on `.steamfield.io`, and the banner comes from `@steamfield/ui/consent`, wired in a follow-up commit. The consent store is the source of truth: pass it to `initAnalytics` as `consent`, and PostHog follows it (granted opts in; undecided or declined goes back to cookieless and stores nothing). The layout only calls `initAnalytics` when the build has a key, so a keyless build ships no analytics code. Never send typed text, emails or tokens.
 
 ## Deploy
 
@@ -121,7 +121,7 @@ Things in the tree that exist to get a build through, not because they are right
 
 ## Pending user actions
 
-- Create a PostHog project, set `PUBLIC_POSTHOG_KEY` (and host) as Pages build variables, and enable cookieless tracking in its settings, or its events are ignored.
+- In the shared Steamfield PostHog project, set `PUBLIC_POSTHOG_KEY` (and host) as Pages build variables for the Production environment only, and enable "Cookieless server hash mode" and "Discard client IP data" in its settings, or cookieless events are ignored.
 - Review the scrub summary and fixture diffs before committing recordings.
 
 ## Deeper context

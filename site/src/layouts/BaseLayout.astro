@@ -72,10 +72,15 @@ const websiteJsonLd = JSON.stringify({
       import { initAnalytics } from "../lib/analytics";
       import "../scripts/site";
 
-      initAnalytics({
-        key: import.meta.env.PUBLIC_POSTHOG_KEY,
-        host: import.meta.env.PUBLIC_POSTHOG_HOST,
-      });
+      // A build without a key ships no analytics code: this branch is dropped.
+      const key = import.meta.env.PUBLIC_POSTHOG_KEY;
+      if (key) {
+        initAnalytics({
+          key,
+          host: import.meta.env.PUBLIC_POSTHOG_HOST,
+          site: "rr",
+        });
+      }
     </script>
   </head>
   <body class="flex min-h-screen flex-col">
