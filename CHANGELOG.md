@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.4] - 2026-11-03
+
+### Fixed
+
+- Two runs could hold the same host's lock at once, and run their commands at the same time, on hosts whose `mkdir` is uutils coreutils (the default on Ubuntu 26). rr takes the lock by creating `rr.lock/`, and uutils `mkdir` can report success to both of two runs that race to create it. A run now holds the lock only once it has also created `rr.lock/info.json` with the shell's noclobber redirect, which only one run can do. A run that loses waits for the lock as usual. Older rr versions on such a host can still race each other, so upgrade rr everywhere that shares a host.
+
+### Security
+
+- Release binaries are built with Go 1.26.10, which fixes ten standard-library advisories rr can reach (GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610 to GO-2026-6613, GO-2026-6617 and GO-2026-6809) in `net/http`, `net/textproto`, `crypto/tls` and `crypto/x509`. Building from source now needs Go 1.26.10.
+
+### Documentation
+
+- The docs are published at [rr.steamfield.io](https://rr.steamfield.io).
+
 ## [0.29.3] - 2026-10-05
 
 ### Fixed
