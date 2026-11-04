@@ -5,6 +5,7 @@ import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubIntersectionObserver } from "../../tests/helpers/dom";
+import { renderDocsMarkdown } from "../../tests/helpers/markdown";
 
 const track = vi.fn();
 vi.mock("../lib/analytics", () => ({ track: (...args: unknown[]) => track(...args) }));
@@ -80,14 +81,10 @@ describe("copy lines (CopyLine.astro)", () => {
 describe("code frames", () => {
   it("get a copy button that copies the code", async () => {
     const user = userEvent.setup();
-    // codeBlocks' build-time markup (src/lib/markdown.ts), as the docs pages ship it.
-    await load(
-      '<figure data-code-block><pre id="code-1"><code>hosts: [m4]</code></pre><figcaption data-code-title>.rr.yaml</figcaption>' +
-        '<span data-code-copy data-copy-root><button type="button" hidden data-copy-command aria-label="Copy" aria-controls="code-1">' +
-        '<svg aria-hidden="true"></svg><span data-copy-label>Copy</span></button>' +
-        '<span data-copy-result role="status" aria-live="polite"></span></span></figure>',
-    );
-    const button = screen.getByRole("button", { name: "Copy" }) as HTMLButtonElement;
+    // The markup the docs pages ship, from the same processor and plugins.
+    const { code } = await renderDocsMarkdown('```yaml title=".rr.yaml"\nhosts: [m4]\n```\n');
+    await load(code);
+    const button = screen.getByRole("button", { name: "Copy code" }) as HTMLButtonElement;
     expect(button).toHaveTextContent("Copy");
     expect(button.hidden).toBe(false);
     await user.click(button);

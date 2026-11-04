@@ -126,8 +126,10 @@
   background-color: transparent;
 }
 
-/* Docs Markdown: @steamfield/ui/markdown's plugins emit these data-* hooks (src/lib/markdown.ts).
-   A code frame's caption comes after the <pre> in the markup; order puts it on top. */
+/* Docs Markdown: @steamfield/ui/markdown's plugins emit these data-* hooks (src/lib/markdown.ts),
+   and CodeFrame.astro mirrors them. @steamfield/ui 0.2.0 puts a code frame's caption after the
+   <pre>, so flex and order-first draw it on top; drop both once the site is on 0.2.1, which
+   emits the caption first. */
 [data-code-block] {
   @apply border-line rounded-panel relative flex flex-col overflow-hidden border;
 }
@@ -140,19 +142,21 @@
   @apply m-0 overflow-x-auto rounded-none px-4 py-3 text-[13px] leading-relaxed;
 }
 
-/* The copy button's wrapper sits in the frame's corner; the button is text only. */
+/* The copy button's wrapper sits in the frame's corner; a failure message drops below the
+   button on its own surface rather than over the code. */
 [data-code-copy] {
-  @apply absolute top-2 right-2;
+  @apply absolute top-2 right-2 flex flex-col items-end gap-1;
 }
 
 [data-code-copy] button {
   @apply border-line-strong bg-canvas text-ink-2 rounded-control block border px-2 py-0.5 text-xs;
 }
 
-[data-code-copy] button[hidden] {
-  display: none;
+[data-code-copy] [data-copy-result][data-state="failed"] {
+  @apply border-line-strong bg-canvas text-error rounded-control max-w-64 border px-2 py-1 text-xs leading-snug;
 }
 
+/* codeBlocks always adds an icon; rr's button is text only (AGENTS.md, Build workarounds). */
 [data-code-copy] svg {
   display: none;
 }
@@ -171,11 +175,12 @@
   content: none;
 }
 
-.prose [data-callout] code {
+/* Prose gives blockquote code and bold the quote's color; an aside's kept theirs. Links keep theirs. */
+.prose [data-callout] :where(code):not(:where(a *)) {
   color: var(--tw-prose-code);
 }
 
-.prose [data-callout] strong {
+.prose [data-callout] :where(strong):not(:where(a *)) {
   color: var(--tw-prose-bold);
 }
 

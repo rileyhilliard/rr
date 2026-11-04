@@ -1,20 +1,7 @@
 // @vitest-environment node
-import { createSatteriMarkdownProcessor, satteriHeadingIdsPlugin } from "@astrojs/markdown-satteri";
 import { Window } from "happy-dom";
 import { describe, expect, it } from "vitest";
-import { docsHastPlugins, shikiTransformers } from "./markdown";
-
-async function render(markdown: string) {
-  const processor = await createSatteriMarkdownProcessor({
-    hastPlugins: [satteriHeadingIdsPlugin(), ...docsHastPlugins],
-    syntaxHighlight: "shiki",
-    shikiConfig: {
-      themes: { light: "github-light", dark: "github-dark-default" },
-      transformers: shikiTransformers,
-    },
-  });
-  return processor.render(markdown);
-}
+import { renderDocsMarkdown as render } from "../../tests/helpers/markdown";
 
 const parser = new new Window().DOMParser();
 async function dom(markdown: string) {
@@ -59,7 +46,8 @@ describe("rendered docs Markdown", () => {
     const region = body.querySelector("table")?.parentElement;
     expect(region?.getAttribute("tabindex")).toBe("0");
     expect(region?.getAttribute("role")).toBe("region");
-    expect(region?.getAttribute("aria-label")).toBeTruthy();
+    // The library's default: named after the section, so two tables never share a name.
+    expect(region?.getAttribute("aria-label")).toBe("Hosts table");
   });
 
   it("links each h2 and h3 to itself with a named, textless anchor", async () => {
@@ -72,37 +60,57 @@ describe("rendered docs Markdown", () => {
       const link = el?.querySelector("a");
       expect(el?.id).toBe(id);
       expect(link?.getAttribute("href")).toBe(`#${id}`);
-      expect(link?.getAttribute("aria-label")).toBe("Link to this section");
+      expect(link?.getAttribute("aria-label")).toBe(`Link to section: ${el?.textContent}`);
       expect(link?.textContent).toBe("");
     }
   });
 });
 
+// The data-* hooks global.css styles and site.ts's copy enhancer reads.
 describe("docs Markdown", () => {
   it("turns GitHub alerts into labelled callouts and leaves plain quotes alone", async () => {
-    const { code } = await render("> [!WARNING]\n> Back up first.\n\n> Just a quote.\n");
-    expect(code).toContain('<blockquote role="note" data-callout="warning">');
-    expect(code).toContain('<p data-callout-title="">Warning</p>');
-    expect(code).toContain("<p>Back up first.</p>");
-    expect(code).not.toContain("[!WARNING]");
-    expect(code).toContain("<blockquote>");
+    const body = await dom("> [!WARNING]\n> Back up first.\n\n> Just a quote.\n");
+    const callout = body.querySelector('blockquote[role="note"][data-callout="warning"]');
+    expect(callout?.querySelector("[data-callout-title]")?.textContent).toBe("Warning");
+    expect(body.querySelectorAll("[data-callout]")).toHaveLength(1);
+    expect(body.querySelector("blockquote:not([data-callout])")?.textContent?.trim()).toBe(
+      "Just a quote.",
+    );
   });
 
   it("links headings without changing their text", async () => {
-    const { code, metadata } = await render("## Install it\n");
-    expect(code).toContain('<a href="#install-it" data-heading-anchor=""');
+    const { metadata } = await render("## Install it\n");
+    const body = await dom("## Install it\n");
+    expect(body.querySelector('h2 > a[data-heading-anchor][href="#install-it"]')).not.toBeNull();
     expect(metadata.headings).toEqual([{ depth: 2, slug: "install-it", text: "Install it" }]);
   });
 
-  it("frames code blocks and captions titled ones", async () => {
-    const { code } = await render('```sh title="Terminal"\nbun add acme\n```\n\n```js\nx\n```\n');
-    expect(code.match(/<figure data-code-block="">/g)).toHaveLength(2);
-    expect(code).toContain('<figcaption data-code-title="">Terminal</figcaption>');
+  it("frames code blocks, captions titled ones, and gives each a copy control for its <pre>", async () => {
+    const body = await dom('```sh title="Terminal"\nbun add acme\n```\n\n```js\nx\n```\n');
+    const figures = [...body.querySelectorAll("figure[data-code-block]")];
+    expect(figures).toHaveLength(2);
+    expect(figures[0]?.querySelector("figcaption[data-code-title]")?.textContent).toBe("Terminal");
+    expect(figures[1]?.querySelector("[data-code-title]")).toBeNull();
+    // The caption comes first in the markup only from @steamfield/ui 0.2.1; global.css orders it.
+    for (const [i, figure] of figures.entries()) {
+      const pre = figure.querySelector("pre");
+      const button = figure.querySelector("[data-code-copy] button[data-copy-command]");
+      expect(pre?.id).toBe(`code-block-${i + 1}`);
+      expect(button?.hasAttribute("hidden")).toBe(true);
+      expect(button?.getAttribute("aria-controls")).toBe(pre?.id);
+      expect(button?.getAttribute("aria-label")).toBe("Copy code");
+      expect(button?.querySelector("[data-copy-label]")?.textContent).toBe("Copy");
+      expect(
+        button?.parentElement?.querySelector(':scope > [data-copy-result][role="status"]'),
+      ).not.toBeNull();
+    }
   });
 
   it("wraps tables in a focusable scroll region", async () => {
-    const { code } = await render("| a | b |\n| - | - |\n| 1 | 2 |\n");
-    expect(code).toMatch(/<div data-table-scroll="" tabindex="0" role="region"[^>]*><table>/);
+    const body = await dom("| a | b |\n| - | - |\n| 1 | 2 |\n");
+    expect(
+      body.querySelector('div[data-table-scroll][tabindex="0"][role="region"] > table'),
+    ).not.toBeNull();
   });
 
   it("drops the file's own h1, which the docs layout renders from frontmatter", async () => {

@@ -30,7 +30,6 @@ const hero = loadHeroRun();
 const commands = loadCommands();
 const agent = agentSteps(loadAgentRecording());
 const [brew] = site.install;
-const codeThemes = { light: "github-light", dark: "github-dark-default" } as const;
 ---
 
 <BaseLayout title={site.tagline} path="/">
@@ -150,11 +149,10 @@ const codeThemes = { light: "github-light", dark: "github-dark-default" } as con
     <div data-stagger style="--stagger-gap: 140ms" class="grid gap-6 lg:grid-cols-2">
       <CodeFrame
         data-motion="lift-card"
-        id="code-fallback-config"
+        codeId="code-fallback-config"
         title="~/.rr/config.yaml"
         code={site.fallback.config}
         lang="yaml"
-        themes={codeThemes}
       />
       <DataTable
         caption="Which route rr uses, by where you are"
@@ -232,20 +230,18 @@ const codeThemes = { light: "github-light", dark: "github-dark-default" } as con
       <CodeFrame
         data-motion="lift-card"
         class="lift"
-        id="code-setup-global"
+        codeId="code-setup-global"
         title="~/.rr/config.yaml"
         code={site.setup.global}
         lang="yaml"
-        themes={codeThemes}
       />
       <CodeFrame
         data-motion="lift-card"
         class="lift"
-        id="code-setup-project"
+        codeId="code-setup-project"
         title=".rr.yaml"
         code={site.setup.project}
         lang="yaml"
-        themes={codeThemes}
       />
     </div>
     <p

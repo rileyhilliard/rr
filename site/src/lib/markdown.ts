@@ -11,14 +11,19 @@ type HastPlugin = Extract<
   { name: string }
 >;
 
-/** Code blocks' copy buttons say "Copy", as rr's always have; site.ts's enhanceCopyButtons wires them. */
-const COPY = "Copy";
+/** rr's code colors: both GitHub themes as CSS variables; global.css picks the dark one. */
+export const shikiThemes = { light: "github-light", dark: "github-dark-default" } as const;
 
 /**
- * Shiki copies `title="..."` from a fence's info string onto the `<pre>` (codeMeta), and
- * codeBlocks turns it into the frame's caption.
+ * Shiki settings for the docs and the landing page's code frames. codeMeta copies
+ * `title="..."` from a fence's info string onto the `<pre>`, and codeBlocks turns it into
+ * the frame's caption. Not the library's createShikiConfig, which uses one css-variables theme.
  */
-export const shikiTransformers = [codeMeta()];
+export const shikiConfig = {
+  themes: shikiThemes,
+  defaultColor: false as const,
+  transformers: [codeMeta()],
+};
 
 export const docsLinks = {
   name: "docs-links",
@@ -48,7 +53,8 @@ export const docsHastPlugins = [
   dropTitle,
   docsLinks,
   callouts(),
-  headingAnchors({ label: () => "Link to this section" }),
+  headingAnchors(),
   tables(),
-  codeBlocks({ copyLabel: COPY, copyText: COPY }),
+  // "code-block-N" keeps the <pre> ids clear of heading slugs such as #code-1.
+  codeBlocks({ copyText: "Copy", idPrefix: "code-block" }),
 ];

@@ -86,17 +86,26 @@ describe("docs pages", () => {
   });
 
   it("renders the Markdown conventions the docs use", () => {
-    const html = docs.map(({ id }) => read("dist", pagePath(id))).join("\n");
+    const pages = docs.map(({ id }) => page("dist", pagePath(id)));
+    const all = (selector: string) => pages.flatMap((doc) => [...doc.querySelectorAll(selector)]);
     const source = docs.map((doc) => doc.source).join("\n");
     // Callouts and titled fences are checked where a page uses them; markdown.test.ts covers both.
     if (/^> \[!NOTE\]/m.test(source))
-      expect(html).toMatch(/<blockquote role="note" data-callout="note">/);
+      expect(all('blockquote[role="note"][data-callout="note"]').length).toBeGreaterThan(0);
     const fenceTitle = /^```\w*[^\n]*title="([^"]+)"/m.exec(source)?.[1];
     if (fenceTitle)
-      expect(html).toContain(`<figcaption data-code-title="">${fenceTitle}</figcaption>`);
-    expect(html).toMatch(/<div data-table-scroll="" tabindex="0" role="region"/);
-    expect(html).toMatch(/<a href="#[\w-]+" data-heading-anchor=""/);
-    expect(html).toMatch(/--shiki-dark:/);
+      expect(
+        all("figure[data-code-block] > figcaption[data-code-title]").map((el) => el.textContent),
+      ).toContain(fenceTitle);
+    expect(
+      all('div[data-table-scroll][tabindex="0"][role="region"] > table').length,
+    ).toBeGreaterThan(0);
+    expect(all(":is(h2, h3) > a[data-heading-anchor][href^='#']").length).toBeGreaterThan(0);
+    expect(
+      all("figure[data-code-block] pre").every((pre) =>
+        /--shiki-dark:/.test(pre.getAttribute("style") ?? ""),
+      ),
+    ).toBe(true);
   });
 
   it("lists every page on the docs home", () => {
@@ -184,6 +193,30 @@ describe("the whole site", () => {
     if (site.version) expect(text).toContain(`v${site.version}`);
     expect(text).toContain(`${site.license} license`);
     expect(isWebp(readFileSync("dist/og/index.webp"))).toBe(true);
+  });
+
+  it("points every landing copy button at its own snippet", () => {
+    const home = page("dist", "index.html");
+    const buttons = [...home.querySelectorAll("[data-copy-command]")];
+    const ids = buttons.map((button) => button.getAttribute("aria-controls") ?? "");
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const [i, button] of buttons.entries()) {
+      const matches = home.querySelectorAll(`[id="${ids[i]}"]`);
+      expect(matches, ids[i]).toHaveLength(1);
+      const text = matches[0]?.textContent?.trim();
+      const frame = button.closest("[data-code-block]");
+      // Code frames copy their config example; command lines copy their command.
+      const snippets = frame
+        ? [site.fallback.config, site.setup.global, site.setup.project]
+        : [...site.install.map((method) => method.command), ...site.plugin];
+      expect(
+        snippets.map((snippet) => snippet.trim()),
+        ids[i],
+      ).toContain(text);
+    }
+    const frames = home.querySelectorAll("[data-code-block] [data-copy-command]");
+    expect(frames).toHaveLength(3);
   });
 
   it("serves robots.txt, the sitemap index and an unindexed 404 page", () => {
