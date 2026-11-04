@@ -92,7 +92,7 @@ func TestToHomeRelative(t *testing.T) {
 	}{
 		{
 			name:  "macOS home path",
-			input: "/Users/rileyhilliard/.local/bin",
+			input: "/Users/user/.local/bin",
 			want:  "$HOME/.local/bin",
 		},
 		{
@@ -135,7 +135,7 @@ func TestGenerateSetupSuggestion_InteractiveOnly(t *testing.T) {
 		Command:      "uv",
 		FoundInLogin: false,
 		FoundInInter: true,
-		InterPath:    "/Users/rileyhilliard/.local/bin/uv",
+		InterPath:    "/Users/user/.local/bin/uv",
 	}
 
 	suggestion := GenerateSetupSuggestion(result, "m4")
