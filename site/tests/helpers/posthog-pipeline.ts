@@ -35,7 +35,7 @@ type BeforeSendFn = Exclude<BeforeSend, unknown[] | undefined>;
 type Network = "offline" | "as-configured";
 
 /** happy-dom reports an automated user agent; without this every event drops. */
-const TEST_DOM_OVERRIDES = { opt_out_useragent_filter: true } as const;
+export const TEST_DOM_OVERRIDES = { opt_out_useragent_filter: true } as const;
 
 /** Config that keeps the real SDK offline and synchronous. */
 export const OFFLINE_OVERRIDES = {

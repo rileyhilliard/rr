@@ -3,8 +3,8 @@ import posthog, { type PostHog } from "posthog-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPostHogPipeline,
-  OFFLINE_OVERRIDES,
   type PostHogPipeline,
+  TEST_DOM_OVERRIDES,
 } from "../../tests/helpers/posthog-pipeline";
 import type * as AnalyticsModule from "./analytics";
 import type { Consent, ConsentStore } from "./analytics";
@@ -334,14 +334,11 @@ describe("init", () => {
     expect(pipeline.initConfig()).toMatchObject(expected);
   });
 
-  it("leaves only the test DOM's user-agent setting to the harness", async () => {
+  it("leaves only the test DOM's settings to the harness", async () => {
     await start();
-    // Production sets the harness's network keys itself (see the init options test).
-    const harnessOnly = Object.keys(OFFLINE_OVERRIDES).filter(
-      (name) => !["advanced_disable_flags", "disable_external_dependency_loading"].includes(name),
-    );
-    expect(harnessOnly).toEqual(["opt_out_useragent_filter"]);
-    expect(pipeline.initConfig()).not.toHaveProperty("opt_out_useragent_filter");
+    for (const name of Object.keys(TEST_DOM_OVERRIDES)) {
+      expect(pipeline.initConfig()).not.toHaveProperty(name);
+    }
   });
 
   it("requests no flags or remote config and loads no script from PostHog", async () => {
@@ -351,6 +348,9 @@ describe("init", () => {
     vi.spyOn(sdk, "_send_request").mockImplementation((options) => {
       requested.push(options.url);
     });
+    // Toolbar credentials left by an earlier visit: posthog-js would load the toolbar
+    // script from PostHog for them, unless external dependency loading is off.
+    localStorage.setItem("_postHogToolbarParams", JSON.stringify({ token: key }));
     const scriptsBefore = document.scripts.length;
     const live = createPostHogPipeline(posthog, { network: "as-configured" });
     await analytics.initAnalytics(

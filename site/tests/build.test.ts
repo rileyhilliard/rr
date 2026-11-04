@@ -453,7 +453,9 @@ describe("analytics in the build", () => {
       expect(filesContaining(reached, consentMarker)).not.toEqual([]);
       const sources = [...reached.values()];
       expect(sources.some((source) => siteValue.test(source))).toBe(true);
-      expect(sources.some((source) => source.includes("steamfield.io"))).toBe(true);
+      expect(sources.some((source) => /domain:\s*["'`]steamfield\.io["'`]/.test(source))).toBe(
+        true,
+      );
       const styles = [...stylesheetsOf(out, "index.html").values()];
       expect(styles.some((source) => source.includes(bannerStyleMarker))).toBe(true);
       expect(styles.some(isConsentStyle)).toBe(true);
