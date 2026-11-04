@@ -32,7 +32,7 @@ const agent = agentSteps(loadAgentRecording());
 const [brew] = site.install;
 ---
 
-<BaseLayout title={site.tagline} path="/">
+<BaseLayout title={site.home.title} description={site.home.description} path="/">
   <ReleaseBanner slot="banner" announcement={site.announcement} />
 
   <section aria-labelledby="hero-title" class="relative overflow-hidden">
@@ -40,7 +40,7 @@ const [brew] = site.install;
     <div class="relative mx-auto flex max-w-[1200px] flex-col gap-12 px-4 pt-16 pb-20 sm:px-8 sm:pt-24 sm:pb-28">
       <div class="grid items-end gap-10 lg:grid-cols-[minmax(0,1fr)_27rem] lg:gap-16">
         <div id="hero-title">
-          <Hero tagline={site.tagline} description={site.description} />
+          <Hero tagline={site.tagline} description={site.home.lede} />
         </div>
         <div class="flex flex-col gap-4">
           {brew && (
@@ -120,7 +120,7 @@ const [brew] = site.install;
 
   <Section
     id="faster"
-    title="Parallel tasks"
+    title="Run test shards in parallel"
     lede="A parallel task pools your hosts: it lists other tasks, and rr starts each one on its own host at the same time, as if every host's cores were plugged into your laptop. With shards of similar size, two hosts finish in about half the time and three in about a third."
   >
     <div
@@ -168,7 +168,7 @@ const [brew] = site.install;
     title="Commands"
     lede="Real output from rr's own repository and hosts, recorded with `--pretty`. Without the flag, commands print JSON events."
   >
-    <div data-motion="scale-in-media">
+    <div data-motion="scale-in-media" data-nosnippet>
       <CommandTabs client:visible commands={commands} />
     </div>
   </Section>
@@ -186,7 +186,7 @@ const [brew] = site.install;
       class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]"
     >
       <!-- min-w-0: a grid item, or the transcript's long lines widen the track. -->
-      <div data-motion="scale-in-media" class="min-w-0">
+      <div data-motion="scale-in-media" class="min-w-0" data-nosnippet>
         <TerminalPlayer
           client:visible
           title="Claude Code in the rr repository"
@@ -208,7 +208,8 @@ const [brew] = site.install;
         <div>
           <h3 class="text-ink mb-3 font-semibold">With Claude Code</h3>
           <p class="text-ink-2 mb-3 text-sm leading-relaxed">
-            After installing rr, the plugin teaches Claude its commands and config, and
+            After installing rr, the <a href="/docs/claude-code/">Claude Code plugin</a> teaches
+            Claude its commands and config, and
             <code>/rr:setup</code> writes the configs and checks every host.
           </p>
           <div class="flex flex-col gap-2">

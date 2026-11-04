@@ -28,6 +28,12 @@ export const site = {
   tagline: "Load-balance your coding agents' test runs across your own machines.",
   description:
     "rr syncs your working tree to a free machine over SSH, locks it, runs your tests there and streams the output back. Several coding agents can test at once without slowing down your laptop.",
+  home: {
+    title: "Remote Test Runner for Coding Agents",
+    description:
+      "rr is an open-source remote test runner for coding agents. Send tests to your own machines over SSH, queue concurrent runs, and run shards across hosts.",
+    lede: "rr is a remote test runner. It locks a free machine, syncs your working tree over SSH, and streams the test output back. Several coding agents can test at once without slowing down your laptop.",
+  },
   /** Absolute production URL: canonicals, the sitemap, OG images and llms.txt use it. */
   url: "https://rr.steamfield.io",
   repo,
