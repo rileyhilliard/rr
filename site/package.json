@@ -31,10 +31,12 @@
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "astro": "^7.4.5",
+    "github-slugger": "^2.0.0",
     "posthog-js": "^1.444.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "satori": "^0.63.2",
+    "satteri": "^0.10.5",
     "sharp": "^0.35.5",
     "tailwindcss": "^4.3.3"
   },

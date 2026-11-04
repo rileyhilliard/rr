@@ -1,7 +1,8 @@
-// Clock for the Monitor stage and the How it works diagram (the terminal player runs
-// on @steamfield/ui's agent demo). It advances only while the demo is on screen, the
-// tab is visible, motion is allowed and the visitor hasn't paused it. Before hydration and under reduced motion it
-// reports `still`, and each demo renders its finished or representative frame.
+// Clock for the Monitor stage, on 50ms ticks (the terminal player and the How it works
+// diagram run on @steamfield/ui's agent demo and usePlayback). It advances only while the
+// demo is on screen, the tab is visible, motion is allowed and the visitor hasn't paused
+// it. Before hydration and under reduced motion it reports `still`, and the stage renders
+// its representative frame.
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 const TICK_MS = 50;
@@ -21,8 +22,7 @@ export type Playback = {
   seek: (ms: number) => void;
 };
 
-/** `smooth` advances on animation frames instead of 50ms ticks, for moving shapes. */
-export function usePlayback(duration: number, speed = 1, smooth = false): Playback {
+export function usePlayback(duration: number, speed = 1): Playback {
   const ref = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [reduced, setReduced] = useState(false);
@@ -67,25 +67,13 @@ export function usePlayback(duration: number, speed = 1, smooth = false): Playba
   const playing = !still && visible && !hidden && !paused && !complete;
 
   useEffect(() => {
-    if (!playing || !smooth) return;
-    let last = performance.now();
-    let frame = requestAnimationFrame(function step(now) {
-      const delta = Math.min(now - last, 100) * speed;
-      last = now;
-      setElapsed((time) => Math.min(time + delta, duration));
-      frame = requestAnimationFrame(step);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [playing, smooth, duration, speed]);
-
-  useEffect(() => {
-    if (!playing || smooth) return;
+    if (!playing) return;
     const timer = window.setInterval(
       () => setElapsed((time) => Math.min(time + TICK_MS * speed, duration)),
       TICK_MS,
     );
     return () => window.clearInterval(timer);
-  }, [playing, smooth, duration, speed]);
+  }, [playing, duration, speed]);
 
   const toggle = useCallback(() => setPaused((value) => !value), []);
   const replay = useCallback(() => {

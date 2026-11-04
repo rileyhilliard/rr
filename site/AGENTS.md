@@ -43,8 +43,8 @@ The parent repository's Go test `internal/monitor/site_golden_test.go` pins `fix
 | `src/lib/monitor/` | `render.ts` (port of the TUI's rendering), `timeline.ts` (snapshots to frames) |
 | `src/lib/queue.ts` | The Queue board's model of rr's host choice and wait message |
 | `src/lib/flow.ts` | The How it works diagram's simulated timeline (same lock rules, labeled illustrative) |
-| `src/lib/use-playback.ts` | Clock for the Monitor stage and the flow diagram (visibility, reduced motion, pause/replay) |
-| `@steamfield/ui` | Shared library: the terminal player's clock (`useAgentDemo`), command and install tabs, copy buttons, scroll reveals, the TOC highlight and the `.md` exports; `src/styles/sf-theme.css` maps rr's tokens onto its `--sf-*` variables |
+| `src/lib/use-playback.ts` | Clock for the Monitor stage (visibility, reduced motion, pause/replay, 50ms ticks) |
+| `@steamfield/ui` | Shared library: the terminal player's clock (`useAgentDemo`), the flow diagram's clock (`usePlayback`), command and install tabs, copy buttons, scroll reveals, the TOC highlight, the docs Markdown plugins and the `.md` exports; `src/styles/sf-theme.css` maps rr's tokens onto its `--sf-*` variables |
 | `src/data/` | Build-time loaders from `fixtures/` to island props |
 | `src/components/Logo.astro`, `public/brand/`, `scripts/brand.ts` | The mark (⣾, rr's spinner frame) in header and footer. `public/brand/` holds the source SVGs (icon tile, marks, horizontal and stacked lockups, light and dark); `make brand` renders their WebP sizes, the social cards and `public/site.webmanifest`. `public/favicon.svg` is a copy of `rr-icon.svg`. `design/logo/` keeps the concept exploration and its `preview.html` |
 | `fixtures/` | Scrubbed real rr recordings and the monitor golden file; `fixtures/raw/` is gitignored |
@@ -107,7 +107,10 @@ Things in the tree that exist to get a build through, not because they are right
 | Where | What and why | Remove when |
 | --- | --- | --- |
 | `package.json` | `typescript@^6`: `astro check` refuses TypeScript 7 | `@astrojs/check` (or its replacement) supports TypeScript 7 |
-| Component tests | Stub `IntersectionObserver`: happy-dom never reports intersection, so demos would never play | happy-dom reports intersection |
+| Component tests | Stub `IntersectionObserver` (`tests/helpers/dom.ts`): happy-dom never reports intersection, so demos would never play | happy-dom reports intersection |
+| `src/styles/global.css` | `[data-code-copy] svg { display: none }`: `@steamfield/ui/markdown`'s `codeBlocks` always puts a copy icon in the button, and rr's code copy buttons are text only (`CodeFrame.astro` leaves it out) | `codeBlocks` gains an icon option |
+| `src/styles/global.css` | `[data-code-block]` is a flex column with the caption `order-first`: `@steamfield/ui` 0.2.0 emits the caption after the `<pre>` | the site is on `@steamfield/ui` 0.2.1, which emits it first |
+| `tests/helpers/markdown.ts` | Defines `Response.prototype.bytes` when missing: Shiki's inlined wasm needs it and happy-dom's `Response` lacks it, so `site.test.ts` can render through the real processor | happy-dom implements `Response.bytes` |
 
 ## Deferred
 

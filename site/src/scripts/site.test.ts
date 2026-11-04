@@ -1,46 +1,16 @@
 // Characterization of the page script: copy buttons, analytics hooks, scroll reveals and the
 // TOC highlight. site.ts sets everything up when it is imported, so each test builds the DOM
 // first and then imports a fresh copy of the module.
-import { act } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubIntersectionObserver } from "../../tests/helpers/dom";
+import { renderDocsMarkdown } from "../../tests/helpers/markdown";
 
 const track = vi.fn();
 vi.mock("../lib/analytics", () => ({ track: (...args: unknown[]) => track(...args) }));
 
-type Observed = { callback: IntersectionObserverCallback; targets: Set<Element> };
-let observers: Observed[] = [];
-
-class FakeObserver {
-  readonly entry: Observed;
-  constructor(callback: IntersectionObserverCallback) {
-    this.entry = { callback, targets: new Set() };
-    observers.push(this.entry);
-  }
-  observe(target: Element) {
-    this.entry.targets.add(target);
-  }
-  unobserve(target: Element) {
-    this.entry.targets.delete(target);
-  }
-  disconnect() {
-    this.entry.targets.clear();
-  }
-  takeRecords() {
-    return [];
-  }
-}
-
-/** Reports `target` as intersecting (or not) to every observer watching it. */
-function intersect(target: Element, isIntersecting = true) {
-  for (const observer of observers) {
-    if (!observer.targets.has(target)) continue;
-    observer.callback(
-      [{ target, isIntersecting } as IntersectionObserverEntry],
-      observer as unknown as IntersectionObserver,
-    );
-  }
-}
+let intersect: ReturnType<typeof stubIntersectionObserver>["intersect"];
 
 /** The reveal marker: html.js plus .is-visible before the migration, data-revealed after it. */
 const motionGate = () =>
@@ -68,9 +38,8 @@ beforeEach(() => {
       windowListeners.push([args[0], args[1], args[2]]);
       add(...args);
     });
-  observers = [];
   track.mockClear();
-  vi.stubGlobal("IntersectionObserver", FakeObserver);
+  ({ intersect } = stubIntersectionObserver());
 });
 
 afterEach(() => {
@@ -127,30 +96,15 @@ describe("copy lines (CopyLine.astro)", () => {
 describe("code frames", () => {
   it("get a copy button that copies the code", async () => {
     const user = userEvent.setup();
-    await load(
-      '<figure class="code-frame"><figcaption>.rr.yaml</figcaption><pre><code>hosts: [m4]</code></pre></figure>',
-    );
-    const button = document.querySelector(".code-frame button") as HTMLButtonElement;
-    expect(button).toHaveClass("code-copy");
+    // The markup the docs pages ship, from the same processor and plugins.
+    const { code } = await renderDocsMarkdown('```yaml title=".rr.yaml"\nhosts: [m4]\n```\n');
+    await load(code);
+    const button = screen.getByRole("button", { name: "Copy code" }) as HTMLButtonElement;
     expect(button).toHaveTextContent("Copy");
     expect(button.hidden).toBe(false);
     await user.click(button);
     expect(await navigator.clipboard.readText()).toBe("hosts: [m4]");
     expect(button).toHaveTextContent("Copied");
-  });
-
-  it("each copy the code in their own frame when a page already uses a generated id", async () => {
-    const user = userEvent.setup();
-    await load(
-      '<figure class="code-frame"><pre><code id="code-frame-2">first</code></pre></figure>' +
-        '<figure class="code-frame"><pre><code>second</code></pre></figure>',
-    );
-    const copied: string[] = [];
-    for (const button of document.querySelectorAll<HTMLButtonElement>(".code-frame button")) {
-      await user.click(button);
-      copied.push(await navigator.clipboard.readText());
-    }
-    expect(copied).toEqual(["first", "second"]);
   });
 });
 

@@ -4,7 +4,7 @@ import sitemap from "@astrojs/sitemap";
 import tailwind from "@tailwindcss/vite";
 import { defineConfig } from "astro/config";
 import { site } from "./src/config.ts";
-import { codeTitle, docsHastPlugins } from "./src/lib/markdown.ts";
+import { docsHastPlugins, shikiConfig } from "./src/lib/markdown.ts";
 
 export default defineConfig({
   site: site.url,
@@ -22,12 +22,7 @@ export default defineConfig({
     // Sätteri is Astro's default processor; heading ids come first so the
     // anchor plugin can read them.
     processor: satteri({ hastPlugins: [satteriHeadingIdsPlugin(), ...docsHastPlugins] }),
-    shikiConfig: {
-      themes: { light: "github-light", dark: "github-dark-default" },
-      // Both themes as CSS variables; global.css picks one per theme.
-      defaultColor: false,
-      transformers: [codeTitle],
-    },
+    shikiConfig,
   },
   vite: { plugins: [tailwind()] },
 });

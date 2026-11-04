@@ -11,7 +11,7 @@
 | `src/lib/monitor/` | A port of `rr monitor`'s rendering (`render.ts`) and the snapshot timeline (`timeline.ts`) |
 | `src/lib/docs.ts` | Pure docs rules: sidebar order, pager, URLs, the Markdown export and both llms files |
 | `src/lib/collection.ts` | The only `astro:content` import outside routes |
-| `src/lib/markdown.ts` | Docs Markdown conventions as Sätteri hast plugins plus one Shiki transformer |
+| `src/lib/markdown.ts` | Docs Markdown conventions: `@steamfield/ui/markdown`'s hast plugins and Shiki transformer, plus rr's link rewrite and h1 drop |
 | `src/lib/og.ts` | The social card layout and its fonts |
 | `src/components/landing/` | Landing sections (static React) and the islands: `MonitorStage`, `QueueBoard`, `CommandTabs`, `TerminalPlayer`, `InstallTabs` |
 | `src/scripts/site.ts` | Copy buttons, section-view and command-tab analytics, copy page and the TOC highlight |
@@ -36,13 +36,13 @@ In the docs, link between pages the GitHub way (`configuration.md#lock`); the pl
 
 ## Markdown processing
 
-Astro's default processor is Sätteri, which doesn't run remark or rehype plugins. The plugins in `src/lib/markdown.ts` use Sätteri's own API (`@astrojs/markdown-satteri`): objects with a tag `filter` and a `visit(node, ctx)` function. Shiki highlights code before hast plugins run and drops the fence's info string, so `codeTitle` (a Shiki transformer) copies `title="..."` onto the `<pre>` as `data-title`, and `codeFrames` turns it into a caption. `markdown.test.ts` renders through the same processor.
+Astro's default processor is Sätteri, which doesn't run remark or rehype plugins. The plugins in `src/lib/markdown.ts` use Sätteri's own API (`@astrojs/markdown-satteri`): objects with a tag `filter` and a `visit(node, ctx)` function. Callouts, heading anchors, table scroll regions and code frames (with their copy buttons) are `@steamfield/ui/markdown`'s `callouts`, `headingAnchors`, `tables` and `codeBlocks`, which emit `data-*` hooks that `global.css` styles; `docsLinks` and `dropTitle` are rr's. Shiki highlights code before hast plugins run and drops the fence's info string, so the library's `codeMeta` (a Shiki transformer) copies `title="..."` onto the `<pre>` as `data-title`, and `codeBlocks` turns it into a caption. The site keeps its own dual Shiki themes rather than the library's `createShikiConfig`. The landing page's config examples come from `config.ts`, not Markdown, so `src/components/CodeFrame.astro` mirrors `codeBlocks`' hooks and copy-button labels for them (one set of CSS rules, one copy enhancer). Accessible names follow the library's defaults: a heading's link is "Link to section: <heading>", a table's scroll region is named after its caption or the section it sits in ("Hosts table"), unique on the page, and a code copy button is "Copy code" (its visible text stays "Copy"). `markdown.test.ts` and `tests/build.test.ts` check the hooks, and `tests/helpers/markdown.ts` renders through the same processor for any test that needs the real markup.
 
 ## Islands and scripts
 
 Landing sections are React components rendered to HTML at build time. Only components named in `site.islands` may take a `client:` directive, and only on the landing page; the build test compares the hydrated islands with that list and fails on any island in `/docs/`. Prefer `client:visible`. Interactive behaviour shared by every page (copy buttons, analytics, TOC) goes in `src/scripts/site.ts` as plain DOM code that does nothing when its markup is absent.
 
-Every island server-renders a useful state: the Monitor stage its busiest frame, the Queue board every host locked with a run waiting, the terminals their whole transcript, the command tabs every panel (CSS `:target` picks one, so `#cmd-doctor` works without JavaScript). Demos advance only while on screen, in a visible tab, with motion allowed and not paused: the terminals on `useAgentDemo` from `@steamfield/ui/react/agent-demo` (rr's markup, the library's clock and the terminal timing preset), the Monitor stage and the flow diagram on `src/lib/use-playback.ts`. The command and install tabs are `@steamfield/ui`'s tabs, styled by rr's classes and `src/styles/sf-theme.css`.
+Every island server-renders a useful state: the Monitor stage its busiest frame, the Queue board every host locked with a run waiting, the terminals their whole transcript, the command tabs every panel (CSS `:target` picks one, so `#cmd-doctor` works without JavaScript). Demos advance only while on screen, in a visible tab, with motion allowed and not paused: the terminals on `useAgentDemo` from `@steamfield/ui/react/agent-demo` (rr's markup, the library's clock and the terminal timing preset), the flow diagram on `usePlayback` from `@steamfield/ui/react/playback`, and the Monitor stage on `src/lib/use-playback.ts` (its 50ms tick). The command and install tabs are `@steamfield/ui`'s tabs, styled by rr's classes and `src/styles/sf-theme.css`.
 
 ## Demo recordings
 
