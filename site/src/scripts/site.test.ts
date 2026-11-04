@@ -139,15 +139,18 @@ describe("code frames", () => {
     expect(button).toHaveTextContent("Copied");
   });
 
-  it("don't reuse an id another code element already has", async () => {
+  it("each copy the code in their own frame when a page already uses a generated id", async () => {
+    const user = userEvent.setup();
     await load(
       '<figure class="code-frame"><pre><code id="code-frame-2">first</code></pre></figure>' +
         '<figure class="code-frame"><pre><code>second</code></pre></figure>',
     );
-    const targets = [...document.querySelectorAll(".code-frame button")].map(
-      (button) => document.getElementById(button.getAttribute("aria-controls") ?? "")?.textContent,
-    );
-    expect(targets).toEqual(["first", "second"]);
+    const copied: string[] = [];
+    for (const button of document.querySelectorAll<HTMLButtonElement>(".code-frame button")) {
+      await user.click(button);
+      copied.push(await navigator.clipboard.readText());
+    }
+    expect(copied).toEqual(["first", "second"]);
   });
 });
 
