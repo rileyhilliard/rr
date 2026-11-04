@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -522,4 +523,122 @@ func TestParseRunOutcome_VitestFailedDescribe(t *testing.T) {
 	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
 	require.NotNil(t, o.Summary)
 	assert.Equal(t, 1, o.Summary.Errors)
+}
+
+// testdata/gotest-failure.txt is a real `go test ./internal/lock/... -run
+// TestItoa` log: without -v, go test prints a failing test's log lines after
+// its --- FAIL line.
+func TestParseRunOutcome_GoTestFailureLocation(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/gotest-failure.txt")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		log  string
+		want []output.TestFailure
+	}{
+		{
+			name: "log lines after --- FAIL",
+			log:  string(fixture),
+			want: []output.TestFailure{
+				{TestName: "TestItoa", File: "lock_test.go", Line: 170, Message: `itoa(-1) = "", want "-1"`},
+			},
+		},
+		{
+			name: "verbose: log lines before --- FAIL",
+			log: "=== RUN   TestA\n" +
+				"--- PASS: TestA (0.00s)\n" +
+				"=== RUN   TestB\n" +
+				"    math_test.go:15: expected 6, got 5\n" +
+				"    math_test.go:16: expected 7, got 5\n" +
+				"--- FAIL: TestB (0.00s)\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/math\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestB", File: "math_test.go", Line: 15, Message: "expected 6, got 5"},
+			},
+		},
+		{
+			name: "each failure keeps its own location",
+			log: "--- FAIL: TestA (0.00s)\n" +
+				"    a_test.go:10: a broke\n" +
+				"--- FAIL: TestB (0.00s)\n" +
+				"    b_test.go:20: b broke\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestA", File: "a_test.go", Line: 10, Message: "a broke"},
+				{TestName: "TestB", File: "b_test.go", Line: 20, Message: "b broke"},
+			},
+		},
+		{
+			name: "subtest failure attributes to the parent",
+			log: "--- FAIL: TestParent (0.00s)\n" +
+				"    --- FAIL: TestParent/case (0.00s)\n" +
+				"        p_test.go:5: case broke\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestParent", File: "p_test.go", Line: 5, Message: "case broke"},
+			},
+		},
+		{
+			// Real go test -v output: TestB's first line follows
+			// `=== CONT TestB` with no `=== NAME TestB` before it.
+			name: "verbose parallel: interleaved output goes to the test that printed it",
+			log: "=== RUN   TestA\n" +
+				"=== PAUSE TestA\n" +
+				"=== RUN   TestB\n" +
+				"=== PAUSE TestB\n" +
+				"=== CONT  TestA\n" +
+				"=== CONT  TestB\n" +
+				"    x_test.go:4: b broke\n" +
+				"=== NAME  TestA\n" +
+				"    x_test.go:3: a broke\n" +
+				"--- FAIL: TestA (0.03s)\n" +
+				"=== NAME  TestB\n" +
+				"    x_test.go:4: b again\n" +
+				"--- FAIL: TestB (0.05s)\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.178s\n",
+			want: []output.TestFailure{
+				{TestName: "TestA", File: "x_test.go", Line: 3, Message: "a broke"},
+				{TestName: "TestB", File: "x_test.go", Line: 4, Message: "b broke"},
+			},
+		},
+		{
+			// testify leaves the location line's message empty and prints
+			// the details on the more-indented lines under it.
+			name: "multi-line message under the location line",
+			log: "--- FAIL: TestT (0.00s)\n" +
+				"    x_test.go:5: \n" +
+				"        \tError Trace:\tx_test.go:5\n" +
+				"        \tError:      \tNot equal: \n" +
+				"        \t            \texpected: 1\n" +
+				"        \t            \tactual  : 2\n" +
+				"    x_test.go:6: second assertion\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestT", File: "x_test.go", Line: 5, Message: "Error Trace:\tx_test.go:5\n" +
+					"Error:      \tNot equal:\nexpected: 1\nactual  : 2"},
+			},
+		},
+		{
+			name: "no location line",
+			log: "--- FAIL: TestPanics (0.00s)\n" +
+				"panic: boom [recovered]\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestPanics"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := ParseRunOutcome("go test ./...", []byte(tt.log))
+			assert.Equal(t, tt.want, o.Failures)
+		})
+	}
 }
