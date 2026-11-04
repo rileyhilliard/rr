@@ -64,6 +64,14 @@ describe("agent-readable exports", () => {
     );
   });
 
+  it("rewrites relative links in Markdown exports", () => {
+    const linked = {
+      ...doc("getting-started/linked", {}),
+      body: "See [config](configuration.md#lock).",
+    };
+    expect(toMarkdownExport(linked)).toContain("[config](/docs/configuration/#lock)");
+  });
+
   it("lists every page in llms.txt by group with absolute Markdown URLs", () => {
     const text = llmsIndex(site, nav);
     expect(text).toContain("# Acme\n\n> Notes search.");

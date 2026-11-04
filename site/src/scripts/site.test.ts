@@ -55,13 +55,28 @@ async function load(html: string) {
   await import("./site");
 }
 
+// site.ts adds window listeners each time it's imported; they're removed after each test so
+// one test's listeners don't fire in the next.
+let windowListeners: Parameters<typeof window.removeEventListener>[] = [];
+let addWindowListener: ReturnType<typeof vi.spyOn> | undefined;
+
 beforeEach(() => {
+  const add = window.addEventListener.bind(window);
+  addWindowListener = vi
+    .spyOn(window, "addEventListener")
+    .mockImplementation((...args: Parameters<typeof window.addEventListener>) => {
+      windowListeners.push([args[0], args[1], args[2]]);
+      add(...args);
+    });
   observers = [];
   track.mockClear();
   vi.stubGlobal("IntersectionObserver", FakeObserver);
 });
 
 afterEach(() => {
+  addWindowListener?.mockRestore();
+  for (const args of windowListeners) window.removeEventListener(...args);
+  windowListeners = [];
   vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
@@ -123,13 +138,24 @@ describe("code frames", () => {
     expect(await navigator.clipboard.readText()).toBe("hosts: [m4]");
     expect(button).toHaveTextContent("Copied");
   });
+
+  it("don't reuse an id another code element already has", async () => {
+    await load(
+      '<figure class="code-frame"><pre><code id="code-frame-2">first</code></pre></figure>' +
+        '<figure class="code-frame"><pre><code>second</code></pre></figure>',
+    );
+    const targets = [...document.querySelectorAll(".code-frame button")].map(
+      (button) => document.getElementById(button.getAttribute("aria-controls") ?? "")?.textContent,
+    );
+    expect(targets).toEqual(["first", "second"]);
+  });
 });
 
 describe("analytics hooks", () => {
   it("tracks command tab switches announced by the island", async () => {
     await load("");
     window.dispatchEvent(new CustomEvent("rr:command-tab", { detail: { name: "doctor" } }));
-    expect(track).toHaveBeenCalledWith("command_tab_opened", { name: "doctor" });
+    expect(track.mock.calls).toEqual([["command_tab_opened", { name: "doctor" }]]);
   });
 
   it("tracks a section view once", async () => {

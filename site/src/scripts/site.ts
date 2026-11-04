@@ -36,8 +36,13 @@ function setupCodeCopy() {
   for (const frame of document.querySelectorAll<HTMLElement>(".code-frame")) {
     const code = frame.querySelector("code");
     if (!code) continue;
-    count += 1;
-    code.id ||= `code-frame-${count}`;
+    // A generated id must not collide with one already on the page, or the button
+    // would copy that element instead.
+    while (!code.id) {
+      count += 1;
+      const id = `code-frame-${count}`;
+      if (!document.getElementById(id)) code.id = id;
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "code-copy";
