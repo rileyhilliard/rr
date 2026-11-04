@@ -91,7 +91,8 @@ describe("docs Markdown", () => {
     expect(figures).toHaveLength(2);
     expect(figures[0]?.querySelector("figcaption[data-code-title]")?.textContent).toBe("Terminal");
     expect(figures[1]?.querySelector("[data-code-title]")).toBeNull();
-    // The caption comes first in the markup only from @steamfield/ui 0.2.1; global.css orders it.
+    // The caption leads the frame in the markup, so no CSS reorders it.
+    expect(figures[0]?.firstElementChild?.tagName).toBe("FIGCAPTION");
     for (const [i, figure] of figures.entries()) {
       const pre = figure.querySelector("pre");
       const button = figure.querySelector("[data-code-copy] button[data-copy-command]");

@@ -109,7 +109,6 @@ Things in the tree that exist to get a build through, not because they are right
 | `package.json` | `typescript@^6`: `astro check` refuses TypeScript 7 | `@astrojs/check` (or its replacement) supports TypeScript 7 |
 | Component tests | Stub `IntersectionObserver` (`tests/helpers/dom.ts`): happy-dom never reports intersection, so demos would never play | happy-dom reports intersection |
 | `src/styles/global.css` | `[data-code-copy] svg { display: none }`: `@steamfield/ui/markdown`'s `codeBlocks` always puts a copy icon in the button, and rr's code copy buttons are text only (`CodeFrame.astro` leaves it out) | `codeBlocks` gains an icon option |
-| `src/styles/global.css` | `[data-code-block]` is a flex column with the caption `order-first`: `@steamfield/ui` 0.2.0 emits the caption after the `<pre>` | the site is on `@steamfield/ui` 0.2.1, which emits it first |
 | `tests/helpers/markdown.ts` | Defines `Response.prototype.bytes` when missing: Shiki's inlined wasm needs it and happy-dom's `Response` lacks it, so `site.test.ts` can render through the real processor | happy-dom implements `Response.bytes` |
 
 ## Deferred
