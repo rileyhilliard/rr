@@ -4,4 +4,15 @@
   "name": "rr",
   "compatibility_date": "2026-11-02",
   "pages_build_output_dir": "./dist",
+  // With this file present it is the source of truth: Pages ignores dashboard
+  // variables, and these reach the build as well as the runtime. The PostHog key
+  // is a public client key (it ships in the page). Preview builds get none, so
+  // branch previews send no analytics.
+  "env": {
+    "production": {
+      "vars": {
+        "PUBLIC_POSTHOG_KEY": "phc_ydp4qxgAzjHBKiH6oGe8WzCfnPtVc4hwF3NHY3VK3Uca",
+      },
+    },
+  },
 }

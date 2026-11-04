@@ -98,7 +98,7 @@ Claude Code reads `CLAUDE.md`, which imports this file. Hooks in `.claude/` bloc
 
 ## Deploy
 
-Cloudflare Pages project `rr` (`rr-aqz.pages.dev`), production at rr.steamfield.io through a proxied CNAME in the steamfield.io zone, deployed by Cloudflare's Git integration from `main`, with a preview for every branch: root directory `site`, build command `bun install --frozen-lockfile && make build`, output `dist`, `BUN_VERSION` and `NODE_VERSION` build variables matching `package.json` and `.node-version`. Build watch paths are `site/*`, `docs/*`, `CHANGELOG.md` and `README.md`, the inputs that change the built pages; the Go paths in `.github/workflows/site.yml` only feed drift tests. `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` are Pages build variables. `make deploy-check` verifies headers and URLs locally; `make deploy-preview BRANCH=…` and `make deploy` upload from a machine with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Headers live in `public/_headers`; add `public/_redirects` only for moved pages. `.github/workflows/site.yml` runs the checks (not a required check).
+Cloudflare Pages project `rr` (`rr-aqz.pages.dev`), production at rr.steamfield.io through a proxied CNAME in the steamfield.io zone, deployed by Cloudflare's Git integration from `main`, with a preview for every branch: root directory `site`, build command `bun install --frozen-lockfile && make build`, output `dist`, `BUN_VERSION` and `NODE_VERSION` build variables matching `package.json` and `.node-version`. Build watch paths are `site/*`, `docs/*`, `CHANGELOG.md` and `README.md`, the inputs that change the built pages; the Go paths in `.github/workflows/site.yml` only feed drift tests. Because `wrangler.jsonc` exists, it is the source of truth for the project's variables and Pages ignores dashboard ones: `PUBLIC_POSTHOG_KEY` (and `PUBLIC_POSTHOG_HOST` if needed) live in its `env.production.vars`, so preview builds get none. `make deploy-check` verifies headers and URLs locally; `make deploy-preview BRANCH=…` and `make deploy` upload from a machine with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Headers live in `public/_headers`; add `public/_redirects` only for moved pages. `.github/workflows/site.yml` runs the checks (not a required check).
 
 ## Build workarounds
 
@@ -121,7 +121,7 @@ Things in the tree that exist to get a build through, not because they are right
 ## Pending user actions
 
 - Deploy steamfield.io with its `/privacy` page before deploying this site with a PostHog key: the consent banner and the footer link to https://steamfield.io/privacy.
-- In the shared Steamfield PostHog project, set `PUBLIC_POSTHOG_KEY` (and host) as Pages build variables for the Production environment only, and enable "Cookieless server hash mode" and "Discard client IP data" in its settings, or cookieless events are ignored.
+- Confirm analytics arrives: the shared Steamfield PostHog project (Steamfield org, project 710632) has "Cookieless server hash mode" and "Discard client IP data" on, and its key is in `wrangler.jsonc` `env.production.vars`. Done when pageviews with `site = rr` appear in PostHog.
 - Review the scrub summary and fixture diffs before committing recordings.
 
 ## Deeper context
