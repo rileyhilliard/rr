@@ -1,6 +1,7 @@
 // Test-only: used by src/lib/analytics.test.ts. Adapted from OpenData's
 // shared/testing/posthog-pipeline.ts.
 import type { CaptureResult, PostHog, PostHogConfig } from "posthog-js";
+import { project, type RemoteConfig } from "./posthog-remote-config";
 
 /**
  * Boots the **real** posthog-js offline, through analytics.ts's `load` seam.
@@ -19,10 +20,14 @@ import type { CaptureResult, PostHog, PostHogConfig } from "posthog-js";
  *   letting the event reach the transport, and a real fetch per capture leaves
  *   requests in flight when vitest tears the happy-dom window down.
  * - It sets the OFFLINE_OVERRIDES keys below, overriding whatever the module passed
- *   for them. analytics.ts sets the two network keys itself, so for those the override
- *   changes nothing; `{ network: "as-configured" }` leaves them to the module, so a test
- *   can see what production requests. `initConfig()` returns the module's config before
- *   the wrapper changed it.
+ *   for them. `initConfig()` returns the module's config before the wrapper changed it.
+ *
+ * Requests never leave the test either. The first pipeline replaces posthog-js's
+ * transport (`_send_request`, shared by every instance through the prototype) and its
+ * CDN script loader (see installTransport). Remote config comes from the pipeline's
+ * `remoteConfig`, the real project's by default. The replacements stay for the rest of
+ * the test file, in every file that creates a pipeline. A request for a token no
+ * pipeline set up throws.
  */
 
 /** A fully enriched event as `before_send` sees it. */
@@ -32,19 +37,84 @@ type InitConfig = Partial<PostHogConfig>;
 type PostHogModule = Pick<PostHog, "init">;
 type BeforeSend = PostHogConfig["before_send"];
 type BeforeSendFn = Exclude<BeforeSend, unknown[] | undefined>;
-type Network = "offline" | "as-configured";
 
 /** happy-dom reports an automated user agent; without this every event drops. */
 export const TEST_DOM_OVERRIDES = { opt_out_useragent_filter: true } as const;
 
 /** Config that keeps the real SDK offline and synchronous. */
 export const OFFLINE_OVERRIDES = {
-  /** No remote-config or recorder script fetches. */
+  /**
+   * No script from PostHog's CDN. The harness answers the one every page needs, remote
+   * config, itself; a test that wants the recorder imports its bundle.
+   */
   disable_external_dependency_loading: true,
-  /** No `/flags` or remote-config round trip on init. */
-  advanced_disable_flags: true,
   ...TEST_DOM_OVERRIDES,
 } as const;
+
+type ServedConfig = { config: RemoteConfig; siteApps: unknown[] };
+type Transport = {
+  remoteConfig: RemoteConfig;
+  requests: string[];
+  scripts: string[];
+};
+type Done = (error?: unknown) => void;
+type Loader = (instance: PostHog, name: string, done: Done) => void;
+type PostHogWindow = {
+  __PosthogExtensions__?: { loadExternalDependency?: Loader };
+  _POSTHOG_REMOTE_CONFIG?: Record<string, ServedConfig>;
+};
+
+const transports = new Map<string, Transport>();
+const patched = new WeakSet<object>();
+
+function isSdk(value: unknown): value is PostHog {
+  if (typeof value !== "object" || value === null) return false;
+  return "_send_request" in value;
+}
+
+function transportFor(token: string): Transport {
+  const transport = transports.get(token);
+  if (!transport) {
+    throw new Error(`posthog-js used ${token}, which no pipeline set up`);
+  }
+  return transport;
+}
+
+/**
+ * Replaces posthog-js's transport and its CDN script loader, which every instance
+ * shares, once per prototype. Requests are recorded per token and dropped, except the
+ * remote config JSON, which gets the pipeline's config. Script loads are recorded; the
+ * remote-config one does what PostHog's `/array/<token>/config.js` does when it loads.
+ */
+function installTransport(posthog: PostHogModule) {
+  const sdk: unknown = Object.getPrototypeOf(posthog);
+  if (!isSdk(sdk)) throw new Error("posthog-js's export isn't a PostHog");
+  if (patched.has(sdk)) return;
+  patched.add(sdk);
+  sdk._send_request = function (this: PostHog, options) {
+    const transport = transportFor(this.config.token);
+    transport.requests.push(options.url);
+    if (options.url.includes(`/array/${this.config.token}/config`)) {
+      options.callback?.({ statusCode: 200, json: transport.remoteConfig });
+    }
+  };
+  // posthog-js keeps its CDN loader on window; the cast stays in this helper.
+  const page = window as unknown as PostHogWindow;
+  const extensions = page.__PosthogExtensions__;
+  const load = extensions?.loadExternalDependency;
+  if (!extensions || !load) throw new Error("posthog-js has no CDN loader");
+  extensions.loadExternalDependency = (instance, name, done) => {
+    const token = instance.config.token;
+    const transport = transportFor(token);
+    transport.scripts.push(name);
+    if (name !== "remote-config") return load(instance, name, done);
+    page._POSTHOG_REMOTE_CONFIG = {
+      ...page._POSTHOG_REMOTE_CONFIG,
+      [token]: { config: transport.remoteConfig, siteApps: [] },
+    };
+    done();
+  };
+}
 
 export type PostHogPipeline = {
   /** Pass as initAnalytics' `load`: the real module, with init wrapped. */
@@ -53,6 +123,10 @@ export type PostHogPipeline = {
   posthog(): PostHog;
   /** The config the caller passed to init, before the wrapper changed it. */
   initConfig(): InitConfig;
+  /** The URLs of the requests posthog-js made for this pipeline's token, in order. */
+  requests(): string[];
+  /** The scripts posthog-js asked its CDN for, by name, in order. */
+  scripts(): string[];
   /** Post-`before_send` payloads, in capture order, optionally by name. */
   captured(name?: string): CapturedEvent[];
   /**
@@ -91,10 +165,10 @@ function runBeforeSend(hook: BeforeSend, event: CaptureResult | null) {
  */
 export function createPostHogPipeline(
   posthog: PostHogModule,
-  { network = "offline" }: { network?: Network } = {},
+  { remoteConfig = project }: { remoteConfig?: RemoteConfig } = {},
 ): PostHogPipeline {
-  const offline = network === "offline";
-  const overrides = offline ? OFFLINE_OVERRIDES : TEST_DOM_OVERRIDES;
+  installTransport(posthog);
+  const transport: Transport = { remoteConfig, requests: [], scripts: [] };
   const name = `pipeline_test_${++instanceCounter}`;
   const captured: CapturedEvent[] = [];
   let recording = true;
@@ -104,6 +178,7 @@ export function createPostHogPipeline(
   const wrapped: PostHogModule = {
     init: (token, config) => {
       received = config;
+      transports.set(token, transport);
       client = posthog.init(
         token,
         {
@@ -114,7 +189,7 @@ export function createPostHogPipeline(
             // Never send. See the note on network teardown above.
             return null;
           },
-          ...overrides,
+          ...OFFLINE_OVERRIDES,
         },
         name,
       );
@@ -133,6 +208,8 @@ export function createPostHogPipeline(
   return {
     load: async () => ({ default: wrapped }),
     posthog: live,
+    requests: () => [...transport.requests],
+    scripts: () => [...transport.scripts],
     initConfig: () => {
       if (!received) throw new Error(`posthog.init has not run for ${name}`);
       return received;

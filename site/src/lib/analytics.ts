@@ -5,7 +5,7 @@
 // Consent: the visitor's banner choice (the sf-consent cookie, read through a consent
 // store) is the single source of truth, and PostHog's own consent state follows it.
 // Until the visitor accepts, PostHog runs cookieless and stores nothing on the device.
-import type { BeforeSendFn, PostHog } from "posthog-js";
+import type { BeforeSendFn, PostHog, PostHogConfig } from "posthog-js";
 import type { EventName, EventProps } from "./events";
 
 export type Consent = "granted" | "denied" | null;
@@ -32,13 +32,20 @@ export type AnalyticsConfig = {
   consent?: ConsentStore | undefined;
 };
 type Loader = () => Promise<{ default: Pick<PostHog, "init"> }>;
-type Consenting = "opt_in_capturing" | "clear_opt_in_out_capturing";
-type Status = "get_explicit_consent_status";
-type Client = Pick<PostHog, "capture" | Consenting | Status>;
+type Client = Pick<
+  PostHog,
+  | "capture"
+  | "opt_in_capturing"
+  | "clear_opt_in_out_capturing"
+  | "get_explicit_consent_status"
+  | "set_config"
+  | "startSessionRecording"
+  | "stopSessionRecording"
+>;
 type Call = (client: Client) => void;
 
-// Calls made before the SDK loads wait here. stacks only sends pageviews, but rr, decks
-// and statglass share this module and call track() early.
+// Calls made before the SDK loads wait here: a track() from an island that hydrates
+// before posthog-js has loaded. stacks, rr, decks and statglass all call track().
 const QUEUE_LIMIT = 50;
 let client: Client | undefined;
 let queue: Call[] | undefined;
@@ -63,12 +70,21 @@ function send(call: Call) {
 // localStorage and sessionStorage entries removed (the window id by forgetWindow),
 // and the next event cookieless. Declining stores nothing, not even PostHog's own
 // opt-out record.
+//
+// Session recording and heatmaps run only after Accept, so they follow the same choice:
+// switched on for granted (on every load, not only when PostHog's status changes, since
+// both start off at init) and off otherwise. Heatmaps toggle through set_config, which
+// makes posthog-js add or remove its listeners; recording through its start and stop calls.
 function applyConsent(c: Client, consent: Consent, key: string) {
   const status = c.get_explicit_consent_status();
   if (consent === "granted") {
     if (status !== "granted") c.opt_in_capturing();
+    c.set_config({ capture_heatmaps: true });
+    c.startSessionRecording();
     return;
   }
+  c.stopSessionRecording();
+  c.set_config({ capture_heatmaps: false });
   if (status !== "pending") c.clear_opt_in_out_capturing();
   // Even when PostHog is already pending: consent withdrawn in another tab leaves
   // this tab's window id behind until a page here loads.
@@ -88,14 +104,36 @@ function forgetWindow(key: string) {
   }
 }
 
+// Events that exist only after Accept. posthog-js's heatmaps don't check consent once
+// their listeners are attached, so this is a floor under applyConsent: a page restored
+// from the back-forward cache after a decline on a sibling site, before the pageshow
+// handler below runs, still sends none of them.
+const CONSENTED_ONLY = new Set(["$$heatmap", "$dead_click", "$snapshot"]);
+
 // A registered super property isn't enough for site: opt_in_capturing() resets super
 // properties and captures the initial $pageview (and $opt_in) before it returns, so
 // those events would go out without it. Stamping each event as it leaves covers them.
-function stampSite(site: string): BeforeSendFn {
+function beforeSend(site: string): BeforeSendFn {
   return (event) => {
-    if (!event) return event;
+    if (!event) return null;
+    const granted = client?.get_explicit_consent_status() === "granted";
+    if (CONSENTED_ONLY.has(event.event) && !granted) return null;
     return { ...event, properties: { ...event.properties, site } };
   };
+}
+
+// A page restored from the back-forward cache keeps its consent store's old state, but
+// PostHog's consent record is the shared .steamfield.io cookie, which a decline on a
+// sibling site has cleared. Re-read it, and withdraw here too if it's no longer granted.
+function onRestore(c: Client, key: string) {
+  window.addEventListener("pageshow", (event) => {
+    const granted = c.get_explicit_consent_status() === "granted";
+    if (!event.persisted || granted) return;
+    c.stopSessionRecording();
+    c.set_config({ capture_heatmaps: false });
+    c.clear_opt_in_out_capturing();
+    forgetWindow(key);
+  });
 }
 
 function onLoaded(instance: Client, key: string, store?: ConsentStore) {
@@ -105,10 +143,17 @@ function onLoaded(instance: Client, key: string, store?: ConsentStore) {
     applyConsent(instance, store.getState(), key);
     store.subscribe(() => send((c) => applyConsent(c, store.getState(), key)));
   }
+  onRestore(instance, key);
   client = instance;
   for (const call of queue ?? []) call(instance);
   queue = undefined;
 }
+
+// posthog-js spreads this over its defaults, so the logs key must be present and
+// undefined. The cast is for statglass, whose exactOptionalPropertyTypes rejects an
+// explicit undefined in this type.
+type Extensions = NonNullable<PostHogConfig["__extensionClasses"]>;
+const withoutLogs = { logs: undefined } as unknown as Extensions;
 
 export async function initAnalytics(
   config: AnalyticsConfig,
@@ -133,6 +178,8 @@ export async function initAnalytics(
     defaults: "2026-08-30",
     person_profiles: "identified_only",
     capture_pageview: "history_change",
+    // URLs without their hash: /search/#q=… would put the search text on every event.
+    disable_capture_url_hashes: true,
     // Cookieless until the visitor accepts; then localStorage+cookie, shared across
     // steamfield.io subdomains.
     cookieless_mode: "on_reject",
@@ -144,23 +191,43 @@ export async function initAnalytics(
     // be opted in again here, and opting in resets them to a new distinct_id. Every
     // site on this key needs the same setting.
     opt_out_capturing_persistence_type: "cookie",
-    // Pageviews and catalog events only. These are off here rather than left to the
-    // project's remote config, so turning one on is a code change.
-    autocapture: false,
+    // For every visitor, cookieless included: clicks and form submissions (autocapture,
+    // which never sends input values unless an element opts in with data-ph-capture-value),
+    // and web vitals. Network timing is a recording feature and stays off, because request
+    // URLs carry search text.
+    autocapture: true,
+    capture_performance: { web_vitals: true, network_timing: false },
+    // After Accept only: applyConsent starts these. Recordings mask every input, and the
+    // text of anything marked data-ph-mask (the search box and its results).
     disable_session_recording: true,
-    capture_dead_clicks: false,
     capture_heatmaps: false,
+    // Remote config can turn on network payload capture; an explicit client false wins.
+    session_recording: {
+      maskAllInputs: true,
+      maskTextSelector: "[data-ph-mask]",
+      recordHeaders: false,
+      recordBody: false,
+    },
+    enable_recording_console_log: true,
+    // Off here rather than left to the project's remote config, so turning one on is a
+    // code change.
+    capture_dead_clicks: false,
     capture_exceptions: false,
-    capture_performance: false,
     disable_surveys: true,
     disable_conversations: true,
     disable_product_tours: true,
-    // No feature flags or remote config on these sites, so no /flags request, no remote
-    // config script or JSON on each page, and no script loaded from PostHog's CDN.
-    // Cookieless counting and pageviews don't depend on either.
-    advanced_disable_flags: true,
-    disable_external_dependency_loading: true,
-    before_send: stampSite(config.site),
+    // The one remote-config switch with no client override in posthog-js 1.445.4: a
+    // project with Logs' console capture on would patch the console and ship its output
+    // for every visitor, cookieless included. Leaving the logs extension out of init
+    // keeps that off; posthog.logs isn't used here.
+    __extensionClasses: withoutLogs,
+    // Remote config loads on every page (posthog-js starts a recording only when it says
+    // replay is on); the options above win over what it switches on, except where
+    // noted. Feature flags stay off, so /flags is never requested. Scripts from
+    // PostHog's CDN (remote config, web vitals, the recorder) are allowed.
+    advanced_disable_feature_flags: true,
+    advanced_disable_feature_flags_on_first_load: true,
+    before_send: beforeSend(config.site),
     loaded: (instance) => onLoaded(instance, key, config.consent),
   });
 }

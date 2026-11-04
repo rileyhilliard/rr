@@ -6,11 +6,12 @@ import {
   type PostHogPipeline,
   TEST_DOM_OVERRIDES,
 } from "../../tests/helpers/posthog-pipeline";
+import { everythingOn } from "../../tests/helpers/posthog-remote-config";
 import type * as AnalyticsModule from "./analytics";
 import type { Consent, ConsentStore } from "./analytics";
 import type { EventName } from "./events";
 
-// The catalog has no events yet; a test-only name stands in for one.
+// A test-only event name, so these tests don't depend on the site's catalog.
 const testEvent = "test_event_captured" as EventName;
 
 // Persistence and stored consent are keyed by the token, so each test gets its own.
@@ -241,8 +242,9 @@ describe("a choice stored from an earlier visit", () => {
   it("a stored granted choice counts the first pageview with consent", async () => {
     vi.useFakeTimers();
     await start({ consent: consentStore("granted") });
-    // Fires posthog-js's deferred initial-pageview timer, and anything after it.
-    await vi.runAllTimersAsync();
+    // Past posthog-js's deferred initial-pageview timer (1ms). Not runAllTimers: heatmaps,
+    // on after Accept, poll on an interval that never runs out.
+    await vi.advanceTimersByTimeAsync(100);
     const [pageview, ...more] = pipeline.captured("$pageview");
     expect(more).toEqual([]);
     expect(pageview?.properties.site).toBe("rr");
@@ -308,7 +310,7 @@ describe("a choice stored from an earlier visit", () => {
 });
 
 describe("init", () => {
-  it("initializes cookieless until consent, with remote-config features off", async () => {
+  it("initializes with the module's options", async () => {
     await start({ host: "http://127.0.0.1:9" });
     const expected = {
       api_host: "http://127.0.0.1:9",
@@ -318,20 +320,34 @@ describe("init", () => {
       persistence: "localStorage+cookie",
       cross_subdomain_cookie: true,
       capture_pageview: "history_change",
-      autocapture: false,
+      disable_capture_url_hashes: true,
       disable_session_recording: true,
       capture_dead_clicks: false,
       capture_heatmaps: false,
       capture_exceptions: false,
-      capture_performance: false,
       disable_surveys: true,
       disable_conversations: true,
       disable_product_tours: true,
       opt_out_capturing_persistence_type: "cookie",
-      advanced_disable_flags: true,
-      disable_external_dependency_loading: true,
+      autocapture: true,
+      capture_performance: { web_vitals: true, network_timing: false },
+      session_recording: {
+        maskAllInputs: true,
+        maskTextSelector: "[data-ph-mask]",
+        recordHeaders: false,
+        recordBody: false,
+      },
+      enable_recording_console_log: true,
+      advanced_disable_feature_flags: true,
+      advanced_disable_feature_flags_on_first_load: true,
     };
     expect(pipeline.initConfig()).toMatchObject(expected);
+    expect(pipeline.initConfig()).not.toHaveProperty("advanced_disable_flags");
+    expect(pipeline.initConfig().__extensionClasses).toEqual({
+      logs: undefined,
+    });
+    // Scripts from PostHog's CDN (web vitals, the recorder) are allowed in production.
+    expect(pipeline.initConfig()).not.toHaveProperty("disable_external_dependency_loading");
   });
 
   it("leaves only the test DOM's settings to the harness", async () => {
@@ -341,34 +357,21 @@ describe("init", () => {
     }
   });
 
-  it("requests no flags or remote config and loads no script from PostHog", async () => {
-    // The SDK's own transport: every request it makes goes through _send_request.
-    const sdk: PostHog = Object.getPrototypeOf(posthog);
-    const requested: string[] = [];
-    vi.spyOn(sdk, "_send_request").mockImplementation((options) => {
-      requested.push(options.url);
+  it("requests remote config and never /flags", async () => {
+    await start({ consent: consentStore("granted") });
+    await firstPageview();
+    expect(pipeline.scripts()).toContain("remote-config");
+    expect(pipeline.requests().filter((url) => url.includes("/flags"))).toEqual([]);
+  });
+
+  it("never requests /flags when remote config says the project has flags", async () => {
+    const live = createPostHogPipeline(posthog, {
+      remoteConfig: { hasFeatureFlags: true },
     });
-    // Toolbar credentials left by an earlier visit: posthog-js would load the toolbar
-    // script from PostHog for them, unless external dependency loading is off.
-    localStorage.setItem("_postHogToolbarParams", JSON.stringify({ token: key }));
-    const scriptsBefore = document.scripts.length;
-    const live = createPostHogPipeline(posthog, { network: "as-configured" });
-    await analytics.initAnalytics(
-      {
-        key,
-        host: "http://127.0.0.1:9",
-        site: "rr",
-        consent: consentStore(),
-      },
-      live.load,
-    );
-    const pageview = await firstPageview(live);
-    expect(pageview.properties).toMatchObject({
-      site: "rr",
-      $cookieless_mode: true,
-    });
-    expect(requested.filter((url) => /\/flags|\/config/.test(url))).toEqual([]);
-    expect(document.scripts.length).toBe(scriptsBefore);
+    await analytics.initAnalytics({ key, site: "rr", consent: consentStore() }, live.load);
+    await firstPageview(live);
+    expect(live.scripts()).toContain("remote-config");
+    expect(live.requests().filter((url) => url.includes("/flags"))).toEqual([]);
     live.shutdown();
   });
 
@@ -382,7 +385,317 @@ describe("init", () => {
   });
 });
 
-describe("posthog-js contract that stampSite works around", () => {
+// A click posthog-js's heatmaps and autocapture both accept: a real element, coordinates.
+function clickOn(element: Element) {
+  element.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 12, clientY: 34 }));
+}
+
+// Heatmaps buffer clicks and send them as one $$heatmap event when they flush, which
+// they also do when the page unloads.
+function flushHeatmaps() {
+  window.dispatchEvent(new Event("beforeunload"));
+}
+
+// Elements without attributes: posthog-js walks an element's attributes with for...in, and
+// happy-dom's NamedNodeMap yields entries that aren't attributes, so autocapture throws on
+// any element that has one. Real browsers don't; the attribute-free page avoids it.
+function page() {
+  document.body.innerHTML = "<form><input /><button>Search</button></form>";
+  const button = document.querySelector("button");
+  const input = document.querySelector("input");
+  if (!button || !input) throw new Error("the test page didn't render");
+  input.value = "python api with a secret plan";
+  return { button, input };
+}
+
+// happy-dom's settings for this window; the cast stays in this test.
+type IframeSettings = {
+  disableIframePageLoading: boolean;
+  enableIframePageLoading: boolean;
+};
+function happyDOMSettings(): IframeSettings {
+  return (window as unknown as { happyDOM: { settings: IframeSettings } }).happyDOM.settings;
+}
+const iframeDefaults = { ...happyDOMSettings() };
+
+// The pageshow a browser fires for a page restored from the back-forward cache.
+function restored() {
+  const event = new Event("pageshow");
+  Object.defineProperty(event, "persisted", { value: true });
+  return event;
+}
+
+describe("capture features", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("autocapture counts clicks for a cookieless visitor without input values", async () => {
+    const { button, input } = page();
+    await start({ consent: consentStore() });
+    await firstPageview();
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    clickOn(button);
+    const clicks = pipeline.captured("$autocapture");
+    expect(clicks.length).toBeGreaterThan(0);
+    for (const click of clicks) {
+      expect(click.properties).toMatchObject({
+        site: "rr",
+        $cookieless_mode: true,
+      });
+      expect(JSON.stringify(click.properties)).not.toContain("secret plan");
+    }
+    expect(newStorage()).toEqual([]);
+  });
+
+  it("sends page URLs without the hash, which carries search text", async () => {
+    await start({ consent: consentStore() });
+    await firstPageview();
+    pipeline.clear();
+    // posthog-js wraps history.pushState only once per window, for the first instance in
+    // this file, so the navigation is announced the way Back would be: popstate, which
+    // each instance listens for.
+    history.pushState(null, "", "/search/#q=zebra");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    const pageview = await vi.waitFor(() => pipeline.only("$pageview"));
+    expect(pageview.properties.$current_url).toBe(`${location.origin}/search/`);
+    history.pushState(null, "", "/");
+  });
+
+  it("web vitals capture is on for every visitor", async () => {
+    await start({ consent: consentStore() });
+    expect(pipeline.posthog().webVitalsAutocapture?.isEnabled).toBe(true);
+  });
+
+  it("heatmaps stay off before consent", async () => {
+    const { button } = page();
+    await start({ consent: consentStore() });
+    await firstPageview();
+    clickOn(button);
+    flushHeatmaps();
+    expect(pipeline.captured("$$heatmap")).toEqual([]);
+    expect(newStorage()).toEqual([]);
+  });
+
+  it("heatmaps and recording stay off without a consent store", async () => {
+    // Nothing reconciles consent here, so this is the init options alone.
+    const { button } = page();
+    await start();
+    await firstPageview();
+    clickOn(button);
+    flushHeatmaps();
+    expect(pipeline.captured("$$heatmap")).toEqual([]);
+    expect(pipeline.posthog().config.disable_session_recording).toBe(true);
+  });
+
+  it("heatmaps turn on after accepting, with the site", async () => {
+    const { button } = page();
+    const store = consentStore();
+    await start({ consent: store });
+    await firstPageview();
+    store.set("granted");
+    clickOn(button);
+    flushHeatmaps();
+    expect(pipeline.only("$$heatmap").properties).toMatchObject({
+      site: "rr",
+    });
+  });
+
+  it("heatmaps turn on for a stored grant", async () => {
+    const { button } = page();
+    await start({ consent: consentStore("granted") });
+    await firstPageview();
+    clickOn(button);
+    flushHeatmaps();
+    expect(pipeline.captured("$$heatmap")).toHaveLength(1);
+  });
+
+  it("heatmaps and recording turn on again on the next page after accepting", async () => {
+    // PostHog already holds the grant there, so nothing changes its consent status.
+    await start({ consent: consentStore("granted") });
+    await firstPageview();
+    const next = await nextPage(consentStore("granted"));
+    await firstPageview(next);
+    const { button } = page();
+    clickOn(button);
+    flushHeatmaps();
+    expect(next.captured("$$heatmap")).toHaveLength(1);
+    expect(next.posthog().config.disable_session_recording).toBe(false);
+    next.shutdown();
+  });
+
+  it("heatmaps stop after a withdrawal", async () => {
+    const { button } = page();
+    const store = consentStore("granted");
+    await start({ consent: store });
+    await firstPageview();
+    store.set("denied");
+    clickOn(button);
+    flushHeatmaps();
+    expect(pipeline.captured("$$heatmap")).toEqual([]);
+  });
+
+  it("recording is switched on after accepting and off after a withdrawal", async () => {
+    const store = consentStore();
+    await start({ consent: store });
+    await firstPageview();
+    const recordingOff = () => pipeline.posthog().config.disable_session_recording;
+    expect(recordingOff()).toBe(true);
+    store.set("granted");
+    expect(recordingOff()).toBe(false);
+    store.set("denied");
+    expect(recordingOff()).toBe(true);
+    store.set("granted");
+    store.set(null);
+    expect(recordingOff()).toBe(true);
+  });
+
+  it("recording is switched on for a stored grant", async () => {
+    await start({ consent: consentStore("granted") });
+    expect(pipeline.posthog().config.disable_session_recording).toBe(false);
+  });
+});
+
+describe("when the project's remote config turns everything on", () => {
+  let live: PostHogPipeline;
+
+  beforeEach(async () => {
+    // rrweb's polyfill reads window.DOMTokenList, which happy-dom lists but leaves undefined.
+    vi.stubGlobal("DOMTokenList", document.createElement("div").classList.constructor);
+    // The recorder bundle, so posthog-js needn't fetch it from the CDN.
+    await import("posthog-js/dist/posthog-recorder");
+    // rrweb makes an about:blank iframe for clean copies of built-ins, which happy-dom
+    // refuses (and reports) unless iframe page loading is on; about:blank fetches nothing.
+    Object.assign(happyDOMSettings(), {
+      disableIframePageLoading: false,
+      enableIframePageLoading: true,
+    });
+    live = createPostHogPipeline(posthog, { remoteConfig: everythingOn });
+  });
+
+  afterEach(() => {
+    live.shutdown();
+    Object.assign(happyDOMSettings(), iframeDefaults);
+  });
+
+  async function startLive(consent: ConsentStore) {
+    await analytics.initAnalytics({ key, site: "rr", consent }, live.load);
+    await firstPageview(live);
+    return live.posthog();
+  }
+
+  it("loads remote config as a script, as in production", async () => {
+    await startLive(consentStore());
+    expect(live.scripts()).toContain("remote-config");
+    expect(live.requests().filter((url) => url.includes("/config"))).toEqual([]);
+  });
+
+  it("keeps heatmaps, recording and dead clicks off before consent", async () => {
+    const sdk = await startLive(consentStore());
+    const { button } = page();
+    clickOn(button);
+    flushHeatmaps();
+    expect(live.captured("$$heatmap")).toEqual([]);
+    expect(sdk.sessionRecordingStarted()).toBe(false);
+    expect(sdk.deadClicksAutocapture?.isEnabled(sdk.deadClicksAutocapture)).toBe(false);
+    expect(newStorage(live)).toEqual([]);
+  });
+
+  it("keeps exception capture, surveys, conversations, product tours and console logs off", async () => {
+    const sdk = await startLive(consentStore("granted"));
+    expect(sdk.exceptionObserver?.isEnabled).toBe(false);
+    expect(sdk.deadClicksAutocapture?.isEnabled(sdk.deadClicksAutocapture)).toBe(false);
+    // Each of these is a script from PostHog's CDN; none is even asked for.
+    expect(
+      live.scripts().filter((name) => /exception|surveys|conversations|tours|logs/.test(name)),
+    ).toEqual([]);
+    expect(
+      live.requests().filter((url) => /surveys|conversations|product_tours|logs/.test(url)),
+    ).toEqual([]);
+  });
+
+  it("starts recording for a stored grant", async () => {
+    const sdk = await startLive(consentStore("granted"));
+    expect(sdk.sessionRecordingStarted()).toBe(true);
+  });
+
+  it("starts recording after accepting", async () => {
+    const store = consentStore();
+    const sdk = await startLive(store);
+    expect(sdk.sessionRecordingStarted()).toBe(false);
+    store.set("granted");
+    expect(sdk.sessionRecordingStarted()).toBe(true);
+  });
+
+  it("doesn't record a visitor who declined", async () => {
+    const sdk = await startLive(consentStore("denied"));
+    expect(sdk.sessionRecordingStarted()).toBe(false);
+  });
+
+  it("stops recording on a withdrawal", async () => {
+    const store = consentStore("granted");
+    const sdk = await startLive(store);
+    store.set("denied");
+    expect(sdk.sessionRecordingStarted()).toBe(false);
+  });
+
+  it("doesn't patch the console for Logs, before or after Accept", async () => {
+    const original = window.console.log;
+    const store = consentStore();
+    await startLive(store);
+    expect(window.console.log).toBe(original);
+    store.set("granted");
+    // After Accept the recorder wraps the console for console messages in replays, by
+    // design; that wrapper is rrweb's, over the original, and nothing wraps it for Logs.
+    const wrapped = window.console.log as typeof original & {
+      __rrweb_original__?: unknown;
+    };
+    expect(wrapped === original || wrapped.__rrweb_original__ === original).toBe(true);
+    expect(live.scripts().filter((name) => name.includes("logs"))).toEqual([]);
+    expect(live.requests().filter((url) => url.includes("logs"))).toEqual([]);
+  });
+
+  it("drops heatmap data once PostHog's consent is gone, even with listeners attached", async () => {
+    const sdk = await startLive(consentStore("granted"));
+    // A decline on a sibling site clears PostHog's shared consent cookie; this page's
+    // store and heatmap listeners don't know yet.
+    sdk.consent.reset();
+    const { button } = page();
+    clickOn(button);
+    flushHeatmaps();
+    expect(live.captured("$$heatmap")).toEqual([]);
+  });
+
+  it("stops recording and heatmaps when a page comes back from the cache after a decline elsewhere", async () => {
+    const sdk = await startLive(consentStore("granted"));
+    expect(sdk.sessionRecordingStarted()).toBe(true);
+    sdk.consent.reset();
+    window.dispatchEvent(restored());
+    expect(sdk.sessionRecordingStarted()).toBe(false);
+    expect(sdk.heatmaps?.isEnabled).toBe(false);
+    expect(sdk.config.disable_session_recording).toBe(true);
+  });
+
+  it("keeps recording when a page comes back from the cache still granted", async () => {
+    const sdk = await startLive(consentStore("granted"));
+    window.dispatchEvent(restored());
+    expect(sdk.sessionRecordingStarted()).toBe(true);
+  });
+
+  it("keeps heatmaps on only after accepting", async () => {
+    const store = consentStore();
+    await startLive(store);
+    store.set("granted");
+    const { button } = page();
+    clickOn(button);
+    flushHeatmaps();
+    expect(live.only("$$heatmap").properties).toMatchObject({
+      site: "rr",
+    });
+  });
+});
+
+describe("posthog-js contract that beforeSend's site stamp works around", () => {
   // These pin the SDK behavior that makes analytics.ts stamp site in before_send.
   beforeEach(async () => {
     const { default: sdk } = await pipeline.load();
