@@ -1,5 +1,5 @@
-// Clock for the Monitor stage and the How it works diagram (the terminal player runs
-// on @steamfield/ui's agent demo). It advances only while the demo is on screen, the
+// Clock for the Monitor stage (the terminal player and the How it works diagram run
+// on @steamfield/ui's agent demo and usePlayback). It advances only while the demo is on screen, the
 // tab is visible, motion is allowed and the visitor hasn't paused it. Before hydration and under reduced motion it
 // reports `still`, and each demo renders its finished or representative frame.
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";

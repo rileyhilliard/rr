@@ -4,6 +4,7 @@
 // host per subtask. The timeline comes from src/lib/flow.ts. Before hydration and
 // under reduced motion it holds the moment one parallel run has every host and two
 // other runs are waiting.
+import { usePlayback } from "@steamfield/ui/react/playback";
 import { type ReactNode, useEffect, useMemo } from "react";
 import {
   type ChipView,
@@ -17,7 +18,6 @@ import {
   sceneAt,
   simulate,
 } from "../../lib/flow";
-import { usePlayback } from "../../lib/use-playback";
 import { InlineCode } from "./sections";
 
 const HOLD_MS = 3000;
@@ -678,15 +678,18 @@ export function FlowDiagram() {
   const segments = useMemo(() => simulate(FLOW_RUNS, FLOW_HOSTS.length), []);
   const steps = useMemo(() => flowSteps(segments, FLOW_RUNS, FLOW_HOSTS), [segments]);
   const end = Math.max(...segments.map((s) => s.end)) + 900;
-  const playback = usePlayback(end + HOLD_MS, 1, true);
+  // "hold": reduced motion keeps the clock where it is; the still frame is drawn instead.
+  const playback = usePlayback({ duration: end + HOLD_MS, reducedPolicy: "hold" });
+  // No motion: not hydrated yet, or the visitor prefers reduced motion.
+  const still = !playback.ready || playback.reduced;
 
   // It loops: after the hold at the end, start over.
-  const { complete, still, replay } = playback;
+  const { complete, replay, seek, play } = playback;
   useEffect(() => {
     if (complete && !still) replay();
   }, [complete, still, replay]);
 
-  const t = playback.still ? STILL_AT : Math.min(playback.elapsed, end);
+  const t = still ? STILL_AT : Math.min(playback.elapsed, end);
   const scene = sceneAt(segments, FLOW_RUNS, FLOW_HOSTS.length, t);
   const current = steps.findLastIndex((step) => t >= step.at);
   const live = steps[Math.max(0, current)];
@@ -698,7 +701,7 @@ export function FlowDiagram() {
           <Diagram g={WIDE} scene={scene} t={t} className="hidden sm:block" />
           <Diagram g={TALL} scene={scene} t={t} className="sm:hidden" />
         </div>
-        {!playback.still && live && (
+        {!still && live && (
           // The beat being shown, next to the motion. Not live-announced: it changes every few seconds.
           <p className="border-line text-ink min-h-[4.5rem] border-t px-3 py-3 text-[15px] leading-relaxed sm:px-6 sm:text-base">
             <InlineCode text={live.text} />
@@ -706,7 +709,7 @@ export function FlowDiagram() {
         )}
         <figcaption className="border-line text-muted flex items-center justify-between gap-3 border-t px-3 py-2 text-xs sm:px-6">
           <span>Simulated from rr's lock rules, with each run shortened to seconds.</span>
-          {!playback.still && (
+          {!still && (
             <button
               type="button"
               onClick={playback.toggle}
@@ -717,7 +720,7 @@ export function FlowDiagram() {
           )}
         </figcaption>
       </figure>
-      {playback.still ? (
+      {still ? (
         <ol className="text-ink-2 grid gap-x-8 gap-y-4 text-sm leading-relaxed sm:grid-cols-2 lg:grid-cols-3">
           {steps.map((step) => (
             <li key={step.at}>
@@ -737,7 +740,11 @@ export function FlowDiagram() {
               <li key={step.at}>
                 <button
                   type="button"
-                  onClick={() => playback.seek(step.at)}
+                  onClick={() => {
+                    // Picking a step keeps playing from there, even when paused.
+                    seek(step.at);
+                    play();
+                  }}
                   aria-current={active ? "step" : undefined}
                   className={`flex w-full flex-col gap-2 text-left text-xs leading-snug transition-colors duration-300 sm:text-sm ${
                     active ? "text-ink" : i < current ? "text-ink-2" : "text-muted"
