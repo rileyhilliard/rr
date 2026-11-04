@@ -248,23 +248,25 @@ func Acquire(conn *host.Connection, cfg config.LockConfig, command string, opts 
 					"This is unexpected - please report this bug!")
 			}
 
-			// Write the info file
-			writeCmd := fmt.Sprintf("cat > %q << 'LOCKINFO'\n%s\nLOCKINFO", infoFile, string(infoJSON))
-			_, _, exitCode, err = conn.Client.Exec(writeCmd)
-			if err != nil || exitCode != 0 {
+			claimed, claimErr := claimLock(conn.Client, infoFile, infoJSON)
+			if claimErr != nil {
 				// Clean up and report error
 				forceRemove(conn.Client, lockDir)
 				return nil, errors.New(errors.ErrLock,
 					"Couldn't write the lock info file",
 					"Check disk space and permissions in the lock dir on that host.")
 			}
-
-			log.Debug("lock acquired successfully: %s", lockDir)
-			return &Lock{
-				Dir:  lockDir,
-				Info: info,
-				conn: conn,
-			}, nil
+			if claimed {
+				log.Debug("lock acquired successfully: %s", lockDir)
+				return &Lock{
+					Dir:  lockDir,
+					Info: info,
+					conn: conn,
+				}, nil
+			}
+			// Another run's info file is already there: its mkdir won, and
+			// ours wrongly reported success. Wait for it like any holder.
+			log.Debug("mkdir succeeded but another run claimed %s first", lockDir)
 		}
 
 		// Lock is held by someone else, wait before retrying
@@ -453,15 +455,17 @@ func TryAcquire(conn *host.Connection, cfg config.LockConfig, command string, op
 			"This is unexpected - please report this bug!")
 	}
 
-	// Write the info file
-	writeCmd := fmt.Sprintf("cat > %q << 'LOCKINFO'\n%s\nLOCKINFO", infoFile, string(infoJSON))
-	_, writeStderr, writeExitCode, writeErr := conn.Client.Exec(writeCmd)
-	if writeErr != nil || writeExitCode != 0 {
+	claimed, claimErr := claimLock(conn.Client, infoFile, infoJSON)
+	if claimErr != nil {
 		// Clean up and report error
 		forceRemove(conn.Client, lockDir)
 		return nil, errors.New(errors.ErrLock,
 			"Couldn't write the lock info file",
-			fmt.Sprintf("Check disk space and permissions in the lock dir on that host. Error: %s", strings.TrimSpace(string(writeStderr))))
+			fmt.Sprintf("Check disk space and permissions in the lock dir on that host. Error: %v", claimErr))
+	}
+	if !claimed {
+		log.Debug("TryAcquire: mkdir succeeded but another run claimed %s first", lockDir)
+		return nil, ErrLocked
 	}
 
 	log.Debug("TryAcquire: lock acquired successfully: %s", lockDir)
@@ -800,6 +804,28 @@ func holderHasLiveLocalJob(client sshutil.SSHClient, infoFile string) bool {
 	}
 	debugf("isLockStale: holder's job group %d is still running on this machine, not stale", info.JobPGID)
 	return true
+}
+
+// claimLock writes the new holder's info file, but only if there isn't one
+// yet, and reports whether this run now holds the lock. The lock dir's mkdir
+// picks the holder on most systems, but some mkdir implementations (uutils
+// coreutils, Ubuntu 26's default) can tell two racing runs they both created
+// it. set -C makes the shell itself create the file exclusively (O_EXCL), so
+// of any runs whose mkdir succeeded, only one writes info.json. It returns
+// false with no error when another run's info file is already there.
+func claimLock(client sshutil.SSHClient, infoFile string, infoJSON []byte) (bool, error) {
+	writeCmd := fmt.Sprintf("set -C; cat > %q << 'LOCKINFO'\n%s\nLOCKINFO", infoFile, string(infoJSON))
+	_, stderr, exitCode, err := client.Exec(writeCmd)
+	if err != nil {
+		return false, err
+	}
+	if exitCode == 0 {
+		return true, nil
+	}
+	if _, _, existsCode, err := client.Exec(fmt.Sprintf("test -f %q", infoFile)); err == nil && existsCode == 0 {
+		return false, nil
+	}
+	return false, fmt.Errorf("writing %s failed (exit %d): %s", infoFile, exitCode, strings.TrimSpace(string(stderr)))
 }
 
 // readLockInfo reads and parses the lock info file.

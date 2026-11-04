@@ -55,3 +55,55 @@ func TestLocalHostTakesTheLock(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, again.Release())
 }
+
+// Some mkdir implementations (uutils coreutils, Ubuntu 26's default) can
+// report success to both of two racing calls. The run that loses that race
+// must still see the host as locked, and must leave the winner's lock alone.
+// The fake mkdir here succeeds every time, as the loser's mkdir does.
+func TestLockHeldWhenMkdirReportsAFalseSuccess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local client uses a POSIX shell")
+	}
+	tests := []struct {
+		name    string
+		acquire func(conn *host.Connection, cfg config.LockConfig) (*Lock, error)
+	}{
+		{"TryAcquire", func(conn *host.Connection, cfg config.LockConfig) (*Lock, error) {
+			return TryAcquire(conn, cfg, "make lint")
+		}},
+		{"Acquire", func(conn *host.Connection, cfg config.LockConfig) (*Lock, error) {
+			return Acquire(conn, cfg, "make lint")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer SetRetryIntervalForTesting(20 * time.Millisecond)()
+			cfg := config.LockConfig{
+				Enabled: true,
+				Timeout: 200 * time.Millisecond,
+				Stale:   time.Minute,
+				Dir:     filepath.Join(t.TempDir(), "locks"),
+			}
+			holderConn := host.NewLocalHostConnection("dev", config.Host{Local: true})
+			holder, err := TryAcquire(holderConn, cfg, "go test ./...")
+			require.NoError(t, err)
+
+			fakeBin := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mkdir"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			other := host.NewLocalHostConnection("dev", config.Host{Local: true})
+			got, err := tt.acquire(other, cfg)
+			require.Error(t, err, "the second run must not get the lock")
+			assert.Nil(t, got)
+
+			data, err := os.ReadFile(filepath.Join(cfg.Dir, "rr.lock", "info.json"))
+			require.NoError(t, err, "the holder's lock is still there")
+			info, err := ParseLockInfo(data)
+			require.NoError(t, err)
+			assert.Equal(t, "go test ./...", info.Command, "the holder's info is unchanged")
+
+			require.NoError(t, holder.Release())
+		})
+	}
+}
