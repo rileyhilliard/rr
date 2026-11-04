@@ -261,6 +261,7 @@ export function MonitorStage({
         </div>
         <section
           ref={transcriptRef}
+          data-nosnippet
           // biome-ignore lint/a11y/noNoninteractiveTabindex: axe (scrollable-region-focusable) needs keyboard users able to scroll it
           tabIndex={0}
           aria-label={view === "agent" ? "JSON events" : "Pretty output"}

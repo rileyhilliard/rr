@@ -1,5 +1,5 @@
 ---
-import { docsGroups, site } from "../../config";
+import { docsGroups } from "../../config";
 import DocsLayout from "../../layouts/DocsLayout.astro";
 import { getDocs } from "../../lib/collection";
 import { docHref, docsNav } from "../../lib/docs";
@@ -9,7 +9,7 @@ const nav = docsNav(await getDocs(), docsGroups);
 
 <DocsLayout
   title="Documentation"
-  description={`Install, learn and configure ${site.name}.`}
+  description="Set up SSH hosts for rr, configure remote and parallel test tasks, use the Claude Code plugin, and troubleshoot failed runs."
   path="/docs/"
   nav={nav}
 >

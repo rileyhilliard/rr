@@ -162,9 +162,11 @@ describe("the whole site", () => {
 
   it("renders the landing page from config, hiding empty sections", () => {
     const home = page("dist", "index.html");
-    expect(home.querySelector("h1")?.textContent).toBe(site.tagline);
-    expect(home.querySelector('meta[property="og:image"]')?.getAttribute("content")).toBe(
-      absolute("/og/index.webp"),
+    expect([...home.querySelectorAll("h1")].map((heading) => heading.textContent)).toEqual([
+      site.tagline,
+    ]);
+    expect(home.querySelector("#hero-title p")?.textContent).toMatch(
+      /^rr is a remote test runner\./,
     );
     const text = home.body.textContent ?? "";
     expect(text).toContain(site.install[0]?.command ?? "");
@@ -192,7 +194,62 @@ describe("the whole site", () => {
     if (site.announcement) expect(text).toContain(site.announcement.label);
     if (site.version) expect(text).toContain(`v${site.version}`);
     expect(text).toContain(`${site.license} license`);
+  });
+
+  it("describes the homepage consistently in search and social metadata", () => {
+    const home = page("dist", "index.html");
+    const title = "Remote Test Runner for Coding Agents | rr";
+    const description =
+      "rr is an open-source remote test runner for coding agents. Send tests to your own machines over SSH, queue concurrent runs, and run shards across hosts.";
+    const canonical = absolute("/");
+    const image = absolute("/og/index.webp");
+    expect(home.querySelector("title")?.textContent).toBe(title);
+    expect(home.querySelector('meta[name="description"]')?.getAttribute("content")).toBe(
+      description,
+    );
+    expect(home.querySelector('link[rel="canonical"]')?.getAttribute("href")).toBe(canonical);
+    for (const [selector, content] of [
+      ['meta[property="og:title"]', title],
+      ['meta[property="og:description"]', description],
+      ['meta[property="og:url"]', canonical],
+      ['meta[property="og:image"]', image],
+      ['meta[name="twitter:title"]', title],
+      ['meta[name="twitter:description"]', description],
+      ['meta[name="twitter:image"]', image],
+    ] as const) {
+      expect(home.querySelector(selector)?.getAttribute("content"), selector).toBe(content);
+    }
     expect(isWebp(readFileSync("dist/og/index.webp"))).toBe(true);
+  });
+
+  it("publishes WebSite structured data only on the homepage", () => {
+    for (const file of htmlFiles("dist")) {
+      const structuredData = [
+        ...page("dist", file).querySelectorAll('script[type="application/ld+json"]'),
+      ].map((script) => JSON.parse(script.textContent ?? ""));
+      expect(structuredData, file).toEqual(
+        file === "index.html"
+          ? [
+              {
+                "@context": "https://schema.org",
+                "@type": "WebSite",
+                name: site.name,
+                url: absolute("/"),
+              },
+            ]
+          : [],
+      );
+    }
+  });
+
+  it("excludes only the three replay regions from search snippets", () => {
+    const home = page("dist", "index.html");
+    expect(home.querySelectorAll("[data-nosnippet]")).toHaveLength(3);
+    expect(
+      home.querySelector('section[aria-label="Pretty output"][data-nosnippet]'),
+    ).not.toBeNull();
+    expect(home.querySelector("#commands div[data-nosnippet] > astro-island")).not.toBeNull();
+    expect(home.querySelector("#agent div[data-nosnippet] > astro-island")).not.toBeNull();
   });
 
   it("points every landing copy button at its own snippet", () => {
@@ -220,9 +277,22 @@ describe("the whole site", () => {
   });
 
   it("serves robots.txt, the sitemap index and an unindexed 404 page", () => {
-    expect(read("dist", "robots.txt")).toContain(`Sitemap: ${absolute("/sitemap-index.xml")}`);
+    const robots = read("dist", "robots.txt");
+    expect(robots.trim().split(/\n+/)).toEqual([
+      "User-agent: *",
+      "Allow: /",
+      `Sitemap: ${absolute("/sitemap-index.xml")}`,
+    ]);
     expect(existsSync("dist/sitemap-index.xml")).toBe(true);
-    expect(read("dist", "sitemap-0.xml")).not.toMatch(/404|\.md<|\.webp<|\.txt</);
+    const sitemap = read("dist", "sitemap-0.xml");
+    expect(sitemap).toContain(`<loc>${absolute("/")}</loc>`);
+    expect(sitemap).not.toMatch(/404|\.md<|\.webp<|\.txt</);
+    for (const file of htmlFiles("dist").filter((file) => file.endsWith("index.html"))) {
+      const directives = [...page("dist", file).querySelectorAll('meta[name="robots"]')].map(
+        (meta) => meta.getAttribute("content"),
+      );
+      expect(directives, file).toEqual(["max-snippet:-1, max-image-preview:large"]);
+    }
     const notFound = page("dist", "404.html");
     expect(notFound.querySelector("h1")?.textContent).toBe("Page not found");
     expect(notFound.querySelector('meta[name="robots"]')?.getAttribute("content")).toBe(
