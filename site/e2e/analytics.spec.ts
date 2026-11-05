@@ -13,6 +13,12 @@ import { test as base, expect, type Page, type Route } from "@playwright/test";
 import { docId, docsDir, isSitePage } from "../src/lib/docs-source";
 import { everythingOn } from "../tests/helpers/posthog-remote-config";
 
+declare global {
+  interface Window {
+    rrweb?: Pick<typeof import("posthog-js/rrweb"), "record">;
+  }
+}
+
 const key = "phc_browser_test";
 const host = "https://posthog.test";
 // Text a visitor types; it must not reach a recording or an autocapture event.
@@ -164,6 +170,12 @@ const banner = (page: Page) => page.getByRole("region", { name: "Analytics conse
 const named = (sent: Sent[], event: string, since = 0) =>
   sent.filter((item) => item.event === event && item.at >= since);
 
+// A fresh recorder holds its buffer until it observes an interaction. Wait for
+// rrweb to attach before acting, so the actions cannot race config and script loading.
+async function waitForRecorder(page: Page) {
+  await page.waitForFunction(() => window.rrweb?.record.isRecording(), undefined, delivery);
+}
+
 // rr has no text field of its own; this stands in for one, so the test can check what
 // happens to typed text. It sits in main, outside any a, button, label or form.
 async function typeIntoAField(page: Page) {
@@ -222,6 +234,7 @@ test("records after Accept, with typed text masked and no network payloads", asy
   const sent = await open(page, siteURL);
   await banner(page).getByRole("button", { name: "Accept" }).click();
   await page.goto(`${siteURL}/`);
+  await waitForRecorder(page);
   // A request the page makes while recording, with a header and a body no recording may hold.
   const probe = { header: "probe-header-7c41", body: "probe-body-7c41" };
   await page.evaluate(
@@ -286,9 +299,15 @@ test("stops after a decline on another steamfield.io site, on the next page load
   const sent = await open(page, siteURL);
   await banner(page).getByRole("button", { name: "Accept" }).click();
   await page.goto(`${siteURL}/`);
+  await waitForRecorder(page);
+  await typeIntoAField(page);
   await page.locator("#install").getByRole("tab").nth(1).click();
-  // Recording, before the decline.
-  await expect.poll(() => named(sent, "$snapshot").length, delivery).toBeGreaterThan(0);
+  // The field exists only on this load: its masked value proves this page is
+  // recording before the decline, even if the previous page sent an unload batch.
+  const masked = "*".repeat(typed.length);
+  await expect
+    .poll(() => JSON.stringify(named(sent, "$snapshot")).includes(masked), delivery)
+    .toBe(true);
   // The sibling's Decline: sf-consent becomes denied and PostHog's consent cookie goes.
   const { hostname } = new URL(siteURL);
   await context.addCookies([{ name: "sf-consent", value: "denied", domain: hostname, path: "/" }]);
