@@ -1,0 +1,22 @@
+---
+import DemoFrame from "./DemoFrame.astro";
+import { TerminalPlayer } from "../landing/TerminalPlayer";
+import { agentSteps, loadAgentRecording } from "../../data/agent-session";
+interface Props {
+  caption: string;
+}
+---
+
+<DemoFrame
+  caption={`${Astro.props.caption} The rr output is real; the conversation is illustrative.`}
+>
+  <div data-nosnippet>
+    <TerminalPlayer
+      client:visible
+      title="Claude Code in the rr repository"
+      steps={agentSteps(loadAgentRecording())}
+      heightClass="h-[32rem]"
+      label="An agent fixing a failing test with rr"
+    />
+  </div>
+</DemoFrame>

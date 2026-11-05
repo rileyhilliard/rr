@@ -1,0 +1,18 @@
+---
+import DemoFrame from "./DemoFrame.astro";
+import { TaskChart, Transcript } from "../landing/sections";
+import { site } from "../../config";
+interface Props {
+  caption: string;
+}
+---
+
+<DemoFrame caption={Astro.props.caption}>
+  <div class="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-16">
+    <div class="flex min-w-0 flex-col gap-6">
+      <TaskChart tasks={site.parallel.tasks} />
+      <p class="text-ink-2 max-w-xl text-sm leading-relaxed">{site.parallel.caveat}</p>
+    </div>
+    <Transcript command={site.parallel.command} lines={site.parallel.output} />
+  </div>
+</DemoFrame>

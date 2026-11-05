@@ -102,12 +102,12 @@
   --tw-prose-td-borders: var(--color-line);
 }
 
-.prose :where(code):not(:where(pre *)) {
+.prose :where(code):not(:where(pre *)):where(:not([data-demo], [data-demo] *)) {
   @apply bg-panel border-line rounded-chip border px-1 py-0.5 font-normal;
 }
 
-.prose :where(code):not(:where(pre *))::before,
-.prose :where(code):not(:where(pre *))::after {
+.prose :where(code):not(:where(pre *)):where(:not([data-demo], [data-demo] *))::before,
+.prose :where(code):not(:where(pre *)):where(:not([data-demo], [data-demo] *))::after {
   content: none;
 }
 
@@ -160,7 +160,7 @@
 }
 
 /* A blockquote underneath, so prose's quote styling is undone. */
-.prose [data-callout] {
+.prose [data-callout]:where(:not([data-demo], [data-demo] *)) {
   @apply border-line bg-panel rounded-panel my-6 border border-l-4 px-4 py-1;
   color: var(--tw-prose-body);
   font-style: normal;
@@ -168,17 +168,17 @@
   quotes: none;
 }
 
-.prose [data-callout] p::before,
-.prose [data-callout] p::after {
+.prose [data-callout] p:where(:not([data-demo], [data-demo] *))::before,
+.prose [data-callout] p:where(:not([data-demo], [data-demo] *))::after {
   content: none;
 }
 
 /* Prose gives blockquote code and bold the quote's color; an aside's kept theirs. Links keep theirs. */
-.prose [data-callout] :where(code):not(:where(a *)) {
+.prose [data-callout] :where(code):not(:where(a *)):where(:not([data-demo], [data-demo] *)) {
   color: var(--tw-prose-code);
 }
 
-.prose [data-callout] :where(strong):not(:where(a *)) {
+.prose [data-callout] :where(strong):not(:where(a *)):where(:not([data-demo], [data-demo] *)) {
   color: var(--tw-prose-bold);
 }
 
@@ -186,14 +186,14 @@
   @apply text-ink font-semibold;
 }
 
-.prose [data-callout="note"],
-.prose [data-callout="tip"],
-.prose [data-callout="important"] {
+.prose [data-callout="note"]:where(:not([data-demo], [data-demo] *)),
+.prose [data-callout="tip"]:where(:not([data-demo], [data-demo] *)),
+.prose [data-callout="important"]:where(:not([data-demo], [data-demo] *)) {
   border-left-color: var(--color-info);
 }
 
-.prose [data-callout="warning"],
-.prose [data-callout="caution"] {
+.prose [data-callout="warning"]:where(:not([data-demo], [data-demo] *)),
+.prose [data-callout="caution"]:where(:not([data-demo], [data-demo] *)) {
   border-left-color: var(--color-waiting);
 }
 
@@ -205,7 +205,7 @@
   content: "#";
 }
 
-.prose :where(h2, h3):hover [data-heading-anchor] {
+.prose :where(h2, h3):hover [data-heading-anchor]:where(:not([data-demo], [data-demo] *)) {
   opacity: 1;
 }
 
@@ -438,4 +438,19 @@
   from {
     background-color: color-mix(in srgb, var(--color-waiting) 18%, transparent);
   }
+}
+
+/* The container excludes the TOC rail; demos use its width, never the viewport. */
+.blog-content {
+  container-type: inline-size;
+}
+.blog-breakout {
+  width: 100cqw;
+  max-width: none;
+  margin-inline: calc((100% - 100cqw) / 2);
+}
+
+/* TOC targets clear the sticky header, with room above the heading. */
+.blog-content .prose :where(h2, h3):where(:not([data-demo], [data-demo] *)) {
+  @apply scroll-mt-24;
 }

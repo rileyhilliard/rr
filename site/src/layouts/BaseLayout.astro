@@ -14,6 +14,10 @@ interface Props {
   /** This page's Markdown export, linked as rel="alternate". */
   markdown?: string;
   noindex?: boolean;
+  ogType?: "website" | "article";
+  publishedTime?: string;
+  modifiedTime?: string;
+  jsonLd?: object[];
 }
 const {
   title,
@@ -22,17 +26,37 @@ const {
   image = "/og/index.webp",
   markdown,
   noindex = false,
+  ogType = "website",
+  publishedTime,
+  modifiedTime,
+  jsonLd = [],
 } = Astro.props;
 const canonical = new URL(path, site.url);
 const ogImage = new URL(image, site.url);
 const pageTitle = `${title} | ${site.name}`;
 const onHome = path === "/";
-const websiteJsonLd = JSON.stringify({
-  "@context": "https://schema.org",
-  "@type": "WebSite",
-  name: site.name,
-  url: canonical.href,
-}).replaceAll("<", "\\u003c");
+const homeGraph = [
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": `${site.url}/#website`,
+    name: site.name,
+    url: `${site.url}/`,
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "@id": `${site.url}/#software`,
+    name: site.name,
+    description: site.description,
+    url: `${site.url}/`,
+    applicationCategory: "DeveloperApplication",
+    operatingSystem: "macOS, Linux, Windows (WSL)",
+    license: `${site.repo}/blob/main/LICENSE`,
+    sameAs: [site.repo],
+  },
+];
+const structuredData = onHome ? homeGraph : jsonLd;
 ---
 
 <!doctype html>
@@ -50,7 +74,10 @@ const websiteJsonLd = JSON.stringify({
     <link rel="sitemap" href="/sitemap-index.xml" />
     <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
     {markdown && <link rel="alternate" type="text/markdown" href={markdown} />}
-    <meta property="og:type" content="website" />
+    <link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="rr blog" />
+    <meta property="og:type" content={ogType} />
+    {publishedTime && <meta property="article:published_time" content={publishedTime} />}
+    {modifiedTime && <meta property="article:modified_time" content={modifiedTime} />}
     <meta property="og:site_name" content={site.name} />
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
@@ -67,7 +94,13 @@ const websiteJsonLd = JSON.stringify({
       name="robots"
       content={noindex ? "noindex, nofollow" : "max-snippet:-1, max-image-preview:large"}
     />
-    {onHome && <script is:inline type="application/ld+json" set:html={websiteJsonLd} />}
+    {structuredData.map((data) => (
+      <script
+        is:inline
+        type="application/ld+json"
+        set:html={JSON.stringify(data).replaceAll("<", "\\u003c")}
+      />
+    ))}
     <script>
       import { createConsentStore, mountConsentBanner } from "@steamfield/ui/consent";
       import { initAnalytics } from "../lib/analytics";
@@ -101,7 +134,7 @@ const websiteJsonLd = JSON.stringify({
     </a>
     <slot name="banner" />
     <header class="border-line bg-canvas/95 sticky top-0 z-40 border-b backdrop-blur">
-      <div class="mx-auto flex h-14 max-w-[1200px] items-center gap-4 px-4 sm:px-8">
+      <div class="mx-auto flex h-14 max-w-[1200px] items-center gap-3 px-4 sm:gap-4 sm:px-8">
         <a href="/" class="group flex items-center gap-2 no-underline hover:no-underline">
           <Logo class="h-[1.4rem] w-auto" />
           <span class="flex flex-col gap-1">
@@ -116,14 +149,21 @@ const websiteJsonLd = JSON.stringify({
         {site.version && (
           <a
             href={site.releasesUrl}
-            class="text-muted border-line rounded-chip border px-1.5 py-0.5 font-mono text-[11px] no-underline"
+            class="text-muted border-line rounded-chip hidden border sm:block px-1.5 py-0.5 font-mono text-[11px] no-underline"
           >
             v{site.version}
           </a>
         )}
-        <nav aria-label="Main" class="ml-auto flex items-center gap-5 text-sm">
+        <nav aria-label="Main" class="ml-auto flex items-center gap-3 text-sm sm:gap-5">
           <a href="/docs/" class="text-ink-2 hover:text-ink">
             Docs
+          </a>
+          <a
+            href="/blog/"
+            aria-current={path.startsWith("/blog/") ? "page" : undefined}
+            class="text-ink-2 hover:text-ink aria-[current=page]:text-accent"
+          >
+            Blog
           </a>
           {site.social.map((link) => (
             <a href={link.href} class="text-ink-2 hover:text-ink">
@@ -166,6 +206,9 @@ const websiteJsonLd = JSON.stringify({
         <nav aria-label="Documentation links" class="flex flex-col gap-2">
           <span class="text-ink font-medium">Docs</span>
           <a href="/docs/">Documentation</a>
+          <a href="/blog/" aria-current={path.startsWith("/blog/") ? "page" : undefined}>
+            Blog
+          </a>
           <a href="/docs/configuration/">Configuration</a>
           <a href="/llms.txt">llms.txt</a>
         </nav>

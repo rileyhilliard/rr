@@ -1,0 +1,16 @@
+---
+import DemoFrame from "./DemoFrame.astro";
+import { MonitorStage } from "../landing/MonitorStage";
+import { loadHeroRun } from "../../data/hero-run";
+import { packTimeline } from "../../lib/monitor/timeline";
+interface Props {
+  caption: string;
+}
+const hero = loadHeroRun();
+---
+
+<DemoFrame caption={Astro.props.caption}>
+  <div data-nosnippet>
+    <MonitorStage client:visible {...hero} timeline={packTimeline(hero.timeline)} />
+  </div>
+</DemoFrame>

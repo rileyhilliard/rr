@@ -76,6 +76,8 @@ export const site = {
   },
   /** README "Parallel execution": the three-task example and its timings. */
   parallel: {
+    caveat:
+      "rr hands tasks out in the order you list them, and each host takes the next one as soon as it's free. List the long ones first, and keep shards similar in size. One command still runs on one host, so the pooling comes from how you split the work.",
     command: "rr --pretty test",
     output: [
       "Parallel Execution Summary",

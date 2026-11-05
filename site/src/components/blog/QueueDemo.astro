@@ -1,0 +1,11 @@
+---
+import DemoFrame from "./DemoFrame.astro";
+import { QueueBoard } from "../landing/QueueBoard";
+interface Props {
+  caption: string;
+}
+---
+
+<DemoFrame caption={Astro.props.caption}>
+  <QueueBoard client:visible hosts={["m4-mini", "m1-linux", "m1-mini"]} />
+</DemoFrame>

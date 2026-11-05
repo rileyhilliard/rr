@@ -1,0 +1,47 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { site } from "../../config";
+import { getPosts } from "../../lib/collection";
+import {
+  blogTitle,
+  blogDescription,
+  breadcrumbs,
+  collectionJsonLd,
+  postHref,
+  readingTime,
+} from "../../lib/blog";
+const posts = await getPosts();
+---
+
+<BaseLayout
+  title={blogTitle}
+  description={blogDescription}
+  path="/blog/"
+  image="/og/blog.webp"
+  jsonLd={[collectionJsonLd(posts, site.url), breadcrumbs(site.url)]}
+>
+  <div class="mx-auto max-w-4xl px-6 py-12 sm:py-16">
+    <h1 class="text-ink text-3xl font-semibold tracking-tight sm:text-4xl">{blogTitle}</h1>
+    <p class="text-ink-2 mt-4 max-w-2xl text-lg leading-relaxed">{blogDescription}</p>
+    <ul class="mt-10 divide-y divide-line">
+      {posts.map((post) => (
+        <li class="py-8 first:pt-0">
+          <h2 class="text-ink text-2xl font-semibold tracking-tight">
+            <a href={postHref(post.id)}>{post.data.headline ?? post.data.title}</a>
+          </h2>
+          <p class="text-ink-2 mt-3 leading-relaxed">{post.data.description}</p>
+          <p class="text-muted mt-3 text-sm">
+            <time datetime={post.data.published.toISOString()}>
+              {post.data.published.toLocaleDateString("en-US", {
+                dateStyle: "long",
+                timeZone: "UTC",
+              })}
+            </time>{" "}
+            · {readingTime(post.body ?? "")} min read
+          </p>
+        </li>
+      ))}
+    </ul>
+    {posts.length === 0 && <p class="text-muted mt-10">The first guides are on their way.</p>}
+  </div>
+</BaseLayout>

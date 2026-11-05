@@ -1,0 +1,27 @@
+---
+import DemoFrame from "./DemoFrame.astro";
+import { type Step, TerminalPlayer } from "../landing/TerminalPlayer";
+import { loadCommands } from "../../data/commands";
+import { type CommandName, recordedCommand } from "../../lib/blog";
+import { toneOf } from "../../lib/tone";
+interface Props {
+  caption: string;
+  command: CommandName;
+}
+const cmd = recordedCommand(loadCommands(), Astro.props.command);
+const steps: Step[] = [
+  { kind: "command", text: cmd.command },
+  { kind: "output", lines: cmd.lines.map((text) => ({ text, tone: toneOf(text) })) },
+];
+---
+
+<DemoFrame caption={Astro.props.caption}>
+  <div data-nosnippet>
+    <TerminalPlayer
+      client:visible
+      title={cmd.command}
+      steps={steps}
+      label={`Output of ${cmd.command}`}
+    />
+  </div>
+</DemoFrame>

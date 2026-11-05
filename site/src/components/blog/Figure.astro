@@ -1,0 +1,10 @@
+---
+interface Props {
+  caption: string;
+}
+---
+
+<figure>
+  <slot />
+  <figcaption>{Astro.props.caption}</figcaption>
+</figure>
