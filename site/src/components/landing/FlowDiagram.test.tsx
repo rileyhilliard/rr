@@ -19,7 +19,10 @@ const holders = () =>
 
 describe("FlowDiagram", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Advance animation time only when the test requests it.
+    vi.useFakeTimers();
+    // Testing Library detects fake timers through Jest when draining userEvent's async wrapper.
+    vi.stubGlobal("jest", { advanceTimersByTime: vi.advanceTimersByTime });
     vi.stubGlobal("IntersectionObserver", undefined);
   });
   afterEach(() => {
