@@ -51,6 +51,10 @@ The parent repository's Go test `internal/monitor/site_golden_test.go` pins `fix
 | `scripts/capture-*.sh`, `scripts/scrub-*.mjs` | Recording and scrubbing |
 | `src/lib/docs-source.ts` | Which `../docs/*.md` files are pages (`RR_DOCS_DIR` overrides the folder) |
 | `src/lib/docs.ts`, `src/lib/markdown.ts` | Docs rules, exports, and Sätteri plugins (incl. GitHub-link rewriting) |
+| `src/content/blog/`, `src/content/blog-schema.ts` | Blog posts (`<slug>.mdx`, served at `/blog/<slug>/`) and their frontmatter limits: title ≤ 48 chars, description 120-160, `feature`, `relatedDocs` docs ids |
+| `src/lib/blog.ts` | Blog rules: URLs, reading time, related posts, JSON-LD builders, the llms.txt section, and `demoProps` (the prop allowlist the build test checks every post against) |
+| `src/layouts/BlogLayout.astro`, `src/pages/blog/` | Article page (breadcrumb, TOC, install CTA, related docs and posts), the index, `rss.xml` |
+| `src/components/blog/` | Demo wrappers posts import, one per file: they render the landing islands from the same `src/data/` loaders inside a `data-demo` figure that breaks out of the reading column |
 | `src/content-drift.test.ts` | Page copy and recordings checked against README and Go source |
 | `docs/DEVELOPMENT.md`, `docs/PRODUCT.md` | How it fits together; why the page is shaped this way |
 
@@ -105,7 +109,7 @@ What is captured (the module is copied from stacks-api and shared by every site;
 
 ## Deploy
 
-Cloudflare Pages project `rr` (`rr-aqz.pages.dev`), production at rr.steamfield.io through a proxied CNAME in the steamfield.io zone, deployed by Cloudflare's Git integration from `main`, with a preview for every branch: root directory `site`, build command `bun install --frozen-lockfile && make build`, output `dist`, `BUN_VERSION` and `NODE_VERSION` build variables matching `package.json` and `.node-version`. Build watch paths are `site/*`, `docs/*`, `CHANGELOG.md` and `README.md`, the inputs that change the built pages; the Go paths in `.github/workflows/site.yml` only feed drift tests. Because `wrangler.jsonc` exists, it is the source of truth for the project's variables and Pages ignores dashboard ones: `PUBLIC_POSTHOG_KEY` (and `PUBLIC_POSTHOG_HOST` if needed) live in its `env.production.vars`, so preview builds get none. `make deploy-check` verifies headers and URLs locally; `make deploy-preview BRANCH=…` and `make deploy` upload from a machine with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Headers live in `public/_headers`; add `public/_redirects` only for moved pages. `.github/workflows/site.yml` runs the checks (not a required check).
+Cloudflare Pages project `rr` (`rr-aqz.pages.dev`), production at rr.steamfield.io through a proxied CNAME in the steamfield.io zone, deployed by Cloudflare's Git integration from `main`, with a preview for every branch: root directory `site`, build command `bun install --frozen-lockfile && make build`, output `dist`, `BUN_VERSION` and `NODE_VERSION` build variables matching `package.json` and `.node-version`. Build watch paths are `site/*`, `docs/*`, `CHANGELOG.md` and `README.md`, the inputs that change the built pages; the Go paths in `.github/workflows/site.yml` only feed drift tests. Because `wrangler.jsonc` exists, it is the source of truth for the project's variables and Pages ignores dashboard ones: `PUBLIC_POSTHOG_KEY` (and `PUBLIC_POSTHOG_HOST` if needed) live in its `env.production.vars`, so preview builds get none. `make deploy-check` verifies headers and URLs locally; `make deploy-preview BRANCH=…` and `make deploy` upload from a machine with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Headers live in `public/_headers`; `public/_redirects` holds moved pages and the `/sitemap.xml` to `/sitemap-index.xml` redirect (crawlers try `/sitemap.xml` first). `.github/workflows/site.yml` runs the checks (not a required check).
 
 ## Build workarounds
 
@@ -121,7 +125,7 @@ Things in the tree that exist to get a build through, not because they are right
 ## Deferred
 
 - Light theme: the TUI is dark only.
-- A blog or changelog pages (the README's changelog link covers it).
+- Changelog pages (the README's changelog link covers it).
 - Contributor docs (ARCHITECTURE, DEVELOPMENT, releasing) stay GitHub-only.
 - A second hero capture with a host dropping offline mid-run, and a green-run variant of the hero.
 
