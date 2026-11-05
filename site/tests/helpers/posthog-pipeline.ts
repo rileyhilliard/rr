@@ -235,6 +235,8 @@ export function createPostHogPipeline(
     shutdown: () => {
       recording = false;
       client?.reset(true);
+      // reset() arms a debounced save; write it now, before the test's storage is cleared.
+      client?.persistence?.flush();
     },
   };
 }

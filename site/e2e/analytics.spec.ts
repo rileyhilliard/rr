@@ -222,16 +222,29 @@ test("records after Accept, with typed text masked and no network payloads", asy
   const sent = await open(page, siteURL);
   await banner(page).getByRole("button", { name: "Accept" }).click();
   await page.goto(`${siteURL}/`);
+  // A request the page makes while recording, with a header and a body no recording may hold.
+  const probe = { header: "probe-header-7c41", body: "probe-body-7c41" };
+  await page.evaluate(
+    ({ header, body }) =>
+      fetch("/probe", { method: "POST", headers: { "x-probe": header }, body }).catch(() => null),
+    probe,
+  );
   await typeIntoAField(page);
   await page.locator("#install").getByRole("tab").nth(1).click();
-  // Staying on the page: recordings and heatmaps are sent on their own timers.
-  await expect.poll(() => named(sent, "$snapshot").length, delivery).toBeGreaterThan(0);
+  // Staying on the page: recordings and heatmaps are sent on their own timers. Wait for
+  // the recording to hold the typed field's value as rrweb masks it (one * per
+  // character), so the checks below read recording data that carries the input.
+  const masked = "*".repeat(typed.length);
+  const recordings = () => JSON.stringify(named(sent, "$snapshot"));
+  await expect.poll(() => recordings().includes(masked), delivery).toBe(true);
   await expect.poll(() => named(sent, "$$heatmap").length, delivery).toBeGreaterThan(0);
-  const recordings = JSON.stringify(named(sent, "$snapshot"));
-  expect(recordings).not.toContain(typed.split(" ")[0]);
+  // Whole-payload scans: the typed text, the probe's header and body must appear nowhere.
+  expect(recordings()).not.toContain(typed.split(" ")[0]);
+  expect(recordings()).not.toContain(probe.header);
+  expect(recordings()).not.toContain(probe.body);
   // No network plugin at all: neither payloads, headers nor timing are recorded.
-  expect(recordings).not.toContain("rrweb/network@1");
-  expect(recordings).not.toContain("requestHeaders");
+  expect(recordings()).not.toContain("rrweb/network@1");
+  expect(recordings()).not.toContain("requestHeaders");
 });
 
 test("autocapture counts clicks and sends no typed text", async ({ page, siteURL }) => {
