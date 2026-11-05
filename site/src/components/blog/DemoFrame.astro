@@ -1,0 +1,15 @@
+---
+interface Props {
+  caption: string;
+  wide?: boolean;
+}
+const { caption, wide = true } = Astro.props;
+---
+
+<figure
+  data-demo
+  class:list={["not-prose text-ink my-10 min-w-0 text-base", { "blog-breakout": wide }]}
+>
+  <slot />
+  <figcaption class="text-muted mt-3 text-sm leading-relaxed">{caption}</figcaption>
+</figure>

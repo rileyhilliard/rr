@@ -1,0 +1,124 @@
+---
+title: "Run Claude Code tests on a remote machine"
+description: "Keep Claude Code local and run tests on a remote machine by syncing your working tree, then invoking your test command over SSH or through rr."
+published: 2026-11-05
+keyword: "run Claude Code tests on a remote machine"
+feature: agents
+relatedDocs: [claude-code, ssh-setup]
+---
+
+import AgentDemo from "../../components/blog/AgentDemo.astro";
+
+To run Claude Code tests on a remote machine, have the local agent invoke your test command over SSH after syncing the edited files.
+
+You can also SSH into the remote box and run Claude Code there, which moves the whole editing session off your laptop. Keeping the agent local takes a separate sync step: the test process must see the changes it just made. A wrapper can combine that sync with remote execution and return a structured result for the agent to read.
+
+## Can Claude Code run tests on a remote machine?
+
+Claude Code can invoke shell commands, including the command you already use to run tests. Its [terminal documentation](https://code.claude.com/docs/en/overview) covers running the CLI in your project. For remote tests, the shell command can be an SSH invocation:
+
+```bash
+ssh testbox 'cd ~/src/rr && make test'
+```
+
+Here, `testbox` is an SSH hostname or alias you can already reach, and `~/src/rr` is a copy of the rr working tree on that machine. Substitute your project's directory and test command. The remote needs the toolchain and dependencies that command expects. Try the command yourself before asking the agent to use it; connection failures are easier to diagnose outside an editing session.
+
+An SSH command runs against the files on the remote machine. Local edits stay local until you transfer them. If the agent adds a failing test on your laptop and immediately runs SSH against an older checkout, a passing result says nothing about that new test. This is the main detail to settle before adopting a remote TDD workflow.
+
+## How do I run Claude Code itself on the remote machine?
+
+Run the whole session remotely if you are happy to keep the working copy there. Install and authenticate Claude Code on the remote, prepare the project and its dependencies, then connect from your laptop. With tmux installed on the remote, start a named terminal session:
+
+```bash
+ssh testbox
+tmux new-session -s rr-dev
+cd ~/src/rr
+claude
+```
+
+The agent reads and edits that remote checkout, and ordinary test commands run there too. There is no local-to-remote sync between each edit and test because both happen on the same machine. Your laptop is the terminal you use to interact with the session.
+
+Tmux keeps the terminal session running when you detach or the SSH connection drops. With its default key bindings, press Ctrl-b, then d to detach. After reconnecting over SSH, resume with:
+
+```bash
+tmux attach-session -t rr-dev
+```
+
+The [tmux manual](https://man.openbsd.org/tmux.1) documents session persistence and reattachment. This option puts your editing tools and project environment on the remote box. If you want the agent to keep working with your laptop's checkout, have it call remote commands instead.
+
+## How can the local agent run tests over SSH?
+
+Pair rsync with SSH to transfer local edits before running tests. The guide to [running a command on a remote machine over SSH](/blog/ssh-run-command-on-remote-machine/) covers quoting and exit codes in more depth. From the local project root, create a dedicated remote destination once, then sync and execute:
+
+```bash
+ssh testbox 'mkdir -p ~/src/rr'
+rsync -a -e ssh \
+  --exclude='.git/' \
+  --exclude='node_modules/' \
+  --exclude='.venv/' \
+  ./ testbox:src/rr/ &&
+ssh testbox 'cd ~/src/rr && make test'
+```
+
+The trailing slash in `./` means copy the directory's contents. The exclusions leave Git metadata and those dependency directories out of the transfer; build the remote environment separately. Rsync needs to be installed on both ends. Its [official manual](https://man7.org/linux/man-pages/man1/rsync.1.html) explains these options. Adjust the exclusions for your stack, including any local files you do not want copied.
+
+The `&&` prevents the test command from starting if the transfer fails. SSH returns the remote command's exit status, or 255 for an SSH error, as described in the [SSH manual](https://man.openbsd.org/ssh.1). The agent can read the test runner's text and use the status to decide whether to investigate a failure.
+
+This example does not delete destination files that you removed locally. A deleted test can remain in that remote directory. It also provides no coordination between agents: two local worktrees pointed at `src/rr/` would overwrite the same copy. For occasional runs, managing a dedicated destination yourself may be enough. Repeated runs need a consistent sync policy, and concurrent agents need separate copies plus a way to avoid competing test processes.
+
+## How do I keep the agent local and the tests remote?
+
+rr is one option for handling the repeated sync-and-run work. It is a single Go binary that takes a lock on a free host, syncs your working tree using rsync over SSH and runs your command there. Output streams back to the local caller. The agent continues editing locally:
+
+```bash
+rr run "make test"
+```
+
+The remote needs SSH and rsync, plus your project's toolchain; rr installs no remote daemon or agent. It does not make a missing compiler or an unprepared test environment disappear. Get a small remote command working before handing it a full suite. The [SSH setup guide](/docs/ssh-setup/) covers the connection prerequisites.
+
+Locks apply per host, across projects. Several agents using rr can take different free hosts, or wait when a host is occupied. Each Git worktree syncs to its own remote directory, so separate local worktrees do not overwrite one shared remote copy. That isolation is useful when agents are changing different branches at the same time.
+
+Give the agent a scoped test command while it works on a failure. For a single-command task named `test` that runs pytest, this forwards the filter to the runner:
+
+```bash
+rr test -- -k login -x
+```
+
+The `--` separates rr's flags from task arguments. Arguments normally append to the task command; an `{args}` placeholder places them elsewhere when needed. Use the filter appropriate to your runner, then run the broader suite after the focused test passes.
+
+## What does the agent read back when a test fails?
+
+rr emits JSON by default. Phase events on stderr describe connection, locking, sync and execution, followed by a final `result` event when the command completes. Events carry fields such as `phase`, `status` and `host`; the result includes `exit_code` and `duration_s`. The command's own stdout and stderr also pass through, so the agent still has the original test output. Use `--pretty` or `-p` when you want the human display.
+
+The recorded session below shows an agent running a filtered failing Go test remotely, reading the result and editing locally. It reruns that test before running the full suite. In this older recording, the JSON failure entry contains the test name; the agent gets the source location from the raw Go test output.
+
+<AgentDemo caption="An agent runs a filtered failing test on a remote host, fixes it, reruns it, then runs the full suite." />
+
+Current result details can include `summary` counts for passed, failed, skipped and errored tests. For pytest, Jest/Vitest and Go test, `failures` can carry the test name, a file and line, and a message when those are available. The agent can use those fields to find the failure without treating every line of console output as equally useful. [Go test and pytest JSON output for agents](/blog/test-results-json-for-agents/) compares them with the runners' own report formats.
+
+A narrow filter still needs scrutiny. `details.no_tests` reports when no tests ran, even if the runner's exit code is zero. A pipeline can also hide a test failure behind its last command's successful exit; the plugin teaches the agent about using `bash -o pipefail -c`. A green status is insufficient if the intended test never executed.
+
+Failures before execution need a different response from failed assertions. rr reports structured errors with an `error.code`, message and suggestion. Codes such as `SSH_TIMEOUT`, `RSYNC_FAILED` and `DEPENDENCY_MISSING` identify setup or transport problems. The codes come from a lookup table, so the agent can branch on the code without guessing from wording.
+
+## How do I set up the Claude Code plugin?
+
+Install the rr binary locally using Homebrew, or choose another method in the [installation instructions](/#install):
+
+```bash
+brew install rileyhilliard/tap/rr
+```
+
+In Claude Code, add the marketplace and install the plugin:
+
+```text
+/plugin marketplace add https://github.com/rileyhilliard/rr
+/plugin install rr@rr
+```
+
+Run `/rr:setup` from the local project root. It walks through global host configuration at `~/.rr/config.yaml` and project configuration at `.rr.yaml`, including stack-appropriate sync exclusions and tasks. It checks SSH with `rr doctor`, then tests execution with `rr exec "pwd"` and sync with `rr run "ls -la"`. Requirements can be declared with `require:`; `rr provision` can install missing tools that have supported installers.
+
+The plugin teaches Claude the command syntax and how to read structured results, including the zero-test and pipeline pitfalls. Ask it to use rr for the failing test while keeping edits in the local checkout. The [Claude Code plugin guide](/docs/claude-code/) covers setup and usage. Update the installed plugin when needed with:
+
+```text
+/plugin update rr@rr
+```

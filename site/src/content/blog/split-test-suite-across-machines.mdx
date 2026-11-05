@@ -1,0 +1,165 @@
+---
+title: "Split a test suite across multiple machines"
+description: "Split a test suite across multiple machines by selecting independent shards, then running each on a CI runner or a free host with rr."
+published: 2026-11-05
+keyword: "split a test suite across multiple machines"
+feature: parallel
+relatedDocs: [configuration]
+---
+
+import RunSummary from "../../components/blog/RunSummary.astro";
+import MonitorDemo from "../../components/blog/MonitorDemo.astro";
+
+To split a test suite across multiple machines, divide it into independent shards and run each shard on a separate host. Jest and Playwright have shard flags; pytest needs a plugin or explicit test groups.
+
+Start with your runner's existing parallelism if one machine has spare capacity. Once you need more machines, a CI matrix can launch the shard commands on separate runners. For a local development loop using your own machines, rr is one option: it syncs your working tree over rsync and SSH, locks free hosts, and runs named shard tasks in parallel. You still define which tests each task runs.
+
+## How do you split a test suite across multiple machines?
+
+A shard is a subset of the suite that can run independently. Across all shards, every intended test should run, with no accidental gaps or duplicates. Keep the shard count fixed for the whole run and give each command a different shard index. Running the same full-suite command on every machine repeats work.
+
+Check test isolation before distributing anything. Two machines can still collide if their tests use the same external database or account. Give each shard its own test data and resource names. A host lock protects a machine from another rr run; shared services still need isolation in your tests.
+
+Keep the test selection reproducible across hosts. Each machine needs the same source revision or working-tree snapshot and compatible dependencies. If collection depends on local files or environment variables, identical shard flags can select different tests. Compare collected tests with the full suite when you first introduce sharding, then keep that coverage check as the suite changes.
+
+## How do you shard pytest, Jest, Playwright and Go tests?
+
+### pytest
+
+With pytest-xdist installed, try local worker processes first:
+
+```bash
+pytest -n auto
+```
+
+[pytest-xdist's worker documentation](https://pytest-xdist.readthedocs.io/en/stable/distribution.html) describes this as local CPU parallelism. It does not spread this command across your machines. Its older remote rsync mode is [deprecated because of environment-reproduction problems](https://pytest-xdist.readthedocs.io/en/stable/remote.html), so avoid building a new setup around that mode.
+
+For separate shard commands, [pytest-split](https://jerry-git.github.io/pytest-split/) uses recorded test durations. Install it in your project's Python environment, record a complete run, then select a group:
+
+```bash
+pip install pytest-split
+pytest --store-durations
+pytest --splits 3 --group 1
+```
+
+Run groups `2` and `3` on the other hosts with the same `--splits 3`. Share the generated `.test_durations` file so each host uses the same timing data. These are pytest-split's flags; other pytest sharding plugins use different names. Its default splitting algorithm needs care with test-order randomization plugins: follow the plugin's documented ordering requirements before combining them.
+
+Explicit directory groups also work when your suite already has clean boundaries. Make sure the groups cover the entire suite, including tests outside the obvious directories.
+
+### Jest
+
+[Jest's shard option](https://jestjs.io/docs/cli#--shard) selects a shard using a one-based index and a total:
+
+```bash
+npx jest --shard=1/3
+npx jest --shard=2/3
+npx jest --shard=3/3
+```
+
+These are separate commands for separate runners. Pasting the block into one terminal runs them sequentially. If you use a custom test sequencer, it must implement Jest's shard method. Keep the same configuration and test inputs on every runner.
+
+### Playwright
+
+[Playwright's sharding guide](https://playwright.dev/docs/test-sharding) uses the same index/total notation:
+
+```bash
+npx playwright test --shard=1/3
+npx playwright test --shard=2/3
+npx playwright test --shard=3/3
+```
+
+By default, Playwright divides work at file granularity. With `fullyParallel: true`, it can divide individual tests across shards. That can help when one large file dominates a run, provided those tests are safe to execute independently. Reports are produced per shard; Playwright documents merging blob reports if you need a combined report.
+
+### Go
+
+[Go's package listing command](https://pkg.go.dev/cmd/go#hdr-List_packages_or_modules) gives you a starting inventory. In a POSIX shell, this selects the first of three package groups:
+
+```bash
+go list ./... > packages.txt
+LC_ALL=C sort packages.txt | awk '(NR - 1) % 3 == 0' > shard-1.txt
+test -s shard-1.txt && xargs go test < shard-1.txt
+```
+
+Select remainders `1` and `2` for the other groups, using different manifest filenames. Generate the manifests from the same package inventory. The nonempty-file check prevents an empty group from invoking a bare `go test`. Package count is only a starting split: a package with expensive integration tests can outweigh many small packages.
+
+## Where should shards run: a CI matrix or your own machines?
+
+A CI matrix is a natural place to run these commands when you already test every pushed revision. Give each job a shard index, install the same dependencies in each job, and execute its corresponding command. The matrix launches jobs; the test runner selects tests inside each job. Shard flags alone do not provision machines or send code to them.
+
+Your own hosts can be more convenient while you're changing code and rerunning tests before a commit. You can sync files and launch commands over SSH yourself, but repeated runs need coordination so a second invocation doesn't overwrite a machine's working tree during a test. This becomes more noticeable when coding agents run tests from separate git worktrees, as in [running multiple Claude Code agents in parallel](/blog/run-multiple-claude-code-agents/).
+
+rr handles that sync-and-lock step for a pool of hosts. It's a single Go binary, with no remote daemon or agent. You need SSH and rsync on both ends, passwordless SSH access to each remote, and your project's toolchain there. It runs the shard commands you configure; choosing test boundaries and preparing a compatible runtime remain your responsibility.
+
+## How do you run shards on your own machines in parallel?
+
+Install rr using the [installation instructions](/#install). The following example assumes an npm project with a lockfile where `npx jest` already runs the suite. Define your machines in the personal host config, replacing the SSH aliases and directories with your own:
+
+```yaml title="~/.rr/config.yaml"
+version: 1
+hosts:
+  mini-a:
+    ssh: [mini-a]
+    dir: ~/rr/sharding-demo
+  mini-b:
+    ssh: [mini-b]
+    dir: ~/rr/sharding-demo
+  workstation:
+    ssh: [workstation]
+    dir: ~/rr/sharding-demo
+```
+
+Put shard commands in the project's `.rr.yaml`. Each leaf task selects tests; the parent lists the tasks to distribute:
+
+```yaml title=".rr.yaml"
+hosts: [mini-a, mini-b, workstation]
+local_fallback: never
+tasks:
+  jest-1:
+    run: npx jest --shard=1/3
+  jest-2:
+    run: npx jest --shard=2/3
+  jest-3:
+    run: npx jest --shard=3/3
+  test:
+    setup: npm ci
+    parallel: [jest-1, jest-2, jest-3]
+    fail_fast: false
+    max_parallel: 3
+```
+
+A parallel task uses `parallel:` instead of `run` or `steps`. Its `setup:` command runs once per host before that host's subtasks. If setup fails, that host's subtasks are aborted. Here, [`npm ci` installs dependencies](https://docs.npmjs.com/cli/v11/commands/npm-ci/) on each participating host; it requires that project's npm lockfile and a suitable Node installation.
+
+Inspect the plan, then run it:
+
+```bash
+rr test --dry-run
+rr --pretty test
+```
+
+rr uses a shared task queue, with a worker for each participating host. Faster hosts can take additional tasks as they finish. If a host's SSH connection fails, its task returns to the queue for another host. The replay below shows a real parallel run of a large suite across three hosts, separate from the illustrative Jest configuration above.
+
+<MonitorDemo caption="A real parallel run of a large suite replayed across three hosts." />
+
+The [configuration reference](/docs/configuration/) covers host selection and parallel task settings. `max_parallel: 0` means unlimited by that setting; `--max-parallel` overrides the configured value. `fail_fast: false` keeps work going after a task failure, while `--fail-fast` overrides it when you want to stop early.
+
+## How much faster does it get?
+
+The slowest shard sets the lower bound when all shards can run at once. Actual wall time also includes preparation and coordination. With similarly sized shards and enough hosts, the rr README describes roughly half the time on two hosts or a third on three. That is a general expectation, not a benchmark for your suite.
+
+The README's example records `test-backend` at 52.9 seconds on `m1-linux`, `test-pipeline` at 40.0 seconds on `m4-mini`, and `test-frontend` at 4.0 seconds on `m1-mini`. Its parallel summary reports 52.9 seconds. Adding those task times gives about 97 seconds; that sequential figure is a calculation, not a separately measured sequential run.
+
+<RunSummary caption="The README's three-task example. The sequential figure is the sum of the three task times, not a separately measured run." />
+
+Measure your own complete command before and after splitting. Include dependency setup and sync time, and compare runs with similar cache state. Extra hosts won't shorten a single dominant shard until you divide that shard further.
+
+## How do you keep shards balanced?
+
+Put long shards first in rr's `parallel:` list. Dispatch is FIFO in the flattened list order, so a long task buried behind short tasks can start late and extend the finish time. Use observed durations to reorder tasks, then split whichever task keeps the other hosts waiting. Equal test counts rarely guarantee equal durations.
+
+Nested parallel tasks let you organize groups without adding scheduling stages. A parent can reference a backend parallel group alongside other tasks; rr flattens those references into one list and rejects cycles. A leaf task's `hosts:` list restricts it to those hosts, useful when a shard requires a GPU machine. Restrict only the tasks that need it, since fewer eligible hosts can mean more waiting.
+
+Local worker parallelism still applies inside each shard. A pytest directory shard can use xdist on its assigned machine, for example. Budget those workers against each host's CPU and memory, especially if the machines differ. Adding workers can make a shard slower when its tests compete for the same resource.
+
+Use the run logs to investigate imbalance and failures. By default, each parallel run writes per-task logs and `summary.json` under `~/.rr/logs/<task>-<timestamp>/`; `rr logs` lists runs. Default output is JSON. For a person watching, `--pretty` shows progress, `--stream` adds live prefixed output, and `--verbose` shows full output per task.
+
+Filtering a whole parallel group needs explicit configuration: extra arguments are rejected unless the parent sets `forward_args: true`. That forwards arguments into each subtask's `{args}` placeholder. A filter can leave a shard with no tests, which rr lists in `no_tests_tasks`. Check those empty shards against what you intended to select before treating the filtered run as coverage of the suite.

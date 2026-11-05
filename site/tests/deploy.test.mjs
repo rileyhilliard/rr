@@ -120,3 +120,9 @@ test("unknown paths get the built 404 page", async () => {
   assert.equal(response.status, 404);
   assert.match(await response.text(), /Page not found/);
 });
+
+test("sitemap.xml redirects to the sitemap index", async () => {
+  const response = await get("/sitemap.xml");
+  assert.equal(response.status, 301);
+  assert.equal(response.headers.get("location"), "/sitemap-index.xml");
+});

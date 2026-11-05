@@ -1,0 +1,138 @@
+---
+title: "Run multiple Claude Code agents in parallel"
+description: "Run multiple Claude Code agents in parallel with one git worktree per session, then separate test resources or send each suite to a free host."
+published: 2026-11-05
+keyword: "run multiple Claude Code agents in parallel"
+feature: agents
+relatedDocs: [claude-code, configuration]
+---
+
+import QueueDemo from "../../components/blog/QueueDemo.astro";
+import FlowDemo from "../../components/blog/FlowDemo.astro";
+
+To run multiple Claude Code agents in parallel, give each session its own git worktree and branch. Start Claude inside each checkout so the sessions edit separate files.
+
+Worktrees still share your laptop's CPU and any services the tests use. Give each suite separate ports and test databases, or run suites one at a time. If you have spare machines, rr can send each run to a free host and lock it until the run ends.
+
+## How do you run multiple Claude Code agents at once?
+
+Create a worktree for each independent task, then open a terminal in each. You need Git, an existing repository with at least one commit, and Claude Code installed. Run these commands at the repository root, using branch names and destination directories that don't already exist:
+
+```bash
+git worktree add -b agent/auth-fix ../rr-auth
+git worktree add -b agent/lock-tests ../rr-locks
+git worktree list
+```
+
+Both new branches start at the current commit. Uncommitted edits in your original checkout aren't part of that starting point. If those edits are needed for the tasks, resolve what should be included before creating the worktrees. The [Git worktree manual](https://git-scm.com/docs/git-worktree) describes branch selection and the restriction against checking out the same branch in multiple worktrees.
+
+In one terminal, start the session for the auth task:
+
+```bash
+cd ../rr-auth
+claude
+```
+
+In another terminal opened at the original repository root, start the other session:
+
+```bash
+cd ../rr-locks
+claude
+```
+
+Claude Code also has a built-in worktree option. As an alternative to the manual setup, run each command below in a separate terminal at the repository root:
+
+```bash
+claude --worktree auth-fix
+claude --worktree lock-tests
+```
+
+Each command creates a named worktree and starts Claude there. The [Claude Code worktree guide](https://code.claude.com/docs/en/worktrees) covers this option and cleanup. Use either approach; you don't need to create the same worktree both ways. A manually created worktree also gives a Codex session a separate checkout to work in.
+
+Give each session a bounded task and tell it to stay in its checkout. Parallel edits can still conflict when you integrate the branches, especially if both agents change the same interface. Review each diff, integrate the branches, then test the combined result.
+
+## What do git worktrees isolate, and what do they share?
+
+Worktrees separate checked-out files and staging areas while sharing repository history. An agent changing a source file in `rr-auth` leaves the corresponding file in `rr-locks` alone. A branch switch in one worktree doesn't switch the other session's branch.
+
+Each checkout needs its development environment prepared. Install dependencies using your project's normal setup, and supply the local configuration the tests expect. Git doesn't copy ignored environment files into a new worktree. Reusing an environment file unchanged can also make both suites target the same test database.
+
+The running processes share the host. A test server binding a fixed address and port can block another suite trying to bind that address. Two suites pointed at the same database can change each other's fixtures, even though their source files live in different directories.
+
+Caches depend on your stack. A cache inside each checkout is separate; a cache at a fixed path in your home directory is shared. Check where your test runner writes mutable state before assuming the worktree path protects it.
+
+## Why do parallel agents' tests fail on one laptop?
+
+Shared test resources can make correct changes fail. One suite resets a database while another is querying it. A test server can't start because another session owns its port. CPU and memory pressure can also stretch a timing-sensitive test past its timeout, while the laptop becomes harder to use for other work.
+
+Reproduce a suspicious failure with the other suites stopped before asking the agent to change the implementation. A passing rerun alone doesn't establish the cause, but a repeated relationship with concurrent runs gives you a useful lead. Keep the original failure available so the agent can distinguish a failed assertion from a service that never started.
+
+Per-worktree configuration is often enough for resource collisions (the guide to [git worktree test database and port conflicts](/blog/git-worktree-test-database-conflicts/) walks through it). Give each checkout its own environment file with a distinct application port and test database name. Your app and test harness must actually read those settings, and the corresponding databases must exist. An environment file has no effect unless your tooling loads it.
+
+Separate names don't create more CPU or RAM. If the laptop remains overloaded, allow one suite to finish before starting another. You can keep agents working on code while coordinating test runs, or run the agent sessions one at a time for the simplest arrangement. This costs concurrency but requires no extra machine.
+
+## How do you give each agent's test run its own machine?
+
+rr is one option when you have a spare machine on your LAN or tailnet. It locks a free host, syncs the working tree there with rsync over SSH, then runs your command and streams output back. Another agent's run tries the next available host.
+
+<QueueDemo caption="Each run locks the host it lands on. When all three are busy, the next run waits and reports who holds the lock." />
+
+The lock is per host, across projects, using the shared lock directory. With locking enabled, rr keeps separate suites sent through rr from running on that host simultaneously. It doesn't assign ports or database names. Host separation avoids collisions over host-local resources; a database shared across machines still needs separate test databases or coordinated access. Commands launched outside rr don't participate in its locks.
+
+rr tries hosts in the project's `hosts:` list order and skips a locked host immediately. Only the host it successfully locks gets synced. An agent can request another test run without you assigning it a particular machine first.
+
+Remote copies remain separate too, provided the host's destination path uses `${PROJECT}`. In a linked git worktree, rr expands that variable to `<repo>@<worktree>` by default, giving each checkout its own remote directory. Keep `sync.worktree_isolation` enabled so later runs from different worktrees don't reuse the same remote copy. The [configuration reference](/docs/configuration/) explains those paths and settings.
+
+## What happens when every machine is busy?
+
+When choosing among several hosts that are all locked, rr waits and retries the locked hosts every two seconds. The pool's `lock.wait_timeout` defaults to one minute. A run restricted to one host uses `lock.timeout`, which defaults to five minutes. Its waiting status identifies lock holders, including the command and process ID when available, so an agent can see why execution hasn't started.
+
+Each rr process retries independently. A freed host goes to whichever run retries first; waiting runs have no guaranteed queue order. This diagram simulates that coordination using rr's lock rules:
+
+<FlowDemo caption="A simulation of independent rr processes trying host locks and waiting when the pool is busy. A freed host goes to the run that retries first." />
+
+rr emits structured JSON by default, with phase events on stderr and a final result event. The waiting event includes holder details such as host, user, process ID and command. Use `--pretty` for human-readable output. If the pool wait expires, the error code is `LOCK_HELD`; the agent should account for the unavailable host before treating it as a test failure.
+
+Keep `local_fallback: never`, the default, if busy remotes should mean waiting. Setting it to `always` permits local execution when all remotes are locked, which can put test work back on the laptop you're trying to free up.
+
+## How do you set this up with a spare machine?
+
+Prepare a remote that can run the same test command you use locally; [setting up a Mac mini as a test server](/blog/mac-mini-test-server/) covers SSH, keys and the toolchain. Both machines need SSH and rsync, and the remote needs your project's toolchain and dependencies. rr requires no daemon on the remote. Install the binary locally with Homebrew, or use the [installation instructions](/#install):
+
+```bash
+brew install rileyhilliard/tap/rr
+```
+
+In Claude Code, install the rr plugin so the session has its command and configuration guidance:
+
+```text
+/plugin marketplace add https://github.com/rileyhilliard/rr
+/plugin install rr@rr
+```
+
+Run guided setup from your project root:
+
+```text
+/rr:setup
+```
+
+Setup writes configuration and tests remote execution. It also checks SSH and required tools. The [Claude Code integration guide](/docs/claude-code/) covers the plugin. For hosts you've named `mini` and `workstation`, the relevant project settings are:
+
+```yaml title=".rr.yaml"
+hosts: [mini, workstation]
+local_fallback: never
+```
+
+With one remote, use `hosts: [mini]` instead. Preserve the sync settings and tasks generated for your project. Commit `.rr.yaml` so every worktree's branch has it: rr looks for the file only inside the checkout you run it from, and a worktree nested in your main checkout won't use the main checkout's copy. A host destination such as `${HOME}/projects/${PROJECT}` keeps the default worktree isolation. Run your normal test command through rr from the worktree being tested, for example:
+
+```bash
+rr run "go test ./..."
+```
+
+Without a spare machine, you can add your current machine as a local host:
+
+```bash
+rr host add --local --name dev
+```
+
+Set the project's `hosts:` list to `[dev]` to use it. The local host runs in your checkout with no SSH or sync and takes the same host lock, so agents using rr wait instead of overlapping their suites. Only one host can be local. This serializes test execution on your existing machine; it adds no compute capacity.

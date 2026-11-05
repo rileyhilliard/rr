@@ -1,0 +1,154 @@
+---
+import type { MarkdownHeading } from "astro";
+import BaseLayout from "./BaseLayout.astro";
+import CopyLine from "../components/CopyLine.astro";
+import { site } from "../config";
+import { type Post, breadcrumbs, postHref, postImage, postJsonLd, readingTime } from "../lib/blog";
+import { type DocEntry, docHref } from "../lib/docs";
+import { Events } from "../lib/events";
+interface Props {
+  post: Post;
+  headings: MarkdownHeading[];
+  docs: DocEntry[];
+  more: Post[];
+}
+const { post, headings, docs, more } = Astro.props;
+const { data } = post;
+const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
+const formatDate = (date: Date) =>
+  date.toLocaleDateString("en-US", { dateStyle: "long", timeZone: "UTC" });
+const [brew] = site.install;
+---
+
+<BaseLayout
+  title={data.title}
+  description={data.description}
+  path={postHref(post.id)}
+  image={postImage(post.id)}
+  ogType="article"
+  publishedTime={data.published.toISOString()}
+  modifiedTime={(data.updated ?? data.published).toISOString()}
+  jsonLd={[postJsonLd(post, site.url, site.repo), breadcrumbs(site.url, post)]}
+>
+  <div class="mx-auto grid max-w-[1200px] gap-10 px-4 py-10 sm:px-8 xl:grid-cols-[minmax(0,1fr)_12rem]">
+    <div class="blog-content min-w-0">
+      <article class="mx-auto max-w-[44rem]">
+        <nav aria-label="Breadcrumb" class="text-muted mb-8 text-sm">
+          <ol class="flex flex-wrap gap-2">
+            <li>
+              <a href="/">Home</a>
+              <span aria-hidden="true"> /</span>
+            </li>
+            <li>
+              <a href="/blog/">Blog</a>
+              <span aria-hidden="true"> /</span>
+            </li>
+            <li aria-current="page">{data.title}</li>
+          </ol>
+        </nav>
+        <header>
+          <h1 class="text-ink text-3xl font-semibold tracking-tight sm:text-4xl">
+            {data.headline ?? data.title}
+          </h1>
+          <p class="text-ink-2 mt-5 text-xl leading-relaxed">{data.description}</p>
+          <p class="text-muted mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+            <time datetime={data.published.toISOString()}>{formatDate(data.published)}</time>
+            {data.updated && (
+              <span>
+                Updated{" "}
+                <time datetime={data.updated.toISOString()}>{formatDate(data.updated)}</time>
+              </span>
+            )}
+            <span>{readingTime(post.body ?? "")} min read</span>
+          </p>
+        </header>
+        {toc.length > 0 && (
+          <details class="border-line rounded-panel mt-8 border text-sm xl:hidden">
+            <summary class="cursor-pointer px-4 py-3 font-medium">On this page</summary>
+            <nav aria-label="On this page" class="px-4 pb-4">
+              <ul class="space-y-1">
+                {toc.map((heading) => (
+                  <li class={heading.depth === 3 ? "pl-3" : ""}>
+                    <a href={`#${heading.slug}`}>{heading.text}</a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          </details>
+        )}
+        <div class="prose prose-lg mt-10 max-w-none">
+          <slot />
+        </div>
+        <aside aria-label="Install rr" class="border-line bg-panel rounded-panel mt-12 border p-6">
+          <p class="text-ink-2 mb-4 leading-relaxed">
+            rr is a single Go binary that syncs your working tree over SSH, locks a free host, runs
+            your command there and streams the output back.
+          </p>
+          {brew && (
+            <CopyLine
+              command={brew.command}
+              track={Events.installCopied}
+              trackMethod={brew.label}
+            />
+          )}
+          <p class="mt-4 flex gap-6 text-sm">
+            <a href="/#install">Install rr</a>
+            <a href="/docs/">Read the docs</a>
+          </p>
+        </aside>
+        {docs.length > 0 && (
+          <section class="border-line mt-10 border-t pt-8" aria-labelledby="related-docs">
+            <h2 id="related-docs" class="text-ink text-xl font-semibold">
+              Related docs
+            </h2>
+            <ul class="mt-4 space-y-5">
+              {docs.map((doc) => (
+                <li>
+                  <a href={docHref(doc.id)} class="font-medium">
+                    {doc.data.title}
+                  </a>
+                  <p class="text-ink-2 mt-1 text-sm">{doc.data.description}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+        {more.length > 0 && (
+          <section class="border-line mt-10 border-t pt-8" aria-labelledby="more-posts">
+            <h2 id="more-posts" class="text-ink text-xl font-semibold">
+              More from the blog
+            </h2>
+            <ul class="mt-4 space-y-5">
+              {more.map((other) => (
+                <li>
+                  <a href={postHref(other.id)} class="font-medium">
+                    {other.data.title}
+                  </a>
+                  <p class="text-ink-2 mt-1 text-sm">{other.data.description}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </article>
+    </div>
+    {toc.length > 0 && (
+      <nav
+        aria-label="On this page"
+        data-toc
+        class="sticky top-24 hidden self-start text-sm xl:block"
+      >
+        <p class="text-muted text-xs font-semibold uppercase">On this page</p>
+        <ul class="mt-2 space-y-1">
+          {toc.map((heading) => (
+            <li class={heading.depth === 3 ? "pl-3" : ""}>
+              <a href={`#${heading.slug}`} class="aria-[current=location]:text-accent">
+                {heading.text}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    )}
+  </div>
+</BaseLayout>

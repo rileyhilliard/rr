@@ -2,7 +2,8 @@ import type { APIRoute, GetStaticPaths } from "astro";
 import satori from "satori";
 import sharp from "sharp";
 import { site } from "../../config";
-import { getDocs } from "../../lib/collection";
+import { blogDescription, blogTitle } from "../../lib/blog";
+import { getDocs, getPosts } from "../../lib/collection";
 import { type Card, ogCard, ogFonts, ogLogo } from "../../lib/og";
 
 // One card per page: /og/index.webp for the landing page, /og/docs/<id>.webp per doc.
@@ -11,6 +12,14 @@ export const getStaticPaths = (async () => {
   const landing = { title: site.tagline, description: site.description, siteName: site.name };
   return [
     { params: { slug: "index" }, props: landing },
+    {
+      params: { slug: "blog" },
+      props: { title: blogTitle, description: blogDescription, siteName: site.name },
+    },
+    ...(await getPosts()).map((post) => ({
+      params: { slug: `blog/${post.id}` },
+      props: { title: post.data.title, description: post.data.description, siteName: site.name },
+    })),
     ...docs.map((doc) => ({
       params: { slug: `docs/${doc.id}` },
       props: { title: doc.data.title, description: doc.data.description, siteName: site.name },

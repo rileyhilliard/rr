@@ -98,7 +98,7 @@ Each section answers one visitor question.
 
 **Won't (this version)**
 - A light theme. The TUI is dark-only. This means dropping the stack's light theme and running axe on dark only.
-- A blog, or changelog pages beyond a link.
+- Changelog pages beyond a link. (A blog of how-to articles was added later, for search: it answers the problems rr solves for readers who don't know rr yet.)
 - WebGL, sound, CRT effects, easter eggs. Those are Steamfield's identity.
 - An interactive shard simulator. It would show scheduling rr doesn't do, and it would duplicate Steamfield's lane demo.
 - A GitHub star count or any runtime API call.

@@ -130,11 +130,7 @@ const [brew] = site.install;
     >
       <div class="flex flex-col gap-6">
         <TaskChart tasks={site.parallel.tasks} />
-        <p class="text-ink-2 max-w-xl text-sm leading-relaxed">
-          rr hands tasks out in the order you list them, and each host takes the next one as soon as
-          it's free. List the long ones first, and keep shards similar in size. One command still
-          runs on one host, so the pooling comes from how you split the work.
-        </p>
+        <p class="text-ink-2 max-w-xl text-sm leading-relaxed">{site.parallel.caveat}</p>
       </div>
       <Transcript command={site.parallel.command} lines={site.parallel.output} />
     </div>
