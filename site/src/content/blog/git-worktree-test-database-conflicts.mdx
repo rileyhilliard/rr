@@ -1,0 +1,107 @@
+---
+title: "Git worktree test database and port conflicts"
+description: "Fix git worktree test database and port conflicts with per-worktree environment files, separate databases, dynamic test ports and Compose project names."
+published: 2026-11-05
+keyword: "git worktree test database and port conflicts"
+feature: worktrees
+relatedDocs: [configuration]
+---
+
+import QueueDemo from "../../components/blog/QueueDemo.astro";
+
+Fix git worktree test database and port conflicts by giving each checkout its own runtime settings. Assign distinct server ports and database names in a local environment file; use OS-assigned ports and databases created per run when tests overlap within a checkout.
+
+Git worktrees separate working files, but processes still use the same machine and services. Start with explicit resource names and separate Docker Compose projects. If maintaining that setup is more work than your workflow needs, you can serialize suites on one machine or run them on separate machines. rr supports that second approach with a host lock, though it doesn't manage ports or databases.
+
+## Why do git worktree database and port conflicts happen?
+
+Two worktrees can contain different code while both test processes connect to the same database. One suite resets a table just as the other inserts a fixture. Each passes alone, and both fail intermittently together. A shared port usually fails sooner: the second server cannot bind its configured address because the first already owns it.
+
+The [Git worktree documentation](https://git-scm.com/docs/git-worktree) describes multiple working trees attached to one repository. Creating another working tree doesn't start another database server or give its processes a private network. Claude Code worktree isolation has the same boundary when an agent runs commands in a linked checkout, which is why [running multiple Claude Code agents in parallel](/blog/run-multiple-claude-code-agents/) needs more than worktrees.
+
+Find the resource behind the failure before changing the test runner. Compare the effective database URL and listening address in each process, including overrides inherited from the launching shell. A different directory name won't help if both shells export the same `DATABASE_URL`. Have the test setup report the database name without credentials so failures show which database they touched.
+
+## How do you give each worktree its own port?
+
+Give long-running development servers explicit ports in a local file for each checkout. The examples below use a POSIX shell and assume your application reads `PORT` and `DATABASE_URL`; substitute your framework's settings if it uses other names. Those environment variable names are conventions, and your server must actually consume them.
+
+Derive a short identifier from the worktree directory, even when you launch commands from a subdirectory. Git's [`--show-toplevel` option](https://git-scm.com/docs/git-rev-parse) returns that working tree's root:
+
+```bash
+worktree_root=$(git rev-parse --show-toplevel)
+worktree_name=$(basename "$worktree_root")
+worktree_id=$(printf '%s' "$worktree_name" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_' '_' | cut -c 1-30)
+printf '%s\n' "$worktree_id"
+```
+
+Choose short, distinct directory names. This normalization can turn different names into the same identifier, and truncation can remove the distinguishing suffix. Check the printed value across your active worktrees; set an explicit identifier if two collide. A port derived by hashing a name can collide too, so an explicit assignment is easier to inspect for a small set of agents.
+
+Create the environment file once, choosing an unused port for this worktree. Use a different port in the next checkout:
+
+```bash
+cat > "$worktree_root/.env.worktree" <<EOF
+PORT=4311
+DATABASE_URL=postgresql://localhost:5432/rr_test_${worktree_id}
+EOF
+```
+
+Keep this file untracked with your project's ignore rules. Load this shell-compatible file into the process that launches the server and tests, or configure your framework to load it explicitly:
+
+```bash
+set -a
+. "$worktree_root/.env.worktree"
+set +a
+```
+
+Tests that start their own server should prefer port `0` when the server API supports it. The OS selects an unused port while binding the socket. For example, [Node's server API](https://nodejs.org/api/net.html) exposes the assigned port through `server.address().port` after the listening event. Pass that address to the test client and close the server during teardown. Checking for a free port and releasing it before starting your server leaves a race with other processes.
+
+## How do you give each worktree its own test database?
+
+Use the worktree identifier in the database name, then create that database before applying migrations. For the PostgreSQL URL above, create the database on that local server:
+
+```bash
+createdb -h localhost -p 5432 "rr_test_$worktree_id"
+```
+
+Your role needs permission to create databases. Match the role used by your application, adding `-U` and a role name when needed. PostgreSQL's [`createdb` reference](https://www.postgresql.org/docs/current/app-createdb.html) covers connection settings if you use a different role or server. Apply your project's migrations and fixtures against the new URL before running tests. Check that any background workers spawned by the suite inherit it too.
+
+A database per worktree prevents collisions between checkouts, but overlapping runs inside one worktree still share it. If agents launch a filtered test while a full suite is running, use a fresh database per run. Let the test harness generate a unique run identifier, create a database using that identifier, and pass its URL to every process in that run. Parallel workers that reset database state may need their own databases as well.
+
+Put cleanup in the harness's teardown or a shell exit trap so a failed assertion also triggers it. Stop database clients before calling [`dropdb`](https://www.postgresql.org/docs/current/app-dropdb.html), and drop only the database created by that run. Keep a record of generated names for cleanup after a killed process. Changing only the application port leaves database interference untouched; a shared database can accept both suites' connections without reporting a collision.
+
+## What about node_modules, caches and Docker?
+
+Install dependencies in each worktree when its dependency tree can change. An untracked `node_modules` directory belongs to the checkout where you install it. Symlinking every worktree to one mutable installation means an install for one branch can alter what another branch loads. Keep environments such as `.venv` separate for the same reason.
+
+Shared caches need inspection according to what they store. A cache of downloaded packages can be reusable across checkouts, while a fixed path for generated test fixtures can overwrite another run's files. Put mutable test output under a worktree-local directory, with a run-specific subdirectory for concurrent runs. Include absolute temporary paths and Unix socket paths in that inspection.
+
+Give each Compose environment a [distinct project name](https://docs.docker.com/compose/how-tos/project-name/), using the identifier you already checked:
+
+```bash
+export COMPOSE_PROJECT_NAME="rr_$worktree_id"
+docker compose up -d
+```
+
+You can use `docker compose -p "rr_$worktree_id" up -d` instead. Use the same project name for later commands, including teardown, so they address the intended environment.
+
+Project names separate Compose-managed resources, but fixed [published host ports](https://docs.docker.com/reference/compose-file/services/#ports) still compete on the host. Parameterize those mappings or avoid publishing a service that only other containers need. An explicitly named or external [volume](https://docs.docker.com/reference/compose-file/volumes/) can remain shared across projects; check those settings before assuming the databases have separate storage. Bind mounts pointing at one absolute host directory also share its files.
+
+## Can each worktree run its tests on a different machine?
+
+Separate machines are useful when a suite assumes fixed local ports or performs broad database resets that would take time to make safe for concurrent runs. You can also run suites sequentially on your existing machine. Remote execution becomes an option when you have spare hosts and want independent suites to run simultaneously.
+
+rr is a single Go binary that syncs your working tree with rsync over SSH, takes a lock on a free host, runs your command there and streams the output back. The remote needs SSH, rsync and your toolchain; there's no remote daemon or agent to install. The [installation instructions](/#install) cover getting the binary.
+
+With locking enabled and a common lock directory, independent rr runs take an exclusive lock per host, across projects. A second worktree's suite uses another free host or waits for one. The queue demo shows each active run holding its own host; finish a run to let the waiting one start.
+
+<QueueDemo caption="Each independent run locks its own host. When every host is busy, another run waits for a host to become available." />
+
+Linked worktrees sync to separate remote directories by default, named `repo@worktree`. This keeps one checkout's synced files apart from another's. The [configuration reference](/docs/configuration/) explains worktree isolation and host selection, including lock wait settings. Keep locking enabled and check local fallback settings if your intention is to run only on remote machines.
+
+## What doesn't this isolate?
+
+rr doesn't manage ports or databases. Separate hosts avoid competition for a host-local listening port, but suites on different hosts can still connect to the same external database. Give those suites separate database names using the earlier setup, or serialize access to that service.
+
+Parallel subtasks within one rr task can run together on one host under its single lock. They share that worktree's remote directory. Give them separate output paths and apply port and database isolation within the task if they need it. The host lock separates independent runs; it doesn't make each subtask a separate environment.
+
+A local host added with `rr host add --local` runs in your actual checkout without syncing. It still takes the host lock, so independent rr runs there queue, but it doesn't create another copy of your files. Processes launched outside rr can still use that machine's ports and services while an rr run holds the lock.

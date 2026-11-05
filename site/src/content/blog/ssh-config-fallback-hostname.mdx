@@ -1,0 +1,127 @@
+---
+title: "SSH config fallback hostname: LAN or Tailscale"
+description: "SSH config has no fallback hostname list; use separate aliases, Match exec probes, or a ProxyCommand to choose between LAN and Tailscale."
+published: 2026-11-05
+keyword: "ssh config fallback hostname"
+feature: hosts
+relatedDocs: [ssh-setup, configuration, troubleshooting]
+---
+
+import CommandDemo from "../../components/blog/CommandDemo.astro";
+
+SSH config has no fallback hostname list: each connection gets one effective `HostName`. Use two aliases and choose manually, or use `Match exec` to select the LAN address when a probe succeeds.
+
+For one name that works at home and away, a Tailscale MagicDNS name may already be enough. If you need to prefer a separate LAN address, a probe or `ProxyCommand` can make that choice, but a dead first address costs a timeout. These approaches select a connection when you start SSH; they do not move an existing shell between addresses.
+
+## Can ssh_config provide a fallback hostname?
+
+Writing two `HostName` directives under one `Host` does not create a retry order. OpenSSH generally uses the first value it obtains for each setting, so the second hostname is ignored. Likewise, `Host gpu-lan gpu-away` means that either name matches the same configuration block. Those names are patterns for choosing settings, not destinations to try.
+
+The [OpenSSH configuration manual](https://man.openbsd.org/ssh_config) describes that first-value rule and the conditional `Match` blocks. Put specific settings before broad defaults such as `Host *`. Otherwise a default can fill in a value before your more specific block gets a chance.
+
+All examples below assume the remote already accepts ordinary SSH connections. Replace `dev` with your remote username, `192.168.1.50` with its LAN address, and `gpu-box` with its actual MagicDNS name. The examples use SSH port 22. Treat the manual-alias, conditional, and proxy configurations as alternatives; pasting them all together can change which settings win.
+
+## How do I use two SSH aliases and pick by hand?
+
+Separate aliases are the easiest configuration to debug. Each name has one destination, and you decide which network to use when invoking SSH:
+
+```ssh-config title="~/.ssh/config"
+Host gpu-lan
+    HostName 192.168.1.50
+    User dev
+
+Host gpu-away
+    HostName gpu-box
+    User dev
+```
+
+At home, run `ssh gpu-lan`. Away from home, run `ssh gpu-away` while connected to your tailnet. Keep any identity settings you already need in the appropriate blocks. Both aliases should log in to the same machine if your goal is choosing between its network addresses.
+
+Test the aliases independently before adding automation. If the LAN alias fails at home, solve that connection problem first. If the Tailscale alias fails away, check that Tailscale is connected and the machine name resolves. Automatic selection can obscure a broken path because the other one keeps working.
+
+An unrelated network can also use `192.168.1.50`. A listening port at that address does not establish that it is your machine. Keep SSH host-key verification enabled, including when adding probes. A host-key warning needs investigation; accepting a different key to make fallback work defeats the identity check.
+
+## How do I switch HostName with Match exec?
+
+`Match exec` runs a local command and applies the following settings when that command exits successfully. A TCP probe checks whether the LAN SSH port answers before SSH chooses its destination. On macOS, the bundled `nc` supports `-G` for the connection timeout:
+
+```ssh-config title="~/.ssh/config"
+Host gpu
+    User dev
+
+Match originalhost gpu exec "nc -z -G 1 192.168.1.50 22"
+    HostName 192.168.1.50
+
+Match originalhost gpu
+    HostName gpu-box
+
+Host *
+```
+
+Run `ssh gpu` with this configuration. When the probe succeeds, the first `Match` supplies the LAN `HostName`. When it fails, the second supplies the MagicDNS name. `originalhost` matches the name you typed, so the fallback block still matches after an earlier block changes `HostName`. The final `Host *` ends the conditional block; put your general defaults beneath it.
+
+The fallback `HostName` must come after the probe block. Setting it in the initial `Host gpu` block would fill the value too early, preventing the successful probe from selecting the LAN address. This ordering also matters when your existing configuration has wildcard blocks or included files.
+
+Netcat flags vary by implementation. With the OpenBSD netcat commonly packaged on Linux, use `nc -z -w 1 192.168.1.50 22` for this probe; its [netcat manual](https://man.openbsd.org/nc.1) documents `-w` as a timeout. Check your installed `man nc` before copying either form. The timeout values here are configuration choices, not measured connection times.
+
+The probe adds a separate TCP connection and runs during configuration evaluation. Inspect the chosen settings with `ssh -G gpu`, then use `ssh -v gpu` to diagnose an actual connection. The settings inspection can itself execute the probe. Repeat on each network you use.
+
+A successful TCP probe only proves that something accepted the connection. If SSH authentication or host-key verification then fails, this configuration does not retry the Tailscale destination. A firewall that silently drops LAN traffic also makes you wait for the probe timeout before trying the other address.
+
+## How can ProxyCommand fall back to another address?
+
+`ProxyCommand` can run a helper that chooses a destination and carries SSH's byte stream. One macOS form probes the LAN port, then replaces the helper with `nc` connected to the chosen address:
+
+```ssh-config title="~/.ssh/config"
+Host gpu-proxy
+    HostName gpu-box
+    User dev
+    ProxyCommand sh -c 'if nc -z -G 1 192.168.1.50 22; then exec nc 192.168.1.50 22; else exec nc gpu-box 22; fi'
+```
+
+Use `ssh gpu-proxy`. The outer SSH client performs authentication and host-key verification over the selected stream. Its configured `HostName` stays `gpu-box`, which also gives host-key management a consistent name for these two paths to the same machine.
+
+This version deliberately puts the short timeout on the probe alone. With OpenBSD netcat on Linux, replace the probe's `-G 1` with `-w 1`. Leave the streaming `nc` commands without that idle timeout, or a quiet interactive session could be closed. The helper's standard output must contain only the connection stream; send any diagnostic messages to standard error.
+
+There is a gap between probing and opening the stream. If the LAN port answers the probe and then becomes unreachable, this helper has already selected LAN. It also cannot recover an established session after a network change. Use this approach when you need the choice inside a transport helper; `Match exec` is easier to read for a simple conditional hostname.
+
+`ProxyJump` solves reaching a target through a jump host. A comma-separated list describes successive hops, so it does not provide alternative destinations when the first is down. Combining it with a custom proxy also requires care: OpenSSH's `ProxyJump` and `ProxyCommand` settings compete, with the first specified taking effect.
+
+## Can Tailscale handle LAN and remote access automatically?
+
+Try the MagicDNS name alone before maintaining address-selection logic. With MagicDNS enabled and both devices connected to the tailnet, `ssh dev@gpu-box` can reach the same named machine at home or away. Tailscale's [MagicDNS guide](https://tailscale.com/docs/features/magicdns) explains how device names resolve within the tailnet.
+
+Tailscale attempts direct connections between devices, so a connection at home can already take a direct LAN path. Direct connections are not guaranteed; network conditions can require a relay. Use `tailscale ping gpu-box` or inspect `tailscale status` to see the connection type, as described in Tailscale's [connection types reference](https://tailscale.com/docs/reference/connection-types).
+
+MagicDNS names the destination; Tailscale chooses its transport path. You would still configure explicit LAN preference if you want ordinary LAN SSH to work independently of Tailscale, or if the path Tailscale establishes does not meet your needs.
+
+[Tailscale SSH](https://tailscale.com/docs/features/tailscale-ssh) is a separate feature for managing SSH authentication and access through Tailscale. You can use a MagicDNS name with your existing SSH server without enabling that feature. Neither choice adds a fallback hostname list to OpenSSH.
+
+## How does rr dial every address at once?
+
+For remote test commands, rr offers another way to choose among addresses, for example when a [Mac mini test server](/blog/mac-mini-test-server/) is reachable over both LAN and Tailscale. It syncs your working tree with rsync over SSH, locks a free host, runs the command there, and streams output back. It is one option when the connection is part of running work remotely; the SSH configurations above handle interactive shells.
+
+Each rr host has an ordered `ssh:` list. Entries can be SSH config aliases, IP addresses, or `user@host` destinations. Using the two plain aliases defined earlier keeps the username and destination settings in SSH config:
+
+```yaml title="~/.rr/config.yaml"
+hosts:
+  gpu-box:
+    ssh:
+      - gpu-lan
+      - gpu-away
+```
+
+rr dials every entry in parallel. If the first alias connects first, rr uses it immediately. If a later alias connects first, rr waits up to 500ms for an earlier one before settling. That preference window lets a slightly slower LAN connection win without waiting through a dead LAN address's full timeout. Losing connections are closed. The preference follows list order; rr has no Tailscale-specific selection logic.
+
+> [!WARNING]
+> rr's SSH parser skips `Match` blocks, so the conditional `gpu` alias above will not apply its probe inside rr. Define plain aliases in their own `Host` blocks and list them separately in rr.
+
+rr reads settings including `HostName`, `IdentityFile`, `ProxyCommand`, and `ProxyJump` from `~/.ssh/config`. To dial LAN and Tailscale in parallel, list each address as its own alias. The [SSH setup guide](/docs/ssh-setup/) covers configuring access.
+
+Run `rr status` to inspect which aliases answer and which host is selected. This recording shows hosts and the aliases they answered on, including LAN and Tailscale paths:
+
+<CommandDemo command="status" caption="rr status lists each host and the alias it answered on, LAN or Tailscale." />
+
+Runs default to a per-alias probe timeout of `2s`, controlled by `defaults.probe_timeout` or overridden with `--probe-timeout`. The [configuration reference](/docs/configuration/) documents that setting. It limits individual connection attempts; it is separate from the 500ms preference window after a successful connection.
+
+If every alias fails, rr reports the attempted aliases and a troubleshooting suggestion. Use `rr doctor` to check each alias's connectivity and latency; it warns when only some connect. The [troubleshooting guide](/docs/troubleshooting/) covers connection problems, and the [installation instructions](/#install) provide the binary if you want to try this workflow.
