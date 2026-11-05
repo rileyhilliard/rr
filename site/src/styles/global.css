@@ -127,15 +127,13 @@
 }
 
 /* Docs Markdown: @steamfield/ui/markdown's plugins emit these data-* hooks (src/lib/markdown.ts),
-   and CodeFrame.astro mirrors them. @steamfield/ui 0.2.0 puts a code frame's caption after the
-   <pre>, so flex and order-first draw it on top; drop both once the site is on 0.2.1, which
-   emits the caption first. */
+   and CodeFrame.astro mirrors them. The caption comes before the <pre> in the markup. */
 [data-code-block] {
-  @apply border-line rounded-panel relative flex flex-col overflow-hidden border;
+  @apply border-line rounded-panel relative overflow-hidden border;
 }
 
 [data-code-block] figcaption {
-  @apply border-line bg-panel text-muted order-first border-b px-4 py-2 font-mono text-xs;
+  @apply border-line bg-panel text-muted border-b px-4 py-2 font-mono text-xs;
 }
 
 [data-code-block] pre {

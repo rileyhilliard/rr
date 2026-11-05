@@ -349,3 +349,132 @@ describe("adding a docs page", () => {
     }
   });
 });
+
+// The layout only calls initAnalytics, and only creates the consent store and
+// banner, when the build has a key, so a keyless build (dev, CI, previews) bundles
+// none of it. The banner's stylesheet ships either way, with the other library CSS.
+describe("analytics in the build", () => {
+  // Every JavaScript file a page loads or may load: its inline scripts, script tags
+  // and island components, renderers and before-hydration scripts, then the imports
+  // (static, and dynamic with any quote style) of each file they reach. Ported from
+  // stacks-api's analytics build test.
+  function scriptsReachedFrom(root: string, page: string): Map<string, string> {
+    const html = read(root, page);
+    const reached = new Map<string, string>();
+    const pending: string[] = [];
+    const follow = (source: string, folder: string) => {
+      // A `//host/...` target is another origin; it isn't in the build.
+      for (const m of source.matchAll(/["'`](\.\/|\/(?!\/))([^"'`]+\.js)["'`]/g)) {
+        const target = m[2] ?? "";
+        // A template such as posthog-js's `/static/${version}/${name}.js` is a URL
+        // built at run time for its CDN scripts, not a file in the build.
+        if (target.includes("${")) continue;
+        pending.push(m[1] === "/" ? target : folder + target);
+      }
+    };
+    const pageFolder = page.slice(0, page.lastIndexOf("/") + 1);
+    const inline = html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g);
+    for (const [index, m] of Array.from(inline).entries()) {
+      const source = m[1] ?? "";
+      reached.set(`${page}#inline-${index}`, source);
+      follow(source, pageFolder);
+    }
+    const entries =
+      /(?:<script[^>]*\ssrc|\scomponent-url|\srenderer-url|\sbefore-hydration-url)="\/(?!\/)([^"]+\.js)"/g;
+    pending.push(...Array.from(html.matchAll(entries), (m) => m[1] ?? ""));
+    for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+      if (reached.has(path)) continue;
+      const source = read(root, path);
+      reached.set(path, source);
+      follow(source, path.slice(0, path.lastIndexOf("/") + 1));
+    }
+    return reached;
+  }
+
+  // The stylesheets a page links, by path, with their contents.
+  function stylesheetsOf(root: string, page: string): Map<string, string> {
+    const html = read(root, page);
+    const links = html.matchAll(/<link[^>]*\srel="stylesheet"[^>]*\shref="\/([^"]+)"/g);
+    return new Map(Array.from(links, (m) => m[1] ?? "").map((path) => [path, read(root, path)]));
+  }
+
+  // The paths, not the contents, so a failure prints something readable.
+  const filesContaining = (reached: Map<string, string>, text: string) =>
+    [...reached].filter(([, source]) => source.includes(text)).map(([path]) => path);
+
+  // The default ingest host: in the analytics module and in posthog-js, nowhere else.
+  const analyticsMarker = "us.i.posthog.com";
+  // posthog-js's consent record prefix: in the SDK only, so finding it means the
+  // scanner followed the module's dynamic import of posthog-js.
+  const sdkMarker = "__ph_opt_in_out_";
+  // The consent store's cookie name: in @steamfield/ui/consent only.
+  const consentMarker = "sf-consent";
+  // A rule from @steamfield/ui/consent's stylesheet, and a variable it reads (which
+  // the site's theme also sets).
+  const bannerStyleMarker = "--sf-consent-background";
+  const isConsentStyle = (source: string) => /\[data-part=["']?consent["']?\]/.test(source);
+
+  // A production build into a temporary directory with this PostHog key, so the
+  // result doesn't depend on the environment `make build` ran in.
+  function buildWithKey(key: string) {
+    const out = mkdtempSync(join(tmpdir(), "rr-analytics-"));
+    const built = spawnSync("bunx", ["--no-install", "astro", "build", "--outDir", out], {
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, PUBLIC_POSTHOG_KEY: key },
+    });
+    expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+    return out;
+  }
+
+  // The site value the layout passes to initAnalytics, as the minifier writes it.
+  const siteValue = /site:\s*["'`]rr["'`]/;
+
+  it("loads no analytics or consent code without a PostHog key", () => {
+    const out = buildWithKey("");
+    try {
+      const reached = scriptsReachedFrom(out, "index.html");
+      expect(reached.size).toBeGreaterThan(0);
+      expect(filesContaining(reached, analyticsMarker)).toEqual([]);
+      expect(filesContaining(reached, consentMarker)).toEqual([]);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  }, 150_000);
+
+  it("loads the key once, posthog-js, the banner and its styles when the build has a key", () => {
+    // Not a credential: any non-empty value turns analytics on for the build.
+    const key = "rr-build-test-key";
+    const out = buildWithKey(key);
+    try {
+      const reached = scriptsReachedFrom(out, "index.html");
+      expect(filesContaining(reached, key)).toHaveLength(1);
+      expect(filesContaining(reached, sdkMarker)).toHaveLength(1);
+      expect(filesContaining(reached, consentMarker)).not.toEqual([]);
+      const sources = [...reached.values()];
+      expect(sources.some((source) => siteValue.test(source))).toBe(true);
+      // The banner's text, which says what Accept turns on.
+      expect(
+        sources.some((source) =>
+          source.includes(
+            "The rr site counts visits and clicks with PostHog. Accept lets it set cookies so repeat visits count once, and turns on session recordings and heatmaps.",
+          ),
+        ),
+      ).toBe(true);
+      expect(sources.some((source) => /domain:\s*["'`]steamfield\.io["'`]/.test(source))).toBe(
+        true,
+      );
+      const styles = [...stylesheetsOf(out, "index.html").values()];
+      expect(styles.some((source) => source.includes(bannerStyleMarker))).toBe(true);
+      expect(styles.some(isConsentStyle)).toBe(true);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  }, 150_000);
+
+  it("links the shared privacy page from the footer", () => {
+    expect(
+      page("dist", "index.html").querySelector('footer a[href="https://steamfield.io/privacy"]'),
+    ).not.toBeNull();
+  });
+});
