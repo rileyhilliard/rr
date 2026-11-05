@@ -140,10 +140,6 @@ async function open(page: Page, siteURL: string) {
   await page.context().addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => false });
     Object.defineProperty(navigator, "userAgentData", { get: () => undefined });
-    // Marks a page the back-forward cache restored, so a test can tell it from a load.
-    addEventListener("pageshow", (event) => {
-      if (event.persisted) document.documentElement.dataset.restored = "true";
-    });
   });
   // On the context, so a page's last batch, sent as it unloads, is caught too.
   await page.context().route(`${host}/**`, (route) => servePostHog(route, sent));
@@ -158,8 +154,6 @@ test.use({
   userAgent: person,
   launchOptions: {
     args: ["--host-resolver-rules=MAP rr.test 127.0.0.1"],
-    // Playwright turns the back-forward cache off by default; allow it, as a browser would.
-    ignoreDefaultArgs: ["--disable-back-forward-cache"],
   },
 });
 
@@ -290,10 +284,8 @@ test("stops after a decline on another steamfield.io site, on the next page load
   expect(cookies.some((cookie) => cookie.name === `__ph_opt_in_out_${key}`)).toBe(true);
   await page.goto(`${siteURL}${DOC}`);
   await page.goBack();
-  // A fresh load: Chromium under Playwright doesn't restore this page from the
-  // back-forward cache (notRestoredReasons says only "masked"), so the restored-page
-  // path is covered by analytics.test.ts's pageshow tests instead.
-  await expect(page.locator("html")).not.toHaveAttribute("data-restored", "true");
+  // A fresh load: Playwright's Chromium runs with the back-forward cache off, so the
+  // restored-page path is covered by analytics.test.ts's pageshow tests instead.
   const since = Date.now();
   await page.locator("#install").getByRole("tab").first().click();
   await typeIntoAField(page);

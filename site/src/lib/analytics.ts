@@ -178,7 +178,8 @@ export async function initAnalytics(
     defaults: "2026-08-30",
     person_profiles: "identified_only",
     capture_pageview: "history_change",
-    // URLs without their hash: /search/#q=… would put the search text on every event.
+    // URLs without their hash: a hash such as stacks' /search/#q=… would put the search
+    // text on every event.
     disable_capture_url_hashes: true,
     // Cookieless until the visitor accepts; then localStorage+cookie, shared across
     // steamfield.io subdomains.
@@ -198,7 +199,7 @@ export async function initAnalytics(
     autocapture: true,
     capture_performance: { web_vitals: true, network_timing: false },
     // After Accept only: applyConsent starts these. Recordings mask every input, and the
-    // text of anything marked data-ph-mask (the search box and its results).
+    // text of anything marked data-ph-mask (each site's AGENTS.md lists its masked elements).
     disable_session_recording: true,
     capture_heatmaps: false,
     // Remote config can turn on network payload capture; an explicit client false wins.

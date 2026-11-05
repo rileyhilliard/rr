@@ -453,6 +453,14 @@ describe("analytics in the build", () => {
       expect(filesContaining(reached, consentMarker)).not.toEqual([]);
       const sources = [...reached.values()];
       expect(sources.some((source) => siteValue.test(source))).toBe(true);
+      // The banner's text, which says what Accept turns on.
+      expect(
+        sources.some((source) =>
+          source.includes(
+            "The rr site counts visits and clicks with PostHog. Accept lets it set cookies so repeat visits count once, and turns on session recordings and heatmaps.",
+          ),
+        ),
+      ).toBe(true);
       expect(sources.some((source) => /domain:\s*["'`]steamfield\.io["'`]/.test(source))).toBe(
         true,
       );
