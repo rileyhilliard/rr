@@ -1,6 +1,7 @@
 // Acceptance tests over the real build in dist/. `make build` runs them after
 // `astro build`. The page list comes from the docs source (src/lib/docs-source.ts:
 // the repository's docs/ folder), not from the build.
+import "@testing-library/jest-dom/vitest";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -134,6 +135,29 @@ describe("docs pages", () => {
 });
 
 describe("the whole site", () => {
+  it("credits Steamfield with a linked logo after Made by in every footer", () => {
+    for (const file of htmlFiles("dist")) {
+      const footer = page("dist", file).querySelector("footer");
+      const link = footer?.querySelector('a[href="https://steamfield.io"]');
+      expect(link, file).toHaveAccessibleName("Steamfield");
+      expect(link?.previousSibling?.textContent?.trim(), file).toBe("Made by");
+      const logo = link?.querySelector("svg");
+      expect(logo, file).not.toBeNull();
+      expect(logo?.getAttribute("aria-hidden"), file).toBe("true");
+      expect(logo?.getAttribute("viewBox"), file).toBe("0 0 145.59 26");
+      expect(logo?.getAttribute("height"), file).toBe("22");
+      expect(
+        [...(logo?.querySelectorAll("path") ?? [])].map((path) => path.getAttribute("fill")),
+      ).toEqual(["currentColor", "currentColor"]);
+      expect(footer?.textContent, file).toContain(`Released under the ${site.license} license.`);
+      expect(footer?.textContent, file).not.toContain("project.");
+      expect(
+        footer?.querySelector('a[href="https://steamfield.io/privacy"]')?.textContent,
+        file,
+      ).toBe("Privacy");
+    }
+  });
+
   it("has no broken internal links or anchors", () => {
     const broken: string[] = [];
     for (const file of htmlFiles("dist")) {
