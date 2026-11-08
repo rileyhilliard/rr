@@ -39,6 +39,12 @@ type TaskExecOptions struct {
 	// StepHandler is called before and after each step in multi-step tasks.
 	// If nil, steps run silently without progress output.
 	StepHandler StepHandler
+
+	// TTY runs each command with the terminal (--tty): a remote command on a
+	// PTY with its own tty.Session, so the terminal is raw only while a step
+	// runs; a bare local command with rr's stdin, stdout and stderr, which
+	// leaves the stdout and stderr writers unused.
+	TTY bool
 }
 
 // StepHandler receives callbacks during multi-step task execution.
@@ -79,7 +85,7 @@ func ExecuteTask(ctx context.Context, conn *host.Connection, task *config.TaskCo
 		if err != nil {
 			return nil, err
 		}
-		exitCode, err := executeCommand(ctx, conn, cmd, env, workDir, opts.SetupCommands, stdout, stderr)
+		exitCode, err := executeCommand(ctx, conn, cmd, env, workDir, opts, stdout, stderr)
 		return &TaskResult{
 			ExitCode:   exitCode,
 			FailedStep: -1,
@@ -149,7 +155,7 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 		}
 
 		stepStart := time.Now()
-		exitCode, err := executeCommand(ctx, conn, step.Run, env, workDir, opts.SetupCommands, stdout, stderr)
+		exitCode, err := executeCommand(ctx, conn, step.Run, env, workDir, opts, stdout, stderr)
 		stepDuration := time.Since(stepStart)
 
 		if err != nil {
@@ -190,13 +196,21 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 }
 
 // executeCommand runs a single command on the connection. Remote commands cd
-// into workDir first; local ones run in the current directory.
-func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
+// into workDir first; local ones run in the current directory. With
+// opts.TTY, stdout gets a remote PTY's merged output and stderr is unused.
+func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env map[string]string, workDir string, opts *TaskExecOptions, stdout, stderr io.Writer) (int, error) {
 	if conn.IsLocal {
-		return ExecuteLocalContext(ctx, BuildCommand(cmd, env, "", setupCommands), "", stdout, stderr)
+		localCmd := BuildCommand(cmd, env, "", opts.SetupCommands)
+		if opts.TTY {
+			return ExecuteLocalTTYContext(ctx, localCmd, "")
+		}
+		return ExecuteLocalContext(ctx, localCmd, "", stdout, stderr)
 	}
 
-	fullCmd := BuildCommand(cmd, env, config.ExpandRemote(workDir), setupCommands)
+	fullCmd := BuildCommand(cmd, env, config.ExpandRemote(workDir), opts.SetupCommands)
+	if opts.TTY {
+		return ExecuteTTY(ctx, conn.Client, fullCmd, stdout)
+	}
 	return conn.Client.ExecStreamContext(ctx, fullCmd, stdout, stderr)
 }
 

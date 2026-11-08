@@ -1,6 +1,7 @@
 package formatters
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
 
@@ -44,6 +45,10 @@ func ParseRunOutcome(command string, log []byte) Outcome {
 	// Runners color their output when the remote gives them a TTY; the
 	// patterns match plain text.
 	log = StripANSI(log)
+	// A PTY (rr run --tty) ends lines with \r\n. Lines are split on \n, so
+	// without this every line keeps a \r, which patterns anchored on $ miss
+	// and failure names and messages carry.
+	log = bytes.ReplaceAll(log, []byte("\r\n"), []byte("\n"))
 	formatter := detectFormatter(command, log)
 	if formatter == nil {
 		return o

@@ -22,6 +22,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/require"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/tty"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"golang.org/x/term"
@@ -40,6 +41,7 @@ type WorkflowOptions struct {
 	Local            bool          // Force local execution (skip remote hosts)
 	Command          string        // Command being run (stored in lock for monitoring)
 	TaskName         string        // Task name for task-specific requirements
+	TTY              bool          // --tty: reject a connection that can't give the command a terminal
 }
 
 // WorkflowContext holds state from workflow setup for use during execution.
@@ -124,11 +126,14 @@ func (w *WorkflowContext) setupSignalHandler() {
 
 		// Second signal force-quits immediately (users expect double Ctrl+C
 		// to kill). Local commands are killed first: exiting doesn't stop
-		// them, since each runs in its own session.
+		// them, since each runs in its own session. A --tty command's
+		// deferred terminal restore never runs past os.Exit, so restore
+		// here or the shell is left in raw mode.
 		if _, ok := <-w.signalChan; !ok {
 			return
 		}
 		host.KillLocalCommands()
+		tty.RestoreAll()
 		os.Exit(130)
 	}()
 }
@@ -788,6 +793,16 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	} else if err := connectRemote(ctx, opts); err != nil {
 		ctx.Close()
 		return nil, err
+	}
+
+	// Which connection a run gets (a local host, a fallback) is only known
+	// now, so this --tty check can't happen with the flag checks. It still
+	// comes before requirements and sync, which would be wasted work.
+	if opts.TTY {
+		if err := checkTTYConnection(ctx.Conn); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 	}
 
 	// Phase 3: Check requirements (before sync)

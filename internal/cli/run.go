@@ -42,6 +42,7 @@ type RunOptions struct {
 	PullDest         string        // Destination directory for pulled files
 	Tail             int           // Print the last N lines of the run log after completion
 	LogName          string        // Run log directory prefix (defaults to "run")
+	TTY              bool          // Give the command a terminal (--tty)
 }
 
 // Run syncs files and executes a command on the remote host.
@@ -59,6 +60,7 @@ func Run(opts RunOptions) (int, error) {
 		Quiet:            opts.Quiet,
 		Local:            opts.Local,
 		Command:          opts.Command,
+		TTY:              opts.TTY,
 	})
 	if err != nil {
 		return 1, err
@@ -83,7 +85,7 @@ func Run(opts RunOptions) (int, error) {
 	if logName == "" {
 		logName = "run"
 	}
-	logPath, closeLog := setupRunLog(wf, logName, streamHandler)
+	logPath, ttyOutput, closeLog := runOutput(wf, opts.TTY, logName, streamHandler)
 	defer closeLog()
 
 	execStart := time.Now()
@@ -110,14 +112,14 @@ func Run(opts RunOptions) (int, error) {
 		// localRunDir re-stats and degrades to the project root, so a second
 		// computation could silently discard an explicit --cwd that passed
 		// validation a moment ago.
-		exitCode, err = exec.ExecuteLocalContext(wf.Context(), opts.Command, offsetRunDir(wf, offset), streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = runLocal(wf.Context(), opts.TTY, opts.Command, offsetRunDir(wf, offset), streamHandler)
 	} else {
 		remoteProjectDir = config.ExpandRemote(wf.Conn.Host.Dir)
 		fullCmd, cmdErr := buildRemoteRunCommand(wf, opts, remoteProjectDir)
 		if cmdErr != nil {
 			return 1, cmdErr
 		}
-		exitCode, err = wf.Conn.Client.ExecStreamContext(wf.Context(), fullCmd, streamHandler.Stdout(), streamHandler.Stderr())
+		exitCode, err = runRemote(wf.Context(), wf.Conn.Client, opts.TTY, fullCmd, ttyOutput, streamHandler)
 	}
 	execDuration := time.Since(execStart)
 	streamHandler.Flush()
@@ -147,9 +149,11 @@ func Run(opts RunOptions) (int, error) {
 	}
 
 	// Post-failure hint: detect local-machine assumptions (paths that only
-	// exist here, git commands against the synced snapshot).
+	// exist here, git commands against the synced snapshot). The hints read
+	// stderr, which a --tty run doesn't have: with it empty, a 127 would
+	// blame the command's first word.
 	failureHint := ""
-	if exitCode != 0 {
+	if exitCode != 0 && !opts.TTY {
 		stderr := streamHandler.GetStderrCapture()
 		if !wf.Conn.InPlace() {
 			failureHint = buildFailureHint(opts.Command, stderr, wf.WorkDir, remoteProjectDir, wf.Conn.Name)
@@ -183,11 +187,16 @@ func Run(opts RunOptions) (int, error) {
 		return exitCode, nil
 	}
 
-	// Pretty mode: check for failures, test summaries, etc.
-	failureExplained, retry := explainRunFailure(wf, opts, streamHandler, outcome, exitCode, execDuration)
-	if retry {
-		wf.Close()
-		return Run(opts)
+	// Pretty mode: check for failures, test summaries, etc. Not for --tty:
+	// missing-tool detection reads stderr, which a PTY merges into stdout.
+	failureExplained := false
+	if !opts.TTY {
+		var retry bool
+		failureExplained, retry = explainRunFailure(wf, opts, streamHandler, outcome, exitCode, execDuration)
+		if retry {
+			wf.Close()
+			return Run(opts)
+		}
 	}
 
 	wf.PhaseDisplay.ThinDivider()
@@ -550,6 +559,7 @@ type runCmdFlags struct {
 	PullDest         string
 	RemoteCWD        string
 	Tail             int
+	TTY              bool
 }
 
 // runCommand is the shared implementation behind 'rr run' and 'rr exec'.
@@ -567,6 +577,14 @@ func runCommand(args []string, f runCmdFlags) error {
 	probeTimeout, err := ParseProbeTimeout(f.ProbeTimeout)
 	if err != nil {
 		return err
+	}
+
+	if f.TTY {
+		req := currentTTYRequest()
+		req.repeat = f.Repeat
+		if err := checkTTYRequest(req); err != nil {
+			return err
+		}
 	}
 
 	// Join all args as the command (handles "rr run make test")
@@ -598,6 +616,7 @@ func runCommand(args []string, f runCmdFlags) error {
 		RemoteCWD:        f.RemoteCWD,
 		Tail:             f.Tail,
 		LogName:          f.Verb,
+		TTY:              f.TTY,
 	})
 
 	if err != nil {
