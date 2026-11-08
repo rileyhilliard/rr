@@ -393,7 +393,17 @@ func TestGetSSHErrorSuggestion(t *testing.T) {
 				Reason:   host.ProbeFailHostKey,
 			},
 			alias:    "user@example.com",
-			contains: []string{"StrictHostKeyChecking=accept-new", "user@example.com"},
+			contains: []string{"ssh -v user@example.com", "StrictHostKeyChecking"},
+		},
+		{
+			name: "unknown host key uses the dial's advice",
+			err: &host.ProbeError{
+				SSHAlias: "test",
+				Reason:   host.ProbeFailHostKey,
+				Cause:    errors.WrapWithCode(fmt.Errorf("knownhosts: key is unknown"), errors.ErrSSH, "handshake failed", "advice for this host's settings"),
+			},
+			alias:    "myserver",
+			contains: []string{"advice for this host's settings"},
 		},
 		{
 			name: "host key mismatch with detailed error extracts real suggestion",

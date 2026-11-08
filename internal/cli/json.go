@@ -207,7 +207,9 @@ func probeErrorToJSON(probeErr *host.ProbeError) *JSONError {
 		suggestion = "Deploy SSH key: ssh-copy-id " + probeErr.SSHAlias
 	case host.ProbeFailHostKey:
 		code = ErrCodeSSHHostKey
-		suggestion = "Accept host key: ssh -o StrictHostKeyChecking=accept-new " + probeErr.SSHAlias + " exit"
+		// Only reached without a structured cause from the dial, so this
+		// can't know the host's known_hosts settings: point at the check.
+		suggestion = "See why the host key isn't trusted: ssh -v " + probeErr.SSHAlias + ". rr follows StrictHostKeyChecking and UserKnownHostsFile for the host in ~/.ssh/config"
 	case host.ProbeFailDNS:
 		code = ErrCodeSSHConnectionFail
 		suggestion = "Check hostname spelling and SSH config"

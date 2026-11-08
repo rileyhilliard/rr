@@ -17,6 +17,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -652,6 +653,20 @@ func TestBuildSSHCmd(t *testing.T) {
 		assert.Contains(t, cmd, "ControlPath=")
 		assert.Contains(t, cmd, "ControlPersist=60")
 		assert.Contains(t, cmd, "BatchMode=yes")
+	})
+
+	t.Run("checks host keys by default", func(t *testing.T) {
+		SSHConfigFile = ""
+		assert.NotContains(t, buildSSHCmd(), "StrictHostKeyChecking")
+	})
+
+	// --no-strict-host-key-checking let rr's own connection through, so
+	// rsync's ssh has to skip the check too.
+	t.Run("no strict host key checking", func(t *testing.T) {
+		SSHConfigFile = ""
+		sshutil.StrictHostKeyChecking = false
+		t.Cleanup(func() { sshutil.StrictHostKeyChecking = true })
+		assert.Contains(t, buildSSHCmd(), "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null")
 	})
 
 	t.Run("custom config file", func(t *testing.T) {

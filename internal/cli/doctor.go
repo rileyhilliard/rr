@@ -703,7 +703,12 @@ func getSSHErrorSuggestion(err error, alias string) string {
 		if errors.As(probeErr.Cause, &hostKeyErr) {
 			return hostKeyErr.Suggestion()
 		}
-		return fmt.Sprintf("Update known_hosts: ssh -o StrictHostKeyChecking=accept-new %s exit", alias)
+		// The dial's own advice knows the host's known_hosts settings.
+		var rrErr *rrerrors.Error
+		if errors.As(probeErr.Cause, &rrErr) && rrErr.Suggestion != "" {
+			return rrErr.Suggestion
+		}
+		return fmt.Sprintf("See why the host key isn't trusted: ssh -v %s. rr follows StrictHostKeyChecking and UserKnownHostsFile for the host in ~/.ssh/config", alias)
 	default:
 		return fmt.Sprintf("Try connecting directly: ssh %s", alias)
 	}

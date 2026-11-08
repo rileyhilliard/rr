@@ -286,7 +286,7 @@ func TestSuggestionForHandshakeError(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), nil, "myhost")
+		suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), resolveSSHSettings("myhost"), "myhost")
 		if suggestion == "" {
 			t.Errorf("suggestionForHandshakeError(%q) returned empty string", tt.errMsg)
 		}
@@ -296,7 +296,7 @@ func TestSuggestionForHandshakeError(t *testing.T) {
 	}
 
 	// Test with encrypted keys
-	suggestion := suggestionForHandshakeError(errFromString("unable to authenticate"), []string{"/path/to/key"}, "myhost")
+	suggestion := suggestionForHandshakeError(errFromString("unable to authenticate"), &sshSettings{encryptedKeys: []string{"/path/to/key"}}, "myhost")
 	if !containsSubstring(suggestion, "ssh-add") || !containsSubstring(suggestion, "/path/to/key") {
 		t.Errorf("suggestionForHandshakeError with encrypted keys should suggest ssh-add, got: %q", suggestion)
 	}
@@ -851,14 +851,14 @@ func TestSuggestionForDialError_NetworkUnreachable(t *testing.T) {
 
 func TestSuggestionForHandshakeError_NoSupportedMethods(t *testing.T) {
 	err := errFromString("no supported methods remain")
-	suggestion := suggestionForHandshakeError(err, nil, "myhost")
+	suggestion := suggestionForHandshakeError(err, &sshSettings{}, "myhost")
 
 	assert.Contains(t, suggestion, "Auth failed")
 }
 
 func TestSuggestionForHandshakeError_HostKey(t *testing.T) {
 	err := errFromString("host key verification failed")
-	suggestion := suggestionForHandshakeError(err, nil, "myhost")
+	suggestion := suggestionForHandshakeError(err, &sshSettings{}, "myhost")
 
 	assert.Contains(t, suggestion, "Host key")
 }
@@ -1008,8 +1008,9 @@ func TestSshAgentAuth_NoSocket(t *testing.T) {
 
 // Tests for createHostKeyCallback function
 
-func TestCreateHostKeyCallback_CreatesKnownHostsIfMissing(t *testing.T) {
+func TestLoadKnownHosts_CreatesDefaultKnownHostsIfMissing(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
 	sshDir := filepath.Join(tmpDir, ".ssh")
 	knownHostsPath := filepath.Join(sshDir, "known_hosts")
 
@@ -1017,9 +1018,9 @@ func TestCreateHostKeyCallback_CreatesKnownHostsIfMissing(t *testing.T) {
 	_, err := os.Stat(sshDir)
 	assert.True(t, os.IsNotExist(err))
 
-	callback, err := createHostKeyCallback(knownHostsPath)
+	files, err := loadKnownHosts([]string{knownHostsPath}, nil)
 	require.NoError(t, err)
-	assert.NotNil(t, callback)
+	assert.Equal(t, []string{knownHostsPath}, files)
 
 	// Verify known_hosts was created
 	info, err := os.Stat(knownHostsPath)
@@ -1035,7 +1036,7 @@ func TestCreateHostKeyCallback_ExistingKnownHosts(t *testing.T) {
 	err := os.WriteFile(knownHostsPath, []byte{}, 0600)
 	require.NoError(t, err)
 
-	callback, err := createHostKeyCallback(knownHostsPath)
+	callback, err := createHostKeyCallback([]string{knownHostsPath}, hostKeyStrict, knownHostsPath)
 	require.NoError(t, err)
 	assert.NotNil(t, callback)
 }
@@ -1363,7 +1364,7 @@ func TestSuggestionForHandshakeError_AllPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), tt.encryptedKeys, "myhost")
+			suggestion := suggestionForHandshakeError(errFromString(tt.errMsg), &sshSettings{encryptedKeys: tt.encryptedKeys}, "myhost")
 			for _, substr := range tt.contains {
 				assert.Contains(t, suggestion, substr)
 			}
@@ -1441,17 +1442,11 @@ func TestKeyFileAuth_ValidKey(t *testing.T) {
 
 // Tests for createHostKeyCallback error handling
 
-func TestCreateHostKeyCallback_InvalidDirectory(t *testing.T) {
-	// Try to create known_hosts in a read-only directory
-	// This is tricky to test portably, so we just verify the function handles errors
-
-	// Test with a path where parent doesn't exist and can't be created
-	callback, err := createHostKeyCallback("/nonexistent/deep/path/known_hosts")
-
-	// Should fail because parent directories can't be created
-	// But might succeed on some systems, so just verify no panic
-	_ = callback
-	_ = err
+func TestLoadKnownHosts_SkipsMissingFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	files, err := loadKnownHosts([]string{"/nonexistent/deep/path/known_hosts"}, []string{"/nonexistent/ssh_known_hosts"})
+	require.NoError(t, err)
+	assert.Empty(t, files)
 }
 
 func TestCreateHostKeyCallback_WithEntries(t *testing.T) {
@@ -1463,7 +1458,7 @@ func TestCreateHostKeyCallback_WithEntries(t *testing.T) {
 	err := os.WriteFile(knownHostsPath, []byte(entry+"\n"), 0600)
 	require.NoError(t, err)
 
-	callback, err := createHostKeyCallback(knownHostsPath)
+	callback, err := createHostKeyCallback([]string{knownHostsPath}, hostKeyStrict, knownHostsPath)
 	require.NoError(t, err)
 	assert.NotNil(t, callback)
 }
