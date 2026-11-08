@@ -933,11 +933,16 @@ func unknownHostKeySuggestion(settings *sshSettings, host string) string {
 	}
 	if settings.unsupportedKnownHosts != "" {
 		// ssh would record the key in the file rr skipped, where rr won't
-		// find it, so neither ssh nor accept-new helps here.
+		// find it, so neither ssh nor accept-new helps here. Only under
+		// accept-new did rr pass up accepting the key, so only then say so.
+		strict := ""
+		if settings.hostKeyPolicy == hostKeyAcceptNew {
+			strict = ", and it checks keys strictly rather than accept ones it can't record"
+		}
 		return fmt.Sprintf("Host key not trusted. The first UserKnownHostsFile for '%s', %s, is a path rr can't use (it uses %% tokens, an unset variable, or isn't absolute), "+
-			"so rr checked %s, and it checks keys strictly rather than accept ones it can't record. "+
+			"so rr checked %s%s. "+
 			"List a plain path such as ~/.ssh/known_hosts first in UserKnownHostsFile for '%s' in ~/.ssh/config, then accept the key once: ssh -o StrictHostKeyChecking=accept-new %s exit",
-			host, settings.unsupportedKnownHosts, checked, host, host)
+			host, settings.unsupportedKnownHosts, checked, strict, host, host)
 	}
 	// ssh records new keys only in the first UserKnownHostsFile, so with
 	// /dev/null first, accepting the key with ssh records it nowhere.

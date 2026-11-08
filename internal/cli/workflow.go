@@ -801,14 +801,6 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 			ctx.Close()
 			return nil, err
 		}
-		// Which connection a remote run gets (a local host, a fallback) is
-		// only known now, so this --tty check can't happen with the flag
-		// checks. It still comes before requirements and sync, which would
-		// be wasted work.
-		if err := checkTTYTarget(ctx, opts); err != nil {
-			ctx.Close()
-			return nil, err
-		}
 	}
 
 	// Phase 3: Check requirements (before sync)
@@ -827,7 +819,10 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 }
 
 // checkTTYTarget runs checkTTYConnection on the picked connection when the
-// run asked for --tty.
+// run asked for --tty. Callers run it before lockPhase: which connection a
+// run gets (a local host, a fallback) is only known after connecting, and a
+// busy local host would otherwise hold the run for lock.timeout only to
+// refuse it.
 func checkTTYTarget(ctx *WorkflowContext, opts WorkflowOptions) error {
 	if !opts.TTY {
 		return nil
@@ -852,8 +847,12 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 			return explainNoFallback(ctx, opts.TaskName, err)
 		}
 		// A fallback took no lock while picking; lock it now (a no-op for
-		// bare local execution).
+		// bare local execution). With a global local host the fallback
+		// runs on it, which --tty can't use.
 		if ctx.Conn.LocalReason != "" {
+			if err := checkTTYTarget(ctx, opts); err != nil {
+				return err
+			}
 			return lockPhase(ctx, opts)
 		}
 		recordLocalJob(ctx)
@@ -865,6 +864,9 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return explainNoFallback(ctx, opts.TaskName, err)
 	}
 	if err := checkTaskHost(ctx, opts.TaskName); err != nil {
+		return err
+	}
+	if err := checkTTYTarget(ctx, opts); err != nil {
 		return err
 	}
 	// Phase 2: Acquire lock (before sync)

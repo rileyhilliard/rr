@@ -101,24 +101,47 @@ func expandKnownHostsPath(p string) (expanded, reason string) {
 	if strings.Contains(p, "%") {
 		return "", "uses % tokens, which rr doesn't expand"
 	}
-	// OpenSSH refuses a path naming an unset variable. Expanding it to ""
-	// would turn ${NOPE}/known_hosts into /known_hosts, so rr skips it too.
-	var unset string
-	p = os.Expand(p, func(name string) string {
-		v := os.Getenv(name)
-		if v == "" && unset == "" {
-			unset = name
-		}
-		return v
-	})
-	if unset != "" {
-		return "", "uses $" + unset + ", which isn't set"
+	p, reason = expandBracedEnv(p)
+	if reason != "" {
+		return "", reason
 	}
 	p = expandPath(p)
 	if !filepath.IsAbs(p) {
 		return "", "isn't an absolute path (start it with / or ~/)"
 	}
 	return p, ""
+}
+
+// expandBracedEnv expands ${NAME} as OpenSSH does in known_hosts paths. Only
+// the braced form is a variable: a bare $NAME, $1 or $$ stays as written,
+// which os.Expand would not leave alone. A variable set to "" expands to "".
+// OpenSSH refuses a path naming an unset variable (expanding it to "" would
+// turn ${NOPE}/known_hosts into /known_hosts), or an unterminated or empty
+// ${, so rr skips such a path too.
+func expandBracedEnv(p string) (expanded, reason string) {
+	var b strings.Builder
+	for {
+		start := strings.Index(p, "${")
+		if start < 0 {
+			b.WriteString(p)
+			return b.String(), ""
+		}
+		end := strings.IndexByte(p[start+2:], '}')
+		if end < 0 {
+			return "", "has a ${ with no closing }"
+		}
+		name := p[start+2 : start+2+end]
+		if name == "" {
+			return "", "has an empty ${}"
+		}
+		value, ok := os.LookupEnv(name)
+		if !ok {
+			return "", "uses ${" + name + "}, which isn't set"
+		}
+		b.WriteString(p[:start])
+		b.WriteString(value)
+		p = p[start+2+end+1:]
+	}
 }
 
 // warned holds the warnings already shown, so one that would repeat on every
@@ -243,11 +266,19 @@ func acceptNewKey(files []string, appendTo, hostname string, remote net.Addr, ke
 	}
 	recheck, err := knownhosts.New(current...)
 	if err != nil {
-		// A file that parsed when the dial started no longer does (something
-		// rewrote it since), so report it as loadKnownHosts would.
+		// One of the files doesn't parse now: one that parsed when the dial
+		// started was rewritten since, or appendTo was created by someone
+		// else after the dial. Name that file, as loadKnownHosts would.
+		bad := strings.Join(current, ", ")
+		for _, path := range current {
+			if _, fileErr := knownhosts.New(path); fileErr != nil {
+				bad, err = path, fileErr
+				break
+			}
+		}
 		return errors.WrapWithCode(err, errors.ErrSSH,
-			fmt.Sprintf("Couldn't read known_hosts file %s", strings.Join(current, ", ")),
-			"Fix or remove the line the error names (ssh-keygen -R <host> -f "+appendTo+" removes a host's entries), "+
+			fmt.Sprintf("Couldn't read known_hosts file %s", bad),
+			"Fix or remove the line the error names (ssh-keygen -R <host> -f "+bad+" removes a host's entries), "+
 				"or point UserKnownHostsFile for this host at another file in ~/.ssh/config")
 	}
 	err = recheck(hostname, remote, key)

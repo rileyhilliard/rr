@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
@@ -67,11 +68,21 @@ func checkTTYRequest(r ttyRequest) error {
 // in rr's terminal and is fine.
 func checkTTYConnection(conn *host.Connection) error {
 	if _, ok := conn.Client.(*host.LocalClient); ok {
-		return errors.New(errors.ErrConfig,
-			fmt.Sprintf("--tty doesn't work on '%s', a local: true host", conn.Name),
-			"A local host runs commands detached from the terminal. Use a remote host with --host, or run without --tty.")
+		return ttyLocalHostError(conn.Name)
 	}
 	return nil
+}
+
+// ttyLocalHostError explains why --tty can't run on the named local: true
+// hosts.
+func ttyLocalHostError(names ...string) error {
+	what := fmt.Sprintf("'%s', a local: true host", names[0])
+	if len(names) > 1 {
+		what = fmt.Sprintf("'%s', local: true hosts", strings.Join(names, "', '"))
+	}
+	return errors.New(errors.ErrConfig,
+		"--tty doesn't work on "+what,
+		"A local host runs commands detached from the terminal. Use a remote host with --host, or run without --tty.")
 }
 
 // parallelTaskTTYError explains --tty on a parallel task, which doesn't
@@ -89,10 +100,17 @@ func parallelTaskTTYError(name string, err error) error {
 }
 
 // warnTerminalRestore tells the user how to fix a terminal a --tty command
-// left in raw mode, for a run that ends without reporting its error: a
-// cancelled run returns 130 and drops it.
-func warnTerminalRestore(err error) {
+// left in raw mode, when the restore error won't reach them otherwise: a
+// cancelled run returns 130 and drops err, and a failed run reports only
+// its first structured error (ErrorToJSON), which can be the command's.
+// When the restore error is the one reported, it already carries the
+// advice, so a warning would say it twice.
+func warnTerminalRestore(err error, cancelled bool) {
 	if !stderrors.Is(err, tty.ErrRestore) {
+		return
+	}
+	var reported *errors.Error
+	if !cancelled && stderrors.As(err, &reported) && stderrors.Is(reported, tty.ErrRestore) {
 		return
 	}
 	const msg = "Couldn't restore the terminal after the command"

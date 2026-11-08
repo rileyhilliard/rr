@@ -103,7 +103,13 @@ func TestResolveSSHSettings_HostKeySettings(t *testing.T) {
 		{name: "${VAR} expanded", host: "target", config: "Host target\n  UserKnownHostsFile ${RR_KH_DIR}/kh\n",
 			wantUser: []string{"/srv/rr/kh"}, wantGlobal: []string{defaultGlobalKnownHosts}},
 		{name: "unset ${VAR} skipped with a warning", host: "target", config: "Host target\n  UserKnownHostsFile ${RR_KH_NOPE}/kh ~/.ssh/other\n",
-			wantUser: []string{".ssh/other"}, wantGlobal: []string{defaultGlobalKnownHosts}, wantWarning: "RR_KH_NOPE"},
+			wantUser: []string{".ssh/other"}, wantGlobal: []string{defaultGlobalKnownHosts}, wantWarning: "${RR_KH_NOPE}, which isn't set"},
+		{name: "bare $ and $1 used literally", host: "target", config: "Host target\n  UserKnownHostsFile ~/.ssh/kh$1 ~/.ssh/kh$RR_KH_DIR\n",
+			wantUser: []string{".ssh/kh$1", ".ssh/kh$RR_KH_DIR"}, wantGlobal: []string{defaultGlobalKnownHosts}},
+		{name: "${VAR} set to empty expands to empty", host: "target", config: "Host target\n  UserKnownHostsFile ~/.ssh/kh${RR_KH_EMPTY}\n",
+			wantUser: []string{".ssh/kh"}, wantGlobal: []string{defaultGlobalKnownHosts}},
+		{name: "unterminated ${ skipped with a warning", host: "target", config: "Host target\n  UserKnownHostsFile ~/.ssh/kh${RR_KH_DIR ~/.ssh/other\n",
+			wantUser: []string{".ssh/other"}, wantGlobal: []string{defaultGlobalKnownHosts}, wantWarning: "no closing }"},
 		{name: "relative path skipped with a warning", host: "target", config: "Host target\n  UserKnownHostsFile kh ~/.ssh/other\n",
 			wantUser: []string{".ssh/other"}, wantGlobal: []string{defaultGlobalKnownHosts}, wantWarning: "isn't an absolute path"},
 		{name: "global files", host: "target", config: "Host target\n  GlobalKnownHostsFile /etc/rr/global /dev/null\n",
@@ -116,6 +122,7 @@ func TestResolveSSHSettings_HostKeySettings(t *testing.T) {
 			withSSHConfig(t, tt.config)
 			t.Setenv("RR_TEST_SSH_USER", "")
 			t.Setenv("RR_KH_DIR", "/srv/rr")
+			t.Setenv("RR_KH_EMPTY", "")
 			warnings := captureWarnings(t)
 			home := os.Getenv("HOME")
 
@@ -339,18 +346,22 @@ func TestDial_AcceptNewWithDevNullFirstWritesNothing(t *testing.T) {
 
 // A first UserKnownHostsFile rr can't use is where ssh would record new keys.
 // Accepting keys and recording none would trust any key on every
-// connection, so accept-new checks strictly instead.
+// connection, so accept-new checks strictly instead. Only accept-new's
+// advice says so: under yes, rr checks strictly anyway.
 func TestDial_AcceptNewWithAnUnusableFirstFileChecksStrictly(t *testing.T) {
 	tests := []struct {
-		name  string
-		files string
+		name         string
+		policy       string
+		files        string
+		strictReason bool
 	}{
-		{"only a % token path", "~/.ssh/known_hosts.d/%k"},
-		{"% token path, then a usable file", "~/.ssh/known_hosts.d/%k ~/.ssh/other_known_hosts"},
+		{"only a % token path", "accept-new", "~/.ssh/known_hosts.d/%k", true},
+		{"% token path, then a usable file", "accept-new", "~/.ssh/known_hosts.d/%k ~/.ssh/other_known_hosts", true},
+		{"yes with a % token path first", "yes", "~/.ssh/known_hosts.d/%k ~/.ssh/other_known_hosts", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hostKeyTarget(t, "  StrictHostKeyChecking accept-new\n  UserKnownHostsFile "+tt.files+"\n")
+			hostKeyTarget(t, "  StrictHostKeyChecking "+tt.policy+"\n  UserKnownHostsFile "+tt.files+"\n")
 			captureWarnings(t)
 
 			_, err := Dial("target", 5*time.Second)
@@ -360,6 +371,12 @@ func TestDial_AcceptNewWithAnUnusableFirstFileChecksStrictly(t *testing.T) {
 			assert.Contains(t, msg, "Host key not trusted")
 			assert.Contains(t, msg, "~/.ssh/known_hosts.d/%k")
 			assert.Contains(t, msg, "rr can't use")
+			assert.Contains(t, msg, "ssh -o StrictHostKeyChecking=accept-new target exit")
+			if tt.strictReason {
+				assert.Contains(t, msg, "rather than accept ones it can't record")
+			} else {
+				assert.NotContains(t, msg, "rather than accept")
+			}
 			assert.NotContains(t, msg, "none or /dev/null")
 			assert.NoFileExists(t, filepath.Join(os.Getenv("HOME"), ".ssh", "other_known_hosts"))
 			assert.NoDirExists(t, filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts.d"))
@@ -367,23 +384,45 @@ func TestDial_AcceptNewWithAnUnusableFirstFileChecksStrictly(t *testing.T) {
 	}
 }
 
+// A file that fails to parse on the re-check under the lock is named on its
+// own, whichever of the files it is, so the suggestion's ssh-keygen -f
+// points at the file to fix.
 func TestAcceptNewKey_UnparseableOnRecheckIsAStructuredError(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "known_hosts")
-	require.NoError(t, os.WriteFile(good, nil, 0o600))
-	// appendTo wasn't among the files read at dial time and has since been
-	// written with a bad line, so the re-check under the lock fails to parse.
-	bad := filepath.Join(dir, "rr_known_hosts")
-	require.NoError(t, os.WriteFile(bad, []byte("example.com ssh-ed25519 not-base64!!\n"), 0o600))
+	const badLine = "example.com ssh-ed25519 not-base64!!\n"
+	tests := []struct {
+		name    string
+		badFile string // "appendTo" or "read"
+	}{
+		// appendTo wasn't among the files read at dial time, and someone
+		// else created it with a bad line since.
+		{name: "appendTo created after the dial", badFile: "appendTo"},
+		// A file read at dial time was rewritten with a bad line since.
+		{name: "a file read at dial time rewritten", badFile: "read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			read := filepath.Join(dir, "known_hosts")
+			appendTo := filepath.Join(dir, "rr_known_hosts")
+			require.NoError(t, os.WriteFile(read, nil, 0o600))
+			require.NoError(t, os.WriteFile(appendTo, nil, 0o600))
+			bad, good := appendTo, read
+			if tt.badFile == "read" {
+				bad, good = read, appendTo
+			}
+			require.NoError(t, os.WriteFile(bad, []byte(badLine), 0o600))
 
-	err := acceptNewKey([]string{good}, bad, "example.com:22", proxyAddr{addr: "example.com:22"}, otherHostKey(t))
+			err := acceptNewKey([]string{read}, appendTo, "example.com:22", proxyAddr{addr: "example.com:22"}, otherHostKey(t))
 
-	require.Error(t, err)
-	var rrErr *errors.Error
-	require.True(t, stderrors.As(err, &rrErr))
-	assert.Equal(t, errors.ErrSSH, rrErr.Code)
-	assert.Contains(t, rrErr.Message, bad)
-	assert.Contains(t, rrErr.Suggestion, "ssh-keygen -R <host> -f "+bad)
+			require.Error(t, err)
+			var rrErr *errors.Error
+			require.True(t, stderrors.As(err, &rrErr))
+			assert.Equal(t, errors.ErrSSH, rrErr.Code)
+			assert.Contains(t, rrErr.Message, bad)
+			assert.NotContains(t, rrErr.Message, good)
+			assert.Contains(t, rrErr.Suggestion, "ssh-keygen -R <host> -f "+bad+" ")
+		})
+	}
 }
 
 func TestDial_AcceptNewWarnsAndConnectsWhenItCantWrite(t *testing.T) {

@@ -199,7 +199,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	// Before any return below: a cancelled run drops err, and a failed one
 	// reports only its first structured error, so the stty advice would be
 	// lost either way.
-	warnTerminalRestore(err)
+	warnTerminalRestore(err, wf.Context().Err() != nil)
 
 	// If cancelled by signal, return standard Ctrl+C exit code
 	if wf.Context().Err() != nil {

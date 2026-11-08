@@ -196,7 +196,10 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 	// Host order is determined by project config (hosts list order) or alphabetical for global hosts
 	hostNames := ctx.selector.GetHostNames()
 	if opts.TTY {
-		hostNames = ttyCandidates(hostNames, ctx.Resolved.Global.Hosts)
+		var err error
+		if hostNames, err = ttyCandidates(hostNames, ctx.Resolved.Global.Hosts); err != nil {
+			return nil, err
+		}
 	}
 
 	if len(hostNames) == 0 {
@@ -337,19 +340,19 @@ func findAvailableHost(ctx *WorkflowContext, opts WorkflowOptions) (*findAvailab
 // ttyCandidates drops local: true hosts from a --tty run's candidates when
 // another host is left: a local host can't give the command a terminal, so
 // picking it would refuse the run while a remote further down is free. With
-// only local hosts the list stays as is, and the run is refused with the
-// reason after connecting.
-func ttyCandidates(names []string, hosts map[string]config.Host) []string {
+// only local hosts it refuses the run up front, before probing or waiting
+// on a busy host's lock.
+func ttyCandidates(names []string, hosts map[string]config.Host) ([]string, error) {
 	remote := make([]string, 0, len(names))
 	for _, name := range names {
 		if !hosts[name].Local {
 			remote = append(remote, name)
 		}
 	}
-	if len(remote) == 0 {
-		return names
+	if len(remote) == 0 && len(names) > 0 {
+		return nil, ttyLocalHostError(names...)
 	}
-	return remote
+	return remote, nil
 }
 
 // machineBusy reports whether the global config's local host, the one a
