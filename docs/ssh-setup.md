@@ -81,7 +81,7 @@ ssh user@your-remote-machine "echo 'SSH is working'"
 
 If this prints "SSH is working" without asking for a password, you're done.
 
-This first connection also matters for another reason: rr verifies host keys against `~/.ssh/known_hosts` and never prompts to accept a new one. Connect with `ssh` once per hostname or alias you list in rr's config, so the key gets recorded. Otherwise rr fails with a host key error (`SSH_HOST_KEY`).
+This first connection also matters for another reason: rr verifies host keys against `~/.ssh/known_hosts` (or the files your `~/.ssh/config` names) and can't prompt to accept a new one. Connect with `ssh` once per hostname or alias you list in rr's config, so the key gets recorded. Otherwise rr fails with a host key error (`SSH_HOST_KEY`). If you'd rather rr record new keys itself, set `StrictHostKeyChecking accept-new` for the host (see [How rr uses your SSH config](#how-rr-uses-your-ssh-config)).
 
 ## Using ssh-agent (for passphrase-protected keys)
 
@@ -198,11 +198,27 @@ rr runs commands over its own SSH client, not `ssh` (sync uses rsync, which does
 | `IdentityAgent` (1Password, Secretive, YubiKey agents) | Yes |
 | `ProxyCommand` | Yes |
 | `ProxyJump` | Yes. rr runs `ssh -W` to the jump host, as OpenSSH does, so the jump host is resolved through your config and your `ssh`. Chains (`a,b`) and `ProxyJump none` work. A `ProxyCommand` on the same host wins, where OpenSSH takes whichever comes first |
+| `StrictHostKeyChecking` | Yes: `yes`, `ask`, `accept-new`, `no`/`off`. See [Host keys](#host-keys) |
+| `UserKnownHostsFile`, `GlobalKnownHostsFile` | Yes, including several paths, `~`, `none` and `/dev/null`. Paths with `%` tokens are skipped with a warning |
 | `Match` blocks | No. Host entries after the first `Match` line aren't seen, so put the hosts rr uses above it |
 
 For authentication, rr tries the SSH agent first, then the `IdentityFile` from your config, then `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, and `~/.ssh/id_ecdsa`. It can't prompt for a passphrase, so passphrase-protected keys have to be loaded in the agent.
 
-For throwaway CI machines where host keys change on every run, `--no-strict-host-key-checking` skips host key verification. Don't use it for machines you care about.
+### Host keys
+
+rr checks each host's key against the files in `UserKnownHostsFile` (default `~/.ssh/known_hosts`) and `GlobalKnownHostsFile` (default `/etc/ssh/ssh_known_hosts`, when it exists). `none` or `/dev/null` means no file. What happens with an unknown key depends on the host's `StrictHostKeyChecking`:
+
+| Value | What rr does |
+|-------|--------------|
+| `yes`, `ask` (the default) | Fails with a host key error. rr can't prompt, so `ask` acts like `yes`, as it does for `ssh -o BatchMode=yes` |
+| `accept-new` | Appends the key to the host's first `UserKnownHostsFile` and connects. A key that changed still fails. With `UserKnownHostsFile /dev/null` it accepts the key for that connection and writes nothing. If the file can't be written, rr warns and connects anyway |
+| `no`, `off` | Doesn't check the key. Unlike OpenSSH, rr writes nothing to known_hosts in this mode |
+
+A known_hosts file rr can't parse stops the connection with an error naming the file, if it's one of your `UserKnownHostsFile` files. A bad global file is skipped with a warning. rr doesn't hash the lines it writes, whatever `HashKnownHosts` says.
+
+This is what lets VMs that ship their own SSH config work as they do with `ssh`. Lima, for example, writes `StrictHostKeyChecking no` and `UserKnownHostsFile /dev/null` for its VMs, so rr skips the check for them too.
+
+For throwaway CI machines where host keys change on every run, `--no-strict-host-key-checking` skips host key verification for every host, whatever `~/.ssh/config` says, and passes `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null` to the `ssh` that rsync and `ProxyJump` run. Don't use it for machines you care about.
 
 ## Troubleshooting
 
@@ -256,16 +272,19 @@ nc -zv your-remote-machine 22
 
 ### "Host key verification failed"
 
-Either you haven't connected with `ssh` yet (rr won't add new keys to `known_hosts` for you), or the remote machine's key changed (reinstalled OS, different machine at same IP, etc.).
+Either rr has no key for the host yet, or the remote machine's key changed (reinstalled OS, different machine at same IP, etc.). The error names the known_hosts files rr checked.
 
-First connection:
+First connection, with the default `StrictHostKeyChecking`:
 ```bash
 ssh -o StrictHostKeyChecking=accept-new your-remote-machine exit
 ```
 
-If the key changed and you trust the change:
+Or set `StrictHostKeyChecking accept-new` for the host in `~/.ssh/config`, and rr records the key itself on the next connection. If the host has `UserKnownHostsFile /dev/null`, accepting the key with `ssh` records it nowhere; use `StrictHostKeyChecking no` for a host like that (a local VM), or point `UserKnownHostsFile` at a real file.
+
+If the key changed and you trust the change, remove the old entry from the file the error names, then connect once to accept the new key. For a port other than 22 the entry is `[host]:port`:
 ```bash
-ssh-keygen -R your-remote-machine
+ssh-keygen -R your-remote-machine -f ~/.ssh/known_hosts
+ssh-keygen -R '[your-remote-machine]:2222' -f ~/.ssh/known_hosts
 ssh user@your-remote-machine   # Accept the new key
 ```
 
