@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -202,14 +203,15 @@ func (c *Client) newSSHSession() (*ssh.Session, error) {
 
 // sshSettings holds resolved SSH connection parameters.
 type sshSettings struct {
-	hostname      string
-	port          string
-	user          string
-	identityFile  string
-	proxyCommand  string   // ProxyCommand from SSH config, if any
-	jumpHosts     string   // ProxyJump from SSH config, if any and there's no ProxyCommand
-	identityAgent string   // IdentityAgent socket path from SSH config (if any)
-	encryptedKeys []string // Keys that exist but are encrypted
+	hostname       string
+	port           string
+	user           string
+	identityFile   string
+	proxyCommand   string   // ProxyCommand from SSH config, if any
+	jumpHosts      string   // ProxyJump from SSH config, if any and there's no ProxyCommand
+	identityAgent  string   // IdentityAgent socket path from SSH config (if any)
+	identitiesOnly bool     // IdentitiesOnly yes: offer only the host's identity files' keys
+	encryptedKeys  []string // Keys that exist but are encrypted
 
 	hostKeyPolicy    hostKeyPolicy // StrictHostKeyChecking from SSH config
 	userKnownHosts   []string      // UserKnownHostsFile paths; empty for none or /dev/null
@@ -332,6 +334,11 @@ func resolveSSHSettings(host string) *sshSettings {
 		hostFound = true
 	}
 
+	if identitiesOnly, _ := cfg.Get(host, "IdentitiesOnly"); identitiesOnly != "" {
+		settings.identitiesOnly = strings.EqualFold(strings.TrimSpace(identitiesOnly), "yes")
+		hostFound = true
+	}
+
 	// Get IdentityAgent (e.g. 1Password, YubiKey agent sockets)
 	if identityAgent, _ := cfg.Get(host, "IdentityAgent"); identityAgent != "" {
 		// Expand env vars first ($SSH_AUTH_SOCK), then tilde (~/)
@@ -389,9 +396,15 @@ var StrictHostKeyChecking = true
 func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
 
+	// Key files are collected into one publickey method with the agent's
+	// keys (below), not added as methods of their own: x/crypto/ssh tries
+	// only the first publickey method, so a key file listed after an agent
+	// that doesn't hold the host's key would never be offered.
+	var fileSigners []ssh.Signer
+
 	// Helper to try loading a key and track encrypted keys
 	tryKeyFile := func(keyPath string) {
-		keyAuth, err := keyFileAuth(keyPath)
+		signer, err := keyFileSigner(keyPath)
 		if err != nil {
 			var encErr *EncryptedKeyError
 			if stderrors.As(err, &encErr) {
@@ -400,7 +413,7 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 			// Other errors (file not found, etc.) are silently ignored
 			return
 		}
-		authMethods = append(authMethods, keyAuth)
+		fileSigners = append(fileSigners, signer)
 	}
 
 	// Check for test key override (for CI environments)
@@ -416,9 +429,24 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		authMethods = append(authMethods, keyAuth)
 	} else {
 		// Normal mode: try multiple auth methods
-		// Try SSH agent first (most common and convenient)
-		if agentAuth := sshAgentAuth(settings.identityAgent); agentAuth != nil {
-			authMethods = append(authMethods, agentAuth)
+		defaultKeys := []string{
+			filepath.Join(homeDir(), ".ssh", "id_ed25519"),
+			filepath.Join(homeDir(), ".ssh", "id_rsa"),
+			filepath.Join(homeDir(), ".ssh", "id_ecdsa"),
+		}
+
+		// Try SSH agent first (most common and convenient). With
+		// IdentitiesOnly, only the agent keys matching the host's identity
+		// files are offered: every other key counts against the server's
+		// MaxAuthTries, and an agent with a handful of keys can use them up
+		// before the right one is tried.
+		fromAgent := agentSigners(settings.identityAgent)
+		if fromAgent != nil && settings.identitiesOnly {
+			identities := defaultKeys
+			if settings.identityFile != "" {
+				identities = []string{settings.identityFile}
+			}
+			fromAgent = onlySigners(fromAgent, identityPublicKeys(identities))
 		}
 
 		// Try specific identity file from SSH config
@@ -426,18 +454,17 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 			tryKeyFile(settings.identityFile)
 		}
 
-		// Try default key files
-		defaultKeys := []string{
-			filepath.Join(homeDir(), ".ssh", "id_ed25519"),
-			filepath.Join(homeDir(), ".ssh", "id_rsa"),
-			filepath.Join(homeDir(), ".ssh", "id_ecdsa"),
-		}
-
+		// Try default key files, unless IdentitiesOnly limits auth to the
+		// host's own IdentityFile.
 		for _, keyPath := range defaultKeys {
-			if keyPath == settings.identityFile {
-				continue // Already tried this one
+			if keyPath == settings.identityFile || (settings.identitiesOnly && settings.identityFile != "") {
+				continue // Already tried this one, or not this host's key
 			}
 			tryKeyFile(keyPath)
+		}
+
+		if fromAgent != nil || len(fileSigners) > 0 {
+			authMethods = append(authMethods, ssh.PublicKeysCallback(combinedSigners(fromAgent, fileSigners)))
 		}
 	}
 
@@ -515,6 +542,16 @@ var (
 // If identityAgent is "none", agent auth is explicitly disabled.
 // The default SSH_AUTH_SOCK connection is cached; per-host connections are tracked for cleanup.
 func sshAgentAuth(identityAgent string) ssh.AuthMethod {
+	signers := agentSigners(identityAgent)
+	if signers == nil {
+		return nil
+	}
+	return ssh.PublicKeysCallback(signers)
+}
+
+// agentSigners returns the agent's key source for sshAgentAuth, or nil when
+// there's no usable agent or it holds no keys.
+func agentSigners(identityAgent string) func() ([]ssh.Signer, error) {
 	if identityAgent == "none" {
 		return nil
 	}
@@ -539,7 +576,7 @@ func sshAgentAuth(identityAgent string) ssh.AuthMethod {
 		perHostAgentConns = append(perHostAgentConns, conn)
 		perHostAgentConnsMu.Unlock()
 
-		return ssh.PublicKeysCallback(client.Signers)
+		return client.Signers
 	}
 
 	// Default: use SSH_AUTH_SOCK with cached connection
@@ -568,7 +605,7 @@ func sshAgentAuth(identityAgent string) ssh.AuthMethod {
 		return nil
 	}
 
-	return ssh.PublicKeysCallback(agentClient.Signers)
+	return agentClient.Signers
 }
 
 // CloseAgent closes all SSH agent connections (both default and per-host).
@@ -587,7 +624,72 @@ func CloseAgent() {
 
 // keyFileAuth returns an auth method using a private key file.
 // Returns EncryptedKeyError if the key requires a passphrase.
+// identityPublicKeys returns the public keys of the given identity files,
+// read from each one's .pub file, or from the private key itself when it
+// isn't encrypted. A file whose key can't be read is left out, as OpenSSH
+// leaves it out.
+func identityPublicKeys(paths []string) [][]byte {
+	var keys [][]byte
+	for _, path := range paths {
+		if data, err := os.ReadFile(path + ".pub"); err == nil {
+			if pub, _, _, _, err := ssh.ParseAuthorizedKey(data); err == nil {
+				keys = append(keys, pub.Marshal())
+				continue
+			}
+		}
+		if data, err := os.ReadFile(path); err == nil {
+			if signer, err := ssh.ParsePrivateKey(data); err == nil {
+				keys = append(keys, signer.PublicKey().Marshal())
+			}
+		}
+	}
+	return keys
+}
+
+// combinedSigners offers the agent's keys first, then the key files'. An
+// agent that can't list its keys is skipped rather than failing auth, so the
+// key files still get their turn.
+func combinedSigners(fromAgent func() ([]ssh.Signer, error), files []ssh.Signer) func() ([]ssh.Signer, error) {
+	return func() ([]ssh.Signer, error) {
+		var all []ssh.Signer
+		if fromAgent != nil {
+			if agentKeys, err := fromAgent(); err == nil {
+				all = append(all, agentKeys...)
+			}
+		}
+		return append(all, files...), nil
+	}
+}
+
+// onlySigners narrows an agent's keys to those in allowed (marshaled public
+// keys), for IdentitiesOnly.
+func onlySigners(signers func() ([]ssh.Signer, error), allowed [][]byte) func() ([]ssh.Signer, error) {
+	return func() ([]ssh.Signer, error) {
+		all, err := signers()
+		if err != nil {
+			return nil, err
+		}
+		var kept []ssh.Signer
+		for _, s := range all {
+			if slices.ContainsFunc(allowed, func(k []byte) bool { return bytes.Equal(k, s.PublicKey().Marshal()) }) {
+				kept = append(kept, s)
+			}
+		}
+		return kept, nil
+	}
+}
+
 func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
+	signer, err := keyFileSigner(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.PublicKeys(signer), nil
+}
+
+// keyFileSigner loads the private key at keyPath, paired with its
+// certificate (keyPath-cert.pub) when there is one.
+func keyFileSigner(keyPath string) (ssh.Signer, error) {
 	key, err := os.ReadFile(keyPath)
 	if err != nil {
 		return nil, err
@@ -617,11 +719,11 @@ func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 		} else if certSigner, certErr := ssh.NewCertSigner(cert, signer); certErr != nil {
 			emitWarning(fmt.Sprintf("Found certificate %s but couldn't use it: %v", certPath, certErr))
 		} else {
-			return ssh.PublicKeys(certSigner), nil
+			return certSigner, nil
 		}
 	}
 
-	return ssh.PublicKeys(signer), nil
+	return signer, nil
 }
 
 // Helper functions
