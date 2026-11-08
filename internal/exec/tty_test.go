@@ -48,3 +48,16 @@ func TestExecuteTask_TTYRemote(t *testing.T) {
 		assert.False(t, client.called, "the command doesn't start without the terminal")
 	})
 }
+
+// A Ctrl+C between the steps of a steps: task stops the run: the next step
+// doesn't start, and the terminal is never touched.
+func TestExecuteTTY_CancelledBeforeStart(t *testing.T) {
+	client := &ttyClient{MockClient: sshtesting.NewMockClient("box")}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	exitCode, err := ExecuteTTY(ctx, client, "sudo true", nil)
+	assert.Equal(t, 130, exitCode)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.False(t, client.called)
+}

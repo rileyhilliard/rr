@@ -2,7 +2,7 @@ package exec
 
 import (
 	"context"
-	"fmt"
+	stderrors "errors"
 	"io"
 	"os"
 
@@ -13,9 +13,11 @@ import (
 
 // ExecuteTTY runs cmd on a remote PTY with the local terminal lent to it
 // (--tty). The terminal is in raw mode only while the command runs; it's
-// back to normal when this returns. The PTY merges stdout and stderr, and
-// all of it goes to output unbuffered.
-func ExecuteTTY(ctx context.Context, client sshutil.SSHClient, cmd string, output io.Writer) (int, error) {
+// back to normal when this returns, a panic included. The PTY merges stdout
+// and stderr, and all of it goes to output unbuffered. A failed terminal
+// restore is in the returned error (tty.ErrRestore), joined to the
+// command's own error if it has one.
+func ExecuteTTY(ctx context.Context, client sshutil.SSHClient, cmd string, output io.Writer) (exitCode int, err error) {
 	execer, ok := client.(sshutil.TTYExecer)
 	if !ok {
 		return -1, errors.New(errors.ErrExec,
@@ -23,13 +25,29 @@ func ExecuteTTY(ctx context.Context, client sshutil.SSHClient, cmd string, outpu
 			"Run without --tty.")
 	}
 
+	// A Ctrl+C between the steps of a steps: task must not start the next
+	// one, as RunLocalCommand does for local commands.
+	if ctx.Err() != nil {
+		return 130, ctx.Err()
+	}
+
 	session, err := tty.Start()
 	if err != nil {
 		return -1, err
 	}
+	defer func() {
+		closeErr := session.Close()
+		switch {
+		case closeErr == nil:
+		case err == nil:
+			err = closeErr
+		default:
+			err = stderrors.Join(err, closeErr)
+		}
+	}()
 
 	size := session.Size()
-	exitCode, err := execer.ExecTTYContext(ctx, cmd, sshutil.TTYOptions{
+	return execer.ExecTTYContext(ctx, cmd, sshutil.TTYOptions{
 		Term:   os.Getenv("TERM"),
 		Width:  size.Width,
 		Height: size.Height,
@@ -37,14 +55,4 @@ func ExecuteTTY(ctx context.Context, client sshutil.SSHClient, cmd string, outpu
 		Output: output,
 		Resize: session.Resize(),
 	})
-
-	if closeErr := session.Close(); closeErr != nil {
-		if err == nil {
-			return exitCode, closeErr
-		}
-		// The command's error is the result. The terminal is still raw,
-		// though, and the user needs to know how to fix it.
-		fmt.Fprintln(os.Stderr, closeErr)
-	}
-	return exitCode, err
 }

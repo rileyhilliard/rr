@@ -85,7 +85,7 @@ func Run(opts RunOptions) (int, error) {
 	if logName == "" {
 		logName = "run"
 	}
-	logPath, ttyOutput, closeLog := runOutput(wf, opts.TTY, logName, streamHandler)
+	logPath, ttyOutput, closeLog := runOutput(wf, opts.TTY, logName, opts.Tail, streamHandler)
 	defer closeLog()
 
 	execStart := time.Now()
@@ -123,6 +123,11 @@ func Run(opts RunOptions) (int, error) {
 	}
 	execDuration := time.Since(execStart)
 	streamHandler.Flush()
+
+	// Before any return below: a cancelled run drops err, and a failed one
+	// reports only its first structured error, so the stty advice would be
+	// lost either way.
+	warnTerminalRestore(err)
 
 	if wf.Context().Err() != nil {
 		return 130, nil

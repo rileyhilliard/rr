@@ -3,14 +3,17 @@ package cli
 import (
 	"bytes"
 	stderrors "errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/tty"
 	sshtesting "github.com/rileyhilliard/rr/pkg/sshutil/testing"
 	"github.com/spf13/cobra"
@@ -127,17 +130,31 @@ func TestTaskCommand_TTY(t *testing.T) {
 	})
 
 	for _, forwardArgs := range []bool{false, true} {
-		name := "parallel task"
-		if forwardArgs {
-			name += " with forward_args"
+		for _, tc := range []struct {
+			flag      string
+			ttyReason bool // the parallel-task --tty explanation, not the generic unknown-flag error
+		}{
+			{flag: "--tty", ttyReason: true},
+			{flag: "--ttyx"},
+			{flag: "--tty-foo"},
+		} {
+			name := "parallel task " + tc.flag
+			if forwardArgs {
+				name += " with forward_args"
+			}
+			t.Run(name, func(t *testing.T) {
+				cmd := createParallelTaskCommand("checks", config.TaskConfig{Parallel: []string{"lint", "test"}, ForwardArgs: forwardArgs})
+				quietCommand(cmd)
+				cmd.SetArgs([]string{tc.flag})
+				err := cmd.Execute()
+				if tc.ttyReason {
+					requireConfigErrorWithSuggestion(t, err, "parallel task 'checks'")
+					return
+				}
+				require.Error(t, err)
+				assert.NotContains(t, err.Error(), "--tty doesn't work with parallel task")
+			})
 		}
-		t.Run(name, func(t *testing.T) {
-			cmd := createParallelTaskCommand("checks", config.TaskConfig{Parallel: []string{"lint", "test"}, ForwardArgs: forwardArgs})
-			quietCommand(cmd)
-			cmd.SetArgs([]string{"--tty"})
-			err := cmd.Execute()
-			requireConfigErrorWithSuggestion(t, err, "parallel task 'checks'")
-		})
 	}
 }
 
@@ -166,6 +183,55 @@ func TestTTY_LocalHostRejectedBeforeRunning(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(projectDir, "task.out"))
 }
 
+// --local --tty with a local: true host is refused before its lock: a busy
+// host would otherwise hold the run for lock.timeout only to refuse it.
+func TestTTY_LocalTargetRejectedBeforeLockWait(t *testing.T) {
+	projectDir, lockDir := writeLocalHostConfigs(t)
+	t.Chdir(projectDir)
+
+	lockCfg := config.LockConfig{Enabled: true, Timeout: time.Second, Stale: time.Minute, Dir: filepath.Dir(lockDir)}
+	held, err := lock.TryAcquire(host.NewLocalHostConnection("dev", config.Host{Local: true}), lockCfg, "rr test (other run)")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = held.Release() })
+
+	start := time.Now()
+	captureStdout(t, func() {
+		captureStderr(t, func() {
+			_, err = Run(RunOptions{Command: "true", Local: true, TTY: true})
+		})
+	})
+	requireConfigErrorWithSuggestion(t, err, "'dev', a local: true host")
+	assert.Less(t, time.Since(start), 5*time.Second, "refused without waiting for the held lock")
+}
+
+// Under --tty the load balancer passes over a local: true host while a
+// remote is left to try, and keeps it when it's the only kind there is.
+func TestFindAvailableHost_TTYSkipsLocalHost(t *testing.T) {
+	hosts := map[string]config.Host{
+		"dev":    {Local: true, Dir: t.TempDir()},
+		"remote": {SSH: []string{"nonexistent-host-a-xxxx"}, Dir: "~"},
+	}
+
+	t.Run("local host first, remote after", func(t *testing.T) {
+		ctx, lockCfg := localHostWorkflow(t, hosts, []string{"dev", "remote"}, config.LocalFallbackNever)
+
+		result, err := findAvailableHost(ctx, WorkflowOptions{Command: "rr test", TTY: true})
+		require.Error(t, err, "the unreachable remote is the only candidate")
+		assert.Nil(t, result)
+		assert.True(t, errors.IsCode(err, errors.ErrSSH), "the remote's dial error, got %v", err)
+		assert.NoDirExists(t, filepath.Join(lockCfg.Dir, "rr.lock"), "the local host is never tried")
+	})
+
+	t.Run("only local hosts", func(t *testing.T) {
+		ctx, _ := localHostWorkflow(t, map[string]config.Host{"dev": hosts["dev"]}, []string{"dev"}, config.LocalFallbackNever)
+
+		result, err := findAvailableHost(ctx, WorkflowOptions{Command: "rr test", TTY: true})
+		require.NoError(t, err)
+		ctx.Lock = result.lock
+		assert.Equal(t, "dev", result.conn.Name, "kept, so the run is refused with the reason")
+	})
+}
+
 // --local with no local host configured runs in rr's own terminal: the
 // command writes straight to stdout, and nothing is logged.
 func TestTTY_BareLocalRunWritesToTerminalWithoutRunLog(t *testing.T) {
@@ -183,6 +249,52 @@ func TestTTY_BareLocalRunWritesToTerminalWithoutRunLog(t *testing.T) {
 	assert.Equal(t, 3, exitCode)
 	assert.Contains(t, out, "from-the-command")
 	assert.NoDirExists(t, filepath.Join(os.Getenv("HOME"), ".rr", "logs"), "a bare local --tty run has no run log")
+}
+
+// --tail has nothing to print on a bare local --tty run, and says so
+// instead of doing nothing.
+func TestTTY_BareLocalRunWarnsAboutTail(t *testing.T) {
+	projectDir, _ := writeRoutingConfigs(t, false, "hosts: [box]")
+	t.Chdir(projectDir)
+	withStructuredOutput(t)
+
+	var err error
+	events := captureStderr(t, func() {
+		captureStdout(t, func() {
+			_, err = Run(RunOptions{Command: "true", Local: true, TTY: true, Tail: 5})
+		})
+	})
+	require.NoError(t, err)
+	assert.Contains(t, events, `"flag":"--tail"`)
+	assert.Contains(t, events, "no run log")
+}
+
+// A cancelled run drops its error, so a failed terminal restore in it is
+// reported as a warning; other errors aren't.
+func TestWarnTerminalRestore(t *testing.T) {
+	withStructuredOutput(t)
+	restoreErr := errors.WrapWithCode(fmt.Errorf("%w: input/output error", tty.ErrRestore), errors.ErrExec, "Couldn't restore the terminal after the command", "Run 'stty sane'.")
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "no error"},
+		{name: "a command error", err: stderrors.New("context canceled")},
+		{name: "restore failure", err: restoreErr, want: true},
+		{name: "restore failure joined to the command's error", err: stderrors.Join(stderrors.New("context canceled"), restoreErr), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := captureStderr(t, func() { warnTerminalRestore(tt.err) })
+			if !tt.want {
+				assert.Empty(t, events)
+				return
+			}
+			assert.Contains(t, events, "stty sane")
+		})
+	}
 }
 
 // skipIfTerminal skips a test that needs stdin or stdout not to be a

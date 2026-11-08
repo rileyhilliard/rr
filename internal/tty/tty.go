@@ -9,6 +9,7 @@
 package tty
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/term"
@@ -19,3 +20,8 @@ import (
 func IsTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
+
+// ErrRestore is in the error Session.Close returns when the terminal
+// couldn't be put back in its normal mode, so callers can tell the user how
+// to fix it even when they don't report the error itself.
+var ErrRestore = errors.New("terminal restore failed")

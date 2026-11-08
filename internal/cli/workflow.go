@@ -786,20 +786,26 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
+		// Check --tty before the lock: waiting out a busy local host only to
+		// refuse the run would waste the wait.
+		if err := checkTTYTarget(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 		if err := lockPhase(ctx, opts); err != nil {
 			ctx.Close()
 			return nil, err
 		}
-	} else if err := connectRemote(ctx, opts); err != nil {
-		ctx.Close()
-		return nil, err
-	}
-
-	// Which connection a run gets (a local host, a fallback) is only known
-	// now, so this --tty check can't happen with the flag checks. It still
-	// comes before requirements and sync, which would be wasted work.
-	if opts.TTY {
-		if err := checkTTYConnection(ctx.Conn); err != nil {
+	} else {
+		if err := connectRemote(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
+		// Which connection a remote run gets (a local host, a fallback) is
+		// only known now, so this --tty check can't happen with the flag
+		// checks. It still comes before requirements and sync, which would
+		// be wasted work.
+		if err := checkTTYTarget(ctx, opts); err != nil {
 			ctx.Close()
 			return nil, err
 		}
@@ -818,6 +824,15 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	}
 
 	return ctx, nil
+}
+
+// checkTTYTarget runs checkTTYConnection on the picked connection when the
+// run asked for --tty.
+func checkTTYTarget(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if !opts.TTY {
+		return nil
+	}
+	return checkTTYConnection(ctx.Conn)
 }
 
 // connectRemote picks a remote host and takes its lock. With several hosts

@@ -171,7 +171,7 @@ func RunTask(opts TaskOptions) (int, error) {
 	}
 
 	// Tee raw output into a per-run log file (best-effort).
-	logPath, ttyOutput, closeLog := runOutput(wf, opts.TTY, opts.TaskName, streamHandler)
+	logPath, ttyOutput, closeLog := runOutput(wf, opts.TTY, opts.TaskName, opts.Tail, streamHandler)
 	defer closeLog()
 
 	execStart := time.Now()
@@ -195,6 +195,11 @@ func RunTask(opts TaskOptions) (int, error) {
 	result, err := exec.ExecuteTask(wf.Context(), wf.Conn, task, taskArgs, mergedEnv, remoteDir, stdout, stderr, execOpts)
 	execDuration := time.Since(execStart)
 	streamHandler.Flush()
+
+	// Before any return below: a cancelled run drops err, and a failed one
+	// reports only its first structured error, so the stty advice would be
+	// lost either way.
+	warnTerminalRestore(err)
 
 	// If cancelled by signal, return standard Ctrl+C exit code
 	if wf.Context().Err() != nil {

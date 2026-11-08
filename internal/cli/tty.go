@@ -2,10 +2,10 @@ package cli
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
@@ -13,6 +13,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/rileyhilliard/rr/internal/tty"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
+	"github.com/spf13/pflag"
 )
 
 // ttyFlagUsage is the --tty help text on run, exec and task commands.
@@ -75,9 +76,11 @@ func checkTTYConnection(conn *host.Connection) error {
 
 // parallelTaskTTYError explains --tty on a parallel task, which doesn't
 // register the flag: the generic unknown-flag hint about '--' would send
-// the user the wrong way. Returns nil for any other flag error.
+// the user the wrong way. Returns nil for any other flag error, --ttyx or
+// --tty-foo included.
 func parallelTaskTTYError(name string, err error) error {
-	if !strings.Contains(err.Error(), "unknown flag: --tty") {
+	var notExist *pflag.NotExistError
+	if !stderrors.As(err, &notExist) || notExist.GetSpecifiedName() != "tty" {
 		return nil
 	}
 	return errors.New(errors.ErrConfig,
@@ -85,21 +88,65 @@ func parallelTaskTTYError(name string, err error) error {
 		"Its subtasks run at the same time and can't share one terminal. Run a single subtask with --tty: rr <subtask> --tty")
 }
 
+// warnTerminalRestore tells the user how to fix a terminal a --tty command
+// left in raw mode, for a run that ends without reporting its error: a
+// cancelled run returns 130 and drops it.
+func warnTerminalRestore(err error) {
+	if !stderrors.Is(err, tty.ErrRestore) {
+		return
+	}
+	const msg = "Couldn't restore the terminal after the command"
+	const suggestion = "Run 'stty sane' (or 'reset') to fix the terminal."
+	emitWarning(PhaseEvent{
+		Type:   "phase",
+		Phase:  "exec",
+		Status: "warn",
+		Details: map[string]interface{}{
+			"message":    msg,
+			"suggestion": suggestion,
+		},
+	}, msg+". "+suggestion)
+}
+
 // runOutput sets up where a run's output goes and opens its run log. Without
 // --tty the StreamHandler tees into the log. A remote --tty command writes
 // its raw PTY output to the returned writer: the terminal, with a copy in
 // the log, so rr logs, --tail and the test outcome still work. A bare local
-// --tty command writes to the terminal directly, so it has no log.
-func runOutput(wf *WorkflowContext, useTTY bool, name string, sh *output.StreamHandler) (logPath string, ttyOutput io.Writer, closeLog func()) {
+// --tty command writes to the terminal directly, so it has no log, and
+// --tail (tail > 0) gets a warning that it has nothing to print.
+func runOutput(wf *WorkflowContext, useTTY bool, name string, tail int, sh *output.StreamHandler) (logPath string, ttyOutput io.Writer, closeLog func()) {
 	if !useTTY {
 		logPath, closeLog = setupRunLog(wf, name, sh)
 		return logPath, nil, closeLog
 	}
 	if wf.Conn.IsLocal {
+		if tail > 0 {
+			warnTailWithoutRunLog()
+		}
 		return "", nil, func() {}
 	}
 	logPath, logFile, closeLog := openRunLog(wf, name)
 	return logPath, rawTee{out: os.Stdout, log: logFile}, closeLog
+}
+
+// warnTailWithoutRunLog says --tail does nothing on a bare local --tty run.
+// It's a warning, not an error: whether a run is bare local (local mode,
+// --local, a fallback when the hosts are busy) is only known after
+// connecting, and failing a fallback run over --tail would be worse than
+// skipping the tail.
+func warnTailWithoutRunLog() {
+	const msg = "--tail has no effect here: a local --tty command writes straight to the terminal, with no run log"
+	const suggestion = "Drop --tail; the output is already on screen."
+	emitWarning(PhaseEvent{
+		Type:   "phase",
+		Phase:  "exec",
+		Status: "warn",
+		Details: map[string]interface{}{
+			"flag":       "--tail",
+			"message":    msg,
+			"suggestion": suggestion,
+		},
+	}, msg+". "+suggestion)
 }
 
 // runLocal runs a bare local rr run/exec command: with --tty in rr's own

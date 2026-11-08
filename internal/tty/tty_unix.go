@@ -4,6 +4,7 @@ package tty
 
 import (
 	stderrors "errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -51,9 +52,12 @@ type Session struct {
 // for resizes. Keystrokes, Ctrl+C included, then go to the command as bytes
 // instead of being handled by the local terminal, as with ssh -t.
 func Start() (*Session, error) {
-	fd := int(os.Stdin.Fd())
-	outFd := int(os.Stdout.Fd())
+	return start(int(os.Stdin.Fd()), int(os.Stdout.Fd()))
+}
 
+// start is Start on the given terminal fds, so tests can hand it a PTY in
+// place of the real stdin and stdout.
+func start(fd, outFd int) (*Session, error) {
 	width, height, err := term.GetSize(outFd)
 	if err != nil {
 		return nil, errors.WrapWithCode(err, errors.ErrExec,
@@ -140,7 +144,7 @@ func (s *Session) Close() error {
 		rawMu.Unlock()
 
 		if err := term.Restore(s.fd, s.oldState); err != nil {
-			s.closeErr = errors.WrapWithCode(err, errors.ErrExec,
+			s.closeErr = errors.WrapWithCode(fmt.Errorf("%w: %w", ErrRestore, err), errors.ErrExec,
 				"Couldn't restore the terminal after the command",
 				"Run 'stty sane' (or 'reset') to fix the terminal.")
 		}
@@ -209,8 +213,13 @@ func (r *stdinReader) readOnce(p []byte) (n int, done bool, err error) {
 	if ready == 0 || fds[0].Revents == 0 {
 		return 0, false, nil
 	}
-	if fds[0].Revents&unix.POLLNVAL != 0 {
-		return 0, true, stderrors.New("stdin is closed")
+	// Stdin ending (the terminal hung up, the fd was closed) ends the
+	// command's input, not the command, so it reads as io.EOF. An error here
+	// would fail a command that exits 0: x/crypto's Session.Wait returns the
+	// stdin copy's error when the exit status is clean.
+	if fds[0].Revents&unix.POLLIN == 0 {
+		// POLLHUP, POLLERR or POLLNVAL with nothing left to read.
+		return 0, true, io.EOF
 	}
 
 	n, err = unix.Read(int(r.fd), p)
@@ -218,7 +227,8 @@ func (r *stdinReader) readOnce(p []byte) (n int, done bool, err error) {
 		return 0, false, nil
 	}
 	if err != nil {
-		return 0, true, err
+		// EIO from a terminal that hung up, for one.
+		return 0, true, io.EOF
 	}
 	if n == 0 {
 		return 0, true, io.EOF
