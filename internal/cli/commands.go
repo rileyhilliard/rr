@@ -31,6 +31,8 @@ var (
 	execCwdFlag              string
 	runTailFlag              int
 	execTailFlag             int
+	runTTYFlag               bool
+	execTTYFlag              bool
 	syncHostFlag             string
 	syncTagFlag              string
 	syncProbeTimeoutFlag     string
@@ -91,6 +93,7 @@ Examples:
 			PullDest:         runPullDestFlag,
 			RemoteCWD:        runCwdFlag,
 			Tail:             runTailFlag,
+			TTY:              runTTYFlag,
 		})
 	},
 }
@@ -121,6 +124,7 @@ Examples:
 			PullDest:         execPullDestFlag,
 			RemoteCWD:        execCwdFlag,
 			Tail:             execTailFlag,
+			TTY:              execTTYFlag,
 		})
 	},
 }
@@ -561,6 +565,7 @@ func init() {
 	runCmd.Flags().StringVar(&runPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 	runCmd.Flags().StringVar(&runCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
 	runCmd.Flags().IntVar(&runTailFlag, "tail", 0, "print the last N lines of the run log after completion")
+	runCmd.Flags().BoolVar(&runTTYFlag, "tty", false, ttyFlagUsage)
 
 	// exec command flags
 	execCmd.Flags().StringVar(&execHostFlag, "host", "", "target host name")
@@ -572,6 +577,7 @@ func init() {
 	execCmd.Flags().StringVar(&execPullDestFlag, "pull-dest", "", "destination directory for pulled files (default: current directory)")
 	execCmd.Flags().StringVar(&execCwdFlag, "cwd", "", "subdirectory to cd into on remote before running (relative to project root)")
 	execCmd.Flags().IntVar(&execTailFlag, "tail", 0, "print the last N lines of the run log after completion")
+	execCmd.Flags().BoolVar(&execTTYFlag, "tty", false, ttyFlagUsage)
 
 	// sync command flags
 	syncCmd.Flags().StringVar(&syncHostFlag, "host", "", "target host name")

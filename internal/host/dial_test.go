@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
@@ -324,6 +325,38 @@ func TestDialAliases_AllFailStructuredError(t *testing.T) {
 	_, err := DialAliases("box", []string{"one", "two"}, DialOptions{Dial: dial, Grace: 10 * time.Millisecond})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Couldn't connect to 'box' - tried: one, two")
+}
+
+func TestDialAliases_AllFailSuggestion(t *testing.T) {
+	hostKeyAdvice := "Host key not trusted: set StrictHostKeyChecking accept-new"
+	structured := func(alias string) error {
+		return categorizeProbeError(alias, rrerrors.WrapWithCode(
+			stderrors.New("knownhosts: key is unknown"), rrerrors.ErrSSH, "handshake failed", hostKeyAdvice))
+	}
+	generic := "The remote might be offline, or there could be a network/firewall issue."
+
+	tests := []struct {
+		name    string
+		aliases []string
+		err     func(alias string) error
+		want    string
+	}{
+		{"one alias keeps its own advice", []string{"one"}, structured, hostKeyAdvice},
+		{"one alias without advice gets the generic text", []string{"one"},
+			func(string) error { return stderrors.New("connection refused") }, generic},
+		{"several aliases get the generic text", []string{"one", "two"}, structured, generic},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dial := func(alias string, _ time.Duration) (*sshutil.Client, time.Duration, error) {
+				return nil, 0, tt.err(alias)
+			}
+			_, err := DialAliases("box", tt.aliases, DialOptions{Dial: dial, Grace: 10 * time.Millisecond})
+			var rrErr *rrerrors.Error
+			require.ErrorAs(t, err, &rrErr)
+			assert.Equal(t, tt.want, rrErr.Suggestion)
+		})
+	}
 }
 
 // eventsOfType filters events by type.

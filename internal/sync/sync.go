@@ -16,6 +16,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/util"
+	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
 // controlSocketDir is the directory for SSH ControlMaster sockets.
@@ -34,6 +35,11 @@ var SSHConfigFile string
 func buildSSHCmd() string {
 	cmd := fmt.Sprintf("ssh -o ControlMaster=auto -o ControlPath=%s/%%h-%%p -o ControlPersist=60 -o BatchMode=yes",
 		controlSocketDir)
+	// --no-strict-host-key-checking let rr's own connection through; rsync's
+	// ssh has to skip the check too, or sync fails on the same unknown host.
+	if !sshutil.StrictHostKeyChecking {
+		cmd += " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+	}
 	configFile := SSHConfigFile
 	if configFile == "" {
 		if home, err := os.UserHomeDir(); err == nil {

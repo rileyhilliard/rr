@@ -64,9 +64,9 @@ func TestKnownHostKeyAlgorithms(t *testing.T) {
 
 	assert.Equal(t,
 		[]string{ssh.KeyAlgoED25519, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA},
-		knownHostKeyAlgorithms(path, "10.0.0.5:22"))
-	assert.Nil(t, knownHostKeyAlgorithms(path, "10.0.0.6:22"), "unknown host keeps the default order")
-	assert.Nil(t, knownHostKeyAlgorithms(filepath.Join(dir, "missing"), "10.0.0.5:22"))
+		knownHostKeyAlgorithms([]string{path}, "10.0.0.5:22"))
+	assert.Nil(t, knownHostKeyAlgorithms([]string{path}, "10.0.0.6:22"), "unknown host keeps the default order")
+	assert.Nil(t, knownHostKeyAlgorithms(nil, "10.0.0.5:22"))
 }
 
 // startMultiKeySSHServer runs an SSH server on localhost with an ecdsa and

@@ -2100,6 +2100,7 @@ RUN/EXEC FLAGS
       --pull stringArray       Pull files from remote after the command
       --pull-dest string       Destination for pulled files
       --tail int               Print the last N lines of the run log after completion
+      --tty                    Give the command a terminal, for prompts like sudo's (interactive use only)
       --skip-requirements      Skip require: checks
       --repeat int             (run only) Run N times in parallel across hosts
 

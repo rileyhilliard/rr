@@ -43,12 +43,17 @@ func proxyJumpValue(proxyJump string) string {
 // option; ssh handles the earlier hops itself, as `ssh target` would.
 // BatchMode keeps it from prompting, since rr can't answer. LogLevel=ERROR
 // keeps banners and notices out of stderr, which rr reports as the cause.
+// With --no-strict-host-key-checking the jump ssh skips host key checks
+// too, or an unknown jump host would fail after rr itself let it through.
 func proxyJumpArgs(jumpHosts, hostname, port string) []string {
 	hops := strings.Split(jumpHosts, ",")
 	for i := range hops {
 		hops[i] = strings.TrimSpace(hops[i])
 	}
 	args := []string{"-o", "BatchMode=yes", "-o", "LogLevel=ERROR"}
+	if !StrictHostKeyChecking {
+		args = append(args, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null")
+	}
 	if len(hops) > 1 {
 		args = append(args, "-J", strings.Join(hops[:len(hops)-1], ","))
 	}

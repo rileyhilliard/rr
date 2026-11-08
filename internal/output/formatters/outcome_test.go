@@ -642,3 +642,37 @@ func TestParseRunOutcome_GoTestFailureLocation(t *testing.T) {
 		})
 	}
 }
+
+// A PTY (--tty) ends lines with \r\n. The outcome must be the one the same
+// output gives with \n endings: the counts, and failure names and messages
+// with no trailing \r.
+func TestParseRunOutcome_PTYLineEndings(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		log     string
+	}{
+		{name: "pytest", command: "pytest tests/", log: pytestFailureLog},
+		{name: "pytest -qq bare summary", command: "pytest -qq tests/", log: "bringing up nodes...\n2 failed, 3 passed in 1.10s\n"},
+		{
+			name:    "go test",
+			command: "go test ./...",
+			log:     "=== RUN   TestOK\n--- PASS: TestOK (0.00s)\n=== RUN   TestFail\n    example_test.go:15: Expected 1\n        got 2\n--- FAIL: TestFail (0.00s)\nFAIL\nexit status 1\nFAIL\texample\t0.005s\n",
+		},
+		{
+			name:    "jest",
+			command: "bunx jest",
+			log:     " FAIL  src/a.test.ts\n  ● suite › works\n\n    expect(1).toBe(2)\n\n      at src/a.test.ts:3:5\n\nTests:       1 failed, 1 total\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := ParseRunOutcome(tt.command, []byte(tt.log))
+			require.NotNil(t, want.Summary, "the \\n log must parse for the comparison to mean anything")
+
+			got := ParseRunOutcome(tt.command, []byte(strings.ReplaceAll(tt.log, "\n", "\r\n")))
+			assert.Equal(t, want, got)
+		})
+	}
+}

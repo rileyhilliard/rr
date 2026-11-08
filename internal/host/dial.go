@@ -229,7 +229,21 @@ func raceAliases[C interface{ Close() error }](
 	}
 	return nil, errors.WrapWithCode(stderrors.Join(failures...), errors.ErrSSH,
 		fmt.Sprintf("Couldn't connect to '%s' - tried: %s", hostName, formatFailedAliases(aliases)),
-		"The remote might be offline, or there could be a network/firewall issue.")
+		aggregateSuggestion(failures))
+}
+
+// aggregateSuggestion is the advice for a host whose aliases all failed.
+// With one failure, that dial's own advice is the useful part (an untrusted
+// host key, an encrypted key), so it's kept rather than replaced by the
+// generic network advice.
+func aggregateSuggestion(failures []error) string {
+	if len(failures) == 1 {
+		var structured *errors.Error
+		if stderrors.As(failures[0], &structured) && structured.Suggestion != "" {
+			return structured.Suggestion
+		}
+	}
+	return "The remote might be offline, or there could be a network/firewall issue."
 }
 
 // drainAndCloseDials closes connections from attempts that complete after a
