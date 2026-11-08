@@ -60,25 +60,65 @@ func parseHostKeyPolicy(value, host string) hostKeyPolicy {
 }
 
 // knownHostsPaths reads a UserKnownHostsFile or GlobalKnownHostsFile value:
-// whitespace-separated paths with ~ expanded. "none" and /dev/null mean no
-// file, so they're dropped. Paths with ssh_config % tokens are skipped with
-// a warning, so rr never reads or writes a file with a literal % in its name.
-func knownHostsPaths(value, option string) []string {
-	paths := []string{}
-	for _, p := range strings.Fields(value) {
+// whitespace-separated paths with ${VAR} and ~ expanded. "none" and /dev/null
+// mean no file, so they're dropped.
+//
+// Some paths rr can't use, and it skips them with a warning so it never reads
+// or writes the wrong file: ones with ssh_config % tokens (rr doesn't expand
+// them), ones naming an unset variable, and ones that aren't absolute after
+// expansion (OpenSSH reads those relative to its working directory, and rr's
+// is the synced project).
+//
+// first is the first entry, expanded: OpenSSH records new keys there and
+// nowhere else. It's "" when that entry is none or /dev/null, and also when
+// rr skipped it, in which case unsupported holds the entry as written.
+func knownHostsPaths(value, option string) (paths []string, first, unsupported string) {
+	paths = []string{}
+	for i, p := range strings.Fields(value) {
 		p = strings.Trim(p, `"`)
-		if p == "" || strings.EqualFold(p, "none") || p == os.DevNull {
+		if p == "" || strings.EqualFold(p, "none") || p == "/dev/null" || p == os.DevNull {
 			continue
 		}
-		if strings.Contains(p, "%") {
-			warnOnce("token:"+p, fmt.Sprintf(
-				"%s %s in ~/.ssh/config uses %% tokens, which rr doesn't expand; rr skips that file",
-				option, p))
+		expanded, reason := expandKnownHostsPath(p)
+		if reason != "" {
+			warnOnce("skip:"+p, fmt.Sprintf("%s %s in ~/.ssh/config %s; rr skips that file", option, p, reason))
+			if i == 0 {
+				unsupported = p
+			}
 			continue
 		}
-		paths = append(paths, expandPath(p))
+		if i == 0 {
+			first = expanded
+		}
+		paths = append(paths, expanded)
 	}
-	return paths
+	return paths, first, unsupported
+}
+
+// expandKnownHostsPath expands ${VAR} (as OpenSSH 8.4+ does), then ~, in a
+// known_hosts path. A non-empty reason says why rr can't use the path.
+func expandKnownHostsPath(p string) (expanded, reason string) {
+	if strings.Contains(p, "%") {
+		return "", "uses % tokens, which rr doesn't expand"
+	}
+	// OpenSSH refuses a path naming an unset variable. Expanding it to ""
+	// would turn ${NOPE}/known_hosts into /known_hosts, so rr skips it too.
+	var unset string
+	p = os.Expand(p, func(name string) string {
+		v := os.Getenv(name)
+		if v == "" && unset == "" {
+			unset = name
+		}
+		return v
+	})
+	if unset != "" {
+		return "", "uses $" + unset + ", which isn't set"
+	}
+	p = expandPath(p)
+	if !filepath.IsAbs(p) {
+		return "", "isn't an absolute path (start it with / or ~/)"
+	}
+	return p, ""
 }
 
 // warned holds the warnings already shown, so one that would repeat on every
@@ -203,7 +243,12 @@ func acceptNewKey(files []string, appendTo, hostname string, remote net.Addr, ke
 	}
 	recheck, err := knownhosts.New(current...)
 	if err != nil {
-		return err
+		// A file that parsed when the dial started no longer does (something
+		// rewrote it since), so report it as loadKnownHosts would.
+		return errors.WrapWithCode(err, errors.ErrSSH,
+			fmt.Sprintf("Couldn't read known_hosts file %s", strings.Join(current, ", ")),
+			"Fix or remove the line the error names (ssh-keygen -R <host> -f "+appendTo+" removes a host's entries), "+
+				"or point UserKnownHostsFile for this host at another file in ~/.ssh/config")
 	}
 	err = recheck(hostname, remote, key)
 	var keyErr *knownhosts.KeyError

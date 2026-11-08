@@ -206,7 +206,7 @@ type sshSettings struct {
 	hostname       string
 	port           string
 	user           string
-	identityFile   string
+	identityFiles  []string // IdentityFile paths from SSH config, in order
 	proxyCommand   string   // ProxyCommand from SSH config, if any
 	jumpHosts      string   // ProxyJump from SSH config, if any and there's no ProxyCommand
 	identityAgent  string   // IdentityAgent socket path from SSH config (if any)
@@ -215,8 +215,13 @@ type sshSettings struct {
 
 	hostKeyPolicy    hostKeyPolicy // StrictHostKeyChecking from SSH config
 	userKnownHosts   []string      // UserKnownHostsFile paths; empty for none or /dev/null
+	appendTo         string        // Where accept-new records keys: the first UserKnownHostsFile, "" for none
 	globalKnownHosts []string      // GlobalKnownHostsFile paths
 	knownHostsRead   []string      // Files buildSSHConfig checked host keys against, for errors
+	// unsupportedKnownHosts is the first UserKnownHostsFile entry as written,
+	// when rr skipped it (a % token, say). ssh would record new keys there,
+	// so rr checks keys strictly rather than accept them and record nothing.
+	unsupportedKnownHosts string
 }
 
 // hasProxy reports whether the connection goes through a ProxyJump or
@@ -244,6 +249,7 @@ func resolveSSHSettings(host string) *sshSettings {
 		port:             "22",
 		user:             currentUser(),
 		userKnownHosts:   []string{defaultUserKnownHosts()},
+		appendTo:         defaultUserKnownHosts(),
 		globalKnownHosts: []string{defaultGlobalKnownHosts},
 	}
 
@@ -320,9 +326,16 @@ func resolveSSHSettings(host string) *sshSettings {
 		hostFound = true
 	}
 
-	// Get identity file
-	if identity, _ := cfg.Get(host, "IdentityFile"); identity != "" {
-		settings.identityFile = expandPath(identity)
+	// Get identity files. A host can list several, and with IdentitiesOnly
+	// every one of them has to be offered, not just the first.
+	identities, _ := cfg.GetAll(host, "IdentityFile")
+	for _, identity := range identities {
+		if identity == "" {
+			continue
+		}
+		if path := expandPath(identity); !slices.Contains(settings.identityFiles, path) {
+			settings.identityFiles = append(settings.identityFiles, path)
+		}
 		hostFound = true
 	}
 
@@ -335,7 +348,8 @@ func resolveSSHSettings(host string) *sshSettings {
 	}
 
 	if identitiesOnly, _ := cfg.Get(host, "IdentitiesOnly"); identitiesOnly != "" {
-		settings.identitiesOnly = strings.EqualFold(strings.TrimSpace(identitiesOnly), "yes")
+		v := strings.ToLower(strings.TrimSpace(identitiesOnly))
+		settings.identitiesOnly = v == "yes" || v == "true"
 		hostFound = true
 	}
 
@@ -363,11 +377,12 @@ func resolveSSHSettings(host string) *sshSettings {
 		hostFound = true
 	}
 	if userFiles, _ := cfg.Get(host, "UserKnownHostsFile"); userFiles != "" {
-		settings.userKnownHosts = knownHostsPaths(userFiles, "UserKnownHostsFile")
+		settings.userKnownHosts, settings.appendTo, settings.unsupportedKnownHosts =
+			knownHostsPaths(userFiles, "UserKnownHostsFile")
 		hostFound = true
 	}
 	if globalFiles, _ := cfg.Get(host, "GlobalKnownHostsFile"); globalFiles != "" {
-		settings.globalKnownHosts = knownHostsPaths(globalFiles, "GlobalKnownHostsFile")
+		settings.globalKnownHosts, _, _ = knownHostsPaths(globalFiles, "GlobalKnownHostsFile")
 		hostFound = true
 	}
 
@@ -440,31 +455,31 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		// files are offered: every other key counts against the server's
 		// MaxAuthTries, and an agent with a handful of keys can use them up
 		// before the right one is tried.
-		fromAgent := agentSigners(settings.identityAgent)
+		agentSocket, fromAgent := agentSigners(settings.identityAgent)
 		if fromAgent != nil && settings.identitiesOnly {
 			identities := defaultKeys
-			if settings.identityFile != "" {
-				identities = []string{settings.identityFile}
+			if len(settings.identityFiles) > 0 {
+				identities = settings.identityFiles
 			}
 			fromAgent = onlySigners(fromAgent, identityPublicKeys(identities))
 		}
 
-		// Try specific identity file from SSH config
-		if settings.identityFile != "" {
-			tryKeyFile(settings.identityFile)
+		// Try the identity files from SSH config
+		for _, keyPath := range settings.identityFiles {
+			tryKeyFile(keyPath)
 		}
 
 		// Try default key files, unless IdentitiesOnly limits auth to the
-		// host's own IdentityFile.
+		// host's own IdentityFiles.
 		for _, keyPath := range defaultKeys {
-			if keyPath == settings.identityFile || (settings.identitiesOnly && settings.identityFile != "") {
+			if slices.Contains(settings.identityFiles, keyPath) || (settings.identitiesOnly && len(settings.identityFiles) > 0) {
 				continue // Already tried this one, or not this host's key
 			}
 			tryKeyFile(keyPath)
 		}
 
 		if fromAgent != nil || len(fileSigners) > 0 {
-			authMethods = append(authMethods, ssh.PublicKeysCallback(combinedSigners(fromAgent, fileSigners)))
+			authMethods = append(authMethods, ssh.PublicKeysCallback(combinedSigners(agentSocket, fromAgent, fileSigners)))
 		}
 	}
 
@@ -499,11 +514,14 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 			return nil, err
 		}
 		settings.knownHostsRead = files
-		appendTo := ""
-		if len(settings.userKnownHosts) > 0 {
-			appendTo = settings.userKnownHosts[0]
+		// accept-new with a first UserKnownHostsFile rr can't expand would
+		// accept every unknown key and record none of them, so each
+		// connection would trust whatever key it was shown. Check strictly.
+		policy := settings.hostKeyPolicy
+		if policy == hostKeyAcceptNew && settings.unsupportedKnownHosts != "" {
+			policy = hostKeyStrict
 		}
-		hostKeyCallback, err = createHostKeyCallback(files, settings.hostKeyPolicy, appendTo)
+		hostKeyCallback, err = createHostKeyCallback(files, policy, settings.appendTo)
 		if err != nil {
 			return nil, errors.WrapWithCode(err, errors.ErrSSH,
 				"Couldn't load known_hosts", "Check the files exist and are readable: "+strings.Join(files, ", "))
@@ -542,18 +560,19 @@ var (
 // If identityAgent is "none", agent auth is explicitly disabled.
 // The default SSH_AUTH_SOCK connection is cached; per-host connections are tracked for cleanup.
 func sshAgentAuth(identityAgent string) ssh.AuthMethod {
-	signers := agentSigners(identityAgent)
+	_, signers := agentSigners(identityAgent)
 	if signers == nil {
 		return nil
 	}
 	return ssh.PublicKeysCallback(signers)
 }
 
-// agentSigners returns the agent's key source for sshAgentAuth, or nil when
-// there's no usable agent or it holds no keys.
-func agentSigners(identityAgent string) func() ([]ssh.Signer, error) {
+// agentSigners returns the agent's socket path and key source for
+// sshAgentAuth, or a nil source when there's no usable agent or it holds no
+// keys. The socket names the agent in warnings.
+func agentSigners(identityAgent string) (string, func() ([]ssh.Signer, error)) {
 	if identityAgent == "none" {
-		return nil
+		return "", nil
 	}
 
 	// Per-host IdentityAgent: open a dedicated connection (not cached globally
@@ -561,14 +580,14 @@ func agentSigners(identityAgent string) func() ([]ssh.Signer, error) {
 	if identityAgent != "" {
 		conn, err := net.Dial("unix", identityAgent)
 		if err != nil {
-			return nil
+			return "", nil
 		}
 
 		client := agent.NewClient(conn)
 		signers, err := client.Signers()
 		if err != nil || len(signers) == 0 {
 			conn.Close()
-			return nil
+			return "", nil
 		}
 
 		// Only track the connection for cleanup if we're actually using it
@@ -576,13 +595,13 @@ func agentSigners(identityAgent string) func() ([]ssh.Signer, error) {
 		perHostAgentConns = append(perHostAgentConns, conn)
 		perHostAgentConnsMu.Unlock()
 
-		return client.Signers
+		return identityAgent, client.Signers
 	}
 
 	// Default: use SSH_AUTH_SOCK with cached connection
 	socket := os.Getenv("SSH_AUTH_SOCK")
 	if socket == "" {
-		return nil
+		return "", nil
 	}
 
 	agentConnOnce.Do(func() {
@@ -595,17 +614,17 @@ func agentSigners(identityAgent string) func() ([]ssh.Signer, error) {
 	})
 
 	if agentClient == nil {
-		return nil
+		return "", nil
 	}
 
 	// Only return agent auth if the agent actually has keys.
 	// An empty agent causes auth failures when placed before other methods.
 	signers, err := agentClient.Signers()
 	if err != nil || len(signers) == 0 {
-		return nil
+		return "", nil
 	}
 
-	return agentClient.Signers
+	return socket, agentClient.Signers
 }
 
 // CloseAgent closes all SSH agent connections (both default and per-host).
@@ -622,12 +641,12 @@ func CloseAgent() {
 	perHostAgentConnsMu.Unlock()
 }
 
-// keyFileAuth returns an auth method using a private key file.
-// Returns EncryptedKeyError if the key requires a passphrase.
 // identityPublicKeys returns the public keys of the given identity files,
-// read from each one's .pub file, or from the private key itself when it
-// isn't encrypted. A file whose key can't be read is left out, as OpenSSH
-// leaves it out.
+// read from each one's .pub file, or else from the private key itself. An
+// encrypted OpenSSH key still carries its public key unencrypted, so it
+// counts even without a .pub; that's the key an IdentitiesOnly host most
+// likely has in the agent. A file whose key can't be read is left out, as
+// OpenSSH leaves it out.
 func identityPublicKeys(paths []string) [][]byte {
 	var keys [][]byte
 	for _, path := range paths {
@@ -637,27 +656,47 @@ func identityPublicKeys(paths []string) [][]byte {
 				continue
 			}
 		}
-		if data, err := os.ReadFile(path); err == nil {
-			if signer, err := ssh.ParsePrivateKey(data); err == nil {
-				keys = append(keys, signer.PublicKey().Marshal())
-			}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		signer, err := ssh.ParsePrivateKey(data)
+		if err == nil {
+			keys = append(keys, signer.PublicKey().Marshal())
+			continue
+		}
+		var passErr *ssh.PassphraseMissingError
+		if stderrors.As(err, &passErr) && passErr.PublicKey != nil {
+			keys = append(keys, passErr.PublicKey.Marshal())
 		}
 	}
 	return keys
 }
 
-// combinedSigners offers the agent's keys first, then the key files'. An
-// agent that can't list its keys is skipped rather than failing auth, so the
-// key files still get their turn.
-func combinedSigners(fromAgent func() ([]ssh.Signer, error), files []ssh.Signer) func() ([]ssh.Signer, error) {
+// combinedSigners offers the agent's keys first, then the key files' that
+// the agent doesn't already hold: offering a key twice spends another of the
+// server's MaxAuthTries for nothing. An agent that can't list its keys is
+// skipped with a warning (agentSocket names it) rather than failing auth, so
+// the key files still get their turn.
+func combinedSigners(agentSocket string, fromAgent func() ([]ssh.Signer, error), files []ssh.Signer) func() ([]ssh.Signer, error) {
 	return func() ([]ssh.Signer, error) {
 		var all []ssh.Signer
 		if fromAgent != nil {
-			if agentKeys, err := fromAgent(); err == nil {
-				all = append(all, agentKeys...)
+			agentKeys, err := fromAgent()
+			if err != nil {
+				warnOnce("agent:"+agentSocket, fmt.Sprintf(
+					"Couldn't list the keys in the SSH agent at %s (%v); trying key files only", agentSocket, err))
+			}
+			all = append(all, agentKeys...)
+		}
+		inAgent := len(all)
+		for _, f := range files {
+			pub := f.PublicKey().Marshal()
+			if !slices.ContainsFunc(all[:inAgent], func(s ssh.Signer) bool { return bytes.Equal(pub, s.PublicKey().Marshal()) }) {
+				all = append(all, f)
 			}
 		}
-		return append(all, files...), nil
+		return all, nil
 	}
 }
 
@@ -679,6 +718,8 @@ func onlySigners(signers func() ([]ssh.Signer, error), allowed [][]byte) func() 
 	}
 }
 
+// keyFileAuth returns an auth method using a private key file.
+// Returns EncryptedKeyError if the key requires a passphrase.
 func keyFileAuth(keyPath string) (ssh.AuthMethod, error) {
 	signer, err := keyFileSigner(keyPath)
 	if err != nil {
@@ -886,18 +927,27 @@ func suggestionForHandshakeError(err error, settings *sshSettings, host string) 
 // known_hosts file; with /dev/null ssh would record it nowhere.
 func unknownHostKeySuggestion(settings *sshSettings, host string) string {
 	configFix := fmt.Sprintf("To have rr record new host keys itself, set StrictHostKeyChecking accept-new for '%s' in ~/.ssh/config.", host)
-	if len(settings.userKnownHosts) == 0 {
-		checked := "no known_hosts file"
-		if len(settings.knownHostsRead) > 0 {
-			checked = strings.Join(settings.knownHostsRead, ", ")
-		}
-		return fmt.Sprintf("Host key not trusted. '%s' has UserKnownHostsFile none or /dev/null, so rr checked %s and has nowhere to record the key. "+
+	checked := "no known_hosts file"
+	if len(settings.knownHostsRead) > 0 {
+		checked = strings.Join(settings.knownHostsRead, ", ")
+	}
+	if settings.unsupportedKnownHosts != "" {
+		// ssh would record the key in the file rr skipped, where rr won't
+		// find it, so neither ssh nor accept-new helps here.
+		return fmt.Sprintf("Host key not trusted. The first UserKnownHostsFile for '%s', %s, is a path rr can't use (it uses %% tokens, an unset variable, or isn't absolute), "+
+			"so rr checked %s, and it checks keys strictly rather than accept ones it can't record. "+
+			"List a plain path such as ~/.ssh/known_hosts first in UserKnownHostsFile for '%s' in ~/.ssh/config, then accept the key once: ssh -o StrictHostKeyChecking=accept-new %s exit",
+			host, settings.unsupportedKnownHosts, checked, host, host)
+	}
+	// ssh records new keys only in the first UserKnownHostsFile, so with
+	// /dev/null first, accepting the key with ssh records it nowhere.
+	if settings.appendTo == "" {
+		return fmt.Sprintf("Host key not trusted. '%s' has UserKnownHostsFile none or /dev/null first, so rr checked %s and has nowhere to record the key. "+
 			"Set StrictHostKeyChecking no for '%s' in ~/.ssh/config to skip the check (as for a local VM), or point UserKnownHostsFile at a real file.",
 			host, checked, host)
 	}
-	checked := strings.Join(settings.userKnownHosts, ", ")
-	if len(settings.knownHostsRead) > 0 {
-		checked = strings.Join(settings.knownHostsRead, ", ")
+	if len(settings.knownHostsRead) == 0 {
+		checked = strings.Join(settings.userKnownHosts, ", ")
 	}
 	return fmt.Sprintf("Host key not trusted: rr checked %s and found no key for this host. Accept the key once: ssh -o StrictHostKeyChecking=accept-new %s exit\n%s",
 		checked, host, configFix)

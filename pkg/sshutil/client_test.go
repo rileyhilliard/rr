@@ -1141,10 +1141,10 @@ func TestResolveSSHSettings_Comprehensive(t *testing.T) {
 func TestBuildSSHConfig_NoAuthMethods(t *testing.T) {
 	// Create settings with no valid auth methods available
 	settings := &sshSettings{
-		hostname:     "example.com",
-		port:         "22",
-		user:         "testuser",
-		identityFile: "/nonexistent/key",
+		hostname:      "example.com",
+		port:          "22",
+		user:          "testuser",
+		identityFiles: []string{"/nonexistent/key"},
 	}
 
 	// Save and clear SSH_AUTH_SOCK to disable agent
@@ -1180,10 +1180,10 @@ invalidencryptedcontent
 	require.NoError(t, err)
 
 	settings := &sshSettings{
-		hostname:     "example.com",
-		port:         "22",
-		user:         "testuser",
-		identityFile: keyPath,
+		hostname:      "example.com",
+		port:          "22",
+		user:          "testuser",
+		identityFiles: []string{keyPath},
 	}
 
 	// Save and clear SSH_AUTH_SOCK to disable agent
@@ -1223,10 +1223,10 @@ func TestBuildSSHConfig_InsecureHostKeyChecking(t *testing.T) {
 	require.NoError(t, err)
 
 	settings := &sshSettings{
-		hostname:     "example.com",
-		port:         "22",
-		user:         "testuser",
-		identityFile: keyPath,
+		hostname:      "example.com",
+		port:          "22",
+		user:          "testuser",
+		identityFiles: []string{keyPath},
 	}
 
 	// Disable strict host key checking
@@ -1517,10 +1517,10 @@ func TestBuildSSHConfig_StrictHostKeyChecking(t *testing.T) {
 	require.NoError(t, err)
 
 	settings := &sshSettings{
-		hostname:     "example.com",
-		port:         "22",
-		user:         "testuser",
-		identityFile: keyPath,
+		hostname:      "example.com",
+		port:          "22",
+		user:          "testuser",
+		identityFiles: []string{keyPath},
 	}
 
 	// Enable strict host key checking (default)
@@ -1550,10 +1550,10 @@ invalidencryptedcontent
 	require.NoError(t, err)
 
 	settings := &sshSettings{
-		hostname:     "example.com",
-		port:         "22",
-		user:         "testuser",
-		identityFile: keyPath,
+		hostname:      "example.com",
+		port:          "22",
+		user:          "testuser",
+		identityFiles: []string{keyPath},
 	}
 
 	// Save and clear SSH_AUTH_SOCK to disable agent
