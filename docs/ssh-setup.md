@@ -196,6 +196,7 @@ rr runs commands over its own SSH client, not `ssh` (sync uses rsync, which does
 |--------|-----------|
 | `HostName`, `Port`, `User`, `IdentityFile` | Yes |
 | `IdentityAgent` (1Password, Secretive, YubiKey agents) | Yes |
+| `IdentitiesOnly` | Yes. Only the agent keys matching the host's `IdentityFile` (or the default key files, when none is set) are offered, and other default key files are skipped |
 | `ProxyCommand` | Yes |
 | `ProxyJump` | Yes. rr runs `ssh -W` to the jump host, as OpenSSH does, so the jump host is resolved through your config and your `ssh`. Chains (`a,b`) and `ProxyJump none` work. A `ProxyCommand` on the same host wins, where OpenSSH takes whichever comes first |
 | `StrictHostKeyChecking` | Yes: `yes`, `ask`, `accept-new`, `no`/`off`. See [Host keys](#host-keys) |
