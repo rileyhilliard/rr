@@ -51,6 +51,28 @@ func ExecuteLocalContext(ctx context.Context, cmd string, workDir string, stdout
 	return RunLocalCommand(ctx, command)
 }
 
+// ExecuteLocalTTYContext is ExecuteLocalContext for --tty: the command gets
+// rr's own stdin, stdout and stderr, the terminal itself, so it can prompt
+// and read the answer. No raw mode and no PTY: it already shares rr's
+// session and process group, so the terminal is its controlling terminal.
+// Its output isn't captured.
+func ExecuteLocalTTYContext(ctx context.Context, cmd string, workDir string) (exitCode int, err error) {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+
+	command := exec.Command(shell, "-c", cmd)
+	if workDir != "" {
+		command.Dir = workDir
+	}
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+
+	return RunLocalCommand(ctx, command)
+}
+
 // SignalCause is the cancel cause rr's signal handler gives the run's
 // context (context.WithCancelCause), naming the signal rr got.
 // RunLocalCommand reads it with context.Cause to tell a Ctrl+C, which the
