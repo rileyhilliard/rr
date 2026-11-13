@@ -1,0 +1,65 @@
+---
+title: "How to keep the exit code when using tee"
+description: "Keep a failing test visible when Bash pipes output to tee. Use pipefail for the whole pipeline or PIPESTATUS for the exact test exit code, including over SSH."
+published: 2026-11-13
+keyword: "bash tee exit code"
+feature: output
+relatedDocs: [configuration]
+---
+
+A test can fail and leave your CI job green if its last command is `make test | tee test.log`. By default Bash returns the status of `tee`, which can write a perfectly good log of a failed test. Enable `pipefail` in the Bash process that owns the pipe.
+
+```bash title="test-with-log.sh"
+#!/usr/bin/env bash
+set -o pipefail
+make test 2>&1 | tee test.log
+```
+
+As the last command in this script, the pipeline supplies the script's exit code. The redirection sends test diagnostics to the log along with standard output. Run the script with Bash or execute it via its shebang. Invoking it as `sh test-with-log.sh` selects a different interpreter on many machines. [Bash pipeline rules](https://www.gnu.org/software/bash/manual/html_node/Pipelines.html)
+
+## Which exit code does Bash return with tee?
+
+With `pipefail`, a successful test and a successful write give status zero. If the test fails and `tee` succeeds, you get the test's status. If both fail, Bash returns the rightmost failure, which belongs to `tee`. That's usually what you want for CI when saving the log is part of the job.
+
+Try it with a known failure before changing a build script:
+
+```bash
+bash -c 'exit 7' | tee /dev/null
+printf 'Default pipeline status: %s\n' "$?"
+(
+  set -o pipefail
+  bash -c 'exit 7' | tee /dev/null
+  printf 'With pipefail: %s\n' "$?"
+)
+```
+
+Run that example in a fresh Bash shell with its default options. The two printed statuses should be 0 and 7. Notice that the diagnostic `printf` itself succeeds. If you add a print or cleanup command after the pipeline in a real script, capture the status first and explicitly `exit` with it afterward.
+
+## How do you get the test runner's exact status?
+
+Bash keeps a status for each stage in the `PIPESTATUS` array. Copy the whole array immediately. Even an assignment like `rc=$?` becomes the most recent command and replaces the array you wanted to inspect. [Bash variable reference](https://www.gnu.org/software/bash/manual/bash.html#index-PIPESTATUS)
+
+```bash title="test-status.sh"
+#!/usr/bin/env bash
+make test 2>&1 | tee test.log
+codes=("${PIPESTATUS[@]}")
+if (( codes[1] != 0 )); then
+  printf 'tee failed with status %s\n' "${codes[1]}" >&2
+fi
+exit "${codes[0]}"
+```
+
+Here the contract is different. A caller gets `make`'s exact status even if the log couldn't be written. This script assumes ordinary Bash defaults. In a wrapper that already uses `set -e -o pipefail`, a failing pipeline can exit the shell before it reaches the array assignment. Use the shorter first script if all you need is a failed job.
+
+## Where does pipefail go when tests run over SSH?
+
+The position of the quotes decides which shell parses the pipe. Put `tee` on the laptop when that's where you want the log. Run this as a Bash script against an SSH host called `testbox` with the checkout in `work/app`:
+
+```bash
+set -o pipefail
+ssh testbox 'cd work/app && make test' 2>&1 | tee test.log
+```
+
+A connection failure now fails the pipeline too. Move the pipe inside the remote command and the remote shell owns its status. Your laptop's `pipefail` setting can't recover a failure that the remote shell already reported as success. To write the log there, copy the first script into the project and run `ssh testbox 'cd work/app && bash test-with-log.sh'`. [OpenSSH exit status](https://man.openbsd.org/ssh.1#EXIT_STATUS)
+
+For an rr task, `rr test --tail 20` prints the end of the run log while preserving the task status. It saves a local pipe when you only wanted a shorter transcript. If the task itself uses a pipeline, set the host's `shell` to `"bash -o pipefail -c"` or put the pipeline in a Bash script with its own setting. [rr exit codes and pipes](/docs/configuration/#exit-codes-and-pipes)
