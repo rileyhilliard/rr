@@ -1,0 +1,66 @@
+---
+title: "How to run go test without cached results"
+description: "Run go test without cached results using -count=1, keep compiled packages available, and check that an integration test really ran on the intended host."
+published: 2026-11-13
+keyword: "go test without cache"
+feature: remote-exec
+relatedDocs: [configuration]
+---
+
+import CommandDemo from "../../components/blog/CommandDemo.astro";
+
+Run `go test -count=1 ./...` when you need Go to execute the tests again. It bypasses successful test results for this invocation. Go can still reuse compiled packages, which is handy when the thing you changed was a database or service the test talks to.
+
+## Why does go test print (cached)?
+
+When you supply a package argument such as `.` or `./...`, Go can reuse a previous successful result for each package. It checks inputs including the test binary and the flags you used. On a hit, Go can replay the earlier output and print `(cached)` on the package's summary line. A familiar log message in verbose output can come from that earlier run. [Go test command reference](https://pkg.go.dev/cmd/go#hdr-Test_packages)
+
+Try these commands in a package with a small, passing unit test and stable inputs:
+
+```sh
+go test .
+go test .
+go test -count=1 .
+```
+
+The second invocation is eligible to print `(cached)`. The third executes the package tests and reports elapsed time. Plain `go test` with no package argument uses local directory mode, where test result caching is disabled. Adding the dot can therefore change what happens even though both commands select the current package.
+
+## How do you rerun just one integration test?
+
+Use `-run` to select the test and `-count=1` to execute it. For a test named `TestCheckout` in a package called `checkout`, run this from the module root, substituting the package and test name your project uses:
+
+```sh
+go test -v -count=1 -run '^TestCheckout$' ./checkout
+```
+
+Check for `=== RUN   TestCheckout` and its final status. A mistyped expression can select zero tests and still return success. A test that calls `t.Skip` can leave the package green too. For an integration check, the named test's own `PASS` line tells you more than the package's `ok`.
+
+Suppose a test submits an order to a development service. You change a database constraint and run the same test command again. The test binary can be identical even though the service's behavior has changed. Go accounts for certain local files and environment variables the test reads. It has no way to fingerprint the current contents of that external database. Keep `-count=1` on the task that checks it. [Go test caching rules](https://pkg.go.dev/cmd/go#hdr-Test_packages)
+
+## When should you use go clean -testcache?
+
+Use `go clean -testcache` when you want to expire cached test results for subsequent commands that use the same Go build cache. It reaches other projects sharing that cache. For a single reproduction, `-count=1` leaves their results available.
+
+If the puzzle is why a package keeps *missing* the cache, enable the Go command's cache diagnostics during an ordinary run:
+
+```sh
+GODEBUG=gocachetest=1 go test .
+```
+
+Look for the package name and the explanation of the cache decision. Check the actual command your task runner invoked as well. Adding `-v` alone still permits caching, while a non-cacheable flag can make every run execute. `go help test` lists the rules for your installed toolchain. [Go build and test cache diagnostics](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching)
+
+## Which machine owns a remote Go test result?
+
+The Go process that runs the command uses its configured cache. Cleaning the default cache on your laptop has no effect on a test host with its own cache directory. When comparing two runners, check `go version` and `go env GOCACHE` on each. A warm build cache can make a fresh execution quick, so elapsed wall time alone won't tell you if a test ran.
+
+With rr configured for a remote host named `testbox`, run this from the module root to sync the working tree and choose the machine explicitly. Set the project's `local_fallback: never` when a pass must come from the remote.
+
+```sh
+rr run --host testbox "go test -v -count=1 ./..."
+```
+
+The recording shows a normal package run through rr. For an uncached run, keep `-count=1` in the command you send to Go.
+
+<CommandDemo command="run" caption="A recorded rr run sends a Go package test to a configured host." />
+
+If you're collecting results for a coding agent, keep the individual test events alongside the package exit code. They let the caller tell an executed test from a skipped one. [Go test JSON output for agents](/blog/test-results-json-for-agents/)

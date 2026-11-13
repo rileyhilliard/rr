@@ -1,0 +1,56 @@
+---
+title: "Fix a bind mount on a remote Docker host"
+description: "Fix a missing or empty bind mount on a remote Docker host. Check which machine owns the source path, sync your checkout, and verify what the container reads."
+published: 2026-11-13
+keyword: "remote Docker bind mount"
+feature: remote-exec
+relatedDocs: [configuration, ssh-setup]
+---
+
+A remote Docker bind mount reads the source path on the machine running the Docker daemon. If you type `-v "$PWD:/app"` on your laptop, your shell expands `$PWD` locally and Docker looks up that exact path on the server. To mount uncommitted code, copy the checkout to the server and mount its remote path. [Docker bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
+
+## Why is my remote Docker bind mount empty?
+
+With the short `-v` syntax, Docker can create a missing source path as an empty directory on the daemon host. Mount that directory at `/app` and it also hides any files the image already had there. You can spot this when the test script exists when you run the image alone, then disappears when you add the mount.
+
+Switch to `--mount type=bind` while debugging. By default it reports an error for a missing source path, which makes a typo easier to catch. A path that already exists can still hold the wrong checkout. A distinctive file is a better check than seeing an `app` directory in `ls`. [Docker bind mount syntax](https://docs.docker.com/engine/storage/bind-mounts/#syntax)
+
+## How do you mount a local checkout on the remote host?
+
+For a Linux test server, use an SSH alias such as `testbox` that logs in as an account with access to Docker. If you already have a Docker context for that daemon, use its name below. Otherwise create one and check that it answers:
+
+```sh
+docker context create testbox --docker host=ssh://testbox
+docker --context testbox info
+```
+
+Passing `--context` on the command keeps this selection scoped to one invocation. It changes where Docker sends the request. File transfer is a separate step. [Docker over SSH](https://docs.docker.com/engine/security/protect-access/#use-ssh-to-protect-the-docker-daemon-socket)
+
+For a small reproducible check, create a scratch project with a single fixture. The local and remote scratch directories below are new so you can distinguish this copy from another checkout.
+
+```sh
+local_dir=$(mktemp -d) &&
+remote_dir=$(ssh testbox 'mktemp -d') &&
+printf 'checkout fixture v1\n' > "$local_dir/fixture.txt" &&
+rsync -ac "$local_dir/" "testbox:$remote_dir/"
+
+docker --context testbox run --rm \
+  --mount "type=bind,src=$remote_dir,dst=/app,readonly" \
+  alpine cat /app/fixture.txt
+```
+
+The container should print `checkout fixture v1`. Change the local text to `v2` and rerun just the Docker command. You'll still see `v1`. Repeat the rsync line and run the container again to see `v2`. The `-c` option compares file contents, so this tiny edit transfers even if both versions have the same size and modification time. The mount tracks changes to the remote directory. You control when laptop edits reach it.
+
+For your real suite, substitute its test image and use a dedicated remote project directory. Set the working directory with `-w /app` if the test command uses relative paths. Keep the source read-only if the suite supports that. If it writes test reports, mount a separate writable output directory or omit `--rm` and copy the reports out of the stopped container with `docker cp`. [How to sync a working tree over SSH](/blog/ssh-run-command-on-remote-machine/)
+
+## Why does docker build see files that docker run can't?
+
+The final dot in `docker build .` supplies a build context. A builder can read files supplied by the client and a Dockerfile can copy them into the image. You can therefore build an image containing your current source and run its tests on a remote engine without any runtime source mount. Rebuild after each edit you want to test. Check `.dockerignore` if a fixture never makes it into the build context. [Docker build contexts](https://docs.docker.com/build/concepts/context/)
+
+A suite built around a live source mount can instead run its existing Docker script on the server. With rr configured for a Docker-capable host called `testbox`, invoke it from the project root:
+
+```sh
+rr run --host testbox './scripts/test-in-docker.sh'
+```
+
+rr syncs the checkout, then starts the script in the remote working directory. A script that uses `"$PWD"` now gets the remote checkout path. The script's Docker client must target that machine's daemon too. If the paths still disagree, run `docker context show` there and check for a `DOCKER_HOST` override in its environment. [rr working directory rules](/docs/configuration/#working-directory) and [Docker CLI environment variables](https://docs.docker.com/reference/cli/docker/#environment-variables)
