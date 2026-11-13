@@ -1,0 +1,62 @@
+---
+title: "Open a Playwright trace from a remote test"
+description: "Open a Playwright trace on your laptop after a remote test fails. Capture the original attempt, copy its trace.zip over SSH, and inspect the failed action."
+published: 2026-11-13
+keyword: "open Playwright trace from remote test"
+feature: output
+relatedDocs: [configuration, ssh-setup]
+---
+
+To open a Playwright trace from a remote test, record it on the runner, copy the resulting `trace.zip` to your laptop, and open it with `npx playwright show-trace`. A successful rerun on your laptop can't tell you what the browser saw on the failing machine.
+
+## How do you capture the original failure?
+
+From a checkout with Playwright Test, its project dependencies and the required browser installed, run the test on the machine where it fails. This command turns off retries and keeps the trace for a failing test. Replace the spec path with yours.
+
+```sh
+npx playwright test tests/checkout.spec.ts --retries=0 --trace=retain-on-failure
+```
+
+A checkout button that occasionally stays disabled is a good reason to record the first attempt. With `on-first-retry`, recording starts when Playwright runs the test a second time. If checkout works on retry, that trace contains the working interaction. With retries disabled, that setting never starts a recording. [Playwright trace modes](https://playwright.dev/docs/trace-viewer)
+
+To keep first-attempt failures during a debugging session, use `retain-on-failure` in the command or set it under `use.trace` in your Playwright config. Recording costs time even when Playwright later discards the file for a passing test. Scope the run to the spec you're investigating.
+
+## How do you find and open the remote trace.zip?
+
+Suppose your SSH host is `testbox` and the remote checkout is `~/work/app`. Run the following from your local checkout after the remote run finishes. It lists the traces under the default test output directory:
+
+```sh
+ssh testbox 'cd work/app && find test-results -type f -name trace.zip'
+```
+
+Use the path printed for the failing test and browser project. Directory names depend on the test title and configuration. This example uses a sample path and saves the trace outside the project so a later sync won't send it back.
+
+```sh
+scp 'testbox:work/app/test-results/checkout-submits-chromium/trace.zip' ../checkout-trace.zip
+npx playwright show-trace ../checkout-trace.zip
+```
+
+Here the local filename is yours to choose. Keep the archive zipped. If the search returned nothing, check the configured `outputDir`, whether the selected test actually failed, and whether someone has already started a new run. Playwright clears its output directory at the start of a run. Copy the trace before retrying. [Playwright output directory](https://playwright.dev/docs/api/class-testconfig#test-config-output-dir)
+
+## What should you look at in the viewer?
+
+Select the failing action in the left pane. For a click timeout, read the action log first. A locator that never matched calls for a different fix than a button Playwright found but kept waiting to become enabled. Inspect the DOM snapshot around that action to see the page state that produced the wait.
+
+If the button depends on a request, check the Network tab for the same interval. A 403 response can explain why checkout stayed disabled even when the selector was correct. A trace records what the browser could observe. To learn why the server rejected the request, use its timestamp or request identifier to find the corresponding server log. [Playwright Trace Viewer](https://playwright.dev/docs/trace-viewer)
+
+## Can rr copy the evidence after a failed run?
+
+An rr task can run Playwright on a configured test host and pull the output directory after the command finishes, including when the tests fail. Add this task to your project's `.rr.yaml`. It assumes Playwright is installed on that host and uses the default output directory.
+
+```yaml title=".rr.yaml"
+tasks:
+  browser-test:
+    run: npx playwright test --trace=retain-on-failure
+    pull:
+      - src: test-results/
+        dest: ../browser-evidence/
+```
+
+Run `rr browser-test` from the project root, then look under `../browser-evidence/` for the failing test's archive. Choose a fresh destination when keeping evidence from separate runs. A pull copies files into the destination and can leave older, differently named traces there. A pull error is reported separately from the test's exit code.
+
+If you split the suite, put the pull on each subtask and give each shard its own remote Playwright output directory. Two shards that use `test-results/` on the same host can erase one another's evidence before rr gets to the pull. [rr artifact pulls](/docs/configuration/#pulling-files-back) and [how to split a test suite across machines](/blog/split-test-suite-across-machines/)
