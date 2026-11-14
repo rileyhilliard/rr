@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,13 +87,18 @@ func seedKnownHosts(t *testing.T, home string) {
 // stdout, stderr, and the exit code.
 func runRRBinary(t *testing.T, bin, dir, home string, args ...string) (string, string, int) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	// A stalled SSH, rsync or lock wait fails here, naming the command,
+	// instead of hanging until go test's global timeout.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	require.NoError(t, ctx.Err(), "rr %v timed out; stderr so far:\n%s", args, stderr.String())
 	code := 0
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {

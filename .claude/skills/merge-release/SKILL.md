@@ -105,7 +105,7 @@ PR_NUMBER=$(gh pr view --json number -q .number)
 ./scripts/pr-wait.sh "$PR_NUMBER"
 ```
 
-It waits for every check, then prints unresolved CodeRabbit threads and any "review skipped" notice. If a check failed, stop and report it. If there are unresolved threads, show them to the user and ask before merging. It fails right away if the PR's base isn't `main`, because CI doesn't run there.
+It waits for every check, then prints unresolved CodeRabbit threads and any "review skipped" notice. If a check failed, stop and report it. If there are unresolved threads, or it reports that CodeRabbit skipped or didn't review the PR, show that to the user and ask before merging. It fails right away if the PR's base isn't `main`, because CI doesn't run there.
 
 ### Step 6: Squash-merge and sync main
 
