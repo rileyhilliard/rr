@@ -1,0 +1,20 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+---
+
+<BaseLayout title="Page not found" path="/404/" noindex>
+  <div class="mx-auto max-w-2xl px-6 py-24 text-center">
+    <h1 class="text-3xl font-bold">Page not found</h1>
+    <p class="text-muted mt-4">
+      This page may have moved. Go to the{" "}
+      <a href="/" class="text-accent">
+        home page
+      </a>{" "}
+      or the{" "}
+      <a href="/docs/" class="text-accent">
+        docs
+      </a>
+      .
+    </p>
+  </div>
+</BaseLayout>

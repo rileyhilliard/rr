@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -192,7 +193,7 @@ func executeSteps(ctx context.Context, conn *host.Connection, steps []config.Tas
 // into workDir first; local ones run in the current directory.
 func executeCommand(ctx context.Context, conn *host.Connection, cmd string, env map[string]string, workDir string, setupCommands []string, stdout, stderr io.Writer) (int, error) {
 	if conn.IsLocal {
-		return ExecuteLocal(BuildCommand(cmd, env, "", setupCommands), "", stdout, stderr)
+		return ExecuteLocalContext(ctx, BuildCommand(cmd, env, "", setupCommands), "", stdout, stderr)
 	}
 
 	fullCmd := BuildCommand(cmd, env, config.ExpandRemote(workDir), setupCommands)
@@ -268,8 +269,19 @@ const DefaultShell = "${SHELL:-/bin/bash}"
 // The trailing semicolon ensures this is always a successful command that can be followed by &&.
 const rcSourceCommand = `[ -f ~/.bashrc ] && . ~/.bashrc || true; [ -f ~/.zshrc ] && . ~/.zshrc || true;`
 
+// posixShell reports whether shell (a path, as in $SHELL) is unset or a shell
+// that runs the sh syntax BuildRemoteCommand produces.
+func posixShell(shell string) bool {
+	switch filepath.Base(shell) {
+	case ".", "sh", "bash", "zsh", "dash", "ksh":
+		return true
+	}
+	return false
+}
+
 // BuildRemoteCommand builds the command `rr run` sends to a host: rc files
-// sourced, then the host's setup commands, a cd into the host dir, and cmd,
+// sourced (except on a local host, which already runs in the user's session
+// environment), then the host's setup commands, a cd into the host dir, and cmd,
 // chained with && and wrapped in the host's shell. Setup commands and cmd are
 // user shell text, so each sits in its own brace group, as in BuildCommand:
 // a ; or || inside one can't run the rest of the command after a failed
@@ -295,12 +307,22 @@ func BuildRemoteCommand(cmd string, host *config.Host) string {
 	// Prepend rc sourcing to get PATH setup from tools like nvm, bun, pyenv, etc.
 	// SSH non-interactive sessions skip .bashrc/.zshrc, so we do it explicitly.
 	// The rc source command ends with semicolons and || true, so it's safe to concatenate.
-	fullCmd := rcSourceCommand + " " + cmdChain
+	// A local host skips this: rr's environment already has the session's
+	// setup, and re-sourcing would undo an activated venv or `nvm use`.
+	fullCmd := cmdChain
+	if !host.Local {
+		fullCmd = rcSourceCommand + " " + cmdChain
+	}
 
 	// Wrap in shell (use default login shell if not configured)
 	shell := host.Shell
 	if shell == "" {
 		shell = DefaultShell
+		// A local host runs under the user's own $SHELL, which may be one
+		// (fish, nu) that can't run this sh syntax.
+		if host.Local && !posixShell(os.Getenv("SHELL")) {
+			shell = "/bin/bash"
+		}
 	}
 
 	// Escape special characters so they're evaluated inside the shell -c, not by the outer shell.

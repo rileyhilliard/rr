@@ -21,6 +21,9 @@ const (
 	ErrHostNotFound = "HOST_NOT_FOUND"
 	// ErrDependency means a required tool is missing locally or on the remote.
 	ErrDependency = "DEPENDENCY"
+	// ErrInterrupted means the user stopped rr (Ctrl+C, SIGTERM) before the
+	// command ran, e.g. while it waited for a lock.
+	ErrInterrupted = "INTERRUPTED"
 )
 
 // Error represents a structured error with code, message, suggestion, and optional cause.

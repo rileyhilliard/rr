@@ -1,9 +1,11 @@
 package formatters
 
 import (
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/rileyhilliard/rr/internal/output"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -291,6 +293,352 @@ func TestParseRunOutcome_NoTests(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, ParseRunOutcome(tt.command, []byte(tt.output)).NoTests)
+		})
+	}
+}
+
+// testdata/vitest-failures.txt is a real `bun run test` log as rr records it:
+// vitest 5's default reporter, colors on, one test failing an assertion and one
+// file failing to load. The command names only the package script, so vitest
+// has to be recognized from the output.
+func TestParseRunOutcome_VitestDefaultReporter(t *testing.T) {
+	log, err := os.ReadFile("testdata/vitest-failures.txt")
+	require.NoError(t, err)
+
+	o := ParseRunOutcome("bun install --frozen-lockfile && bun run test", log)
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 468, Failed: 1, Errors: 1}, *o.Summary)
+
+	require.Len(t, o.Failures, 2)
+
+	suite := o.Failures[0]
+	assert.Equal(t, "tests/zz-rr-probe-suite.test.ts", suite.TestName)
+	assert.Equal(t, "tests/zz-rr-probe-suite.test.ts", suite.File)
+	assert.Equal(t, 3, suite.Line)
+	assert.Equal(t, "Error: probe: suite failed to load", suite.Message)
+
+	test := o.Failures[1]
+	assert.Equal(t, "rr probe > fails on purpose", test.TestName)
+	assert.Equal(t, "tests/zz-rr-probe.test.ts", test.File)
+	assert.Equal(t, 8, test.Line)
+	assert.True(t, strings.HasPrefix(test.Message,
+		"AssertionError: expected { status: 200 } to deeply equal { status: 500 }"), test.Message)
+	assert.Contains(t, test.Message, `+   "status": 200,`)
+	assert.NotContains(t, test.Message, "\x1b[", "ANSI codes are stripped")
+	assert.NotContains(t, test.Message, "expect({ status: 200 })", "the code frame is left out")
+}
+
+func TestParseRunOutcome_VitestPassing(t *testing.T) {
+	log := "\x1b[32m✓\x1b[39m tests/a.test.ts (3 tests) 5ms\n" +
+		"\n" +
+		"\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (1)\x1b[39m\n" +
+		"\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[33m1 skipped\x1b[39m\x1b[90m (3)\x1b[39m\n"
+
+	o := ParseRunOutcome("npm test", []byte(log))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 2, Skipped: 1}, *o.Summary)
+	assert.Empty(t, o.Failures)
+}
+
+// testdata/vitest-interleaved.txt: vitest writes its summary to stdout and the
+// failure listing to stderr, and the log interleaves them, so the summary can
+// land between two failure blocks. Every block after it must still be read.
+func TestParseRunOutcome_VitestSummaryInsideFailures(t *testing.T) {
+	log, err := os.ReadFile("testdata/vitest-interleaved.txt")
+	require.NoError(t, err)
+
+	o := ParseRunOutcome("bun run test", log)
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 461, Failed: 6}, *o.Summary)
+	require.Len(t, o.Failures, 6)
+	last := o.Failures[5]
+	assert.Equal(t, "errorResponse > leaves an upstream failure's detail out of the body", last.TestName)
+	assert.Equal(t, "tests/errors.test.ts", last.File)
+}
+
+// A vitest -t filter that matches nothing skips every test and exits 0. That
+// ran nothing, like pytest's "-k typo", so no_tests says so; the skip count
+// stays in the summary.
+func TestParseRunOutcome_VitestFilterMatchedNothing(t *testing.T) {
+	log := " ↓ tests/a.test.ts (3 tests | 3 skipped)\n" +
+		"\n" +
+		" Test Files  1 skipped (1)\n" +
+		"      Tests  3 skipped (3)\n"
+
+	o := ParseRunOutcome(`bun run test -t "no such test"`, []byte(log))
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Skipped: 3, NoTests: true}, *o.Summary)
+	assert.True(t, o.NoTests)
+
+	// No name filter: a suite that skips everything on purpose
+	// (describe.skip, skipIf(!process.env.DB_URL), todo-only) ran what was asked.
+	log = " Test Files  1 skipped (1)\n      Tests  2 skipped | 1 todo (3)\n"
+	o = ParseRunOutcome("bun run test", []byte(log))
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Skipped: 3}, *o.Summary)
+	assert.False(t, o.NoTests)
+
+	// Some tests ran: skips alongside passes are ordinary.
+	log = " Test Files  1 passed (1)\n      Tests  1 passed | 2 skipped (3)\n"
+	o = ParseRunOutcome("bun run test", []byte(log))
+	assert.False(t, o.NoTests)
+}
+
+// In a vitest workspace each FAIL line starts with the project's label.
+func TestParseRunOutcome_VitestWorkspaceProjectLabel(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  |unit| tests/a.test.ts > suite > fails\n" +
+		"AssertionError: expected 1 to be 2\n" +
+		" ❯ tests/a.test.ts:4:13\n" +
+		"⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  1 failed | 2 passed (3)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "suite > fails", o.Failures[0].TestName)
+	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
+	assert.Equal(t, 4, o.Failures[0].Line)
+	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
+}
+
+// A log with two runs (watch mode, a rerun) reports the last one: its counts
+// and its failures, not the earlier run's.
+func TestParseRunOutcome_VitestRepeatedRun(t *testing.T) {
+	first := " RUN  v5.0.0 /repo\n" +
+		"⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		" FAIL  tests/a.test.ts [ tests/a.test.ts ]\n" +
+		"Error: bad import\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		" Test Files  1 failed (1)\n      Tests  1 failed | 1 passed | 2 skipped (4)\n"
+	second := " RERUN  tests/a.test.ts x1\n" +
+		" Test Files  1 passed (1)\n      Tests  2 passed | 2 skipped (4)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(first+second))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 2, Skipped: 2}, *o.Summary)
+	assert.Empty(t, o.Failures)
+}
+
+// A file that fails to load can leave vitest with "Tests  no tests". That's a
+// suite error, not a run that collected nothing.
+func TestParseRunOutcome_VitestFailedSuiteNoTests(t *testing.T) {
+	log := "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		" FAIL  tests/a.test.ts [ tests/a.test.ts ]\n" +
+		"Error: Cannot find module './missing'\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  no tests\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Errors: 1}, *o.Summary)
+	assert.False(t, o.NoTests)
+	require.Len(t, o.Failures, 1)
+}
+
+// Colors written with colons (ESC[38:2::255:0:0m) are stripped too.
+func TestStripANSI_ColonParameters(t *testing.T) {
+	in := "\x1b[38:2::255:0:0m Test Files \x1b[39m 1 passed (1)"
+	assert.Equal(t, " Test Files  1 passed (1)", string(StripANSI([]byte(in))))
+}
+
+// The stdout summary can land inside a failure block before its location
+// line. It isn't part of the failure's message.
+func TestParseRunOutcome_VitestSummaryBeforeLocation(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > s > fails\n" +
+		"AssertionError: expected 1 to be 2\n" +
+		"\n" +
+		" Test Files  1 failed | 3 passed (4)\n" +
+		"      Tests  1 failed | 9 passed (10)\n" +
+		"   Start at  09:03:05\n" +
+		"   Duration  6.76s (tests 43%)\n" +
+		"\n" +
+		"     Import  115 modules were evaluated 530 times\n" +
+		"             ~494ms faster with isolate: false\n" +
+		"\n" +
+		" \u276f tests/a.test.ts:4:13\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "AssertionError: expected 1 to be 2", o.Failures[0].Message)
+	assert.Equal(t, 4, o.Failures[0].Line)
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, TestSummary{Passed: 9, Failed: 1}, *o.Summary)
+}
+
+// Vitest prints one error under consecutive FAIL headers when the tests
+// failed the same way. Each of them gets that error.
+func TestParseRunOutcome_VitestGroupedErrors(t *testing.T) {
+	log := "⎯⎯⎯ Failed Tests 2 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > s > one\n" +
+		" FAIL  tests/a.test.ts > s > two\n" +
+		"Error: boom\n" +
+		" \u276f tests/a.test.ts:4:9\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  2 failed (2)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 2)
+	for i, name := range []string{"s > one", "s > two"} {
+		assert.Equal(t, name, o.Failures[i].TestName)
+		assert.Equal(t, "Error: boom", o.Failures[i].Message)
+		assert.Equal(t, 4, o.Failures[i].Line)
+	}
+}
+
+// A suite that fails in a describe's beforeAll is listed under Failed Suites
+// with the describe name, which is what the failure is called.
+func TestParseRunOutcome_VitestFailedDescribe(t *testing.T) {
+	log := "⎯⎯⎯ Failed Suites 1 ⎯⎯⎯\n" +
+		"\n" +
+		" FAIL  tests/a.test.ts > db suite\n" +
+		"Error: connect ECONNREFUSED\n" +
+		" \u276f tests/a.test.ts:3:5\n" +
+		"⎯⎯⎯⎯⎯⎯[1/1]⎯\n" +
+		"\n" +
+		" Test Files  1 failed (1)\n" +
+		"      Tests  2 passed (2)\n"
+
+	o := ParseRunOutcome("bun run test", []byte(log))
+
+	require.Len(t, o.Failures, 1)
+	assert.Equal(t, "db suite", o.Failures[0].TestName)
+	assert.Equal(t, "tests/a.test.ts", o.Failures[0].File)
+	require.NotNil(t, o.Summary)
+	assert.Equal(t, 1, o.Summary.Errors)
+}
+
+// testdata/gotest-failure.txt is a real `go test ./internal/lock/... -run
+// TestItoa` log: without -v, go test prints a failing test's log lines after
+// its --- FAIL line.
+func TestParseRunOutcome_GoTestFailureLocation(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/gotest-failure.txt")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		log  string
+		want []output.TestFailure
+	}{
+		{
+			name: "log lines after --- FAIL",
+			log:  string(fixture),
+			want: []output.TestFailure{
+				{TestName: "TestItoa", File: "lock_test.go", Line: 170, Message: `itoa(-1) = "", want "-1"`},
+			},
+		},
+		{
+			name: "verbose: log lines before --- FAIL",
+			log: "=== RUN   TestA\n" +
+				"--- PASS: TestA (0.00s)\n" +
+				"=== RUN   TestB\n" +
+				"    math_test.go:15: expected 6, got 5\n" +
+				"    math_test.go:16: expected 7, got 5\n" +
+				"--- FAIL: TestB (0.00s)\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/math\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestB", File: "math_test.go", Line: 15, Message: "expected 6, got 5"},
+			},
+		},
+		{
+			name: "each failure keeps its own location",
+			log: "--- FAIL: TestA (0.00s)\n" +
+				"    a_test.go:10: a broke\n" +
+				"--- FAIL: TestB (0.00s)\n" +
+				"    b_test.go:20: b broke\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestA", File: "a_test.go", Line: 10, Message: "a broke"},
+				{TestName: "TestB", File: "b_test.go", Line: 20, Message: "b broke"},
+			},
+		},
+		{
+			name: "subtest failure attributes to the parent",
+			log: "--- FAIL: TestParent (0.00s)\n" +
+				"    --- FAIL: TestParent/case (0.00s)\n" +
+				"        p_test.go:5: case broke\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestParent", File: "p_test.go", Line: 5, Message: "case broke"},
+			},
+		},
+		{
+			// Real go test -v output: TestB's first line follows
+			// `=== CONT TestB` with no `=== NAME TestB` before it.
+			name: "verbose parallel: interleaved output goes to the test that printed it",
+			log: "=== RUN   TestA\n" +
+				"=== PAUSE TestA\n" +
+				"=== RUN   TestB\n" +
+				"=== PAUSE TestB\n" +
+				"=== CONT  TestA\n" +
+				"=== CONT  TestB\n" +
+				"    x_test.go:4: b broke\n" +
+				"=== NAME  TestA\n" +
+				"    x_test.go:3: a broke\n" +
+				"--- FAIL: TestA (0.03s)\n" +
+				"=== NAME  TestB\n" +
+				"    x_test.go:4: b again\n" +
+				"--- FAIL: TestB (0.05s)\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.178s\n",
+			want: []output.TestFailure{
+				{TestName: "TestA", File: "x_test.go", Line: 3, Message: "a broke"},
+				{TestName: "TestB", File: "x_test.go", Line: 4, Message: "b broke"},
+			},
+		},
+		{
+			// testify leaves the location line's message empty and prints
+			// the details on the more-indented lines under it.
+			name: "multi-line message under the location line",
+			log: "--- FAIL: TestT (0.00s)\n" +
+				"    x_test.go:5: \n" +
+				"        \tError Trace:\tx_test.go:5\n" +
+				"        \tError:      \tNot equal: \n" +
+				"        \t            \texpected: 1\n" +
+				"        \t            \tactual  : 2\n" +
+				"    x_test.go:6: second assertion\n" +
+				"FAIL\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestT", File: "x_test.go", Line: 5, Message: "Error Trace:\tx_test.go:5\n" +
+					"Error:      \tNot equal:\nexpected: 1\nactual  : 2"},
+			},
+		},
+		{
+			name: "no location line",
+			log: "--- FAIL: TestPanics (0.00s)\n" +
+				"panic: boom [recovered]\n" +
+				"FAIL\tgithub.com/example/pkg\t0.005s\n",
+			want: []output.TestFailure{
+				{TestName: "TestPanics"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := ParseRunOutcome("go test ./...", []byte(tt.log))
+			assert.Equal(t, tt.want, o.Failures)
 		})
 	}
 }

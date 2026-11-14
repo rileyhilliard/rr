@@ -804,6 +804,214 @@ test_error_cases() {
     run_test "invalid task (should fail)" 1 "$RR_BIN" nonexistenttask
 }
 
+# --- Local host (no SSH needed) ---------------------------------------------
+# Everything here runs against a throwaway HOME. HOME/USERPROFILE are set only
+# on each rr invocation (see lh), never exported, so the other sections, the
+# real ~/.rr and /tmp/rr-locks are never touched. The project's lock.dir lives
+# under the temp dir too.
+LH_ROOT=""
+LH_HOME=""
+LH_PIDS=""
+
+# Run rr from DIR against the temp HOME: lh DIR rr-args...
+lh() {
+    local dir="$1"
+    shift
+    (cd "$dir" && HOME="$LH_HOME" USERPROFILE="$LH_HOME" exec "$RR_BIN" "$@")
+}
+
+# Stop background jobs and remove the temp dir. Safe to call twice.
+local_host_cleanup() {
+    local pid
+    for pid in $LH_PIDS; do
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    done
+    LH_PIDS=""
+    if [[ -n "$LH_ROOT" ]]; then
+        rm -rf "$LH_ROOT"
+        LH_ROOT=""
+    fi
+}
+
+# Wait until FILE contains PATTERN (grep -F), up to ~10s.
+lh_wait_for() {
+    local file="$1" pattern="$2" i
+    for ((i = 0; i < 100; i++)); do
+        grep -qF -- "$pattern" "$file" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+# Assert FILE contains PATTERN (grep -F)
+lh_assert_contains() {
+    local name="$1" file="$2" pattern="$3"
+    if grep -qF -- "$pattern" "$file"; then
+        log_pass "$name"
+    else
+        log_fail "$name (missing '$pattern')"
+        head -c 600 "$file" | sed 's/^/  /'
+    fi
+}
+
+# Assert FILE has a line matching the extended regex PATTERN
+lh_assert_line() {
+    local name="$1" file="$2" pattern="$3"
+    if grep -qE -- "$pattern" "$file"; then
+        log_pass "$name"
+    else
+        log_fail "$name (no line matching '$pattern')"
+        head -c 600 "$file" | sed 's/^/  /'
+    fi
+}
+
+test_local_host() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Testing Local Host (no SSH)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    LH_ROOT=$(mktemp -d)
+    LH_HOME="$LH_ROOT/home"
+    mkdir -p "$LH_HOME" "$LH_ROOT/proj/sub"
+    test_local_host_body "$LH_ROOT/proj"
+    local_host_cleanup
+}
+
+test_local_host_body() {
+    local proj="$1"
+    local out="$LH_ROOT/out" err="$LH_ROOT/err"
+
+    cat > "$proj/.rr.yaml" << EOF
+version: 1
+lock:
+  dir: $LH_ROOT/locks
+  timeout: 1m
+tasks:
+  where:
+    run: pwd
+EOF
+
+    # 1. Add the host
+    run_test "local host: host add --local" 0 \
+        lh "$proj" host add --local --name dev --tag fast
+    lh "$proj" host list > "$out" 2>&1
+    lh_assert_contains "local host: host list shows local" "$out" '"local": true'
+
+    # host add can't set setup_commands, so write the config the way a user would
+    cat > "$LH_HOME/.rr/config.yaml" << 'EOF'
+version: 1
+hosts:
+  dev:
+    local: true
+    tags: [fast]
+    setup_commands:
+      - export FROM_SETUP=setup-value
+EOF
+
+    # 2. rr run keeps the invocation dir, applies setup_commands, skips sync
+    # shellcheck disable=SC2016  # $FROM_SETUP must expand in the host's shell, not here
+    lh "$proj/sub" run 'pwd; echo "setup=$FROM_SETUP"' > "$out" 2> "$err"
+    lh_assert_line "local host: run keeps the subdir" "$out" '/proj/sub$'
+    lh_assert_contains "local host: setup_commands applied" "$out" "setup=setup-value"
+    lh_assert_contains "local host: sync skipped in_place" "$err" \
+        '"phase":"sync","status":"skipped","details":{"reason":"in_place"}'
+
+    # 3. Tasks run at the project root
+    lh "$proj/sub" where > "$out" 2> "$err"
+    lh_assert_line "local host: task runs at project root" "$out" '/proj$'
+
+    # 4. Concurrent runs queue on the lock instead of overlapping
+    local marker="$LH_ROOT/marker" i pid pids="" failed_runs=0
+    : > "$marker"
+    for i in 1 2 3; do
+        lh "$proj" run "echo start >> '$marker'; sleep 2; echo X; echo end >> '$marker'" \
+            > "$LH_ROOT/c$i.out" 2> "$LH_ROOT/c$i.err" &
+        pids="$pids $!"
+    done
+    LH_PIDS="$LH_PIDS$pids"
+    for pid in $pids; do
+        wait "$pid" || failed_runs=$((failed_runs + 1))
+    done
+    if [[ "$failed_runs" -eq 0 ]]; then
+        log_pass "local host: 3 concurrent runs all succeed"
+    else
+        log_fail "local host: $failed_runs of 3 concurrent runs failed"
+    fi
+    if [[ "$(paste -sd, "$marker")" == "start,end,start,end,start,end" ]]; then
+        log_pass "local host: concurrent runs don't overlap"
+    else
+        log_fail "local host: concurrent runs overlapped ($(paste -sd, "$marker"))"
+    fi
+    cat "$LH_ROOT"/c?.err > "$out"
+    lh_assert_contains "local host: a waiting run emits lock/waiting" "$out" \
+        '"phase":"lock","status":"waiting"'
+
+    # 5. --local goes through the local host
+    # shellcheck disable=SC2016  # expands in the host's shell
+    lh "$proj" run --local 'echo "from=$FROM_SETUP"' > "$out" 2> "$err"
+    lh_assert_contains "local host: --local gets setup_commands" "$out" "from=setup-value"
+    lh_assert_contains "local host: --local reports host dev" "$err" '"host":"dev"'
+    lh_assert_contains "local host: --local reports local_flag" "$err" '"local_reason":"local_flag"'
+
+    # 7. Other commands
+    lh "$proj" status > "$out" 2>&1
+    lh_assert_contains "local host: status has in_place_hosts" "$out" '"in_place_hosts"'
+    lh_assert_line "local host: status lists dev in_place_hosts" "$out" '^ +"dev"$'
+    lh "$proj" monitor --once --json > "$out" 2>&1
+    lh_assert_contains "local host: monitor --once includes dev" "$out" '"name": "dev"'
+    run_test "local host: doctor exits 0" 0 lh "$proj" doctor
+    lh "$proj" doctor > "$out" 2>&1
+    if grep -qi 'ssh' "$out"; then
+        log_fail "local host: doctor mentions SSH"
+        grep -i ssh "$out" | head -3 | sed 's/^/  /'
+    else
+        log_pass "local host: doctor has no SSH check"
+    fi
+    run_test_contains "local host: setup dev is a config error" "CONFIG_" 1 \
+        lh "$proj" setup dev
+    run_test_contains "local host: sync --host dev is a config error" "CONFIG_" 1 \
+        lh "$proj" sync --host dev
+
+    # 8 + 9. A held lock: interrupt a waiter, then unlock it
+    # Background jobs the test signals or kills are started inline, not through
+    # lh: a function call in the background adds a shell, so $! would not be rr.
+    (cd "$proj" && HOME="$LH_HOME" USERPROFILE="$LH_HOME" exec "$RR_BIN" run 'sleep 10') > /dev/null 2>&1 &
+    LH_PIDS="$LH_PIDS $!"
+    if ! lh_wait_for "$LH_ROOT/locks/rr.lock/info.json" "{"; then
+        log_fail "local host: holder never took the lock"
+        return
+    fi
+
+    (cd "$proj" && HOME="$LH_HOME" USERPROFILE="$LH_HOME" exec "$RR_BIN" run true) > "$out" 2> "$err" &
+    local waiter=$! waiter_exit=0
+    LH_PIDS="$LH_PIDS $waiter"
+    if lh_wait_for "$err" '"phase":"lock","status":"waiting"'; then
+        kill -INT "$waiter"
+        wait "$waiter" || waiter_exit=$?
+        if [[ "$waiter_exit" -eq 130 ]]; then
+            log_pass "local host: SIGINT while waiting exits 130"
+        else
+            log_fail "local host: SIGINT while waiting exited $waiter_exit (want 130)"
+        fi
+        cat "$out" "$err" > "$LH_ROOT/both"
+        lh_assert_contains "local host: SIGINT reports INTERRUPTED" "$LH_ROOT/both" "INTERRUPTED"
+    else
+        log_fail "local host: waiter never emitted lock/waiting"
+        kill "$waiter" 2>/dev/null
+    fi
+
+    lh "$proj" unlock dev > "$out" 2>&1
+    lh_assert_contains "local host: unlock releases a held lock" "$out" '"released": 1'
+
+    # 6. Without a local host, --local runs bare and reports host "local"
+    LH_HOME="$LH_ROOT/home2"
+    mkdir -p "$LH_HOME"
+    lh "$proj" run --local 'echo bare' > "$out" 2> "$err"
+    lh_assert_contains "local host: no local host reports host local" "$err" '"host":"local"'
+}
+
 # Print summary
 print_summary() {
     echo ""
@@ -828,7 +1036,8 @@ print_summary() {
 
 # Cleanup
 cleanup() {
-    if [[ -n "$RR_BIN" && -f "$RR_BIN" ]]; then
+    local_host_cleanup
+    if [[ -n "$RR_BIN"&& -f "$RR_BIN" ]]; then
         rm -f "$RR_BIN"
         rmdir "$(dirname "$RR_BIN")" 2>/dev/null || true
     fi
@@ -904,6 +1113,7 @@ main() {
     test_multi_step_tasks
     test_task_arguments
     test_error_cases
+    test_local_host
 
     print_summary
 }

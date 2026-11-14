@@ -1,0 +1,11 @@
+---
+import DemoFrame from "./DemoFrame.astro";
+import { FlowDiagram } from "../landing/FlowDiagram";
+interface Props {
+  caption: string;
+}
+---
+
+<DemoFrame caption={Astro.props.caption}>
+  <FlowDiagram client:visible />
+</DemoFrame>

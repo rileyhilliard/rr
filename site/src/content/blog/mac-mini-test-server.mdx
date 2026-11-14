@@ -1,0 +1,161 @@
+---
+title: "Use a Mac mini as a test server"
+headline: "Use a Mac mini as a test server for coding agents"
+description: "Use a Mac mini as a test server for coding agents by enabling SSH, installing your toolchain, and syncing laptop edits with rsync or rr."
+published: 2026-11-05
+keyword: "use a Mac mini as a test server for coding agents"
+feature: setup
+relatedDocs: [ssh-setup, configuration, troubleshooting]
+---
+
+import CommandDemo from "../../components/blog/CommandDemo.astro";
+import MonitorDemo from "../../components/blog/MonitorDemo.astro";
+
+You can use a Mac mini as a test server for coding agents: enable SSH, install your project's toolchain, then copy your working files over and run tests through an SSH command.
+
+Your laptop keeps the editor and agent session; the mini runs the build or test process. Plain rsync and SSH handle a single run. When several agents need the machine, rr is one option for syncing their edits and taking a host lock before execution. Start with a spare machine you own, including a Linux box or old laptop, and confirm that your actual suite runs there before buying hardware.
+
+## Can I use a Mac mini as a test server for coding agents?
+
+A Mac mini works when your project's dependencies support its operating system and processor. A suite that requires Linux still needs a Linux environment. Check native dependencies and external services before treating a passing macOS run as evidence about a Linux deployment.
+
+The agent can stay on your laptop. Claude Code or Codex only needs a command it can invoke to send the current files and start the remote test. Moving the agent itself onto the mini is a separate choice; it isn't required for offloading tests.
+
+Use a writable directory on the remote as a disposable copy of the project. Keep your normal development checkout elsewhere so a sync cannot overwrite edits made directly on the server. For the examples below, the laptop has SSH and rsync, and the remote account is named `runner`. Replace that account and the example hostname with yours.
+
+## How do I turn on SSH and passwordless login?
+
+On the mini, open System Settings > General > Sharing and enable Remote Login. Allow the account that will run tests. Apple's [Remote Login instructions](https://support.apple.com/en-us/guide/mac-help/mchlp1066/mac) show where to find the SSH command for that account.
+
+On Linux, install and enable your distribution's OpenSSH server. For Ubuntu, the [OpenSSH server guide](https://ubuntu.com/server/docs/how-to/security/openssh-server/) uses `sudo apt install openssh-server`. Service names differ across distributions, so use your distribution's instructions for starting sshd.
+
+Test the connection from your laptop:
+
+```bash
+ssh runner@mac-mini.local
+```
+
+Confirm the server's host-key fingerprint on the first connection, then log out with `exit`. If the hostname doesn't resolve, use the machine's LAN address temporarily. A refused connection usually means the SSH service isn't accepting connections; a timeout points toward reachability or a firewall.
+
+Use an existing SSH key if you have one. Otherwise, generate an Ed25519 key on the laptop with [OpenSSH's key utility](https://man.openbsd.org/ssh-keygen), taking care not to overwrite an existing private key:
+
+```bash
+ssh-keygen -t ed25519
+ssh-copy-id runner@mac-mini.local
+```
+
+The copy command installs your public key on the remote account. If `ssh-copy-id` isn't installed on your laptop, the [SSH setup guide](/docs/ssh-setup/) includes a manual alternative. Keep the private key on the laptop. With a passphrase-protected key, load it into your SSH agent so automated commands can authenticate without a prompt.
+
+Verify a command can finish without asking for the remote account password:
+
+```bash
+ssh runner@mac-mini.local 'echo connected'
+```
+
+## How do I keep it reachable at home and away?
+
+Use the mini's local hostname for LAN connections. macOS advertises a name ending in `.local`; check or change it using Apple's [local hostname settings](https://support.apple.com/en-us/guide/mac-help/mchlp2322/mac). Test that name from the laptop on the network where you'll work.
+
+Give the connection a short alias in your laptop's SSH config. This keeps the username and key selection consistent across commands:
+
+```text title="~/.ssh/config"
+Host mini-lan
+    HostName mac-mini.local
+    User runner
+    IdentityFile ~/.ssh/id_ed25519
+    AddKeysToAgent yes
+```
+
+Keep the mini awake during the hours you want tests available. In System Settings > Energy, enable the option that prevents automatic sleeping when the display is off. Apple's [sleep and wake settings guide](https://support.apple.com/en-us/guide/mac-help/mchle41a6ccd/mac) covers the desktop controls. On an old laptop, check its power and lid settings separately before leaving it unattended.
+
+For access away from home, Tailscale can carry the same SSH connection over your tailnet. Install it on both machines and connect them to your tailnet. Follow the [SSH over Tailscale guide](https://tailscale.com/docs/reference/ssh-over-tailscale); with MagicDNS enabled, the server has a hostname you can use instead of its Tailscale IP address.
+
+Add a second SSH alias, such as `mini-tail`, using that hostname and the same remote account. Test `ssh mini-tail 'echo connected'` while away from the LAN. Both aliases should reach the same machine. That gives rr separate network paths to one host later. [SSH config fallback hostnames](/blog/ssh-config-fallback-hostname/) covers choosing between the two without rr.
+
+## What toolchain does the server need?
+
+Install the compiler or runtime your project expects on the mini, along with its test dependencies. Match the versions specified by the project. A Python virtual environment or native Node dependency copied from another operating system may be unusable, so install dependencies on the remote itself.
+
+Check commands through SSH as well as in a terminal opened on the mini. For a Go project:
+
+```bash
+ssh mini-lan 'go version'
+rsync --version
+ssh mini-lan 'rsync --version'
+```
+
+If a command is missing over SSH, fix the remote account's PATH or shell startup configuration before sending the suite ([command not found over SSH](/blog/command-not-found-over-ssh/) explains why it happens). Install rsync on either end if needed; on a Mac with Homebrew, the [rsync formula](https://formulae.brew.sh/formula/rsync) provides `brew install rsync`.
+
+Run the project's dependency installation on the server and configure any test database there. Credentials and test data also need to be available to the remote account. A source sync alone doesn't reproduce your laptop's environment, and rr doesn't replace your project's dependency setup.
+
+## How do I send my laptop's test runs to it?
+
+For one agent and one run at a time, start with rsync and SSH. From the project root on the laptop, create a dedicated remote copy, transfer the files, then run the tests. This example uses Go; substitute your own test command:
+
+```bash
+ssh mini-lan 'mkdir -p ~/test-work/rr'
+rsync -az -e ssh --exclude=.git --exclude=.venv --exclude=node_modules ./ mini-lan:test-work/rr/
+ssh mini-lan 'cd ~/test-work/rr && go test ./...'
+```
+
+The source's trailing slash copies the directory's contents into the destination. The excludes leave Git metadata and those dependency directories out of the transfer. This command copies uncommitted edits too. The [rsync manual](https://man7.org/linux/man-pages/man1/rsync.1.html) explains the transfer and exclusion rules. Adapt the exclusions to your stack; this example doesn't read your `.gitignore`.
+
+This copy command leaves destination files in place when you delete them locally. Recreate the disposable remote copy when you need a clean baseline. Also keep runs sequential: another sync into the same directory can change files while tests are reading them.
+
+rr adds sync-and-run commands with host locking. It is a single Go binary on your laptop; each remote needs SSH and rsync, with no rr agent or daemon to install. Install it using Homebrew, or choose another method from the [installation options](/#install):
+
+```bash
+brew install rileyhilliard/tap/rr
+rr init
+rr doctor
+```
+
+Run `rr init` from the project root. It writes `.rr.yaml` and offers hosts found in your SSH config. Treat `mini-lan` and `mini-tail` as aliases of one host, rather than adding the same physical machine as separate runners. Host definitions live in `~/.rr/config.yaml`; for example:
+
+```yaml title="~/.rr/config.yaml"
+version: 1
+hosts:
+  mini:
+    ssh: [mini-lan, mini-tail]
+    dir: ${HOME}/rr-work/${PROJECT}
+```
+
+Include `mini-tail` only after you've configured it. rr dials a host's aliases in parallel and prefers earlier entries, so put the LAN alias first. The remote directory here is separate from the manual test copy.
+
+Use `rr doctor` to check configuration, SSH keys and agent, host connectivity, and local rsync. The recording shows those checks and each host's aliases:
+
+<CommandDemo command="doctor" caption="rr doctor checks SSH, rsync, configuration, and each host's aliases in this recorded diagnostic run." />
+
+Add a named test task to the project config. This example selects only the mini and disables local fallback, so an unavailable server won't send the suite back onto your laptop:
+
+```yaml title=".rr.yaml"
+hosts: [mini]
+local_fallback: never
+require: [go]
+tasks:
+  test:
+    run: go test ./...
+```
+
+```bash
+rr doctor --requirements
+rr test
+```
+
+`require` declares tools the host needs. `rr provision` can check those requirements and offer to install missing tools it supports. The [configuration reference](/docs/configuration/) covers host definitions and tasks; the [troubleshooting guide](/docs/troubleshooting/) covers failed connections and runs.
+
+With the example's `${PROJECT}` directory, rr gives linked Git worktrees separate remote directories by default. Its host lock coordinates rr runs that share the same lock directory. A manually launched SSH test doesn't take that lock, so route the agents' test commands through rr if you want them to coordinate.
+
+## How do I watch what the machine is doing?
+
+Run `rr monitor` in another laptop terminal to inspect per-host CPU and memory, disk and network activity, plus GPU metrics where available. It collects metrics on both macOS and Linux. The replay below shows a recorded parallel test run across two Mac minis and a MacBook:
+
+<MonitorDemo caption="A real parallel test run with per-host CPU, memory, and task activity. The recording includes m1-mini, m4-mini, and a MacBook." />
+
+```bash
+rr monitor
+```
+
+Use the monitor to investigate a slow run, then compare it with the test output. Memory pressure or an idle CPU can suggest where to look; neither establishes that the machine needs replacing. Keep the first setup to one host until the remote test result is repeatable. If you later add another runner, rr also supports Linux and Windows through WSL.
+
+For a script that needs a snapshot, use `rr monitor --once --json`. Alerting is opt-in and disabled by default, so enable monitor alerts explicitly if you want them.

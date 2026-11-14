@@ -1,0 +1,7 @@
+--- FAIL: TestItoa (0.00s)
+    lock_test.go:170: itoa(-1) = "", want "-1"
+    lock_test.go:170: itoa(-123) = "", want "-123"
+FAIL
+FAIL	github.com/rileyhilliard/rr/internal/lock	0.155s
+ok  	github.com/rileyhilliard/rr/internal/lock/testing	0.155s [no tests to run]
+FAIL

@@ -91,6 +91,23 @@ func outcomeDetails(o formatters.Outcome, exitCode int) map[string]interface{} {
 	return details
 }
 
+// failureMessageElision joins the kept head and tail of a long failure message.
+const failureMessageElision = "\n...\n"
+
+// truncateFailureMessage keeps a failure message within maxFailureMessageLen
+// bytes (plus the elision marker). It keeps the start, where the assertion
+// is, and the end, which is where matchers that dump a value (a DOM node, a
+// large object) put the part that differs; the middle goes.
+func truncateFailureMessage(msg string) string {
+	if len(msg) <= maxFailureMessageLen {
+		return msg
+	}
+	tailLen := maxFailureMessageLen / 3
+	head := msg[:maxFailureMessageLen-tailLen]
+	tail := msg[len(msg)-tailLen:]
+	return strings.ToValidUTF8(head, "") + failureMessageElision + strings.ToValidUTF8(tail, "")
+}
+
 // failureEntries renders parsed test failures for result details: the test
 // name, file (with :line when known), and the message truncated to
 // maxFailureMessageLen. Shared by single runs and parallel subtasks so both
@@ -108,10 +125,7 @@ func failureEntries(failures []output.TestFailure) []map[string]string {
 		}
 		if f.Message != "" {
 			msg := f.Message
-			if len(msg) > maxFailureMessageLen {
-				msg = msg[:maxFailureMessageLen] + "..."
-			}
-			entry["message"] = msg
+			entry["message"] = truncateFailureMessage(msg)
 		}
 		entries = append(entries, entry)
 	}

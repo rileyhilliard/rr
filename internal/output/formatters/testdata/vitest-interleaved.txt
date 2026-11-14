@@ -1,0 +1,307 @@
+bun install v1.4.2 (744846f84)
+
+$ bun scripts/prepare.ts
+lefthook not found: git hooks not installed (brew install lefthook, then bun install)
+
+Checked 550 installs across 641 packages (no changes) [380.00ms]
+$ vitest run
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.2 [39m[90m/home/dev/project[39m
+
+ [32m✓[39m tests/hooks/format-changed.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 648[2mms[22m[39m
+   [32m✓[39m format-changed [2m(3)[22m
+     [33m[2m✓[22m[39m formats the files lint-on-write recorded for the session, then clears the list[33m 349[2mms[22m[39m
+ [32m✓[39m tests/hooks/typecheck-on-write.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 890[2mms[22m[39m
+ [32m✓[39m tests/hooks/lint-on-write.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 1081[2mms[22m[39m
+ [32m✓[39m tests/rate-limiter.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 332[2mms[22m[39m
+ [32m✓[39m tests/hooks/session-start.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 2074[2mms[22m[39m
+   [32m✓[39m session-start [2m(7)[22m
+     [33m[2m✓[22m[39m nudges off main once there is a commit, unless the repo opts out[33m 517[2mms[22m[39m
+     [33m[2m✓[22m[39m prints only the repo line for a set-up checkout on a feature branch[33m 416[2mms[22m[39m
+ [32m✓[39m tests/hooks/detect-secrets.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 319[2mms[22m[39m
+ [31m❯[39m tests/chat-routes.test.ts [2m([22m[2m31 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[33m 424[2mms[22m[39m
+   [31m❯[39m POST /api/chat before the stream starts [2m(8)[22m
+[31m     [31m×[31m returns 503 with a message naming the env var when no key is set[39m[32m 26[2mms[22m[39m
+     [32m✓[39m returns 400 for a body that doesn't decode[32m 8[2mms[22m[39m
+     [32m✓[39m returns 400 for malformed JSON[32m 1[2mms[22m[39m
+     [32m✓[39m returns 415 for a non-JSON content type[32m 2[2mms[22m[39m
+[31m     [31m×[31m returns 429 with Retry-After once the rate limit is spent[39m[32m 89[2mms[22m[39m
+[31m     [31m×[31m returns 400 for a message over the character limit[39m[32m 4[2mms[22m[39m
+     [32m✓[39m returns 400 UnknownModel for a model not in OpenRouter's list[32m 76[2mms[22m[39m
+     [32m✓[39m uses OPENROUTER_MODEL when the request names no model, and a listed model when it does[32m 9[2mms[22m[39m
+   [32m✓[39m persistence [2m(2)[22m
+     [32m✓[39m stores both turns after a finished reply[32m 5[2mms[22m[39m
+     [32m✓[39m stores the partial reply marked interrupted after an abort[32m 57[2mms[22m[39m
+   [32m✓[39m OpenRouter request shape (real provider against the stub) [2m(1)[22m
+     [32m✓[39m sends fallback models, provider routing, and usage accounting; usage lands in metadata[32m 9[2mms[22m[39m
+   [32m✓[39m fallback badge metadata [2m(8)[22m
+     [32m✓[39m flags a reply one of the configured fallback models served, naming the requested one[32m 14[2mms[22m[39m
+     [32m✓[39m doesn't flag a different served model when no fallbacks are configured[32m 7[2mms[22m[39m
+     [32m✓[39m doesn't flag a ~ alias served as a concrete model[32m 16[2mms[22m[39m
+     [32m✓[39m doesn't flag openrouter/auto served as a concrete model[32m 6[2mms[22m[39m
+     [32m✓[39m doesn't flag openrouter/auto, with other fallbacks configured served as a concrete model[32m 6[2mms[22m[39m
+     [32m✓[39m doesn't flag a :free variant served as its base model, even when both are fallbacks[32m 5[2mms[22m[39m
+     [32m✓[39m doesn't flag a reply served under the requested model's canonical slug[32m 4[2mms[22m[39m
+     [32m✓[39m flags a tool turn when only its first step was served by a fallback model[32m 33[2mms[22m[39m
+   [32m✓[39m chat page loader [2m(2)[22m
+     [32m✓[39m returns configured: false without a key[32m 1[2mms[22m[39m
+     [32m✓[39m returns configured: true with a key[32m 1[2mms[22m[39m
+   [32m✓[39m extract page loader [2m(2)[22m
+     [32m✓[39m returns configured: false without a key[32m 0[2mms[22m[39m
+     [32m✓[39m returns configured: true with a key[32m 0[2mms[22m[39m
+   [32m✓[39m other routes [2m(3)[22m
+     [32m✓[39m healthz returns ok[32m 1[2mms[22m[39m
+     [32m✓[39m api.models returns the list from OpenRouter[32m 9[2mms[22m[39m
+     [32m✓[39m api.extract decodes the body and returns the decoded contact[32m 4[2mms[22m[39m
+   [32m✓[39m failure modes [2m(5)[22m
+     [32m✓[39m returns a JSON 500 instead of throwing when the runtime can't build (invalid config)[32m 9[2mms[22m[39m
+     [32m✓[39m healthz fails when the runtime can't build[32m 7[2mms[22m[39m
+     [32m✓[39m the chat page loader throws a 400 Response with a readable message for a bad id[32m 1[2mms[22m[39m
+     [32m✓[39m rejects a turn whose reply would take the chat past MAX_MESSAGES[32m 2[2mms[22m[39m
+     [32m✓[39m rate limits api.extract[32m 1[2mms[22m[39m
+ [32m✓[39m tests/openrouter-replay.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 720[2mms[22m[39m
+ [32m✓[39m tests/export-actions.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 233[2mms[22m[39m
+Error: socket hang up
+    at _destroy (node:_http_client:987:15)
+    at onSocketNT (node:_http_client:1013:5)
+    at processTicksAndRejections (node:internal/process/task_queues:91:21) {
+  code: 'ECONNRESET'
+}
+ [32m✓[39m tests/openrouter-models.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 254[2mms[22m[39m
+POST http://127.0.0.1:58683/api/v1/chat/completions 401 (Unauthorized)
+ [32m✓[39m tests/hooks/guard-generated.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 163[2mms[22m[39m
+POST http://127.0.0.1:58683/api/v1/chat/completions 429 (Too Many Requests)
+POST http://127.0.0.1:58683/api/v1/chat/completions 429 (Too Many Requests)
+POST http://127.0.0.1:58683/api/v1/chat/completions 429 (Too Many Requests)
+ [32m✓[39m tests/hooks/guard-commands.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 187[2mms[22m[39m
+POST http://127.0.0.1:58683/api/v1/chat/completions 404 (Not Found)
+ [31m❯[39m tests/chat-closed-loop.test.tsx [2m([22m[2m9 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 1164[2mms[22m[39m
+   [31m❯[39m chat closed loop [2m(9)[22m
+     [33m[2m✓[22m[39m streams the reply and the tool result into the DOM[33m 398[2mms[22m[39m
+     [32m✓[39m says how to set the key when chat isn't configured, and neither Send nor Enter sends[32m 50[2mms[22m[39m
+     [32m✓[39m puts the not-configured notice above the composer when the chat has history[32m 15[2mms[22m[39m
+[31m     [31m×[31m shows a 400's message with no Retry, since sending it again fails the same way[39m[32m 106[2mms[22m[39m
+     [32m✓[39m shows the key message with no Retry when OpenRouter rejects the key[32m 90[2mms[22m[39m
+     [32m✓[39m offers Retry after a 429 that outlasts the SDK's retries[32m 169[2mms[22m[39m
+     [32m✓[39m says to pick another model, with no Retry, when the model has no endpoints[32m 80[2mms[22m[39m
+     [32m✓[39m offers Retry for a failure a retry can fix, and Retry sends again[32m 143[2mms[22m[39m
+     [32m✓[39m marks a stopped reply interrupted without a reload[32m 94[2mms[22m[39m
+ [32m✓[39m tests/extract-form.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 291[2mms[22m[39m
+[90mstdout[2m | tests/script-layer.test.ts[2m > [22m[2mscript layer[2m > [22m[2mruns a chat turn through the custom fetch with the app's model options
+[22m[39m09:11:16.534 INFO  script turn
+
+[90mstdout[2m | tests/script-layer.test.ts[2m > [22m[2mscript layer[2m > [22m[2mlogs to the terminal only, even under NODE_ENV=development
+[22m[39m09:11:16.612 INFO  script turn
+
+ [32m✓[39m tests/hooks/guard-server-imports.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 156[2mms[22m[39m
+[90mstdout[2m | tests/script-layer.test.ts[2m > [22m[2mscript layer[2m > [22m[2mlogs to the terminal only, even under NODE_ENV=development
+[22m[39m09:11:16.633 INFO  script turn
+
+ [32m✓[39m tests/script-layer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 136[2mms[22m[39m
+ [32m✓[39m tests/model-picker.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 176[2mms[22m[39m
+ [32m✓[39m tests/extract.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 148[2mms[22m[39m
+ [32m✓[39m tests/logging.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 103[2mms[22m[39m
+ [32m✓[39m tests/openrouter-env.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m tests/tools.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m tests/message-list.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m tests/test-layer-isolation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m tests/evals.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/stream-slots.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/hooks/wiring.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/recording.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/hooks/block-destructive.test.ts [2m([22m[2m170 tests[22m[2m)[22m[33m 5972[2mms[22m[39m
+   [32m✓[39m block-destructive checks the working tree before discarding [2m(10)[22m
+     [33m[2m✓[22m[39m allows every discard on a clean tree[33m 452[2mms[22m[39m
+     [33m[2m✓[22m[39m denies discarding unstaged or staged changes[33m 486[2mms[22m[39m
+     [33m[2m✓[22m[39m counts ignored files only when clean removes them[33m 338[2mms[22m[39m
+     [33m[2m✓[22m[39m counts untracked files for a reset to another commit, which can overwrite them[33m 371[2mms[22m[39m
+     [32m✓[39m with changes here and a clean repo elsewhere [2m(2)[22m
+       [33m[2m✓[22m[39m follows cd, pushd, and -C to the tree the command acts on[33m 586[2mms[22m[39m
+       [33m[2m✓[22m[39m keeps a cd inside a subshell or substitution out of the commands after it[33m 539[2mms[22m[39m
+     [33m[2m✓[22m[39m denies when it can't tell which tree or what it will hold[33m 603[2mms[22m[39m
+ [31m❯[39m tests/chat-export.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 23[2mms[22m[39m
+   [32m✓[39m chatToMarkdown [2m(2)[22m
+     [32m✓[39m renders each turn under a role heading, with tool calls and reply details[32m 1[2mms[22m[39m
+     [32m✓[39m keeps a tool input containing backticks inside its code span[32m 0[2mms[22m[39m
+   [31m❯[39m GET /api/chats/:chatId/export [2m(3)[22m
+     [32m✓[39m returns the stored chat as a Markdown download[32m 12[2mms[22m[39m
+[31m     [31m×[31m returns 404 for a chat with no messages[39m[32m 7[2mms[22m[39m
+     [32m✓[39m returns 400 for an id that isn't a UUID[32m 2[2mms[22m[39m
+ [32m✓[39m tests/schemas.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 6 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/chat-closed-loop.test.tsx[2m > [22mchat closed loop[2m > [22mshows a 400's message with no Retry, since sending it again fails the same way
+[31m[1mError[22m: [2mexpect([22m[31melement[31m[2m).not.toBeInTheDocument()[22m
+
+[31mexpected document not to contain element, found <button
+  class="group/button inline-flex shrink-0 items-center justify-center border border-transparent bg-clip-padding font-medium whitespace-nowrap motion-safe:transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 text-primary hover:bg-primary/10 h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5"
+  data-size="sm"
+  data-slot="button"
+  data-variant="accent"
+>
+  Retry
+</button> instead[31m[39m
+[36m [2m❯[22m tests/chat-closed-loop.test.tsx:[2m175:65[22m[39m
+ [31m❯[39m tests/errors.test.ts [2m([22m[2m26 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 11[2mms[22m[39m
+   [32m✓[39m retryableFor [2m(9)[22m
+     [32m✓[39m LlmNotConfigured -> false[32m 1[2mms[22m[39m
+     [32m✓[39m BadRequest -> false[32m 0[2mms[22m[39m
+     [32m✓[39m UnknownModel -> true[32m 0[2mms[22m[39m
+     [32m✓[39m NotFound -> false[32m 0[2mms[22m[39m
+     [32m✓[39m UnsupportedMediaType -> false[32m 0[2mms[22m[39m
+     [32m✓[39m InvalidModelOutput -> false[32m 0[2mms[22m[39m
+     [32m✓[39m RateLimited -> true[32m 0[2mms[22m[39m
+     [32m✓[39m UpstreamUnavailable -> true[32m 0[2mms[22m[39m
+     [32m✓[39m UpstreamUnavailable -> false[32m 0[2mms[22m[39m
+   [31m❯[39m errorResponse [2m(1)[22m
+[31m     [31m×[31m leaves an upstream failure's detail out of the body[39m[32m 6[2mms[22m[39m
+   [32m✓[39m userSafeStreamError [2m(12)[22m
+     [32m✓[39m 401[32m 0[2mms[22m[39m
+     [32m✓[39m 403[32m 0[2mms[22m[39m
+     [32m✓[39m 402[32m 0[2mms[22m[39m
+     [32m✓[39m 429[32m 0[2mms[22m[39m
+     [32m✓[39m 429 after the SDK's retries (a RetryError)[32m 0[2mms[22m[39m
+     [32m✓[39m 404 no endpoints[32m 0[2mms[22m[39m
+     [32m✓[39m 400 context length[32m 0[2mms[22m[39m
+     [32m✓[39m 400 anything else, with OpenRouter's reason[32m 0[2mms[22m[39m
+     [32m✓[39m timeout[32m 0[2mms[22m[39m
+     [32m✓[39m 500[32m 0[2mms[22m[39m
+     [32m✓[39m unknown[32m 0[2mms[22m[39m
+     [32m✓[39m keeps a long upstream reason to one short line[32m 0[2mms[22m[39m
+   [32m✓[39m upstreamErrorDetail [2m(1)[22m
+     [32m✓[39m gives the status and OpenRouter's reason, unwrapping a RetryError, and never headers[32m 0[2mms[22m[39m
+   [32m✓[39m errorFrom [2m(3)[22m
+     [32m✓[39m decodes an ErrorBody from the error's message[32m 1[2mms[22m[39m
+     [32m✓[39m reads a body without `retryable` as retryable, since nothing says a retry can't help[32m 0[2mms[22m[39m
+     [32m✓[39m falls back to the raw text, retryable, for anything that isn't an error body[32m 0[2mms[22m[39m
+    [90m173|[39m     const alert = await screen.findByRole("alert");
+    [90m174|[39m     expect(alert).toHaveTextContent("the limit is 5");
+    [90m175|[39m     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeIn…
+    [90m   |[39m                                                                 [31m^[39m
+    [90m176|[39m   });
+    [90m177|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/chat-export.test.ts[2m > [22mGET /api/chats/:chatId/export[2m > [22mreturns 404 for a chat with no messages
+[31m[1mAssertionError[22m: expected { …(2) } to deeply equal { …(2) }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "message": "There's no chat with that id to export.",[22m
+[32m-   "retryable": false,[39m
+[31m+   "retryable": true,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/chat-export.test.ts:[2m115:35[22m[39m
+    [90m113|[39m     const response = await callExport(CHAT_ID);
+    [90m114|[39m     expect(response.status).toBe(404);
+    [90m115|[39m     expect(await response.json()).toEqual({
+    [90m   |[39m                                   [31m^[39m
+    [90m116|[39m       message: expect.stringMatching(/no chat/i),
+    [90m117|[39m       retryable: false,
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/chat-routes.test.ts[2m > [22mPOST /api/chat before the stream starts[2m > [22mreturns 503 with a message naming the env var when no key is set
+[31m[1mAssertionError[22m: expected { …(2) } to deeply equal { message: StringMatching{…}, …(1) }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "message": "Chat isn't configured. Set OPENROUTER_API_KEY in .env and restart the server.",[22m
+[32m-   "retryable": false,[39m
+[31m+   "retryable": true,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/chat-routes.test.ts:[2m64:35[22m[39m
+    [90m 62|[39m     const response = await callChat(jsonRequest("/api/chat", body()));
+    [90m 63|[39m     expect(response.status).toBe(503);
+    [90m 64|[39m     expect(await response.json()).toEqual({
+    [90m   |[39m                                   [31m^[39m
+    [90m 65|[39m       message: expect.stringMatching(/OPENROUTER_API_KEY/),
+    [90m 66|[39m       retryable: false,
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/chat-routes.test.ts[2m > [22mPOST /api/chat before the stream starts[2m > [22mreturns 429 with Retry-After once the rate limit is spent
+[31m[1mAssertionError[22m: expected { …(2) } to deeply equal { message: Any<String>, …(1) }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "message": "Too many requests. Wait a moment and try again.",[22m
+[32m-   "retryable": true,[39m
+[31m+   "retryable": false,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/chat-routes.test.ts:[2m110:33[22m[39m
+    [90m108|[39m     expect(second.status).toBe(429);
+    [90m109|[39m     expect(Number(second.headers.get("Retry-After"))).toBeGreaterThanO…
+    [90m110|[39m     expect(await second.json()).toEqual({ message: expect.any(String),…
+    [90m   |[39m                                 [31m^[39m
+    [90m111|[39m   });
+    [90m112|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/chat-routes.test.ts[2m > [22mPOST /api/chat before the stream starts[2m > [22mreturns 400 for a message over the character limit
+[31m[1mAssertionError[22m: expected { …(2) } to deeply equal { message: StringMatching{…}, …(1) }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "message": "Your message is 12 characters; the limit is 5.",[22m
+[32m-   "retryable": false,[39m
+[31m+   "retryable": true,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/chat-routes.test.ts:[2m120:35[22m[39m
+    [90m118|[39m     const response = await callChat(jsonRequest("/api/chat", body("far…
+
+[2m Test Files [22m [1m[31m4 failed[39m[22m[2m | [22m[1m[32m27 passed[39m[22m[90m (31)[39m
+[2m      Tests [22m [1m[31m6 failed[39m[22m[2m | [22m[1m[32m461 passed[39m[22m[90m (467)[39m
+[2m   Start at [22m 09:11:11
+[2m   Duration [22m 6.52s[2m (tests 41%, import 37%, setup 9%, transform 9%, environment 3%)[22m
+
+[2m     Import [22m [33m113 modules were evaluated 529 times[39m[2m · 14.34s total, 37% of tracked time[22m
+[2m            [22m [2m~542ms faster with [22m[33misolate: false[39m[2m — shared modules are evaluated once per worker instead of once per file[22m
+[2m            [22m [2mlearn more: https://vitest.dev/guide/improving-performance#test-isolation[22m
+
+    [90m119|[39m     expect(response.status).toBe(400);
+    [90m120|[39m     expect(await response.json()).toEqual({
+    [90m   |[39m                                   [31m^[39m
+    [90m121|[39m       message: expect.stringMatching(/the limit is 5/),
+    [90m122|[39m       retryable: false,
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/errors.test.ts[2m > [22merrorResponse[2m > [22mleaves an upstream failure's detail out of the body
+[31m[1mAssertionError[22m: expected { message: 'Nope.', retryable: true } to deeply equal { message: 'Nope.', retryable: false }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[2m    "message": "Nope.",[22m
+[32m-   "retryable": false,[39m
+[31m+   "retryable": true,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/errors.test.ts:[2m41:35[22m[39m
+    [90m 39|[39m       new UpstreamUnavailable({ message: "Nope.", retryable: false, de…
+    [90m 40|[39m     );
+    [90m 41|[39m     expect(await response.json()).toEqual({ message: "Nope.", retryabl…
+    [90m   |[39m                                   [31m^[39m
+    [90m 42|[39m   });
+    [90m 43|[39m });
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯[22m[39m
+
+error: script "test" exited with code 1

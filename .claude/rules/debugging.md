@@ -5,8 +5,6 @@ paths:
 
 # Debugging
 
-When investigating bugs or unexpected behavior, load the `ce:systematic-debugging` skill.
-
 ## Four-Phase Approach
 
 1. **Reproduce** - Get a reliable repro case

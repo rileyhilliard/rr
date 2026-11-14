@@ -550,3 +550,23 @@ func TestRunTask_StructuredStdout(t *testing.T) {
 		})
 	}
 }
+
+// TestRunTaskRepeated_ExpandsArgsPlaceholders: --repeat takes no args, so a
+// task's {args} placeholders expand the way a plain run expands them ({args}
+// to nothing, {args:-x} to x). Unexpanded, "vitest run {args}" received the
+// literal "{args}" as a filter and every repeat failed.
+func TestRunTaskRepeated_ExpandsArgsPlaceholders(t *testing.T) {
+	withStructuredOutput(t)
+	withGlobalHosts(t)
+	inProject(t, "version: 1\ntasks:\n  t:\n    run: test \"{args:-x}\" = x && test -z \"{args}\"\n")
+
+	var exitCode int
+	var runErr error
+	_, stderr := runCaptured(t, func() {
+		exitCode, runErr = runTaskRepeated("t", 2, "", "", true)
+	})
+	require.NoError(t, runErr)
+	assert.Equal(t, 0, exitCode, "placeholders must be expanded before the command runs")
+	result := resultEvent(t, parseEvents(t, stderr))
+	assert.EqualValues(t, 2, result.Details["passed"])
+}

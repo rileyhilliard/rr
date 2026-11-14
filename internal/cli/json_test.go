@@ -237,6 +237,7 @@ func TestMapErrorCode_Table(t *testing.T) {
 		{errors.ErrSync, ErrCodeRsyncFailed},
 		{errors.ErrLock, ErrCodeLockHeld},
 		{errors.ErrExec, ErrCodeCommandFailed},
+		{errors.ErrInterrupted, ErrCodeInterrupted},
 		{"UNKNOWN_INTERNAL_CODE", ErrCodeUnknown},
 		{"", ErrCodeUnknown},
 	}
@@ -518,6 +519,7 @@ func TestErrorCodes_AreUnique(t *testing.T) {
 		ErrCodeLockHeld,
 		ErrCodeCommandFailed,
 		ErrCodeDependencyMissing,
+		ErrCodeInterrupted,
 		ErrCodeUnknown,
 	}
 
@@ -542,6 +544,7 @@ func TestErrorCodes_Format(t *testing.T) {
 		ErrCodeLockHeld,
 		ErrCodeCommandFailed,
 		ErrCodeDependencyMissing,
+		ErrCodeInterrupted,
 		ErrCodeUnknown,
 	}
 

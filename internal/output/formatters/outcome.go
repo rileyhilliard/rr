@@ -1,6 +1,7 @@
 package formatters
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/rileyhilliard/rr/internal/output"
@@ -25,11 +26,24 @@ type Outcome struct {
 	PipedExitCode bool
 }
 
+// ansiEscapePattern matches ANSI CSI escape sequences (colors, cursor moves):
+// ESC [, parameter bytes (0x30-0x3F, which includes the ":" in
+// "38:2::255:0:0"), intermediate bytes (0x20-0x2F), a final byte (0x40-0x7E).
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`)
+
+// StripANSI removes ANSI escape sequences (colors, cursor moves) from output.
+func StripANSI(b []byte) []byte {
+	return ansiEscapePattern.ReplaceAll(b, nil)
+}
+
 // ParseRunOutcome detects the test framework from the command and its
 // output (the run log) and extracts counts, failures, and the no-tests
 // signal in one pass. Returns a zero Outcome when no framework matches.
 func ParseRunOutcome(command string, log []byte) Outcome {
 	var o Outcome
+	// Runners color their output when the remote gives them a TTY; the
+	// patterns match plain text.
+	log = StripANSI(log)
 	formatter := detectFormatter(command, log)
 	if formatter == nil {
 		return o

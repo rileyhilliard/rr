@@ -43,6 +43,10 @@ func Pull(opts PullOptions) error {
 		// Fall back to all global hosts if resolution fails
 		projectHosts = resolved.Global.Hosts
 	}
+	hostOrder, projectHosts, err = remoteTargetHosts(hostOrder, projectHosts, opts.Host, "pull from")
+	if err != nil {
+		return err
+	}
 	selector := host.NewSelector(projectHosts)
 	selector.SetHostOrder(hostOrder)
 	defer selector.Close()
@@ -62,10 +66,7 @@ func Pull(opts PullOptions) error {
 	spinner.Start()
 
 	// Resolve preferred host using resolution order
-	preferredHost := opts.Host
-	if preferredHost == "" {
-		preferredHost, _, _ = config.ResolveHost(resolved, "")
-	}
+	preferredHost := preferredRemoteHost(resolved, opts.Host, projectHosts)
 
 	// Connect - either by tag or by host/default
 	var conn *host.Connection

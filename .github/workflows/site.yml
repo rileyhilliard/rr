@@ -1,0 +1,57 @@
+name: Site
+# The landing site (site/) and the parts of the repository it quotes. Not a
+# required check: a path-filtered workflow that doesn't run would block merges.
+on:
+  push:
+    branches: [main]
+    paths: &site_paths
+      - "site/**"
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - ".rr.yaml"
+      - "internal/cli/**"
+      - "internal/monitor/graphs.go"
+      - "internal/monitor/styles.go"
+      - "internal/monitor/view.go"
+      - "internal/monitor/alerts.go"
+      - ".github/workflows/site.yml"
+  pull_request:
+    branches: [main]
+    paths: *site_paths
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  site:
+    name: Build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        run: make install
+
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+
+      - name: Lint, type-check, test, build
+        run: make lint check test build
+
+      - name: Browser and accessibility tests
+        run: make e2e
+
+      - name: Pages headers and canonical URLs
+        run: make deploy-check

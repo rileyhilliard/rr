@@ -404,8 +404,8 @@ func TestExtractTaskFailures_TruncatesLongMessages(t *testing.T) {
 	tests, ok := failures[0]["tests"].([]map[string]string)
 	require.True(t, ok)
 	require.NotEmpty(t, tests)
-	assert.LessOrEqual(t, len(tests[0]["message"]), maxFailureMessageLen+3) // +3 for "..."
-	assert.True(t, strings.HasSuffix(tests[0]["message"], "..."))
+	assert.LessOrEqual(t, len(tests[0]["message"]), maxFailureMessageLen+len(failureMessageElision))
+	assert.Contains(t, tests[0]["message"], failureMessageElision)
 }
 
 func TestExtractTaskFailures_OutputTailCapped(t *testing.T) {
@@ -581,4 +581,23 @@ func TestBuildSubtaskInfos_CompoundSubtaskWithoutPlaceholderErrors(t *testing.T)
 	_, err := buildSubtaskInfos(proj, parentTask, []string{"test-py"}, []string{"tests/foo.py"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "{args} placeholder")
+}
+
+// TestExtractTaskFailures_OutputTailIsPlainText: output_tail is read by
+// agents and scripts, so the runner's colors are stripped from it.
+func TestExtractTaskFailures_OutputTailIsPlainText(t *testing.T) {
+	result := &parallel.Result{
+		Failed: 1,
+		TaskResults: []parallel.TaskResult{{
+			TaskName: "build",
+			Host:     "m4-mini",
+			ExitCode: 1,
+			Command:  "make build",
+			Output:   []byte("\x1b[31mNo test files found, exiting with code 1\x1b[39m\n\x1b[2mfilter: \x1b[22m\x1b[33mfoo\x1b[39m\n"),
+		}},
+	}
+
+	failures := extractTaskFailures(result, parseTaskOutcomes(result), "")
+	require.Len(t, failures, 1)
+	assert.Equal(t, "No test files found, exiting with code 1\nfilter: foo", failures[0]["output_tail"])
 }

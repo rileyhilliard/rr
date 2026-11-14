@@ -54,6 +54,24 @@ func hasIntentionalZeroFlag(command string) bool {
 	return false
 }
 
+// nameFilterFlags select tests by name. A run using one where every test was
+// skipped ran nothing the user asked for: the filter matched nothing.
+var nameFilterFlags = []string{"-t", "--testnamepattern"}
+
+// hasNameFilterFlag reports whether command passes a test-name filter, as a
+// whole token ("-t", "--testNamePattern" or "--testNamePattern=x").
+func hasNameFilterFlag(command string) bool {
+	for _, field := range strings.Fields(strings.ToLower(command)) {
+		name, _, _ := strings.Cut(field, "=")
+		for _, flag := range nameFilterFlags {
+			if name == flag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // summarize reads aggregate counts from a formatter that has already
 // processed the output. ok is false when the output contained no
 // recognizable test results.
@@ -63,6 +81,14 @@ func summarize(formatter output.Formatter, command string) (TestSummary, bool) {
 		return TestSummary{}, false
 	}
 	passed, failed, skipped, errs := provider.GetTestCounts()
+	if passed+failed+errs == 0 && skipped > 0 {
+		// Everything skipped. With a test-name filter (vitest/jest -t) that
+		// means the filter matched nothing; without one it's a suite that
+		// skips on purpose (describe.skip, skipIf(!process.env.DB_URL)).
+		reporter, ok := formatter.(output.NoTestsReporter)
+		noTests := ok && reporter.RanNothing() && hasNameFilterFlag(command) && !hasIntentionalZeroFlag(command)
+		return TestSummary{Skipped: skipped, NoTests: noTests}, true
+	}
 	if passed+failed+skipped+errs == 0 {
 		// All-zero counts are only meaningful when the runner explicitly said
 		// it ran nothing. Otherwise this is unparseable output (or a non-test

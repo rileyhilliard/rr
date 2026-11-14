@@ -17,9 +17,8 @@ type GoTestResult struct {
 	Package  string
 	Status   string // "PASS", "FAIL", "SKIP"
 	Duration string
-	Message  string   // Error message for failures
-	Location string   // file:line for failures
-	Output   []string // Additional output lines
+	Message  string // Error message for failures
+	Location string // file:line for failures
 }
 
 // GoPackageResult holds information about a package test run.
@@ -39,11 +38,26 @@ type GoTestFormatter struct {
 	packageStyle lipgloss.Style
 
 	// State tracking
-	tests        []GoTestResult
-	packages     []GoPackageResult
-	currentTest  string
-	currentPkg   string
-	failureLines []string
+	tests       []GoTestResult
+	packages    []GoPackageResult
+	currentTest string
+	currentPkg  string
+	// Test whose log lines come next. go test -v names it in === RUN, PAUSE,
+	// CONT and NAME lines (parallel tests interleave); without -v a test's
+	// log lines follow its --- FAIL line.
+	owner string
+	// Failure location per test, until its package result ends.
+	blocks map[string]*goTestBlock
+}
+
+// goTestBlock is the first file:line a test logged, with the message on
+// that line and the more-indented lines under it (testify's details).
+type goTestBlock struct {
+	location   string
+	message    []string
+	indent     int  // indent of the location line
+	collecting bool // still reading lines under the location line
+	result     int  // index in tests once --- FAIL is seen, else -1
 }
 
 // NewGoTestFormatter creates a new go test output formatter.
@@ -56,7 +70,7 @@ func NewGoTestFormatter() *GoTestFormatter {
 		packageStyle: lipgloss.NewStyle().Foreground(ui.ColorSecondary),
 		tests:        make([]GoTestResult, 0),
 		packages:     make([]GoPackageResult, 0),
-		failureLines: make([]string, 0),
+		blocks:       make(map[string]*goTestBlock),
 	}
 }
 
@@ -69,6 +83,8 @@ func (f *GoTestFormatter) Name() string {
 var (
 	// === RUN   TestName
 	runPattern = regexp.MustCompile(`^=== RUN\s+(\S+)`)
+	// === PAUSE/CONT/NAME TestName: which test's output follows
+	ownerPattern = regexp.MustCompile(`^=== (?:PAUSE|CONT|NAME)\s+(\S+)`)
 	// --- PASS: TestName (0.00s)
 	passPattern = regexp.MustCompile(`^--- PASS: (\S+) \(([^)]+)\)`)
 	// --- FAIL: TestName (0.00s)
@@ -120,6 +136,14 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 	// === RUN TestName
 	if matches := runPattern.FindStringSubmatch(line); matches != nil {
 		f.currentTest = matches[1]
+		f.owner = matches[1]
+		delete(f.blocks, matches[1])
+		return f.mutedStyle.Render(line)
+	}
+
+	// === PAUSE/CONT/NAME TestName
+	if matches := ownerPattern.FindStringSubmatch(line); matches != nil {
+		f.owner = matches[1]
 		return f.mutedStyle.Render(line)
 	}
 
@@ -133,6 +157,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentTest = ""
+		f.endTest(testName)
 		return f.passStyle.Render(line)
 	}
 
@@ -140,14 +165,15 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 	if matches := failPattern.FindStringSubmatch(line); matches != nil {
 		testName := matches[1]
 		duration := matches[2]
-		result := GoTestResult{
+		f.tests = append(f.tests, GoTestResult{
 			Name:     testName,
 			Status:   "FAIL",
 			Duration: duration,
-			Output:   append([]string{}, f.failureLines...),
-		}
-		f.tests = append(f.tests, result)
-		f.failureLines = nil
+		})
+		// Without -v, this test's log lines come next.
+		f.owner = testName
+		f.block(testName).result = len(f.tests) - 1
+		f.applyBlock(f.blocks[testName])
 		f.currentTest = ""
 		return f.failStyle.Render(line)
 	}
@@ -162,6 +188,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentTest = ""
+		f.endTest(testName)
 		return f.skipStyle.Render(line)
 	}
 
@@ -175,6 +202,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentPkg = ""
+		f.endPackage()
 		return f.passStyle.Render(line)
 	}
 
@@ -188,6 +216,7 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 			Duration: duration,
 		})
 		f.currentPkg = ""
+		f.endPackage()
 		return f.failStyle.Render(line)
 	}
 
@@ -215,20 +244,13 @@ func (f *GoTestFormatter) ProcessLine(line string) string {
 
 	// Error location (file:line: message)
 	if matches := errorLocationPattern.FindStringSubmatch(line); matches != nil {
-		f.failureLines = append(f.failureLines, line)
-		// Update the last failed test's location if we have one pending
-		if f.currentTest != "" {
-			location := matches[1]
-			message := matches[2]
-			// Store for when the test result comes in
-			f.failureLines = append(f.failureLines, fmt.Sprintf("%s: %s", location, message))
-		}
+		f.recordLocation(line, matches[1], matches[2])
 		return f.failStyle.Render(line)
 	}
+	f.recordContinuation(line)
 
 	// If we're in a test and the line looks like test output, collect it
 	if f.currentTest != "" && strings.HasPrefix(line, "    ") {
-		f.failureLines = append(f.failureLines, line)
 		// Check if it looks like an error
 		if strings.Contains(strings.ToLower(line), "error") ||
 			strings.Contains(line, "expected") ||
@@ -346,7 +368,79 @@ func (f *GoTestFormatter) Reset() {
 	f.packages = make([]GoPackageResult, 0)
 	f.currentTest = ""
 	f.currentPkg = ""
-	f.failureLines = make([]string, 0)
+	f.endPackage()
+}
+
+func (f *GoTestFormatter) block(test string) *goTestBlock {
+	b := f.blocks[test]
+	if b == nil {
+		b = &goTestBlock{result: -1}
+		f.blocks[test] = b
+	}
+	return b
+}
+
+// recordLocation keeps the owner's first file:line; it's the earliest
+// assertion. A later one ends the message under the first.
+func (f *GoTestFormatter) recordLocation(line, location, message string) {
+	if f.owner == "" {
+		return
+	}
+	b := f.block(f.owner)
+	if b.location != "" {
+		b.collecting = false
+		return
+	}
+	b.location, b.indent, b.collecting = location, indentOf(line), true
+	b.message = appendNonEmpty(nil, message)
+	f.applyBlock(b)
+}
+
+// recordContinuation adds a line indented under the owner's location line
+// to its message, and ends the message at any other line.
+func (f *GoTestFormatter) recordContinuation(line string) {
+	b := f.blocks[f.owner]
+	if b == nil || !b.collecting {
+		return
+	}
+	if strings.TrimSpace(line) == "" || indentOf(line) <= b.indent {
+		b.collecting = false
+		return
+	}
+	b.message = appendNonEmpty(b.message, line)
+	f.applyBlock(b)
+}
+
+// applyBlock copies a block onto its failure once --- FAIL was seen.
+func (f *GoTestFormatter) applyBlock(b *goTestBlock) {
+	if b == nil || b.result < 0 {
+		return
+	}
+	f.tests[b.result].Location = b.location
+	f.tests[b.result].Message = strings.Join(b.message, "\n")
+}
+
+func (f *GoTestFormatter) endTest(test string) {
+	delete(f.blocks, test)
+	f.owner = ""
+}
+
+// endPackage drops all location state once a package result ends its
+// tests' output.
+func (f *GoTestFormatter) endPackage() {
+	f.blocks = make(map[string]*goTestBlock)
+	f.owner = ""
+}
+
+func indentOf(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " \t"))
+}
+
+func appendNonEmpty(lines []string, line string) []string {
+	if line = strings.TrimSpace(line); line != "" {
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // RanNothing implements output.NoTestsReporter.
@@ -386,19 +480,11 @@ func (f *GoTestFormatter) GetTestFailures() []output.TestFailure {
 				}
 			}
 
-			// Build message from output lines
-			var message string
-			if len(t.Output) > 0 {
-				message = strings.Join(t.Output, "\n")
-			} else if t.Message != "" {
-				message = t.Message
-			}
-
 			failures = append(failures, output.TestFailure{
 				TestName: t.Name,
 				File:     file,
 				Line:     line,
-				Message:  message,
+				Message:  t.Message,
 			})
 		}
 	}

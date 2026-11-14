@@ -1,0 +1,46 @@
+---
+title: "How to exclude node_modules from rsync"
+description: "Exclude node_modules from rsync at every depth, preview what a sync would delete, and keep dependencies installed for the machine that runs your tests."
+published: 2026-11-13
+keyword: "rsync exclude node_modules"
+feature: sync
+relatedDocs: [configuration]
+---
+
+Use `--exclude='node_modules'` to keep rsync from copying dependencies to your test server. The bare name matches at any depth, including `packages/web/node_modules` in a monorepo. Send the lockfile with the source so the test server can install the versions your checkout expects.
+
+From the root of a project, preview the transfer to an SSH host called `testbox`. The example assumes `~/work/app` already exists on that host.
+
+```sh
+rsync -ani --exclude='node_modules' --exclude='.git' ./ testbox:work/app/
+```
+
+The final slash on `./` means the contents of the current directory go directly into `work/app/`. The `n` in `-ani` makes this a dry run. Look for a source file you've just edited in the itemized list. If the list looks right, use `-ai` to send the files. rsync can send uncommitted files too, so check for local configuration you want to exclude. [rsync manual](https://rsync.samba.org/ftp/rsync/rsync.1)
+
+## Which rsync exclude pattern matches node_modules?
+
+| Pattern | What it leaves out |
+| --- | --- |
+| `node_modules` | Any entry with this name, including a symlink, anywhere in the transfer |
+| `node_modules/` | Directories with this name anywhere in the transfer |
+| `/node_modules/` | The directory at the transfer root only |
+
+The difference shows up when a workspace links to dependencies stored elsewhere. Archive mode copies symlinks as links. A directory-only rule can let a link called `node_modules` through, pointing to a path that only exists on the laptop. The bare name covers both layouts. The same reasoning applies to `.git`, which is a file in a linked worktree. [rsync filter rules](https://rsync.samba.org/ftp/rsync/rsync.1#FILTER_RULES)
+
+## Will rsync delete the remote copy?
+
+An ordinary exclude also protects matching entries on the receiver when you use `--delete`. That lets you remove a source file locally and retire it on the test server while keeping the server's dependency directory. `--delete-excluded` changes that behavior and can remove those dependencies.
+
+To check your actual filter list, add `--delete` to the dry run against a dedicated project mirror. A remote-only source file in that mirror is a candidate for deletion. A protected `node_modules` should have no deletion entry. Check the destination path as well as the filenames before dropping `-n`. [rsync deletion options](https://rsync.samba.org/ftp/rsync/rsync.1#opt--delete)
+
+## When should the server reinstall dependencies?
+
+Install on the host where Node will load the packages. A native addon built on an Apple Silicon laptop may be unusable on a Linux runner even when both checkouts have the same lockfile. For a project with a committed npm lockfile, this gives you a clean baseline after the first sync:
+
+```sh
+ssh testbox 'cd work/app && npm ci && npm test'
+```
+
+`npm ci` removes an existing install before recreating it. It also fails if the manifest and lockfile disagree. If you choose to reuse an install while editing source files, rerun the clean install after switching Node versions or changing dependencies. An excluded directory can survive a sync long after its contents have become incompatible. [npm ci reference](https://docs.npmjs.com/cli/v11/commands/npm-ci/)
+
+rr uses rsync to send the working tree before running your command over SSH. Its default excludes already cover the bare `node_modules` name. Setting your own `sync.exclude` replaces the default list, so check that list first if dependencies suddenly start transferring. By default rr also checks whether the local `package-lock.json` is newer than the remote install directory and removes that directory when it is. Your task still owns the install step. [rr sync configuration](/docs/configuration/#sync)

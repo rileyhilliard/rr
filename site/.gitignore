@@ -1,0 +1,32 @@
+# Build output and Astro caches
+dist/
+.astro/
+
+# Dependencies
+node_modules/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Raw rr captures; scripts/scrub-fixtures.mjs writes the committed fixtures.
+fixtures/raw/
+
+# Wrangler scratch files (tests/deploy.test.mjs)
+.wrangler/

@@ -213,3 +213,11 @@ func TestPruneStaleWorktrees_SkipsWhenDirIsNotProject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
+
+func TestPruneStaleWorktrees_SkipsLocalHost(t *testing.T) {
+	mock := sshtesting.NewMockClient("dev")
+	conn := &host.Connection{Name: "dev", Client: mock, Host: config.Host{Local: true, Dir: "/work/" + config.ProjectName()}}
+	got, err := PruneStaleWorktrees(conn, t.TempDir(), PruneOptions{})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}

@@ -570,3 +570,14 @@ func TestPull_WithFlags(t *testing.T) {
 		assert.NotContains(t, err.Error(), "No connection provided")
 	}
 }
+
+func TestPull_SkipsForLocalHost(t *testing.T) {
+	conn := &host.Connection{
+		Name:   "dev",
+		Alias:  "local",
+		Client: host.NewLocalClient(),
+		Host:   config.Host{Local: true, Dir: "/does/not/exist"},
+	}
+	err := Pull(conn, PullOptions{Patterns: []config.PullItem{{Src: "file.txt"}}}, nil)
+	assert.NoError(t, err)
+}

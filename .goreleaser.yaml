@@ -49,15 +49,15 @@ homebrew_casks:
       - rr
     homepage: https://github.com/rileyhilliard/rr
     description: Sync code and run commands on remote machines
-    url:
-      verified: github.com/rileyhilliard/rr/
     repository:
       owner: rileyhilliard
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/rr"]
-          end
+    # Homebrew deprecated `postflight` blocks, which is what `hooks.post.install`
+    # renders, so the quarantine strip goes in as a `postflight_steps` block.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "rr"], chdir: ".", writable_paths: ["rr"]
+        end
+      end

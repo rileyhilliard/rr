@@ -8,8 +8,12 @@ import (
 	"time"
 )
 
+// setProcessGroup starts the proxy in its own session: its own process group,
+// so Close can signal everything it started, and no controlling terminal, so
+// a prompt from any hop (a password, a new host key) fails at once with ssh's
+// reason instead of stopping the process on the terminal read.
 func setProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
 
 func (c *proxyConn) Close() error {

@@ -14,6 +14,18 @@ type LockInfo struct {
 	PID          int       `json:"pid"`
 	Command      string    `json:"command,omitempty"`
 	MachineToken string    `json:"machine_token,omitempty"`
+	// JobPGID is the process group of the job a local host is running under
+	// this lock, set once the job starts (see Lock.SetJobPGID). The job runs
+	// in its own session, so it outlives a killed rr; while the group exists
+	// the holder counts as alive. 0 when unknown (a remote host, or a lock
+	// written before this field existed).
+	JobPGID int `json:"job_pgid,omitempty"`
+	// JobStarted is when the job in JobPGID started, recorded with it. Once
+	// the job and rr are gone, a later process can get the job's pid and
+	// lead a group with the same id; its start time tells it apart (see
+	// jobGroupAlive). Zero in a lock written before this field existed,
+	// where any group with that id counts as the job.
+	JobStarted time.Time `json:"job_started,omitzero"`
 }
 
 // NewLockInfo creates a LockInfo with the current user, hostname, time, PID, and command.
@@ -64,8 +76,12 @@ func (i *LockInfo) SameMachine() bool {
 }
 
 // IsDeadLocalHolder reports whether the lock is held by a process on this
-// machine that is no longer running. Such locks are safe to remove
-// immediately instead of waiting for the staleness threshold.
+// machine that is no longer running, and whose job (JobPGID, when recorded)
+// has stopped too. Such locks are safe to remove immediately instead of
+// waiting for the staleness threshold. A SIGKILLed rr leaves its local job
+// running in its own session; the lock stays held until that job is gone.
+// A group that now has the job's id but started after it (JobStarted) isn't
+// the job (see jobGroupAlive).
 func (i *LockInfo) IsDeadLocalHolder() bool {
 	if i.PID <= 0 || i.PID == os.Getpid() {
 		return false
@@ -73,7 +89,18 @@ func (i *LockInfo) IsDeadLocalHolder() bool {
 	if !i.SameMachine() {
 		return false
 	}
-	return !processAlive(i.PID)
+	if processAlive(i.PID) {
+		return false
+	}
+	return i.JobPGID <= 0 || !jobGroupAlive(i.JobPGID, i.JobStarted)
+}
+
+// HasLiveLocalJob reports whether the lock's holder is on this machine and
+// the job it recorded (JobPGID, JobStarted) is still running. Such a lock is
+// in use however old its heartbeat is: a SIGKILLed rr stops touching
+// info.json, but its job runs on in the checkout.
+func (i *LockInfo) HasLiveLocalJob() bool {
+	return i.JobPGID > 0 && i.SameMachine() && jobGroupAlive(i.JobPGID, i.JobStarted)
 }
 
 // Describe returns a human-readable description with command, holder, age,

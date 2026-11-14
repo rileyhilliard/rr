@@ -220,6 +220,10 @@ func connectDoctorHosts(hostNames []string, hosts map[string]config.Host, dial h
 		go func(i int, name string) {
 			defer wg.Done()
 			hostCfg := hosts[name]
+			if hostCfg.Local {
+				conns[i] = host.NewLocalHostConnection(name, hostCfg)
+				return
+			}
 			result, err := host.DialAliases(name, hostCfg.SSH, host.DialOptions{Dial: dial})
 			if err != nil {
 				errs[i] = err
@@ -302,8 +306,11 @@ func collectChecks(cfgPath string, projectCfg *config.Config, globalCfg *config.
 		checks = append(checks, &doctor.HostResolutionCheck{Err: err})
 	}
 
-	// SSH checks (always run)
-	checks = append(checks, doctor.NewSSHChecks()...)
+	// SSH checks run unless every host in scope is local: a local host has no
+	// SSH, so a missing key or agent isn't a problem worth a warning.
+	if !doctor.AllLocal(hostNames, hosts) {
+		checks = append(checks, doctor.NewSSHChecks()...)
+	}
 
 	// Host connectivity checks for the hosts in scope
 	if len(hostNames) > 0 {
@@ -313,8 +320,11 @@ func collectChecks(cfgPath string, projectCfg *config.Config, globalCfg *config.
 		checks = append(checks, &doctor.WorktreeMappingCheck{Hosts: hosts})
 	}
 
-	// Dependency checks (local; remote rsync runs with --requirements)
-	checks = append(checks, doctor.NewDepsChecks()...)
+	// Dependency checks (local; remote rsync runs with --requirements). Only
+	// syncing needs rsync here, and nothing syncs to a local host.
+	if !doctor.AllLocal(hostNames, hosts) {
+		checks = append(checks, doctor.NewDepsChecks()...)
+	}
 
 	return checks
 }
@@ -650,8 +660,9 @@ func formatProbeError(err error) string {
 		return "Connection failed"
 	}
 
-	// For known error types, return the friendly description
-	return capitalizeFirst(probeErr.Reason.String())
+	// For known error types, return the friendly description, naming the
+	// jump host or ProxyCommand when the failure was there
+	return capitalizeFirst(probeErr.Summary())
 }
 
 // getSSHErrorSuggestion returns an actionable suggestion for an SSH error.
@@ -665,6 +676,12 @@ func getSSHErrorSuggestion(err error, alias string) string {
 	probeErr, ok := err.(*host.ProbeError)
 	if !ok {
 		return fmt.Sprintf("Try connecting directly: ssh %s", alias)
+	}
+
+	// The reason is about the jump host or ProxyCommand, not the alias, so
+	// the advice below would point at the wrong machine
+	if probeErr.Via != "" {
+		return fmt.Sprintf("The failure was in its %s. Check that first, then try: ssh -v %s", probeErr.Via, alias)
 	}
 
 	switch probeErr.Reason {

@@ -5,8 +5,6 @@ paths:
 
 # Verification
 
-Before claiming work is complete, load the `ce:verification-before-completion` skill.
-
 ## Always Verify
 
 ```bash

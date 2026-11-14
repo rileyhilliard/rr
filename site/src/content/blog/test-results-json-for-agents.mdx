@@ -1,0 +1,108 @@
+---
+title: "Go test and pytest JSON output for agents"
+description: "Get Go test and pytest JSON output for agents with Go's built-in events or a pytest plugin, then extract failures and detect empty test runs."
+published: 2026-11-05
+keyword: "go test and pytest JSON output for agents"
+feature: output
+relatedDocs: [claude-code]
+---
+
+import AgentDemo from "../../components/blog/AgentDemo.astro";
+
+For Go test and pytest JSON output for agents, use `go test -json` or pytest's third-party `pytest-json-report` plugin. Pytest also has built-in JUnit XML export if your consumer accepts XML.
+
+These reports give a script structured data, but an agent still needs to know whether the intended tests ran and which failed. Keep the runner's exit status alongside the report, extract the failing test and its diagnostic, and distinguish an empty run from a passing suite. Start with your runner's native format before adding another tool.
+
+## How do you get Go test and pytest JSON output?
+
+Run Go tests from your module directory and save the event stream:
+
+```bash
+go test -json ./... > go-tests.jsonl
+```
+
+The file is newline-delimited JSON: parse each line as an event. It is not one JSON array that you can load as a single document. Go's [test2json format reference](https://pkg.go.dev/cmd/test2json) documents the event fields.
+
+For pytest, the built-in report option writes XML:
+
+```bash
+pytest --junitxml=report.xml
+```
+
+If the consumer requires JSON, install the plugin in the Python environment that runs your tests:
+
+```bash
+python -m pip install pytest-json-report
+python -m pytest --json-report
+```
+
+The plugin saves `.report.json` by default. Its [report options and format documentation](https://pypi.org/project/pytest-json-report/) describe the summary and per-test details. That report is a JSON document, so it needs a different reader than Go's event stream.
+
+Jest has its own JSON report flags. With Jest installed in your project, run:
+
+```bash
+npx jest --json --outputFile=jest-results.json
+```
+
+According to the [Jest CLI reference](https://jestjs.io/docs/cli), `--json` sends other test output and user messages to stderr; `--outputFile` writes the results to a file when paired with `--json`. Keep that diagnostic stream available when debugging the run.
+
+## What does go test -json give you?
+
+Go emits events as tests run. `Action` identifies events such as `run`, `pass`, `fail`, and `output`; other actions cover pauses and skipped tests. `Package` identifies the package, while `Test`, when present, identifies the test. `Elapsed` accompanies pass and fail events and records seconds for that test or package.
+
+A failure event identifies the failed test, but its assertion text comes through `output` events. To build an agent's failure report, accumulate `Output` by package and test, then attach the accumulated diagnostic to the failed test. Package-level events have no `Test` field. Preserve those too, so a failure outside an individual test does not disappear from your report. The [Go event documentation](https://pkg.go.dev/cmd/test2json) explains these distinctions.
+
+Choose a counting policy before turning the stream into totals. Counting every pass or fail event as a test would mix package outcomes with individual test outcomes. Your consumer should also decide how it wants to represent a parent test and its subtests. Keep those identities in the parsed data even if the agent initially receives only a short summary.
+
+Use the detailed stream when you need a timeline or your own aggregation rules. For an edit-and-rerun loop, produce a smaller view after the process finishes, and retain the original event file for diagnostics that the smaller view leaves out.
+
+## How do you export pytest results as XML or JSON?
+
+Use JUnit XML when you already have a consumer for it. Pytest's [JUnit XML documentation](https://docs.pytest.org/en/stable/how-to/output.html#creating-junitxml-format-files) describes the built-in `--junitxml=report.xml` option. An agent's tool can parse the XML and return selected fields; the model does not have to read the serialized report itself. Adding a JSON plugin is unnecessary if that path already works.
+
+Use `pytest-json-report` when a JSON file fits your integration better. It is a separate dependency, so include it in the test environment's dependency setup. Installing it in a different Python environment will not make its flags available to the pytest process running your suite.
+
+The plugin can include captured output and traceback details as well as the summary. Choose the information your consumer needs instead of passing the whole report into every agent turn. A successful run usually needs counts and an exit status. A failed run needs enough detail to locate the relevant test and understand its assertion.
+
+Treat each report as an artifact of one invocation. If a command fails before writing its report, a file left by an earlier invocation must not become evidence for the new run. Use a distinct report path per run or remove the old artifact before starting, and record whether the new command actually produced a report.
+
+## What does a coding agent actually need from a test run?
+
+An agent usually needs test counts, the failing test's name, a source location such as `file:line`, and a diagnostic message. The exit status answers whether the command succeeded. The counts help establish what ran. The location and message guide the next edit. A full transcript remains useful when the short diagnostic does not explain the failure.
+
+rr is one option when those tests also need to run on a remote machine (see [running Claude Code tests on a remote machine](/blog/run-claude-code-tests-on-remote-machine/)). It syncs your working tree with rsync over SSH, locks a free host, runs the command there, and streams its output back. The remote needs SSH, rsync, and your toolchain; there is no remote rr daemon. Its result event provides a shared summary for Go, pytest, Jest, and Vitest without requiring you to add report flags to the test command.
+
+The session below replays recorded rr output for a filtered failing Go test, followed by a fix, a rerun, and the full suite. Its failure entry shows the test name only: the recording predates Go source-location parsing. The surrounding agent conversation is illustrative.
+
+<AgentDemo caption="The agent reads the failing remote test's result event, fixes the code, and reruns the tests. The test runs are real recordings." />
+
+rr's `details.summary` contains `passed`, `failed`, `skipped`, and `errors`. On a non-zero exit, `details.failures` contains parsed failures, each with a `name` and, when available, a `file` location and `message`. A parser cannot supply a location that it did not extract, so consumers must allow those fields to be absent.
+
+For Go failures, rr uses the first `file.go:LINE: message` line in the failure block as the location. It follows `=== RUN`, `=== PAUSE`, and `=== CONT` markers to attribute interleaved parallel-test output, and keeps testify detail lines in the message. Long messages retain their beginning and final third; consult the full log when the omitted middle matters.
+
+## How do you catch a run that collected no tests?
+
+Zero failed tests does not establish that the intended tests ran. An agent may select the wrong path or use a filter that matches nothing. Treat an explicit empty-run report as a reason to inspect test selection before making another code change.
+
+Pytest documents exit code `5` for [no tests collected](https://docs.pytest.org/en/stable/reference/exit-codes.html). Preserve that distinction in a wrapper instead of reducing every non-zero status to an assertion failure. The next action is to check collection or invocation, not to search for a failed assertion.
+
+rr sets `details.no_tests: true` when the runner explicitly reports running nothing, such as pytest's `no tests ran` or a Go run where every package reports `[no test files]`. Collect-only and list flags do not trigger that signal. rr keeps the runner's exit code unchanged, so the flag is information your agent must interpret.
+
+An absent summary is a separate case. rr's summary extraction is best-effort; unrecognized output can leave no parsed summary. Your consumer should report that it could not establish counts and retain the log for inspection. Filling in zero counts would incorrectly turn missing information into an empty-run claim.
+
+On a zero-test run whose command contains a pipe, rr also sets `details.piped_exit_code: true`. The exit status may belong to the pipeline's last stage. Check that caveat before interpreting a successful shell exit as a successful test invocation.
+
+## How do you get one result across test frameworks?
+
+Use a common result view when your agent switches between supported runners. rr detects the framework from the command or log, selecting the highest-scoring match among its supported parsers. Its pytest parser handles quiet `-q` output as well as verbose test-status lines and traceback diagnostics. The common fields let the consumer use the same failure-reading logic across those runners.
+
+After configuring an rr host, keep the test invocation you normally use inside `rr run`:
+
+```bash
+rr run "go test ./..."
+rr run "pytest -q"
+```
+
+rr writes JSON-line phase events for connection, sync, and execution to stderr, followed by a final `result` event. The command's own output passes through unchanged, so stderr can also contain the command's plain-text diagnostics. Parse rr's JSON events while retaining those diagnostics, and select the final result for the agent's decision. `--pretty` provides the human-readable presentation.
+
+The [rr installation instructions](/#install) cover installing the binary. The [Claude Code integration guide](/docs/claude-code/) explains the plugin that teaches Claude Code rr's commands and structured output. If your tests already run where you need them and you only need a report file, the runner commands above supply that file without remote execution setup.

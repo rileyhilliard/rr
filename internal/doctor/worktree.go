@@ -32,7 +32,12 @@ func (c *WorktreeMappingCheck) Run() CheckResult {
 	sort.Strings(names)
 
 	mappings := make([]string, 0, len(names))
+	var inPlace []string
 	for _, name := range names {
+		if c.Hosts[name].Local {
+			inPlace = append(inPlace, name)
+			continue
+		}
 		mappings = append(mappings, fmt.Sprintf("%s:%s", name, config.ExpandRemote(c.Hosts[name].Dir)))
 	}
 
@@ -41,10 +46,17 @@ func (c *WorktreeMappingCheck) Run() CheckResult {
 		treeDesc = fmt.Sprintf("linked worktree '%s'", wt.Name)
 	}
 
+	var clauses []string
+	if len(mappings) > 0 {
+		clauses = append(clauses, "syncs to "+strings.Join(mappings, ", "))
+	}
+	if len(inPlace) > 0 {
+		clauses = append(clauses, "runs in place on "+strings.Join(inPlace, ", "))
+	}
 	result := CheckResult{
 		Name:    c.Name(),
 		Status:  StatusPass,
-		Message: fmt.Sprintf("%s syncs to %s", treeDesc, strings.Join(mappings, ", ")),
+		Message: fmt.Sprintf("%s %s", treeDesc, strings.Join(clauses, " and ")),
 	}
 
 	// A linked worktree sharing the main checkout's remote dir means

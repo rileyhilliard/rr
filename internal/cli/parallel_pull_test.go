@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,7 +108,7 @@ func TestPullSubtaskFiles_Dirs(t *testing.T) {
 
 	var dests []string
 	captureStderr(t, func() {
-		pullSubtaskFiles(tasks, result, hosts, func(_ *host.Connection, opts rrsync.PullOptions, _ io.Writer) error {
+		pullSubtaskFiles(tasks, result, hosts, "", func(_ *host.Connection, opts rrsync.PullOptions, _ io.Writer) error {
 			for _, p := range opts.Patterns {
 				dests = append(dests, p.Dest)
 			}
@@ -164,7 +165,7 @@ func TestPullSubtaskFiles(t *testing.T) {
 	}
 
 	stderr := captureStderr(t, func() {
-		pullSubtaskFiles(tasks, result, hosts, pull)
+		pullSubtaskFiles(tasks, result, hosts, "", pull)
 	})
 
 	require.Len(t, calls, 2, "only remote subtasks with pull config are pulled")
@@ -225,15 +226,26 @@ func TestPullAndReport_SingleRunShape(t *testing.T) {
 	}
 }
 
-func TestPullSubtaskFiles_LocalRunSkips(t *testing.T) {
+// TestPullSubtaskFiles_LocalRunCopiesInPlace checks a subtask run locally
+// (--local) is copied from the dir it ran in, not pulled over SSH.
+func TestPullSubtaskFiles_LocalRunCopiesInPlace(t *testing.T) {
+	skipWithoutRsync(t)
+	projectDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "x"), []byte("x"), 0o644))
+	t.Chdir(t.TempDir())
+
 	tasks := []parallel.TaskInfo{{Name: "a", Pull: []config.PullItem{{Src: "x"}}}}
 	result := &parallel.Result{TaskResults: []parallel.TaskResult{{TaskName: "a", Host: "local"}}}
 	called := false
-	pullSubtaskFiles(tasks, result, nil, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
-		called = true
-		return nil
+	captureStderr(t, func() {
+		pullSubtaskFiles(tasks, result, nil, projectDir, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
+			called = true
+			return nil
+		})
 	})
 	assert.False(t, called)
+	_, err := os.Stat(filepath.Join("a_0", "x"))
+	assert.NoError(t, err)
 }
 
 // TestPullSubtaskFiles_NeverConnectedSkips checks a subtask assigned to a
@@ -245,7 +257,7 @@ func TestPullSubtaskFiles_NeverConnectedSkips(t *testing.T) {
 	tasks := []parallel.TaskInfo{{Name: "a", Pull: []config.PullItem{{Src: "x"}}}}
 	result := &parallel.Result{TaskResults: []parallel.TaskResult{{TaskName: "a", Host: "box-a", ExitCode: 1}}}
 	called := false
-	pullSubtaskFiles(tasks, result, hosts, func(*host.Connection, rrsync.PullOptions, io.Writer) error {
+	pullSubtaskFiles(tasks, result, hosts, "", func(*host.Connection, rrsync.PullOptions, io.Writer) error {
 		called = true
 		return nil
 	})

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -63,7 +64,17 @@ const defaultMonitorTimeout = 8 * time.Second
 // settings resolution shared by `rr monitor` and `rr monitor --once`.
 func resolveMonitorScope(hostsFilter string) (*monitorScope, error) {
 	resolved, err := config.LoadResolved("")
-	if err != nil {
+	if errors.IsCode(err, errors.ErrConfigNotFound) {
+		// With no explicit path, this is a checkout without .rr.yaml inside
+		// another checkout that has one. That config is skipped so a run
+		// doesn't use the other checkout's code; monitor runs no code, so it
+		// shows the global hosts, as it does with no project config.
+		global, globalErr := config.LoadGlobal()
+		if globalErr != nil {
+			return nil, globalErr
+		}
+		resolved = &config.ResolvedConfig{Global: global, Project: config.DefaultConfig(), Source: config.GlobalOnly}
+	} else if err != nil {
 		return nil, err
 	}
 
@@ -84,16 +95,29 @@ func resolveMonitorScope(hostsFilter string) (*monitorScope, error) {
 		sort.Strings(hostOrder)
 	}
 
-	// Filter hosts if --hosts flag provided
-	if hostsFilter != "" {
-		hosts = filterHosts(hosts, hostsFilter)
-		if len(hosts) == 0 {
-			return nil, errors.New(errors.ErrHostNotFound,
-				fmt.Sprintf("No hosts match '%s'", hostsFilter),
-				"Double-check your host names or try without the --hosts filter.")
+	// Hosts named with --hosts are looked up among all global hosts, not just
+	// the project's: an explicit request wins over the project's hosts: list,
+	// which usually leaves the local host out.
+	if strings.Trim(hostsFilter, ", ") != "" {
+		hosts = filterHosts(resolved.Global.Hosts, hostsFilter)
+		hostOrder = hostOrder[:0:0]
+		var unknown []string
+		for _, name := range strings.Split(hostsFilter, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" || slices.Contains(hostOrder, name) {
+				continue
+			}
+			if _, ok := hosts[name]; !ok {
+				unknown = append(unknown, "'"+name+"'")
+				continue
+			}
+			hostOrder = append(hostOrder, name)
 		}
-		// Filter the order list too
-		hostOrder = filterHostOrder(hostOrder, hosts)
+		if len(unknown) > 0 {
+			return nil, errors.New(errors.ErrHostNotFound,
+				fmt.Sprintf("No configured host named %s", strings.Join(unknown, ", ")),
+				"Check the names with 'rr host list', or drop --hosts to monitor the project's hosts.")
+		}
 	}
 
 	// Apply monitor.exclude from project config. Hosts explicitly requested

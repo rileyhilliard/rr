@@ -20,6 +20,10 @@ func TestConfigFileCheck(t *testing.T) {
 		if result.Status != StatusFail {
 			t.Errorf("expected StatusFail, got %v", result.Status)
 		}
+		// The check passes on the search's own explanation and advice
+		// instead of a generic suggestion that may not apply.
+		assert.Contains(t, result.Message, "Can't find config file at")
+		assert.Equal(t, "Double-check that path - it doesn't seem to exist.", result.Suggestion)
 	})
 
 	t.Run("config found", func(t *testing.T) {

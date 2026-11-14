@@ -68,13 +68,13 @@ func TestFormatLatency(t *testing.T) {
 func TestFindSelectedHost(t *testing.T) {
 	tests := []struct {
 		name        string
-		results     map[string]probeResult
+		results     []probeResult
 		expectsHost bool // whether we expect a host to be selected
 	}{
 		{
 			name: "returns nil when no hosts are healthy",
-			results: map[string]probeResult{
-				"dev": {
+			results: []probeResult{
+				{
 					HostName: "dev",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "dev-lan", Success: false},
@@ -86,8 +86,8 @@ func TestFindSelectedHost(t *testing.T) {
 		},
 		{
 			name: "selects first healthy host",
-			results: map[string]probeResult{
-				"dev": {
+			results: []probeResult{
+				{
 					HostName: "dev",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "dev-lan", Success: false},
@@ -99,8 +99,8 @@ func TestFindSelectedHost(t *testing.T) {
 		},
 		{
 			name: "selects first successful alias",
-			results: map[string]probeResult{
-				"gpu-box": {
+			results: []probeResult{
+				{
 					HostName: "gpu-box",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "gpu-lan", Success: false},
@@ -113,7 +113,7 @@ func TestFindSelectedHost(t *testing.T) {
 		},
 		{
 			name:        "empty results returns nil",
-			results:     map[string]probeResult{},
+			results:     []probeResult{},
 			expectsHost: false,
 		},
 	}
@@ -136,14 +136,14 @@ func TestOutputStatusJSON(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		results  map[string]probeResult
+		results  []probeResult
 		selected *Selected
 		validate func(t *testing.T, output StatusOutput)
 	}{
 		{
 			name: "includes all hosts with their aliases",
-			results: map[string]probeResult{
-				"dev": {
+			results: []probeResult{
+				{
 					HostName: "dev",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "dev-lan", Success: true, Latency: 10 * time.Millisecond},
@@ -185,8 +185,8 @@ func TestOutputStatusJSON(t *testing.T) {
 		},
 		{
 			name: "healthy is false when no aliases succeed",
-			results: map[string]probeResult{
-				"unreachable": {
+			results: []probeResult{
+				{
 					HostName: "unreachable",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "host1", Success: false},
@@ -203,7 +203,7 @@ func TestOutputStatusJSON(t *testing.T) {
 		},
 		{
 			name:     "empty results produces empty hosts array",
-			results:  map[string]probeResult{},
+			results:  []probeResult{},
 			selected: nil,
 			validate: func(t *testing.T, output StatusOutput) {
 				assert.Empty(t, output.Hosts)
@@ -212,8 +212,8 @@ func TestOutputStatusJSON(t *testing.T) {
 		},
 		{
 			name: "nil error does not appear in output",
-			results: map[string]probeResult{
-				"test": {
+			results: []probeResult{
+				{
 					HostName: "test",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "test-ssh", Success: false, Error: nil},
@@ -238,7 +238,7 @@ func TestOutputStatusJSON(t *testing.T) {
 			os.Stdout = w
 
 			// Run the function
-			outputErr := outputStatusJSON(tt.results, tt.selected, nil)
+			outputErr := outputStatusJSON(tt.results, statusScopeGlobal, tt.selected, nil)
 			require.NoError(t, outputErr)
 
 			// Restore stdout and read captured output
@@ -263,15 +263,15 @@ func TestOutputStatusJSON(t *testing.T) {
 func TestOutputStatusText(t *testing.T) {
 	tests := []struct {
 		name           string
-		results        map[string]probeResult
+		results        []probeResult
 		selected       *Selected
 		wantContains   []string
 		wantNotContain []string
 	}{
 		{
 			name: "shows selected host",
-			results: map[string]probeResult{
-				"dev-machine": {
+			results: []probeResult{
+				{
 					HostName: "dev-machine",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "dev-lan", Success: true, Latency: 5 * time.Millisecond},
@@ -283,8 +283,8 @@ func TestOutputStatusText(t *testing.T) {
 		},
 		{
 			name: "shows selected host with alias",
-			results: map[string]probeResult{
-				"server": {
+			results: []probeResult{
+				{
 					HostName: "server",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "server-ssh", Success: true, Latency: 10 * time.Millisecond},
@@ -296,8 +296,8 @@ func TestOutputStatusText(t *testing.T) {
 		},
 		{
 			name: "shows none when no hosts reachable",
-			results: map[string]probeResult{
-				"broken": {
+			results: []probeResult{
+				{
 					HostName: "broken",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "broken-ssh", Success: false},
@@ -309,8 +309,8 @@ func TestOutputStatusText(t *testing.T) {
 		},
 		{
 			name: "shows via alias for selected host",
-			results: map[string]probeResult{
-				"gpu": {
+			results: []probeResult{
+				{
 					HostName: "gpu",
 					Aliases: []host.ProbeResult{
 						{SSHAlias: "gpu-tailscale", Success: true, Latency: 50 * time.Millisecond},
@@ -331,7 +331,7 @@ func TestOutputStatusText(t *testing.T) {
 			os.Stdout = w
 
 			// Run the function
-			outputErr := outputStatusText(tt.results, tt.selected, nil)
+			outputErr := outputStatusText(tt.results, statusScopeGlobal, tt.selected, nil)
 			require.NoError(t, outputErr)
 
 			// Restore stdout and read captured output

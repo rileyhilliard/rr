@@ -1,0 +1,34 @@
+---
+import { docsGroups } from "../../config";
+import DocsLayout from "../../layouts/DocsLayout.astro";
+import { getDocs } from "../../lib/collection";
+import { docHref, docsNav } from "../../lib/docs";
+
+const nav = docsNav(await getDocs(), docsGroups);
+---
+
+<DocsLayout
+  title="Documentation"
+  description="Set up SSH hosts for rr, configure remote and parallel test tasks, use the Claude Code plugin, and troubleshoot failed runs."
+  path="/docs/"
+  nav={nav}
+>
+  <p>
+    Every page here is also served as Markdown, and <a href="/llms.txt">llms.txt</a> lists them all.
+  </p>
+  {nav.map((group) => (
+    <section aria-labelledby={`group-${group.id}`}>
+      <h2 id={`group-${group.id}`}>{group.label}</h2>
+      <ul class="not-prose grid gap-4 sm:grid-cols-2">
+        {group.items.map((item) => (
+          <li class="border-line rounded-lg border p-4">
+            <a href={docHref(item.id)} class="font-semibold">
+              {item.title}
+            </a>
+            <p class="text-muted mt-1 text-sm">{item.description}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))}
+</DocsLayout>

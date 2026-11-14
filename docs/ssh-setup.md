@@ -1,3 +1,10 @@
+---
+title: SSH setup
+description: Set up passwordless SSH from your machine to a remote host so rr can sync and run there.
+group: getting-started
+order: 10
+---
+
 # SSH setup
 
 Before using rr, you need passwordless SSH access to your remote machine. This guide walks through setting that up.
@@ -15,7 +22,7 @@ If you already have SSH keys and just need to copy them to a new machine:
 ssh-copy-id user@your-remote-machine
 ```
 
-Done. Skip to [Verify it works](#verify-it-works).
+Done. Skip to [Verify it works](#4-verify-it-works).
 
 ## Full walkthrough
 
@@ -25,7 +32,7 @@ Done. Skip to [Verify it works](#verify-it-works).
 ls ~/.ssh/id_*.pub
 ```
 
-If you see files like `id_ed25519.pub` or `id_rsa.pub`, you already have keys. Skip to [Copy your key to the remote](#2-copy-your-key-to-the-remote).
+If you see files like `id_ed25519.pub` or `id_rsa.pub`, you already have keys. Skip to [Copy your key to the remote](#3-copy-your-key-to-the-remote).
 
 If you get "No such file or directory", continue to generate new keys.
 
@@ -183,14 +190,14 @@ This will:
 
 ## How rr uses your SSH config
 
-rr doesn't shell out to `ssh`. It uses its own SSH client, which reads `~/.ssh/config` but only understands part of it:
+rr runs commands over its own SSH client, not `ssh` (sync uses rsync, which does use `ssh`). That client reads `~/.ssh/config` but only understands part of it:
 
 | Option | Supported |
 |--------|-----------|
 | `HostName`, `Port`, `User`, `IdentityFile` | Yes |
 | `IdentityAgent` (1Password, Secretive, YubiKey agents) | Yes |
 | `ProxyCommand` | Yes |
-| `ProxyJump` | No. rr warns; use `ProxyCommand ssh -W %h:%p <jump-host>` instead |
+| `ProxyJump` | Yes. rr runs `ssh -W` to the jump host, as OpenSSH does, so the jump host is resolved through your config and your `ssh`. Chains (`a,b`) and `ProxyJump none` work. A `ProxyCommand` on the same host wins, where OpenSSH takes whichever comes first |
 | `Match` blocks | No. Host entries after the first `Match` line aren't seen, so put the hosts rr uses above it |
 
 For authentication, rr tries the SSH agent first, then the `IdentityFile` from your config, then `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, and `~/.ssh/id_ecdsa`. It can't prompt for a passphrase, so passphrase-protected keys have to be loaded in the agent.

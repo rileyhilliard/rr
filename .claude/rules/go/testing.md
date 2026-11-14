@@ -87,7 +87,7 @@ CI fails the integration job if any test skips, so a new `t.Skip` there needs a 
 
 ## Flaky Tests
 
-When fixing flaky tests, load the `ce:fixing-flaky-tests` skill.
+When fixing flaky tests, load the `ce:writing-tests` skill (flaky-test guidance is in its references/flaky-tests.md).
 
 | Symptom | Likely Cause |
 |---------|--------------|

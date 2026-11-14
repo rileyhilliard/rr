@@ -1,10 +1,12 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/rileyhilliard/rr/internal/config"
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 )
 
 // ConfigFileCheck verifies that a config file exists.
@@ -18,6 +20,17 @@ func (c *ConfigFileCheck) Category() string { return "CONFIG" }
 func (c *ConfigFileCheck) Run() CheckResult {
 	path, err := config.Find(c.ConfigPath)
 	if err != nil {
+		// The search explains what it found and what to do (a nested
+		// checkout names the .rr.yaml it skipped and the cp to run).
+		var rrErr *rrerrors.Error
+		if errors.As(err, &rrErr) && rrErr.Suggestion != "" {
+			return CheckResult{
+				Name:       c.Name(),
+				Status:     StatusFail,
+				Message:    rrErr.Message,
+				Suggestion: rrErr.Suggestion,
+			}
+		}
 		return CheckResult{
 			Name:       c.Name(),
 			Status:     StatusFail,

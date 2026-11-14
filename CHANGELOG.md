@@ -5,6 +5,126 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Release binaries are built with Go 1.26.11, which fixes GO-2026-6859 in `net/http`. Building from source now needs Go 1.26.11.
+
+## [0.29.4] - 2026-11-03
+
+### Fixed
+
+- Two runs could hold the same host's lock at once, and run their commands at the same time, on hosts whose `mkdir` is uutils coreutils (the default on Ubuntu 26). rr takes the lock by creating `rr.lock/`, and uutils `mkdir` can report success to both of two runs that race to create it. A run now holds the lock only once it has also created `rr.lock/info.json` with the shell's noclobber redirect, which only one run can do. A run that loses waits for the lock as usual. Older rr versions on such a host can still race each other, so upgrade rr everywhere that shares a host.
+
+### Security
+
+- Release binaries are built with Go 1.26.10, which fixes ten standard-library advisories rr can reach (GO-2026-6603, GO-2026-6605, GO-2026-6607, GO-2026-6608, GO-2026-6610 to GO-2026-6613, GO-2026-6617 and GO-2026-6809) in `net/http`, `net/textproto`, `crypto/tls` and `crypto/x509`. Building from source now needs Go 1.26.10.
+
+### Documentation
+
+- The docs are published at [rr.steamfield.io](https://rr.steamfield.io).
+
+## [0.29.3] - 2026-10-05
+
+### Fixed
+
+- `brew upgrade` and `brew cleanup` on Homebrew 7 warned "Calling `postflight` is deprecated! Use `postflight_steps` instead" and asked you to report it to the tap. The cask now removes the macOS quarantine attribute in a `postflight_steps` block. The rr binary is unchanged; the warning stops once you upgrade to this release.
+
+## [0.29.2] - 2026-10-04
+
+### Added
+
+- `ProxyJump` in `~/.ssh/config`. rr connects through the jump host as OpenSSH does, by running `ssh -W` to it, including chains (`a,b`), `user@host:port`, `[v6]:port` and `ssh://` jump hosts, and `ProxyJump none`. rr starts that `ssh` without a shell, in batch mode and detached from the terminal, so a prompt from any jump host fails with `ssh`'s reason instead of waiting on an answer rr can't give. A `ProxyCommand` on the same host wins (OpenSSH uses whichever appears first in the file), and `ProxyCommand none` now turns a proxy off rather than being run as a command. rr used to warn that `ProxyJump` was unsupported (once per probe, so `rr monitor` repeated it on every refresh) and dial the target directly, which fails when the jump host is the only way in.
+
+### Fixed
+
+- A failure in a jump host or `ProxyCommand` was reported as the target's: "SSH handshake ... didn't go through. Try: ssh <host>" when the proxy failed after the first 100ms, or "Check the remote host is running SSH" when it timed out. It now says "Couldn't reach 'X' through jump host 'J'" (or "through its ProxyCommand"), with what `ssh` printed as the cause and advice to check the jump host, then the target from it. `rr status`, `rr doctor` and the connect progress show it as, for example, "hostname not found via jump host 'bastion'". When the jump host gets through and the target refuses the handshake or hangs up, the error is the target's.
+- SSH suggestions printed a literal `<host>` or `<hostname>` placeholder; they now name the host.
+- A target's host key missing from `~/.ssh/known_hosts` (`knownhosts: key is unknown`) was an unknown failure with "Something went wrong during SSH setup". It's now `SSH_HOST_KEY`, with the `ssh -o StrictHostKeyChecking=accept-new <host> exit` command to accept it.
+- "host key mismatch ... server sent ecdsa-sha2-nistp256 key" for a host that `known_hosts` knows by another key type. `ssh` records only the key it negotiated (usually ed25519), and rr asked for ecdsa first, so a host accepted with `ssh -o StrictHostKeyChecking=accept-new <host> exit` failed in rr. rr now asks for the key types `known_hosts` has for the host, as OpenSSH does.
+- With several project hosts, "Couldn't connect to any host" dropped each host's failure. It now keeps them as the cause, so the error says why each alias failed.
+
+## [0.29.1] - 2026-10-04
+
+### Added
+
+- A config warning for `setup:` on a task that isn't parallel. rr only runs a task's `setup` before parallel subtasks, so on any other task it was silently skipped. The warning suggests chaining it into `run`, making it the first step, or moving it to `defaults.setup`.
+
+### Changed
+
+- `rr update` on a Homebrew install runs `brew upgrade --cask rileyhilliard/tap/rr` (`brew reinstall` with `--force`). It used to replace the binary inside `Caskroom/rr/<old version>/`, which left Homebrew recording the old version. If brew finishes without installing the release, rr says so instead of reporting success. If you already ran `rr update` on a Homebrew install, run `brew upgrade --cask rileyhilliard/tap/rr` once so Homebrew records the right version.
+
+### Fixed
+
+- `rr status` picked its "Selected" host at random when several were reachable, and listed every global host. It now lists the hosts in the order runs try them and selects the first reachable one:
+  - with `hosts:` (or `host:`) in `.rr.yaml`, the project's hosts in that order (`scope: project`)
+  - in local mode (`local_fallback` on and no hosts), this machine only (`scope: local`)
+  - otherwise every global host alphabetically (`scope: global`)
+
+  The JSON adds `scope`, and `hosts` is in preference order. A nested worktree without `.rr.yaml` still gets the global hosts instead of `CONFIG_NOT_FOUND`.
+
+## [0.29.0] - 2026-10-04
+
+Three changes can break scripts and agents: runs on this machine report the local host's name when one is configured, a checkout nested inside another no longer picks up the outer checkout's `.rr.yaml`, and `--local` now overrides a task's `hosts:` list. They're marked Breaking under Changed, and [MIGRATION.md](docs/MIGRATION.md) has the upgrade steps.
+
+### Added
+
+- **Local host (`local: true`)** - A host entry can now be the machine rr runs on, in rotation with the remote hosts instead of only as a fallback. Give it `local: true` and no `ssh` or `dir`. It's tried in host order, takes the same lock as any host (at `<lock.dir>/rr.lock` on this machine), gets a worker in parallel tasks, and works with `--host`, `--tag`, `rr status` (JSON lists it under `project.in_place_hosts`), `rr doctor` (including `--path` and `--requirements`), `rr monitor`, `rr unlock`, and `rr provision`. Commands get its `setup_commands`, `shell`, and `require` checks like a remote host, and tasks also get its `env`. Commands start in the home directory like an SSH session, and don't re-source `~/.bashrc`/`~/.zshrc`, so an activated virtualenv or `nvm use` stays in effect. It runs in place in the local project directory: nothing is synced or path-rewritten, the sync phase is skipped with `reason: in_place`, `rr prune` reports it skipped, and output files land in the checkout. `pull:` and `--pull` copy from the project directory to the destination, or report the pull skipped (`reason: same_dir`) when the destination is the project directory. `rr sync` and `rr pull` never pick it, and naming it with `--host` is a config error. Only one host can be local, `local: true` with `ssh` or `dir` fails validation, and so does `local: true` on Windows, since the host runs commands through `/bin/sh`. A project with no `hosts:` list uses every global host, so adding a local host puts this machine in the rotation of every such project.
+- **`rr host add --local`** - Adds this machine as a local host without the wizard: `rr host add --local --name dev [--tag fast] [--env K=V]`. It can't be combined with `--ssh` or `--dir`, and it refuses a second local host, naming the one you have. The interactive `rr host add` first asks whether the host is this machine or a remote one, and `rr init` offers "This machine (local, run in place)" in its host list. Both offers appear only while no host is local, and the name prompt rejects `local` and names already in use so you can retype.
+- **A local job keeps its host locked after rr is killed** - A local host's command runs in its own session, so when rr is SIGKILLed (a harness timeout, the OOM killer) the job keeps running in the checkout. The lock now records the job's process group (`job_pgid` in `info.json`), and while that group is alive the lock is neither reclaimed as a dead holder nor treated as stale, however old its heartbeat. The next run waits for the job instead of starting beside it. `rr monitor` counts such a lock as held.
+- **`lock` `waiting` event** - A run that finds its host's lock held emits one `{"phase":"lock","status":"waiting","host":"dev",...}` event before it waits. `details` has `message` (whose lock it is and how long rr will wait), `holders` (`host`, `user`, `pid`, `command`, `age_s`, `same_machine`) and `wait_timeout_s`, the same shape as the `connect` `waiting` event of a load-balanced wait. With `--pretty` the lock spinner shows the same message.
+- **`INTERRUPTED` error code, exit 130** - Ctrl+C or SIGTERM while rr waits for a lock now stops the wait, both on a single host and in the load-balanced wait across hosts. Nothing runs, the error envelope says `INTERRUPTED` ("Stopped waiting for the lock on dev"), and rr exits 130, the same code as Ctrl+C during the command. The wait used to ignore the signal. An interrupted load-balanced wait never falls back locally, even with `local_fallback: always`. Agents shouldn't retry it: the user stopped the run.
+
+### Changed
+
+- **Breaking for agents: `--local`, local mode and `local_fallback` run on the local host** - With a local host configured, these runs go through it as `--host` would, instead of running bare in your terminal:
+  - Structured output names the host (e.g. `dev`) as `host` on the connect events, the fallback `warn` event and the result, instead of `local`. `details.reason`, `details.local_reason` and `details.fallback` are unchanged, so match on those to tell why a run was local, not on `host == "local"`.
+  - A `lock` phase now runs on that host (waiting up to `lock.timeout`, with a `lock` `waiting` event), and sync is skipped with `reason: in_place` instead of `local`.
+  - The command gets the host's `setup_commands`, `shell` and `require` checks (a missing tool is now `DEPENDENCY_MISSING`) and the project's `defaults.setup`; tasks also get the host's `env`. It runs in its own session with no terminal, and a task runs at the project root (`rr run` still keeps the directory you ran it from).
+  - A parallel task with `--local` uses the local host as its one worker, and runs every subtask on it, including ones pinned to other hosts with `hosts:` (see the task `hosts:` entry below).
+  - When every host is locked and the local host is busy, rr waits for a host and then fails instead of falling back locally, even with `local_fallback: always`, including when `hosts:` or `--tag` left the local host out of the run.
+
+  Without a local host, these runs behave as before: no lock, host `local`, sync skipped as `local`, the command attached to your terminal.
+- **Breaking: the `.rr.yaml` search stops at the git top level** - rr walked up past the checkout's root looking for `.rr.yaml`, so a worktree created inside the main checkout (for example under `.claude/worktrees/`) without its own `.rr.yaml` loaded the main checkout's. That made the main checkout the project root: a local host ran the main checkout's code, and a remote host synced it. The search now stops at the directory holding `.git` (a directory, or the file of a linked worktree or submodule), including when you run rr from that directory. If the nearest `.rr.yaml` above it sits inside an enclosing git checkout, rr fails with `CONFIG_NOT_FOUND` naming the file it skipped and suggesting you commit or copy it into this checkout; `rr doctor` fails its `config_file` check with the same message. Commands that only read hosts (`rr monitor`, `rr status`, `rr host list`, `rr unlock`) use your global hosts instead of failing. A `.rr.yaml` in a plain directory above your repos (say `~/code/.rr.yaml` over the repo `~/code/foo`) is now ignored, and the repo uses your global hosts. Before, rr ignored it from the repo's subdirectories but loaded it when run from the repo's top-level directory; if you relied on that, copy the file into each repo. A subdirectory of one checkout still finds that checkout's `.rr.yaml`, and outside git the search still stops at your home directory.
+- **A host can't be named `local`** - That name is what structured output reports for a bare local run, so a host called `local` couldn't be told apart from one. Config validation now rejects it (`CONFIG_INVALID`) and suggests a name like `dev`.
+- **The lock timeout names the host** - `Lock timeout after 5m0s - someone else is using this remote` is now `Lock timeout after 5m0s - another run is using m4-mini`, and the "couldn't write the lock info file" suggestion points at the lock dir on that host instead of "the remote". The code is still `LOCK_HELD`.
+- **`rr doctor` skips the SSH and rsync checks when every host is local** - With only local hosts in scope, a missing SSH key, SSH agent or rsync can't affect a run, so the `ssh_key`, `ssh_agent` and `rsync_local` checks don't run. A project with no hosts in scope still gets them.
+- **`rr setup <local host>` fails clearly** - It used to start SSH key setup and stall on a prompt. It now fails with `CONFIG_INVALID`: "'dev' is a local host; there's no SSH to set up".
+- **Host names in `--pretty` output** - The task summary ("Task 'test' completed on ...") names the host instead of its SSH alias. The exit 126 and 137 hints say "the host" instead of "remote", a failed run on a local host suggests checking your local environment instead of remote logs, and `rr monitor --help` says "hosts", not "remote hosts".
+- **A failed phase event's `error` is one line** - It held the pretty-printed error, with its `✗`, the underlying cause and the suggestion on separate lines. It's now the error's message; the error envelope after it still has `code`, `message` and `suggestion`.
+- **Breaking: task `hosts:` decides where a task runs, and `--local` overrides it** - A single task's `hosts:` list was only checked after rr had picked and locked a host, so a load-balanced run could take a host the task doesn't allow (or wait out its lock) and then refuse. rr now picks only among the task's hosts. `--host` naming another host is refused (`CONFIG_INVALID`) before any lock wait, with a suggestion naming an allowed host. `--local` and local mode now override a task's `hosts:` (single tasks and every parallel subtask), as they already override the project's `hosts:` list: a shared `.rr.yaml` can't name each person's local host, so `rr <task> --local` is how a pinned task runs on this machine. Before, a pinned single task refused `--local`, and a parallel one refused it only when a local host was configured. `--tag` on a pinned task fails up front (`CONFIG_INVALID`, naming the task's hosts) when only hosts outside the list carry the tag, and a tag no host has lists every host's tags. A pinned task no longer falls back to this machine unless its `hosts:` list names the local host: unreachable hosts fail with `SSH_CONNECTION_FAILED` naming them, and busy ones are waited for. It used to fall back, could wait out a busy local host's `lock.timeout`, and then refuse.
+- **`rr monitor --hosts` can name any configured host** - It only matched hosts in the project's `hosts:` list, so naming the local host (or any host the project leaves out) silently showed nothing for it. It now looks names up among all global hosts, and fails with `HOST_NOT_FOUND` naming any that aren't configured instead of dropping them.
+- **Plainer failure advice** - A failed bare `--local` run no longer suggests `ssh local`, an interrupted lock wait says rr was stopped instead of `context canceled`, `rr doctor` in a nested checkout repeats the `cp` command from the config search, and a host named `local` gets the rename advice as its suggestion.
+- **Pulls after local runs copy the files** - `pull:` and `--pull` used to do nothing after a `--local` or `local_fallback` run. They now copy from the project directory to the destination, the same as after a run on a local host, and report the pull phase skipped (`reason: same_dir`) when the destination is the project directory. Parallel subtasks run with `--local` get their own `<dest>/<name>_<index>/` copy.
+
+### Fixed
+
+- **A parallel subtask could run on a host whose lock rr didn't get** - When a parallel worker's first subtask timed out waiting for its host's lock, the worker's later subtasks skipped the lock and ran anyway. They now fail with the same lock error.
+- **A finished run could delete the next run's lock** - A run releases its lock when the command finishes and again when it cleans up. If another run took the lock in between, the second release removed that run's lock. Release now happens once, and later updates to the lock's `info.json` are skipped. A release whose removal fails is retried by the next one, instead of leaving the lock until it goes stale.
+- **A local fallback ran the unreachable host's setup** - When no host could be reached and rr fell back locally, the fallback kept the last host's config, so that remote machine's `setup_commands` and `env` ran on this one. A fallback now uses the local host's config when there is one, and no host config otherwise.
+- **Stopping a bare local run** - Without a local host, `--local`, local mode and `local_fallback` commands only stopped when the terminal's Ctrl+C reached them. Cancelling rr (SIGTERM, or a parallel subtask's timeout) now interrupts the command and kills it 3 seconds later if it's still running. For `rr run` and single tasks, a Ctrl+C reaches the command once, from the terminal: rr doesn't send a second SIGINT or kill it, so pytest teardown and `docker compose` shut down cleanly. A command rr hasn't started yet when you press Ctrl+C isn't started. Parallel subtasks still get SIGINT from rr as well.
+- **A reused process group id could hold a local host's lock** - After rr and its job were gone, a new process that got the job's pid kept the lock held until `rr unlock`. The lock now records the job's start time (`job_started` in `info.json`), and a group leader that started later isn't taken for the job.
+- **Parallel lock waits were silent** - A parallel run waiting on a busy host now emits a `lock` `waiting` event naming the holder, once per host, as single runs do. Ctrl+C while every subtask is still waiting for a lock exits 130 with `INTERRUPTED` instead of exit 1.
+- **Setup-file hints** - The hint for a missing setup file now reads bash 5 (`bash: line 1: <path>: No such file or directory`) and dash (`.: cannot open <path>`) errors, and a bare local run no longer blames `defaults.setup`, which it doesn't run.
+- **`rr monitor` on a Mac took seconds per host** - `netstat -ib` resolved every interface address to a host name, which took about 5 seconds per call on some networks, and a snapshot calls it twice. The metrics command now uses `netstat -ibn`. The parsed counters are unchanged.
+
+## [0.28.0] - 2026-09-28
+
+### Changed
+
+- **`${PROJECT}` for a repo with no remote, used from a linked worktree** - Without an `origin` remote the name came from `--show-toplevel`, which in a linked worktree is the worktree's own directory. With worktree isolation off every worktree got its own name, and two repos with same-named worktrees shared one. The name now comes from the main checkout. If this is your setup, the first run after upgrading syncs into a new remote dir, and the old one is left behind.
+
+### Fixed
+
+- **Vitest runs reported no failures and wrong counts** - The jest formatter only understood jest's output. A vitest run's summary (`Tests  1 failed | 468 passed (469)`) and failure blocks (`FAIL  file > suite > test`) matched nothing, and `✓` file lines were counted as tests. Vitest is now recognized from its `Test Files` summary, even when the command doesn't name it (`npm test`, `bun run test`). Counts come from the `Tests` line, and each entry under Failed Tests and Failed Suites becomes a failure with its `file:line` and message. A file that fails to load counts as an error. This also covers vitest workspaces, tests vitest groups under one shared error, and a log holding several runs (only the last run counts).
+- **Colored test output wasn't parsed** - Runners color their output when the remote gives them a TTY, and the escape codes broke every pattern. The run log is now stripped of ANSI codes before parsing, and a parallel subtask's `output_tail` is plain text.
+- **A vitest `-t` filter that matched nothing looked like a pass** - Vitest skips every test and exits 0. With a test-name filter (`-t`, `--testNamePattern`) and every test skipped, the result now carries `no_tests` and the warning, like `pytest -k typo`. A suite that skips everything on purpose, without a filter, is left alone.
+- **Long failure messages lost the part that differs** - Messages were cut at 500 bytes from the front. Matchers that dump a value (a DOM node, a large object) put the difference at the end. Long messages now keep the start and the end, with the middle elided.
+- **Requirement checks missed tools on the host's PATH** - The check ran a bare `command -v` over SSH, without the rc files, host `setup_commands`, or shell that every rr command gets. Tools those put on PATH (bun, node, uv under `$HOME`) were reported missing on hosts that have them. The check now runs the way a run does. A failing setup command or host shell is reported as that, with its stderr, instead of every tool showing as missing, and an rc-file alias no longer counts as the tool.
+- **`rr <task> --repeat N` passed `{args}` through literally** - A task like `vitest run {args}` got the literal `{args}`, so every repeat failed. Placeholders now expand as for a run with no args (`{args:-x}` gives `x`).
+- **`rr run` from an unsynced subdirectory ran at the root without saying so** - When the subdirectory isn't on the remote (excluded from sync), the run still falls back to the project root, but now prints a warning on stderr naming the directory. Stdout and the exit code are unchanged.
+
 ## [0.27.2] - 2026-09-23
 
 ### Changed

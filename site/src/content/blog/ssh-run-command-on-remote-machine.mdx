@@ -1,0 +1,160 @@
+---
+title: "Run a command on a remote machine over SSH"
+headline: "How to run a command on a remote machine over SSH and get the output"
+description: "Run ssh user@host 'command' to execute a remote command, stream its output locally, and return its exit status when the command finishes."
+published: 2026-11-05
+keyword: "ssh run command on remote machine and get output"
+feature: remote-exec
+relatedDocs: [ssh-setup, configuration]
+---
+
+import CommandDemo from "../../components/blog/CommandDemo.astro";
+
+To run a command on a remote machine over SSH and get the output, use `ssh user@host 'command'`. The command runs there, and its output appears in your local terminal.
+
+SSH waits for the command to finish, then exits with the remote command's exit status. Without a pseudo-terminal, stdout and stderr return as separate streams. A build or test can therefore behave like a local command in a script. If it needs files you've just edited locally, sync those files first.
+
+## How do you run a command over SSH and get the output?
+
+Put the remote command after the SSH destination:
+
+```bash
+ssh user@host 'uname -s'
+```
+
+Replace `user` with your remote account and `host` with the machine's hostname or address. You need SSH access to that machine and permission to run the command there. These examples assume a Unix-like remote shell. On Windows, run the local examples from WSL.
+
+The output identifies the remote operating system. When the command finishes, your local shell prompt returns. You don't need to open an interactive SSH session first or send an extra `exit` command afterward. The [OpenSSH client manual](https://man.openbsd.org/ssh.1) describes this command mode and its terminal options.
+
+Choose the working directory explicitly for a project command:
+
+```bash
+ssh user@host 'cd ~/remote-work && make test'
+```
+
+Both `cd` and `make test` run remotely because both are inside the quotes. The `&&` runs the tests only if the directory change succeeds. A semicolon would let the tests run even after a failed `cd`, potentially in the wrong directory. At this point, `~/remote-work` must already contain the project and its dependencies.
+
+## How do quoting, exit codes and TTYs work?
+
+Single quotes keep your local shell from expanding variables in the remote command. This prints the remote account's home directory:
+
+```bash
+ssh user@host 'printf "%s\n" "$HOME"'
+```
+
+Your local shell removes the outer single quotes and passes their contents to SSH. The remote shell then expands `$HOME`. Double quotes around the whole command would allow your local shell to expand `$HOME` before SSH sends it, so the remote machine could receive your laptop's home path. The [Bash manual's single-quote rules](https://www.gnu.org/software/bash/manual/html_node/Single-Quotes.html) explain which characters stay literal.
+
+Quotes also determine where operators run. A `>` inside the quoted command redirects on the remote machine. Put it outside the quotes to save the returned output locally:
+
+```bash
+ssh user@host 'cd ~/remote-work && make test' >test.stdout 2>test.stderr
+remote_status=$?
+printf 'Remote exit status: %s\n' "$remote_status"
+```
+
+Here, `test.stdout` and `test.stderr` are local files, so the test output no longer appears in your terminal. SSH's own diagnostics also go to local stderr. That means `test.stderr` can contain connection errors as well as the test command's error output.
+
+Save `$?` immediately after SSH returns. Running another command first replaces that status with the newer command's status. OpenSSH returns the remote command's code, or `255` when an SSH error occurs. A remote program can also return `255`, so use the diagnostic text to distinguish that case. If you add a local pipeline, its status follows your shell's pipeline rules; it may report the last pipeline command instead of SSH.
+
+Use `-t` when a program needs a terminal, such as an interactive process viewer:
+
+```bash
+ssh -t user@host 'top'
+```
+
+A pseudo-terminal changes output behavior and combines the remote stdout and stderr streams. Keep ordinary builds and tests without `-t` when you want separate logs or machine-readable output. A program can also buffer its output when it has no terminal. If messages arrive in batches, check that program's buffering options before adding a TTY.
+
+## How do you run a local script on the remote machine?
+
+Feed the local script to a remote interpreter through SSH's standard input:
+
+```bash
+ssh user@host 'bash -s' < script.sh
+```
+
+The local shell opens `script.sh`; the remote Bash process reads and executes it. Bash must be installed on the remote machine. The script's executable bit and shebang don't select the interpreter here because the command explicitly starts Bash.
+
+Put the remote working directory in the script if its commands need one:
+
+```bash title="script.sh"
+set -e
+cd ~/remote-work
+make test
+```
+
+For this script, `set -e` stops execution if the standalone `cd` command fails. Without it, a failed directory change would leave Bash trying `make test` in its starting directory. SSH returns the script's final exit status, and its output comes back through the same streams as a one-line command.
+
+Only the script travels through stdin. Files it references must already exist remotely, and commands that read stdin would share the stream carrying the script. For scripts that need interactive input or additional local files, copy them to the remote machine before running them.
+
+## How do you run local code remotely with rsync and SSH?
+
+Sync your working tree before starting the remote command when the tests need your latest edits. From the local project root, with rsync installed on both machines, use:
+
+```bash
+rsync -az --delete ./ user@host:remote-work/ &&
+  ssh user@host 'cd ~/remote-work && make test'
+```
+
+The source `./` sends the current directory's contents. The destination is relative to the remote account's home directory, matching `~/remote-work` in the SSH command. The local `&&` starts SSH only after rsync succeeds. This includes uncommitted edits because rsync copies files from disk.
+
+The `-a` option enables archive mode, including recursive copying and preservation of attributes such as modification times; `-z` compresses transferred data. Rsync uses SSH for this single-colon remote destination. The [rsync manual](https://man7.org/linux/man-pages/man1/rsync.1.html) explains these options and trailing-slash behavior.
+
+> [!WARNING]
+> `--delete` removes destination files that are absent from the source. Use a dedicated remote directory for this mirror. Preview the same transfer with `--dry-run` before the first real sync.
+
+Exclude paths that should stay local or be managed separately on the remote machine:
+
+```bash
+rsync -az --delete \
+  --exclude='.git' \
+  --exclude='node_modules' \
+  --exclude='.venv' \
+  ./ user@host:remote-work/ &&
+  ssh user@host 'cd ~/remote-work && make test'
+```
+
+These ordinary excludes also protect matching destination paths from deletion. The `.git` pattern covers both a checkout's directory and a linked worktree's `.git` file. Install the remote dependencies separately; copying a local virtual environment to a different operating system can leave it unusable. Adjust the exclusions for your project, including generated files that shouldn't cross machines.
+
+## When do rsync and SSH stop being enough?
+
+Concurrent runs can overwrite a shared remote working directory. One coding agent may be running tests while another syncs different edits into the same files. Separate local git worktrees don't prevent that if both transfers target `remote-work/`. Give each worktree its own remote directory and coordinate access to any machine that should run only one suite at a time.
+
+A fixed SSH destination also leaves host selection to you. If that machine is down, the command fails. If its address is reachable only on your LAN, leaving the LAN breaks that route. A reachable alternative address or another available machine helps only if your wrapper knows to try it; see [SSH config fallback hostnames](/blog/ssh-config-fallback-hostname/) for the options.
+
+Non-interactive shells can have a different `PATH` from an interactive login. A tool that works after typing `ssh user@host` may be missing when invoked through `ssh user@host 'command'`. Compare the remote command environment with `ssh user@host 'printf "%s\n" "$PATH"'`, then use the tool's absolute path or explicitly load the environment it needs. [Fixing command not found over SSH](/blog/command-not-found-over-ssh/) goes through the shell startup files involved.
+
+Maintaining the sync exclusions and coordinating runs adds work to the wrapper. For occasional commands against files already on a server, plain SSH remains sufficient. A repeated edit-and-test loop benefits from a tool that handles the sync and host lock together.
+
+## How can you sync, run and stream back in one command?
+
+rr packages that loop as `rr run "make test"`. It is a single Go binary that uses rsync over SSH, with no remote daemon or agent to install. The remote machine still needs SSH, rsync and your project's toolchain. Start with the [SSH setup guide](/docs/ssh-setup/) to configure passwordless access.
+
+Install rr with Homebrew, or use the other methods in the [installation instructions](/#install):
+
+```bash
+brew install rileyhilliard/tap/rr
+```
+
+Define a host in your global configuration. Use a dedicated sync directory, just as with the manual rsync command. `${PROJECT}` expands to the repository name, or `repo@worktree` inside a linked git worktree, so each worktree gets its own remote copy:
+
+```yaml title="~/.rr/config.yaml"
+version: 1
+hosts:
+  remote:
+    ssh: [user@host]
+    dir: ${HOME}/remote-work/${PROJECT}
+```
+
+With this single host configured, run the command from your local project root:
+
+```bash
+rr run "make test"
+```
+
+rr connects and takes the host lock before checking requirements and syncing. Another rr run can't sync to that locked host; with several hosts configured, rr can take the next free one. This recording shows a real `rr run` executing a Go test command, including the connection and sync steps:
+
+<CommandDemo command="run" caption='A real rr run "go test ./internal/lock/...": connect, lock, sync, then run the tests with output streamed back.' />
+
+The command's stdout and stderr stream back separately and pass through untouched in rr's default structured mode; rr's own JSON events go to stderr. The remote exit code becomes rr's exit code. Use `rr exec "make test"` to run against the existing remote files without syncing.
+
+The [configuration reference](/docs/configuration/) covers sync exclusions and remote shell setup. rr supplies default excludes for paths such as `.git` and preserves remote dependency directories such as `.venv` and `node_modules`. A host can also list several SSH aliases, which rr tries in parallel with preference for earlier entries. Those aliases need working LAN or tailnet routes; the test tools must already be installed.

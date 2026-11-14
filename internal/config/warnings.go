@@ -98,6 +98,15 @@ func taskWarnings(cfg *Config, path string) []Warning {
 			})
 		}
 
+		if !parallel && task.Setup != "" {
+			warnings = append(warnings, Warning{
+				File:       path,
+				Key:        "tasks." + name + ".setup",
+				Message:    fmt.Sprintf("'setup' on task '%s' never runs; it only applies to parallel tasks", name),
+				Suggestion: "Chain it into the task's run (setup && command) or make it the first step, or use project 'defaults.setup' to run it before every command.",
+			})
+		}
+
 		if !parallel && task.Output != "" {
 			warnings = append(warnings, Warning{
 				File:       path,

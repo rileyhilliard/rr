@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -170,8 +171,8 @@ func TestAttachRunOutcomeFailures(t *testing.T) {
 		require.Len(t, failures, 1)
 		assert.Equal(t, "test_div", failures[0]["name"])
 		assert.Equal(t, "tests/test_math.py:12", failures[0]["file"])
-		assert.LessOrEqual(t, len(failures[0]["message"]), maxFailureMessageLen+3)
-		assert.True(t, strings.HasSuffix(failures[0]["message"], "..."))
+		assert.LessOrEqual(t, len(failures[0]["message"]), maxFailureMessageLen+len(failureMessageElision))
+		assert.Contains(t, failures[0]["message"], failureMessageElision)
 	})
 
 	t.Run("passing run lists none", func(t *testing.T) {
@@ -179,4 +180,22 @@ func TestAttachRunOutcomeFailures(t *testing.T) {
 		attachRunOutcome(wf, "pytest tests/", logPath, 0)
 		assert.NotContains(t, wf.ResultDetails, "failures")
 	})
+}
+
+func TestTruncateFailureMessage(t *testing.T) {
+	short := "AssertionError: expected 1 to be 2"
+	assert.Equal(t, short, truncateFailureMessage(short))
+
+	// A matcher that dumps a DOM node: the start says what was asserted, the
+	// end says what was found. Both survive; the attribute noise between them
+	// doesn't.
+	long := "expected document not to contain element, found <button\n  class=\"" +
+		strings.Repeat("inline-flex ", 100) + "\"\n>\n  Retry\n</button> instead"
+	got := truncateFailureMessage(long)
+	assert.LessOrEqual(t, len(got), maxFailureMessageLen+len(failureMessageElision))
+	assert.True(t, strings.HasPrefix(got, "expected document not to contain element"))
+	assert.True(t, strings.HasSuffix(got, "Retry\n</button> instead"))
+
+	// Cutting inside a multi-byte character doesn't leave invalid UTF-8.
+	assert.True(t, utf8.ValidString(truncateFailureMessage(strings.Repeat("⎯", maxFailureMessageLen))))
 }

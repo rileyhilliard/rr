@@ -42,11 +42,11 @@ func TestBuildSnapshotCommand_Darwin(t *testing.T) {
 	cmd := BuildSnapshotCommand(PlatformDarwin, "/tmp/rr.lock")
 
 	// Only netstat needs priming on macOS: top -l 1 is already instantaneous.
-	assert.Equal(t, 2, strings.Count(cmd, "netstat -ib"),
+	assert.Equal(t, 2, strings.Count(cmd, "netstat -ibn"),
 		"netstat must be sampled twice so network rates have a delta")
 	assert.Equal(t, 1, strings.Count(cmd, "top -l 1"))
 	assert.Equal(t, 1, strings.Count(cmd, "sleep 1"))
-	assert.Less(t, strings.Index(cmd, "sleep 1"), strings.LastIndex(cmd, "netstat -ib"))
+	assert.Less(t, strings.Index(cmd, "sleep 1"), strings.LastIndex(cmd, "netstat -ibn"))
 
 	assert.True(t, strings.HasSuffix(cmd, `cat '/tmp/rr.lock/info.json' 2>/dev/null || true`),
 		"lock section must stay last, got: %s", cmd)
@@ -94,7 +94,7 @@ func TestBuildMetricsCommand_UnaffectedBySnapshot(t *testing.T) {
 
 	darwin := BuildMetricsCommand(PlatformDarwin, "/tmp/rr.lock")
 	assert.False(t, strings.Contains(darwin, "sleep"), "TUI command must not sleep")
-	assert.Equal(t, 1, strings.Count(darwin, "netstat -ib"), "TUI command samples once")
+	assert.Equal(t, 1, strings.Count(darwin, "netstat -ibn"), "TUI command samples once")
 }
 
 // --- Snapshot output parsing ---

@@ -1,0 +1,456 @@
+/* sf sits after base, so preflight never strips library styles, and before
+   components and utilities, so site classes win (src/styles/sf-theme.css). */
+@layer theme, base, sf, components, utilities;
+@import "tailwindcss";
+@import "./sf-theme.css";
+@import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/martian-mono/wdth.css";
+@plugin "@tailwindcss/typography";
+
+/*
+ * Tokens. The palette is rr's TUI palette (internal/ui/colors.go), so the site
+ * and the terminal match. The site is dark only, like the TUI: one set of values,
+ * no theme classes. Components use these utilities, never raw hex.
+ * src/styles/tokens.test.ts checks every text/surface pair for contrast.
+ * `static` emits every token, because the CSS below reads them with var().
+ */
+@theme static {
+  --font-sans: "Instrument Sans Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Martian Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surfaces */
+  --color-canvas: #0a0a0f;
+  --color-panel: #12121a;
+  /* Decorative dividers only; controls and focus rings use line-strong. */
+  --color-line: #2a2a4a;
+  --color-line-strong: #6a6a9a;
+
+  /* Text */
+  --color-ink: #ffffff;
+  --color-ink-2: #b4b4d0;
+  --color-muted: #8a8aae;
+  /* Below AA as text: aria-hidden glyphs and decoration only. */
+  --color-faint: #6b6b8d;
+
+  /* Meaning, as the TUI uses it. Text on a neon fill is canvas, never white. */
+  --color-accent: #ff2e97;
+  --color-info: #00ffff;
+  --color-success: #39ff14;
+  --color-waiting: #ffaa00;
+  --color-error: #ff0055;
+  --color-sync: #bf40ff;
+  /* rr monitor's latency bands (styles.go LatencyColor); fast is info, degraded is accent. */
+  --color-lat-normal: #00d7ff;
+  --color-lat-slow: #ffcc00;
+
+  --radius-chip: 2px;
+  --radius-control: 4px;
+  --radius-panel: 6px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* OpenData's reveal curves: gentle in and out, so entrances settle rather than snap. */
+  --ease-organic: cubic-bezier(0.45, 0.05, 0.25, 1);
+  --ease-organic-mid: cubic-bezier(0.4, 0.05, 0.2, 1);
+}
+
+/* rr's TUI gradient (internal/ui/colors.go): the brand rule under the wordmark,
+   along the hero window and the install band. Decoration, never text. */
+:root {
+  --gradient-brand: linear-gradient(90deg, #ff2e97, #bf40ff 35%, #00ffff 70%, #39ff14);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+
+  a {
+    @apply underline-offset-4 hover:underline;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-info);
+    outline-offset: 2px;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    font-variation-settings: "wdth" 100;
+  }
+}
+
+/* Docs prose follows the tokens. */
+.prose {
+  --tw-prose-body: var(--color-ink-2);
+  --tw-prose-headings: var(--color-ink);
+  --tw-prose-lead: var(--color-muted);
+  --tw-prose-links: var(--color-info);
+  --tw-prose-bold: var(--color-ink);
+  --tw-prose-counters: var(--color-muted);
+  --tw-prose-bullets: var(--color-muted);
+  --tw-prose-hr: var(--color-line);
+  --tw-prose-quotes: var(--color-ink-2);
+  --tw-prose-quote-borders: var(--color-line);
+  --tw-prose-code: var(--color-ink);
+  --tw-prose-th-borders: var(--color-line-strong);
+  --tw-prose-td-borders: var(--color-line);
+}
+
+.prose :where(code):not(:where(pre *)):where(:not([data-demo], [data-demo] *)) {
+  @apply bg-panel border-line rounded-chip border px-1 py-0.5 font-normal;
+}
+
+.prose :where(code):not(:where(pre *)):where(:not([data-demo], [data-demo] *))::before,
+.prose :where(code):not(:where(pre *)):where(:not([data-demo], [data-demo] *))::after {
+  content: none;
+}
+
+/* Shiki emits both themes as CSS variables (defaultColor: false); the site uses the dark one. */
+.astro-code,
+.astro-code span {
+  color: var(--shiki-dark);
+}
+
+/* Shiki's own background gives way to the panel token. */
+.astro-code {
+  background-color: var(--color-panel);
+}
+
+.astro-code span {
+  background-color: transparent;
+}
+
+/* Docs Markdown: @steamfield/ui/markdown's plugins emit these data-* hooks (src/lib/markdown.ts),
+   and CodeFrame.astro mirrors them. The caption comes before the <pre> in the markup. */
+[data-code-block] {
+  @apply border-line rounded-panel relative overflow-hidden border;
+}
+
+[data-code-block] figcaption {
+  @apply border-line bg-panel text-muted border-b px-4 py-2 font-mono text-xs;
+}
+
+[data-code-block] pre {
+  @apply m-0 overflow-x-auto rounded-none px-4 py-3 text-[13px] leading-relaxed;
+}
+
+/* The copy button's wrapper sits in the frame's corner; a failure message drops below the
+   button on its own surface rather than over the code. */
+[data-code-copy] {
+  @apply absolute top-2 right-2 flex flex-col items-end gap-1;
+}
+
+[data-code-copy] button {
+  @apply border-line-strong bg-canvas text-ink-2 rounded-control block border px-2 py-0.5 text-xs;
+}
+
+[data-code-copy] [data-copy-result][data-state="failed"] {
+  @apply border-line-strong bg-canvas text-error rounded-control max-w-64 border px-2 py-1 text-xs leading-snug;
+}
+
+/* codeBlocks always adds an icon; rr's button is text only (AGENTS.md, Build workarounds). */
+[data-code-copy] svg {
+  display: none;
+}
+
+/* A blockquote underneath, so prose's quote styling is undone. */
+.prose [data-callout]:where(:not([data-demo], [data-demo] *)) {
+  @apply border-line bg-panel rounded-panel my-6 border border-l-4 px-4 py-1;
+  color: var(--tw-prose-body);
+  font-style: normal;
+  font-weight: inherit;
+  quotes: none;
+}
+
+.prose [data-callout] p:where(:not([data-demo], [data-demo] *))::before,
+.prose [data-callout] p:where(:not([data-demo], [data-demo] *))::after {
+  content: none;
+}
+
+/* Prose gives blockquote code and bold the quote's color; an aside's kept theirs. Links keep theirs. */
+.prose [data-callout] :where(code):not(:where(a *)):where(:not([data-demo], [data-demo] *)) {
+  color: var(--tw-prose-code);
+}
+
+.prose [data-callout] :where(strong):not(:where(a *)):where(:not([data-demo], [data-demo] *)) {
+  color: var(--tw-prose-bold);
+}
+
+[data-callout-title] {
+  @apply text-ink font-semibold;
+}
+
+.prose [data-callout="note"]:where(:not([data-demo], [data-demo] *)),
+.prose [data-callout="tip"]:where(:not([data-demo], [data-demo] *)),
+.prose [data-callout="important"]:where(:not([data-demo], [data-demo] *)) {
+  border-left-color: var(--color-info);
+}
+
+.prose [data-callout="warning"]:where(:not([data-demo], [data-demo] *)),
+.prose [data-callout="caution"]:where(:not([data-demo], [data-demo] *)) {
+  border-left-color: var(--color-waiting);
+}
+
+[data-heading-anchor] {
+  @apply text-muted ml-2 no-underline opacity-0 focus:opacity-100;
+}
+
+[data-heading-anchor]::after {
+  content: "#";
+}
+
+.prose :where(h2, h3):hover [data-heading-anchor]:where(:not([data-demo], [data-demo] *)) {
+  opacity: 1;
+}
+
+[data-table-scroll] {
+  @apply overflow-x-auto;
+}
+
+/* Terminal frames: the Monitor stage, the commands and the agent session share this
+   chrome. A window bar with three muted dots; the dots are decoration only. */
+.term {
+  @apply border-line bg-panel rounded-panel overflow-hidden border font-mono text-[13px] leading-[1.55];
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+}
+
+.term-bar {
+  @apply border-line text-muted flex min-h-10 items-center gap-3 border-b px-3 py-2 text-xs;
+  background: color-mix(in srgb, var(--color-canvas) 55%, var(--color-panel));
+}
+
+.term-bar::before {
+  content: "";
+  flex: none;
+  width: 34px;
+  height: 8px;
+  background:
+    radial-gradient(circle at 4px 4px, var(--color-faint) 3.5px, transparent 4px),
+    radial-gradient(circle at 17px 4px, var(--color-faint) 3.5px, transparent 4px),
+    radial-gradient(circle at 30px 4px, var(--color-faint) 3.5px, transparent 4px);
+}
+
+/* The hero window carries the brand gradient along its top edge. */
+.term-hero {
+  position: relative;
+}
+
+.term-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--gradient-brand);
+}
+
+/* A field of braille-like dots, the monitor's own graph texture, fading out. */
+.dot-field {
+  background-image: radial-gradient(circle, rgb(191 64 255 / 0.22) 1px, transparent 1.5px);
+  background-size: 14px 18px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black, transparent 75%);
+}
+
+.brand-rule {
+  height: 2px;
+  background: var(--gradient-brand);
+}
+
+/* Panel bands alternate with the canvas to give the page rhythm. */
+.band {
+  @apply bg-panel border-line border-y;
+}
+
+/* Scrolling transcript boxes keep their height so toggles never shift layout. */
+.term-scroll {
+  @apply overflow-auto whitespace-pre;
+}
+
+/* Motion is opt-in: the finished state is the default CSS. Scroll reveals apply only
+   once src/scripts/site.ts has set the gate (html[data-motion-ready], from
+   @steamfield/ui/reveal), so content never waits on it.
+
+   The vocabulary follows OpenData's landing page. A [data-motion] role names how an
+   element enters (its start offset, duration and curve), and --motion-delay places it
+   in its section's sequence. Children of [data-stagger] take their delay from their
+   position: --stagger-from plus --stagger times --stagger-gap. Custom properties
+   inherit, so a nested [data-stagger] sets its own gap and start. Scroll reveals are
+   section-triggered: initReveal marks a [data-reveal] section data-revealed once, and
+   every [data-motion] inside moves from one shared moment. The roles' start states and
+   durations are the library's (reveal/styles.css, the same values); what's rr's own is
+   below: delays from --motion-delay, stagger children without a role, and .lift
+   surfaces, whose entrance wins over their hover transition until site.ts marks the
+   section .is-settled. The hero runs the same
+   roles as keyframes on load (.hero-in), which needs no script. */
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in {
+    animation: fade-in 150ms var(--ease-out) both;
+  }
+
+  [data-stagger] > * {
+    --motion-delay: calc(var(--stagger-from, 0ms) + var(--stagger, 0) * var(--stagger-gap, 75ms));
+  }
+  /* Reset, or a nested list's first child inherits its parent's position. */
+  [data-stagger] > :first-child {
+    --stagger: 0;
+  }
+  [data-stagger] > :nth-child(2) {
+    --stagger: 1;
+  }
+  [data-stagger] > :nth-child(3) {
+    --stagger: 2;
+  }
+  [data-stagger] > :nth-child(4) {
+    --stagger: 3;
+  }
+  [data-stagger] > :nth-child(5) {
+    --stagger: 4;
+  }
+  [data-stagger] > :nth-child(6) {
+    --stagger: 5;
+  }
+  [data-stagger] > :nth-child(7) {
+    --stagger: 6;
+  }
+  [data-stagger] > :nth-child(8) {
+    --stagger: 7;
+  }
+  [data-stagger] > :nth-child(9) {
+    --stagger: 8;
+  }
+  [data-stagger] > :nth-child(10) {
+    --stagger: 9;
+  }
+
+  html[data-motion-ready] [data-reveal] :is([data-motion], [data-stagger] > *) {
+    --sf-reveal-delay: var(--motion-delay, 0ms);
+  }
+
+  /* A stagger child without a role enters as lift-md. */
+  html[data-motion-ready]
+    [data-reveal]:not(.is-settled)
+    :is([data-stagger] > :not([data-motion]), .lift[data-motion]) {
+    transition-property: opacity, transform, filter;
+    transition-duration: 420ms;
+    transition-timing-function: var(--ease-organic);
+    transition-delay: var(--motion-delay, 0ms);
+  }
+  html[data-motion-ready]
+    [data-reveal]:not(.is-settled)
+    .lift:is([data-motion="lift-lg"], [data-motion="lift-card"]) {
+    transition-duration: 520ms;
+  }
+  html[data-motion-ready] [data-reveal]:not([data-revealed]) [data-stagger] > :not([data-motion]) {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  /* Chart bars grow from the left once their section is in view. */
+  html[data-motion-ready] [data-reveal] .grow-x {
+    transform-origin: left center;
+    transition: transform 1100ms var(--ease-organic);
+    transition-delay: calc(var(--stagger-from, 0ms) + var(--stagger, 0) * 120ms + 250ms);
+  }
+
+  html[data-motion-ready] [data-reveal]:not([data-revealed]) .grow-x {
+    transform: scaleX(0);
+  }
+
+  /* Hero: the same roles as keyframes, played on load. */
+  .hero-in {
+    animation: lift-md 420ms var(--ease-organic) backwards;
+    animation-delay: var(--motion-delay, 0ms);
+  }
+  .hero-in[data-motion="lift-sm"] {
+    animation-name: lift-sm;
+    animation-duration: 360ms;
+    animation-timing-function: var(--ease-organic-mid);
+  }
+  .hero-in[data-motion="blur-in-soft"] {
+    animation-name: blur-in-soft;
+    animation-duration: 620ms;
+  }
+  .hero-in[data-motion="scale-in-media"] {
+    animation-name: scale-in-media;
+    animation-duration: 800ms;
+  }
+
+  /* Hover: interactive surfaces lift a pixel and brighten their edge. */
+  .lift {
+    transition:
+      transform 200ms var(--ease-out),
+      border-color 200ms ease,
+      background-color 200ms ease;
+  }
+
+  .lift:hover {
+    transform: translateY(-2px);
+    border-color: var(--color-line-strong);
+  }
+
+  /* A row whose holder just changed flashes once. */
+  .flash {
+    animation: flash 900ms var(--ease-out);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes lift-sm {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes lift-md {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@keyframes blur-in-soft {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateY(12px);
+  }
+}
+
+@keyframes scale-in-media {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+}
+
+@keyframes flash {
+  from {
+    background-color: color-mix(in srgb, var(--color-waiting) 18%, transparent);
+  }
+}
+
+/* The container excludes the TOC rail; demos use its width, never the viewport. */
+.blog-content {
+  container-type: inline-size;
+}
+.blog-breakout {
+  width: 100cqw;
+  max-width: none;
+  margin-inline: calc((100% - 100cqw) / 2);
+}
+
+/* TOC targets clear the sticky header, with room above the heading. */
+.blog-content .prose :where(h2, h3):where(:not([data-demo], [data-demo] *)) {
+  @apply scroll-mt-24;
+}

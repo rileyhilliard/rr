@@ -12,10 +12,19 @@ import (
 // A local target never builds a host selector or dials anything. Falling
 // back to local at runtime (hosts unreachable or all locked) is a different
 // thing: the target is remote, and the fallback is reported as a warning.
+//
+// When the global config has a local host, a local target runs on it
+// (hostName and host are set): with its setup, env, shell, require checks
+// and lock, as if --host had named it. Without one, it runs bare in the
+// caller's terminal.
 type execTarget struct {
 	local bool
 	// reason is host.LocalReasonFlag or host.LocalReasonMode when local.
 	reason string
+	// hostName and host are the global config's local host a local target
+	// runs on; hostName is empty when there's none.
+	hostName string
+	host     config.Host
 }
 
 // resolveExecTarget decides the execution target:
@@ -24,13 +33,23 @@ type execTarget struct {
 //     reason local_mode.
 //   - otherwise remote.
 func resolveExecTarget(resolved *config.ResolvedConfig, localFlag bool, hostFlag, tagFlag string) execTarget {
-	if localFlag {
-		return execTarget{local: true, reason: host.LocalReasonFlag}
+	var target execTarget
+	switch {
+	case localFlag:
+		target = execTarget{local: true, reason: host.LocalReasonFlag}
+	case hostFlag == "" && tagFlag == "" && configLocalMode(resolved):
+		target = execTarget{local: true, reason: host.LocalReasonMode}
+	default:
+		return execTarget{}
 	}
-	if hostFlag == "" && tagFlag == "" && configLocalMode(resolved) {
-		return execTarget{local: true, reason: host.LocalReasonMode}
-	}
-	return execTarget{}
+	target.hostName, target.host = config.LocalHost(resolved)
+	return target
+}
+
+// connection returns the connection a local target runs on (see
+// host.LocalRunConnection).
+func (t execTarget) connection() *host.Connection {
+	return host.LocalRunConnection(t.hostName, t.host, t.reason)
 }
 
 // configLocalMode reports whether the config runs locally by design: the
@@ -73,35 +92,30 @@ func loadRunConfig(localFlag bool, hostFlag, tagFlag string) (*config.ResolvedCo
 }
 
 // resolveTargetHosts returns the hosts a multi-run (parallel task or
-// --repeat) may use. A local target uses none, which the orchestrator runs
-// locally; a remote target resolves hosts from config and --host.
+// --repeat) may use. A local target uses its local host as the one worker,
+// as --host would; with no local host it uses none, which the orchestrator
+// runs locally. A remote target resolves hosts from config and --host.
 func resolveTargetHosts(resolved *config.ResolvedConfig, target execTarget, hostFlag string) ([]string, map[string]config.Host, error) {
 	if target.local {
+		if target.hostName != "" {
+			return []string{target.hostName}, map[string]config.Host{target.hostName: target.host}, nil
+		}
 		return nil, make(map[string]config.Host), nil
 	}
 	return config.ResolveHosts(resolved, hostFlag)
 }
 
 // emitLocalConnect writes the structured connect phase for a local target:
-// started, then complete on host local with details.reason. Nothing is
-// dialed and nothing went wrong, so it's a normal completion, not a fallback
-// warning.
-func emitLocalConnect(reason string) {
+// started, then complete on its local host (or "local" without one) with
+// details.reason. Nothing is dialed and nothing went wrong, so it's a normal
+// completion, not a fallback warning.
+func emitLocalConnect(target execTarget) {
 	WritePhaseEvent(PhaseEvent{Type: "phase", Phase: "connect", Status: "started"})
 	WritePhaseEvent(PhaseEvent{
 		Type:    "phase",
 		Phase:   "connect",
 		Status:  "complete",
-		Host:    "local",
-		Details: map[string]interface{}{"reason": reason},
+		Host:    target.connection().Name,
+		Details: map[string]interface{}{"reason": target.reason},
 	})
-}
-
-// localConnection is the connection used for local execution.
-func localConnection() *host.Connection {
-	return &host.Connection{
-		Name:    "local",
-		Alias:   "local",
-		IsLocal: true,
-	}
 }

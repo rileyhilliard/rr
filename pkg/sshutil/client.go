@@ -2,8 +2,10 @@ package sshutil
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	stderrors "errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -72,12 +74,24 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	// Dial with timeout, using ProxyCommand if configured
 	address := settings.address()
 	var conn net.Conn
-	if settings.proxyCommand != "" {
-		conn, err = dialViaProxy(settings.proxyCommand, host, settings)
+	if settings.hasProxy() {
+		conn, err = startProxy(proxyCmd(host, settings), settings)
 		if err != nil {
-			return nil, errors.WrapWithCode(err, errors.ErrSSH,
-				fmt.Sprintf("ProxyCommand failed for '%s'", host),
-				"Check your ProxyCommand in ~/.ssh/config and verify it works: ssh "+host)
+			var startErr *proxyStartError
+			if stderrors.As(err, &startErr) {
+				return nil, proxyStartFailure(host, settings, startErr)
+			}
+			var stderr string
+			var exitErr *proxyExitError
+			if stderrors.As(err, &exitErr) {
+				stderr = exitErr.stderr
+				// A proxy that exits cleanly without a word has relayed a
+				// connection the target closed.
+				if stderr == "" && exitErr.err == nil {
+					return nil, targetClosed(host, settings, err)
+				}
+			}
+			return nil, proxyFailure(host, settings, timeout, &ProxyError{Stderr: stderr, Err: err})
 		}
 	} else {
 		conn, err = net.DialTimeout("tcp", address, timeout)
@@ -93,7 +107,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	// For proxy connections, we need our own timeout since the proxy may connect but the
 	// SSH handshake could stall (e.g., hung bastion host).
 	var proxyTimedOut atomic.Bool
-	if settings.proxyCommand != "" {
+	if settings.hasProxy() {
 		timer := time.AfterFunc(timeout, func() {
 			proxyTimedOut.Store(true)
 			conn.Close()
@@ -104,11 +118,24 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 	if err != nil {
 		conn.Close()
 
-		// If the proxy handshake timed out, give a specific error
-		if proxyTimedOut.Load() {
-			return nil, errors.WrapWithCode(err, errors.ErrSSH,
-				fmt.Sprintf("SSH handshake via ProxyCommand timed out for '%s'", host),
-				"The proxy connected but the SSH handshake didn't complete. Check the remote host is running SSH.")
+		// Through a proxy, a timeout, or a dropped connection the proxy
+		// explained, is the proxy failing to reach the target. Close has
+		// waited for it to exit, so what it printed is complete. A connection
+		// dropped without a word from the proxy is the target closing it (ssh
+		// always says why when its own leg fails); that, and any other
+		// handshake error, is handled below as the target's.
+		if settings.hasProxy() {
+			var stderr string
+			if pc, ok := conn.(*proxyConn); ok {
+				stderr = proxyStderr(pc.stderr.String())
+			}
+			if proxyTimedOut.Load() || (isConnClosed(err) && stderr != "") {
+				pe := &ProxyError{TimedOut: proxyTimedOut.Load(), Stderr: stderr, Err: err}
+				return nil, proxyFailure(host, settings, timeout, pe)
+			}
+			if isConnClosed(err) {
+				return nil, targetClosed(host, settings, err)
+			}
 		}
 
 		// Check for host key mismatch error (provides detailed suggestion)
@@ -121,7 +148,7 @@ func Dial(host string, timeout time.Duration) (*Client, error) {
 		}
 
 		// Build suggestion, with extra context if we found encrypted keys
-		suggestion := suggestionForHandshakeError(err, settings.encryptedKeys)
+		suggestion := suggestionForHandshakeError(err, settings.encryptedKeys, host)
 
 		return nil, errors.WrapWithCode(err, errors.ErrSSH,
 			fmt.Sprintf("SSH handshake with '%s' didn't go through", host),
@@ -179,9 +206,24 @@ type sshSettings struct {
 	port          string
 	user          string
 	identityFile  string
-	proxyCommand  string   // ProxyCommand from SSH config (if any)
+	proxyCommand  string   // ProxyCommand from SSH config, if any
+	jumpHosts     string   // ProxyJump from SSH config, if any and there's no ProxyCommand
 	identityAgent string   // IdentityAgent socket path from SSH config (if any)
 	encryptedKeys []string // Keys that exist but are encrypted
+}
+
+// hasProxy reports whether the connection goes through a ProxyJump or
+// ProxyCommand rather than straight to the target.
+func (s *sshSettings) hasProxy() bool {
+	return s.proxyCommand != "" || s.jumpHosts != ""
+}
+
+// proxyDirective names the SSH config setting the proxy came from, for errors.
+func (s *sshSettings) proxyDirective() string {
+	if s.jumpHosts != "" {
+		return "ProxyJump"
+	}
+	return "ProxyCommand"
 }
 
 // address returns the host:port string for dialing.
@@ -275,9 +317,11 @@ func resolveSSHSettings(host string) *sshSettings {
 		hostFound = true
 	}
 
-	// Get ProxyCommand
+	// Get ProxyCommand. "none" turns off one set by an earlier block.
 	if proxyCmd, _ := cfg.Get(host, "ProxyCommand"); proxyCmd != "" {
-		settings.proxyCommand = proxyCmd
+		if !strings.EqualFold(strings.TrimSpace(proxyCmd), "none") {
+			settings.proxyCommand = proxyCmd
+		}
 		hostFound = true
 	}
 
@@ -289,12 +333,12 @@ func resolveSSHSettings(host string) *sshSettings {
 		hostFound = true
 	}
 
-	// Warn about ProxyJump (not yet supported, but detectable)
+	// ProxyJump runs the system ssh to the jump host, as OpenSSH does. A
+	// ProxyCommand set for the host wins.
 	if settings.proxyCommand == "" {
 		if proxyJump, _ := cfg.Get(host, "ProxyJump"); proxyJump != "" {
-			emitWarning(fmt.Sprintf(
-				"Host '%s' uses ProxyJump which is not yet supported. "+
-					"Convert to ProxyCommand: ProxyCommand ssh -W %%h:%%p %s", host, proxyJump))
+			settings.jumpHosts = proxyJumpValue(proxyJump)
+			hostFound = true
 		}
 	}
 
@@ -388,7 +432,7 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 					sb.WriteString(fmt.Sprintf("  ssh-add %s\n", key))
 				}
 			}
-			sb.WriteString("\nNot sure which key? Check with: ssh -v <host>")
+			sb.WriteString("\nNot sure which key? Check with: ssh -v " + settings.hostname)
 			suggestion = sb.String()
 		}
 
@@ -397,6 +441,7 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 
 	// Determine host key callback
 	var hostKeyCallback ssh.HostKeyCallback
+	var hostKeyAlgorithms []string
 	if StrictHostKeyChecking {
 		knownHostsPath := filepath.Join(homeDir(), ".ssh", "known_hosts")
 		var err error
@@ -404,15 +449,17 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to load known_hosts: %w", err)
 		}
+		hostKeyAlgorithms = knownHostKeyAlgorithms(knownHostsPath, settings.address())
 	} else {
 		hostKeyCallback = ssh.InsecureIgnoreHostKey() //nolint:gosec // User explicitly disabled host key checking
 	}
 
 	return &ssh.ClientConfig{
-		User:            settings.user,
-		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         10 * time.Second,
+		User:              settings.user,
+		Auth:              authMethods,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgorithms,
+		Timeout:           10 * time.Second,
 	}, nil
 }
 
@@ -581,7 +628,97 @@ func suggestionForDialError(err error) string {
 	return "Check network connectivity to this host"
 }
 
-func suggestionForHandshakeError(err error, encryptedKeys []string) string {
+// proxyFailure turns a connection that failed in its ProxyJump or
+// ProxyCommand into an error naming the jump host (or ProxyCommand), with
+// what the proxy printed as the cause and a way to check each leg.
+func proxyFailure(host string, settings *sshSettings, timeout time.Duration, pe *ProxyError) error {
+	pe.Host = host
+	pe.Directive = settings.proxyDirective()
+	pe.JumpHost = settings.jumpHosts
+
+	waited := ""
+	if timeout > 0 {
+		waited = " within " + timeout.String()
+	}
+
+	if pe.JumpHost != "" {
+		check := fmt.Sprintf("Check the jump host on its own (%s), then that it can reach %s, the HostName and Port for '%s' in ~/.ssh/config.",
+			jumpCheckCommand(pe.JumpHost), settings.address(), host)
+		if pe.TimedOut {
+			return errors.WrapWithCode(pe, errors.ErrSSH,
+				fmt.Sprintf("Timed out reaching '%s' through jump host '%s'", host, pe.JumpHost),
+				"Nothing answered"+waited+". "+check)
+		}
+		return errors.WrapWithCode(pe, errors.ErrSSH,
+			fmt.Sprintf("Couldn't reach '%s' through jump host '%s'", host, pe.JumpHost),
+			check)
+	}
+
+	check := fmt.Sprintf("Check the ProxyCommand for '%s' in ~/.ssh/config, then try: ssh %s", host, host)
+	if pe.TimedOut {
+		return errors.WrapWithCode(pe, errors.ErrSSH,
+			fmt.Sprintf("Timed out reaching '%s' through its ProxyCommand", host),
+			"Nothing answered"+waited+". "+check)
+	}
+	return errors.WrapWithCode(pe, errors.ErrSSH,
+		fmt.Sprintf("Couldn't reach '%s' through its ProxyCommand", host),
+		check)
+}
+
+// targetClosed is a connection through a proxy that the target hung up on
+// before the SSH handshake finished: the proxy got there, so it isn't at fault.
+func targetClosed(host string, settings *sshSettings, err error) error {
+	return errors.WrapWithCode(err, errors.ErrSSH,
+		fmt.Sprintf("'%s' closed the connection before the SSH handshake", host),
+		fmt.Sprintf("The %s reached %s, but its SSH server hung up. Check sshd is running there and isn't refusing this connection (MaxStartups, fail2ban, hosts.deny), then try: ssh %s",
+			settings.proxyDirective(), settings.address(), host))
+}
+
+// proxyStartFailure is a proxy process that couldn't be started, so nothing
+// was dialed. For a ProxyJump that's the system ssh missing.
+func proxyStartFailure(host string, settings *sshSettings, startErr *proxyStartError) error {
+	if settings.jumpHosts != "" {
+		return errors.WrapWithCode(startErr, errors.ErrSSH,
+			fmt.Sprintf("Couldn't run ssh to reach '%s' through jump host '%s'", host, settings.jumpHosts),
+			"rr runs the system ssh for ProxyJump. Install the OpenSSH client and make sure ssh is on PATH, or set a ProxyCommand for the host in ~/.ssh/config.")
+	}
+	return errors.WrapWithCode(startErr, errors.ErrSSH,
+		fmt.Sprintf("Couldn't run the ProxyCommand for '%s'", host),
+		"rr runs ProxyCommand with sh. Make sure sh is on PATH.")
+}
+
+// isConnClosed reports whether a handshake error is the connection going
+// away under it: the proxy exited, or rr closed it at the timeout.
+func isConnClosed(err error) bool {
+	if stderrors.Is(err, io.EOF) || stderrors.Is(err, io.ErrUnexpectedEOF) ||
+		stderrors.Is(err, net.ErrClosed) || stderrors.Is(err, os.ErrClosed) {
+		return true
+	}
+	s := err.Error()
+	return strings.HasSuffix(s, ": EOF") || strings.Contains(s, "file already closed") ||
+		strings.Contains(s, "broken pipe") || strings.Contains(s, "use of closed")
+}
+
+// jumpCheckCommand is the ssh command that connects to the last jump host in
+// a ProxyJump value, through any before it.
+func jumpCheckCommand(jumpHosts string) string {
+	hops := strings.Split(jumpHosts, ",")
+	for i := range hops {
+		hops[i] = strings.TrimSpace(hops[i])
+	}
+	parts := []string{"ssh"}
+	if len(hops) > 1 {
+		parts = append(parts, "-J", strings.Join(hops[:len(hops)-1], ","))
+	}
+	if dest, port := splitJumpPort(hops[len(hops)-1]); port != "" {
+		parts = append(parts, "-p", port, dest)
+	} else {
+		parts = append(parts, dest)
+	}
+	return strings.Join(parts, " ")
+}
+
+func suggestionForHandshakeError(err error, encryptedKeys []string, host string) string {
 	errStr := err.Error()
 	if strings.Contains(errStr, "unable to authenticate") || strings.Contains(errStr, "no supported methods") {
 		// If we found encrypted keys, suggest adding them to the agent
@@ -595,15 +732,15 @@ func suggestionForHandshakeError(err error, encryptedKeys []string) string {
 					sb.WriteString(fmt.Sprintf("  ssh-add %s\n", key))
 				}
 			}
-			sb.WriteString("\nNot sure which key? Check with: ssh -v <host>")
+			sb.WriteString("\nNot sure which key? Check with: ssh -v " + host)
 			return sb.String()
 		}
 		return "Auth failed. Check your keys are loaded: ssh-add -l"
 	}
-	if strings.Contains(errStr, "host key") {
-		return "Host key issue. Try connecting manually first: ssh <host>"
+	if strings.Contains(errStr, "host key") || strings.Contains(errStr, "knownhosts:") {
+		return "Host key not trusted. rr checks ~/.ssh/known_hosts and never adds keys. Accept the key once: ssh -o StrictHostKeyChecking=accept-new " + host + " exit"
 	}
-	return "Something went wrong during SSH setup. Try: ssh <host>"
+	return "Something went wrong during SSH setup. Try: ssh " + host
 }
 
 // EncryptedKeyError is returned when an SSH key requires a passphrase.
@@ -703,6 +840,44 @@ func preprocessSSHConfig(configPath string) ([]byte, int, error) {
 func isEncryptedPEM(data []byte) bool {
 	return bytes.Contains(data, []byte("ENCRYPTED")) ||
 		bytes.Contains(data, []byte("Proc-Type: 4,ENCRYPTED"))
+}
+
+// knownHostKeyAlgorithms returns the host key algorithms to offer for
+// address: those of the keys known_hosts has for it, as OpenSSH orders them.
+// Otherwise the server picks from Go's default order, and a host known only
+// by its ed25519 key (what `ssh` records) fails as a mismatch when the server
+// offers ecdsa first. Nil when known_hosts has no key for the address, which
+// leaves the default order.
+func knownHostKeyAlgorithms(knownHostsPath, address string) []string {
+	callback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil
+	}
+	// A key no host has: the lookup fails and lists the keys it wanted.
+	probe, err := ssh.NewPublicKey(ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)))
+	if err != nil {
+		return nil
+	}
+	var keyErr *knownhosts.KeyError
+	if !stderrors.As(callback(address, proxyAddr{addr: address}, probe), &keyErr) {
+		return nil
+	}
+	var algos []string
+	seen := map[string]bool{}
+	for _, known := range keyErr.Want {
+		keyType := known.Key.Type()
+		names := []string{keyType}
+		if keyType == ssh.KeyAlgoRSA {
+			names = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+		}
+		for _, name := range names {
+			if !seen[name] {
+				seen[name] = true
+				algos = append(algos, name)
+			}
+		}
+	}
+	return algos
 }
 
 // createHostKeyCallback wraps the knownhosts callback to provide better error messages.

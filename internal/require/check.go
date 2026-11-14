@@ -5,13 +5,29 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/rileyhilliard/rr/internal/config"
+	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
+	"github.com/rileyhilliard/rr/internal/util"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 )
 
+// notFoundMarker is what the lookup prints when the tool isn't there, so a
+// missing tool (exit 0, marker) is told apart from a check that couldn't run
+// (a failed setup command or host shell: non-zero exit).
+const notFoundMarker = "rr-require: not found"
+
 // CheckRequirement verifies a single tool exists on the remote host.
 // Uses "command -v <tool>" which is POSIX-compliant and works across shells.
-func CheckRequirement(client sshutil.SSHClient, tool string) CheckResult {
+//
+// With a host config, the lookup runs the way rr runs commands there (rc
+// files, the host's setup_commands, its shell), so a tool those put on PATH
+// counts as present. The cd into the project dir is soft: the dir doesn't
+// exist before the first sync. A nil host runs the bare lookup.
+//
+// The error is non-nil when the lookup couldn't run (the host's shell or
+// setup_commands failed), which would otherwise read as every tool missing.
+func CheckRequirement(client sshutil.SSHClient, host *config.Host, tool string) (CheckResult, error) {
 	result := CheckResult{
 		Name:       tool,
 		CanInstall: exec.CanInstallTool(tool),
@@ -20,28 +36,61 @@ func CheckRequirement(client sshutil.SSHClient, tool string) CheckResult {
 	// Validate tool name to prevent command injection
 	if !ValidateToolName(tool) {
 		result.Satisfied = false
-		return result
+		return result, nil
 	}
 
 	// Use "command -v" for POSIX-compliant tool detection
-	cmd := fmt.Sprintf("command -v %s", tool)
-	stdout, _, exitCode, err := client.Exec(cmd)
+	cmd := fmt.Sprintf("command -v %s || echo %s", tool, util.ShellQuote(notFoundMarker))
+	if host != nil {
+		env := *host
+		env.Dir = ""
+		if host.Dir != "" {
+			// Relative PATH entries (./node_modules/.bin) resolve from the
+			// project dir, as in a run, once a sync has created it.
+			dir := util.ShellQuotePreserveTilde(config.ExpandRemote(host.Dir))
+			cmd = fmt.Sprintf("{ cd %s 2>/dev/null || true; } && %s", dir, cmd)
+		}
+		cmd = exec.BuildRemoteCommand(cmd, &env)
+	}
+	stdout, stderr, exitCode, err := client.Exec(cmd)
 
-	if err != nil || exitCode != 0 {
+	if err != nil {
 		result.Satisfied = false
-		return result
+		return result, nil
+	}
+	if exitCode != 0 {
+		detail := strings.TrimSpace(string(stderr))
+		if detail == "" {
+			detail = fmt.Sprintf("exit code %d", exitCode)
+		}
+		return result, errors.New(errors.ErrExec,
+			fmt.Sprintf("Couldn't check requirements on the host: %s", detail),
+			"Check the host's shell and setup_commands in ~/.rr/config.yaml, or run them on the host to see what fails.")
+	}
+
+	// rc files and setup_commands can print before the lookup runs (e.g. "nvm
+	// use" announcing a version); command -v's answer is the last line.
+	out := strings.TrimSpace(string(stdout))
+	answer := out[strings.LastIndex(out, "\n")+1:]
+	// An alias from an rc file isn't expanded when rr runs a command
+	// (non-interactive shell), so it doesn't count.
+	if answer == notFoundMarker || strings.HasPrefix(answer, "alias ") {
+		result.Satisfied = false
+		return result, nil
 	}
 
 	result.Satisfied = true
-	result.Path = strings.TrimSpace(string(stdout))
-	return result
+	result.Path = answer
+	return result, nil
 }
 
 // CheckAll checks all requirements, using cache and parallel execution.
+// host is the host's config (see CheckRequirement); nil for a bare lookup.
 // Returns results for all requirements, including cached ones.
 // Note: Individual check failures are recorded in CheckResult.Satisfied=false,
-// not returned as errors. Errors are only returned for systemic failures.
-func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName string) ([]CheckResult, error) {
+// not returned as errors. Errors are only returned for systemic failures (the
+// host's shell or setup_commands failing).
+func CheckAll(client sshutil.SSHClient, host *config.Host, reqs []string, cache *Cache, hostName string) ([]CheckResult, error) {
 	if len(reqs) == 0 {
 		return nil, nil
 	}
@@ -69,6 +118,7 @@ func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName st
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	var setupErr error
 
 	for _, idx := range toCheck {
 		wg.Add(1)
@@ -77,17 +127,26 @@ func CheckAll(client sshutil.SSHClient, reqs []string, cache *Cache, hostName st
 			sem <- struct{}{}        // Acquire semaphore
 			defer func() { <-sem }() // Release semaphore
 
-			result := CheckRequirement(client, reqs[i])
+			result, err := CheckRequirement(client, host, reqs[i])
 
 			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if setupErr == nil {
+					setupErr = err
+				}
+				return
+			}
 			results[i] = result
 			cache.Set(hostName, reqs[i], result)
-			mu.Unlock()
 		}(idx)
 	}
 
 	wg.Wait()
 
+	if setupErr != nil {
+		return nil, setupErr
+	}
 	return results, nil
 }
 

@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "projectId": "1c0b1b91-5533-44a4-839b-dfa4a448a9fd",
+  "createdAt": "2026-11-02T16:34:22.229Z",
+  "cli": "0.7.0",
+  "mode": "new",
+  "name": "rr",
+  "preset": "default",
+  "agents": [
+    "claude"
+  ],
+  "stack": {
+    "id": "astro-product-site",
+    "origin": "bundled",
+    "trusted": true
+  },
+  "fragments": [
+    {
+      "id": "agent-ops",
+      "origin": "bundled",
+      "trusted": true
+    },
+    {
+      "id": "cloudflare-pages",
+      "origin": "bundled",
+      "trusted": true
+    },
+    {
+      "id": "posthog",
+      "origin": "bundled",
+      "trusted": true
+    }
+  ],
+  "env": {
+    "PORT_WEB": "4321",
+    "PORT_E2E": "4322"
+  },
+  "commands": {
+    "install": "Install dependencies (frozen lockfile when CI is set) and, outside CI, Playwright's Chromium",
+    "dev": "Astro dev server on PORT_WEB",
+    "lint": "Biome for TS, JS, CSS and JSON; Prettier for .astro files",
+    "format": "Apply Biome and Prettier fixes",
+    "check": "Type-check pages, components and content (astro check)",
+    "test": "Unit and component tests",
+    "coverage": "Unit and component tests with coverage",
+    "build": "Static build into dist/, then the acceptance tests over it",
+    "preview": "Serve the production build on PORT_WEB",
+    "e2e": "Browser and accessibility tests against the production build",
+    "clean": "Remove build output, test output and Astro caches",
+    "deploy-check": "Build, then serve dist/ through wrangler pages dev and check headers, canonical URLs and the 404 page"
+  },
+  "verify": [
+    {
+      "name": "install",
+      "run": "make install",
+      "phase": "setup",
+      "tags": [],
+      "layer": "install",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "lint",
+      "run": "make lint",
+      "phase": "check",
+      "tags": [],
+      "layer": "lint",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "check",
+      "run": "make check",
+      "phase": "check",
+      "tags": [],
+      "layer": "typecheck",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "test",
+      "run": "make test",
+      "phase": "check",
+      "tags": [],
+      "layer": "test",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "build",
+      "run": "make build",
+      "phase": "check",
+      "tags": [],
+      "layer": "build",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "browser",
+      "run": "node scripts/e2e.mjs",
+      "phase": "check",
+      "tags": [],
+      "layer": "test",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "readme-filled",
+      "run": "test -s README.md && ! grep -n 'stacks:fill' README.md",
+      "phase": "check",
+      "tags": [],
+      "layer": "check",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "web",
+      "run": "make dev",
+      "phase": "serve",
+      "tags": [],
+      "expect": {
+        "http": "http://localhost:${PORT_WEB}/docs/",
+        "within": "60s"
+      },
+      "layer": "serve",
+      "timeout": "10m",
+      "owner": "astro-product-site",
+      "skipByDefault": false
+    },
+    {
+      "name": "agents-md-filled",
+      "run": "test -s AGENTS.md && grep -q '^## Commands' AGENTS.md && ! grep -n 'stacks:fill' AGENTS.md",
+      "phase": "check",
+      "tags": [],
+      "layer": "check",
+      "timeout": "10m",
+      "owner": "agent-ops",
+      "skipByDefault": false
+    },
+    {
+      "name": "claude-md-imports-agents",
+      "run": "test ! -f CLAUDE.md || grep -qx '@AGENTS.md' CLAUDE.md",
+      "phase": "check",
+      "tags": [],
+      "layer": "check",
+      "timeout": "10m",
+      "owner": "agent-ops",
+      "skipByDefault": false
+    },
+    {
+      "name": "claude-readme-filled",
+      "run": "test ! -f .claude/README.md || ! grep -n 'stacks:fill' .claude/README.md",
+      "phase": "check",
+      "tags": [],
+      "layer": "check",
+      "timeout": "10m",
+      "owner": "agent-ops",
+      "skipByDefault": false
+    },
+    {
+      "name": "hooks-smoke",
+      "run": "bash .claude/hooks/smoke.sh",
+      "phase": "check",
+      "tags": [],
+      "layer": "check",
+      "timeout": "10m",
+      "owner": "agent-ops",
+      "skipByDefault": false
+    },
+    {
+      "name": "deploy-check",
+      "run": "make deploy-check",
+      "phase": "check",
+      "tags": [],
+      "layer": "build",
+      "timeout": "10m",
+      "owner": "cloudflare-pages",
+      "skipByDefault": false
+    }
+  ],
+  "verifyDigest": "sha256:02847de68eb90c06acdacc044ba0c645a63756039cb2a50a54077b545408c1b1",
+  "briefWords": 4321,
+  "handoff": {
+    "kind": "inside-agent",
+    "agent": "claude",
+    "at": "2026-11-02T16:34:22.229Z"
+  },
+  "fingerprint": "sha256:a10e84f96ce218f8fc83d53ab7ff377b72b34fd951ca437ec277888b4b636c9d"
+}

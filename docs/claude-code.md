@@ -1,3 +1,10 @@
+---
+title: Claude Code plugin
+description: Install the rr plugin so Claude Code knows rr commands, config and troubleshooting.
+group: guides
+order: 10
+---
+
 # Claude Code Plugin
 
 The rr plugin teaches [Claude Code](https://claude.ai/code) how to use the rr CLI, including commands, configuration, and troubleshooting.
@@ -31,7 +38,7 @@ Run from your project root to set up rr:
 ```
 
 This walks through:
-1. Creating/verifying global config with hosts
+1. Creating/verifying global config with hosts (remote machines, or this machine as a local host)
 2. Creating project config with appropriate sync exclusions and tasks
 3. Verifying SSH connectivity
 4. Testing remote execution
@@ -87,7 +94,7 @@ cp /path/to/rr/plugins/rr/commands/*.md ~/.claude/commands/
 |-------|----------|
 | Commands | All CLI commands with flags and examples |
 | Configuration | Global vs project config, all fields, variable expansion |
-| Host management | Adding, removing, listing hosts |
+| Host management | Adding, removing, listing hosts, including this machine as a local host |
 | Sync | Exclude/preserve patterns, rsync flags |
 | Locking | How distributed locks work, unlocking stuck locks |
 | Tasks | Defining and running named tasks, passing args, parallel tasks, dependencies |

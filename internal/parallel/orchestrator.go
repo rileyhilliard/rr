@@ -734,7 +734,10 @@ func (o *Orchestrator) GetOutputManager() *OutputManager {
 	return o.outputMgr
 }
 
-// runLocal executes tasks locally (sequentially) when no remote hosts are configured.
+// runLocal executes tasks locally (sequentially) when there are no hosts:
+// bare local execution, with no lock. With a local host in the global
+// config, a local target gets it as its one host instead (see the CLI's
+// resolveTargetHosts), so it never comes here.
 func (o *Orchestrator) runLocal(ctx context.Context) (*Result, error) {
 	// Determine TTY status for output manager
 	isTTY := isTerminal()

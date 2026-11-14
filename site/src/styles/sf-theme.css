@@ -1,0 +1,92 @@
+/*
+ * @steamfield/ui on rr's tokens. global.css declares the layer order (sf after base,
+ * before components and utilities) ahead of this import. The site is dark only, so
+ * one set of values; every --sf-* reads a token from global.css's @theme.
+ *
+ * The terminal player keeps rr's own markup on the library's headless useAgentDemo,
+ * so it needs no agent-demo stylesheet.
+ */
+@import "@steamfield/ui/tabs/styles.css";
+@import "@steamfield/ui/copy/styles.css";
+@import "@steamfield/ui/react/install-tabs/styles.css";
+@import "@steamfield/ui/reveal/styles.css";
+@import "@steamfield/ui/consent/styles.css";
+
+:root {
+  --sf-bg: var(--color-canvas);
+  --sf-surface: var(--color-panel);
+  --sf-fg: var(--color-ink);
+  /* Inactive tabs and idle copy buttons are ink-2 on this site. */
+  --sf-muted: var(--color-ink-2);
+  --sf-faint: var(--color-faint);
+  --sf-accent: var(--color-accent);
+  --sf-border: var(--color-line-strong);
+  --sf-radius: var(--radius-panel);
+  --sf-font: var(--font-mono);
+  --sf-ok: var(--color-success);
+  --sf-fail: var(--color-error);
+  --sf-warn: var(--color-waiting);
+  --sf-focus: var(--color-info);
+
+  /* The consent banner (BaseLayout.astro, only in builds with a PostHog key). */
+  --sf-consent-background: var(--color-panel);
+  --sf-consent-foreground: var(--color-ink);
+  --sf-consent-muted: var(--color-muted);
+  --sf-consent-border: var(--color-line-strong);
+  --sf-consent-accent: var(--color-accent);
+  --sf-consent-accent-foreground: var(--color-canvas);
+  --sf-consent-radius: var(--radius-panel);
+  --sf-consent-shadow: 0 10px 30px color-mix(in srgb, var(--color-canvas) 80%, transparent);
+  --sf-consent-font: var(--font-sans);
+  /* Above the sticky header (40), below the focused skip link (50). */
+  --sf-consent-z-index: 45;
+}
+
+/* InstallTabs (src/components/landing/InstallTabs.tsx), sized as the site's utilities were. */
+@layer components {
+  .rr-install [data-part="tab-list"] {
+    gap: 0;
+    border-bottom-color: var(--color-line);
+  }
+
+  .rr-install [data-part="tab"] {
+    margin-bottom: -1px;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 500;
+  }
+
+  /* Before hydration no tab carries aria-selected; the first one is the panel on show. */
+  .rr-install [data-part="tabs"]:not([data-live]) [data-part="tab"]:first-child {
+    color: var(--color-ink);
+    border-bottom-color: var(--color-accent);
+  }
+
+  .rr-install [data-part="tab-panel"] {
+    padding: 1rem;
+  }
+
+  .rr-install [data-part="command"] {
+    color: var(--color-ink);
+    font-size: 13px;
+    overflow-wrap: normal;
+    word-break: break-all;
+  }
+
+  .rr-install [data-part="copy-button"] {
+    flex-shrink: 0;
+    border-radius: var(--radius-control);
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .rr-install [data-part="copy-button"][data-state="copied"]:not(:hover) {
+    color: var(--color-ink-2);
+  }
+
+  .rr-install [data-part="copy-button"]:hover {
+    color: var(--color-ink);
+  }
+}

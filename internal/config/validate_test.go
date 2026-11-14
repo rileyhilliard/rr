@@ -1,10 +1,14 @@
 package config
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/rileyhilliard/rr/internal/errors"
 )
 
 func TestValidateParallelTasks(t *testing.T) {
@@ -896,4 +900,154 @@ func TestValidate_Env(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateHost_Local(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    Host
+		wantErr string
+	}{
+		{
+			name: "local host with no ssh and no dir is valid",
+			host: Host{Local: true, Tags: []string{"fast"}, SetupCommands: []string{"echo hi"}, Env: map[string]string{"A": "1"}},
+		},
+		{
+			name:    "local host with ssh is rejected",
+			host:    Host{Local: true, SSH: []string{"box"}},
+			wantErr: "can't set both 'local: true' and 'ssh'",
+		},
+		{
+			name:    "local host with dir is rejected",
+			host:    Host{Local: true, Dir: "~/rr/${PROJECT}"},
+			wantErr: "runs in the project directory",
+		},
+		{
+			name:    "local host still validates env",
+			host:    Host{Local: true, Env: map[string]string{"1BAD": "x"}},
+			wantErr: "env",
+		},
+		{
+			name:    "local host still validates shell",
+			host:    Host{Local: true, Shell: "zsh"},
+			wantErr: "shell",
+		},
+		{
+			name:    "remote host still needs ssh",
+			host:    Host{Dir: "/tmp/rr"},
+			wantErr: "needs at least one SSH connection",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateHost("dev", tt.host)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateGlobal_AtMostOneLocalHost(t *testing.T) {
+	cfg := &GlobalConfig{Version: 1, Hosts: map[string]Host{
+		"dev":   {Local: true},
+		"dev2":  {Local: true},
+		"other": {SSH: []string{"box"}, Dir: "/tmp/rr"},
+	}}
+	err := ValidateGlobal(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only one host can be local")
+	assert.Contains(t, err.Error(), "dev, dev2")
+
+	delete(cfg.Hosts, "dev2")
+	assert.NoError(t, ValidateGlobal(cfg))
+}
+
+func TestValidateGlobal_HostNamedLocalRejected(t *testing.T) {
+	tests := []struct {
+		name string
+		host Host
+	}{
+		{"remote host", Host{SSH: []string{"box"}, Dir: "/tmp/rr"}},
+		{"local host", Host{Local: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{"local": tt.host}})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "can't be named 'local'")
+			var rrErr *errors.Error
+			require.ErrorAs(t, err, &rrErr)
+			assert.Equal(t, errors.ErrConfig, rrErr.Code)
+			assert.Contains(t, rrErr.Suggestion, "Rename it", "the advice is in the suggestion agents read")
+		})
+	}
+
+	assert.NoError(t, ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{
+		"dev": {Local: true},
+	}}))
+}
+
+func TestValidateHost_LocalUnsupportedOnWindows(t *testing.T) {
+	tests := []struct {
+		goos    string
+		host    Host
+		wantErr bool
+	}{
+		{"windows", Host{Local: true}, true},
+		{"linux", Host{Local: true}, false},
+		{"darwin", Host{Local: true}, false},
+		{"windows", Host{SSH: []string{"box"}, Dir: "/tmp/rr"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%s local=%v", tt.goos, tt.host.Local), func(t *testing.T) {
+			old := hostGOOS
+			hostGOOS = tt.goos
+			t.Cleanup(func() { hostGOOS = old })
+
+			err := ValidateGlobal(&GlobalConfig{Version: 1, Hosts: map[string]Host{"dev": tt.host}})
+			if !tt.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "isn't supported on Windows")
+			assert.Contains(t, err.Error(), "host 'dev'")
+		})
+	}
+}
+
+func TestResolveHosts_LocalHostRunsInProjectRoot(t *testing.T) {
+	resolved := &ResolvedConfig{
+		Global: &GlobalConfig{Version: 1, Hosts: map[string]Host{
+			"dev":    {Local: true},
+			"remote": {SSH: []string{"box"}, Dir: "~/rr/${PROJECT}"},
+		}},
+		Project:     &Config{Hosts: []string{"remote", "dev"}},
+		ProjectRoot: "/work/my project",
+	}
+
+	names, hosts, err := ResolveHosts(resolved, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"remote", "dev"}, names, "a local host keeps its place in the hosts order")
+	assert.Equal(t, "/work/my project", hosts["dev"].Dir)
+	assert.Equal(t, "~/rr/${PROJECT}", hosts["remote"].Dir, "remote dirs are untouched")
+	assert.Empty(t, resolved.Global.Hosts["dev"].Dir, "the global config isn't modified")
+}
+
+func TestResolveHosts_LocalHostWithoutProjectUsesCwd(t *testing.T) {
+	wd := t.TempDir()
+	t.Chdir(wd)
+	resolved := &ResolvedConfig{
+		Global: &GlobalConfig{Version: 1, Hosts: map[string]Host{"dev": {Local: true}}},
+	}
+
+	_, hosts, err := ResolveHosts(resolved, "dev")
+	require.NoError(t, err)
+	got, err := os.Getwd()
+	require.NoError(t, err)
+	assert.Equal(t, got, hosts["dev"].Dir)
 }

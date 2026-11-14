@@ -341,10 +341,18 @@ func buildFailureHint(command, stderr, localRoot, remoteDir, host string) string
 var missingPathPatterns = []*regexp.Regexp{
 	// pytest: "ERROR: file or directory not found: tests/foo.py"
 	regexp.MustCompile(`(?i)file or directory not found:\s*(\S+)`),
+	// zsh and bare: "zsh:.:2: no such file or directory: tests/foo.py". Before
+	// the generic pattern, which would take ".:2" from zsh's prefix as the path.
+	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
+	// bash 5 under -c: "bash: line 1: ./scripts/env.sh: No such file or
+	// directory". Before the generic pattern, which stops at "line 1".
+	regexp.MustCompile(`(?i)^[^:\n]*:\s*line \d+:\s*(\S+):\s*no such file or directory`),
+	// dash's "." builtin: "sh: 1: .: cannot open ./env.sh: No such file", and
+	// older dash's "sh: 1: .: Can't open ./env.sh". Anchored on the "."
+	// builtin, so python's "can't open file '...'" doesn't match.
+	regexp.MustCompile(`(?i)^[^:\n]*:\s*\d+:\s*\.:\s*(?:cannot|can't) open\s+(\S+?):?(?:\s|$)`),
 	// generic shell/tool: "cat: tests/foo.py: No such file or directory"
 	regexp.MustCompile(`(?i)^[^:\n]*:\s*(\S+):\s*no such file or directory`),
-	// bare: "no such file or directory: tests/foo.py"
-	regexp.MustCompile(`(?i)no such file or directory:\s*(\S+)`),
 }
 
 // buildRelativePathHint explains a relative path that failed because it was
@@ -392,6 +400,28 @@ func buildRelativePathHint(stderr, projectRoot, invocationDir, runDir string) st
 		return fmt.Sprintf("'%s' doesn't exist in %s, where rr ran the command, but it does in %s. Use '%s', or run with %s",
 			rel, describeOffset(runDir), describeOffset(cand),
 			relFromRunDir(cand, rel, runDir), describeCWDFix(cand))
+	}
+	return ""
+}
+
+// buildSetupFileHint explains a failure where a setup command (host
+// setup_commands or defaults.setup) names a file that doesn't exist where it
+// ran. Setup runs from the project root on hostName, before the command's own
+// cd, so its relative paths are root-relative. Returns "" when the missing
+// path isn't named by a setup command: a typo in the command itself already
+// reads clearly from the shell's error.
+func buildSetupFileHint(stderr string, setup []string, hostName string) string {
+	rel := extractMissingRelPath(stderr)
+	if rel == "" {
+		return ""
+	}
+	for _, s := range setup {
+		if strings.Contains(s, rel) {
+			// The command isn't quoted: setup lines can carry tokens, and
+			// this hint lands in shared run output.
+			return fmt.Sprintf("'%s' doesn't exist on %s, and a setup command (setup_commands or defaults.setup) needs it. Setup runs from the project root, so check the path is right relative to it, and that the file is committed or synced.",
+				rel, hostName)
+		}
 	}
 	return ""
 }

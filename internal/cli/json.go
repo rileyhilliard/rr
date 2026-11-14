@@ -92,6 +92,7 @@ const (
 	ErrCodeLockHeld          = "LOCK_HELD"
 	ErrCodeCommandFailed     = "COMMAND_FAILED"
 	ErrCodeDependencyMissing = "DEPENDENCY_MISSING"
+	ErrCodeInterrupted       = "INTERRUPTED"
 	ErrCodeUnknown           = "UNKNOWN"
 )
 
@@ -181,6 +182,7 @@ var internalToPublicCode = map[string]string{
 	errors.ErrSync:           ErrCodeRsyncFailed,
 	errors.ErrLock:           ErrCodeLockHeld,
 	errors.ErrExec:           ErrCodeCommandFailed,
+	errors.ErrInterrupted:    ErrCodeInterrupted,
 }
 
 // mapErrorCode maps an internal error code to its public code, or UNKNOWN.
@@ -202,10 +204,10 @@ func probeErrorToJSON(probeErr *host.ProbeError) *JSONError {
 		suggestion = "Check if host is reachable: ping the hostname"
 	case host.ProbeFailAuth:
 		code = ErrCodeSSHAuthFailed
-		suggestion = "Deploy SSH key: ssh-copy-id <hostname>"
+		suggestion = "Deploy SSH key: ssh-copy-id " + probeErr.SSHAlias
 	case host.ProbeFailHostKey:
 		code = ErrCodeSSHHostKey
-		suggestion = "Accept host key: ssh -o StrictHostKeyChecking=accept-new <hostname> exit"
+		suggestion = "Accept host key: ssh -o StrictHostKeyChecking=accept-new " + probeErr.SSHAlias + " exit"
 	case host.ProbeFailDNS:
 		code = ErrCodeSSHConnectionFail
 		suggestion = "Check hostname spelling and SSH config"

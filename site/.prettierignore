@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.astro/
+coverage/
+playwright-report/
+test-results/
+.stacks/
+.claude/

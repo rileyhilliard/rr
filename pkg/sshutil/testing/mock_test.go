@@ -121,6 +121,24 @@ EOF`
 	assert.Equal(t, "hello world", string(content))
 }
 
+// With set -C (noclobber) the write only happens when the file is new, as a
+// shell does it.
+func TestMockClient_Exec_CatWriteNoClobber(t *testing.T) {
+	client := NewMockClient("testhost")
+	write := func(content string) int {
+		_, _, code, err := client.Exec("set -C; cat > \"/tmp/file.txt\" << 'EOF'\n" + content + "\nEOF")
+		require.NoError(t, err)
+		return code
+	}
+
+	assert.Equal(t, 0, write("first"), "a new file is written")
+	assert.NotEqual(t, 0, write("second"), "an existing file is refused")
+
+	content, err := client.GetFS().ReadFile("/tmp/file.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "first", string(content))
+}
+
 func TestMockClient_Exec_CatRead(t *testing.T) {
 	client := NewMockClient("testhost")
 

@@ -24,10 +24,24 @@ func init() {
 
 // StatusOutput represents the JSON output for status command.
 type StatusOutput struct {
-	Hosts    []HostStatus    `json:"hosts"`
+	// Hosts are in preference order: the order a run tries them in.
+	Hosts []HostStatus `json:"hosts"`
+	// Scope says where Hosts came from: "project" (the .rr.yaml host
+	// list), "global" (every host in ~/.rr/config.yaml, alphabetical), or
+	// "local" (local mode: this machine only).
+	Scope    string          `json:"scope"`
 	Selected *Selected       `json:"selected,omitempty"`
 	Project  *ProjectMapping `json:"project,omitempty"`
 }
+
+// Status scopes: where the listed hosts came from.
+const (
+	statusScopeProject = "project"
+	statusScopeGlobal  = "global"
+	// statusScopeLocal: the project is in local mode (local_fallback with
+	// no hosts), so runs use this machine and no other host.
+	statusScopeLocal = "local"
+)
 
 // ProjectMapping answers "where will this tree sync?" per host.
 type ProjectMapping struct {
@@ -35,25 +49,35 @@ type ProjectMapping struct {
 	Worktree         string            `json:"worktree,omitempty"`
 	IsLinkedWorktree bool              `json:"is_linked_worktree"`
 	RemoteDirs       map[string]string `json:"remote_dirs"`
+	// InPlaceHosts are hosts with local: true. They run in LocalRoot, so
+	// they have no entry in RemoteDirs.
+	InPlaceHosts []string `json:"in_place_hosts,omitempty"`
 }
 
-// buildProjectMapping resolves the current tree's remote directory on every
-// configured host, reflecting worktree isolation.
-func buildProjectMapping(globalCfg *config.GlobalConfig) *ProjectMapping {
+// buildProjectMapping resolves the current tree's remote directory on each
+// listed host, reflecting worktree isolation.
+func buildProjectMapping(hosts map[string]config.Host) *ProjectMapping {
 	wt := config.DetectWorktree()
 	m := &ProjectMapping{
 		IsLinkedWorktree: wt.IsLinked,
 		Worktree:         wt.Name,
-		RemoteDirs:       make(map[string]string, len(globalCfg.Hosts)),
+		RemoteDirs:       make(map[string]string, len(hosts)),
 	}
 	if wt.TopLevel != "" {
 		m.LocalRoot = wt.TopLevel
-	} else if cwd, err := os.Getwd(); err == nil {
-		m.LocalRoot = cwd
+	} else {
+		// No repo: the project root (where .rr.yaml is), which is where a
+		// sync starts and an in-place host runs, or the current directory.
+		m.LocalRoot = config.DefaultLocalHostDir()
 	}
-	for name := range globalCfg.Hosts {
-		m.RemoteDirs[name] = config.ExpandRemote(globalCfg.Hosts[name].Dir)
+	for name := range hosts {
+		if hosts[name].Local {
+			m.InPlaceHosts = append(m.InPlaceHosts, name)
+			continue
+		}
+		m.RemoteDirs[name] = config.ExpandRemote(hosts[name].Dir)
 	}
+	sort.Strings(m.InPlaceHosts)
 	return m
 }
 
@@ -72,7 +96,9 @@ type AliasStatus struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// Selected indicates which host/alias would be used for the next command.
+// Selected is the first reachable host in preference order: where the next
+// run goes unless that host is locked, in which case the run moves on to the
+// next one.
 type Selected struct {
 	Host  string `json:"host"`
 	Alias string `json:"alias"`
@@ -80,33 +106,74 @@ type Selected struct {
 
 // statusCommand implements the status command logic.
 func statusCommand() error {
-	// Load global config (hosts are stored globally now)
-	globalCfg, err := config.LoadGlobal()
-	if err != nil {
+	resolved, err := config.LoadResolved(Config())
+	if errors.IsCode(err, errors.ErrConfigNotFound) && Config() == "" {
+		// A checkout without .rr.yaml inside one that has it: that config
+		// is skipped so a run doesn't use the other checkout's code. Status
+		// runs no code, so it shows the global hosts, like rr monitor.
+		global, globalErr := config.LoadGlobal()
+		if globalErr != nil {
+			return globalErr
+		}
+		resolved = &config.ResolvedConfig{Global: global, Project: config.DefaultConfig(), Source: config.GlobalOnly}
+	} else if err != nil {
 		return err
 	}
 
-	if len(globalCfg.Hosts) == 0 {
+	if len(resolved.Global.Hosts) == 0 && !configLocalMode(resolved) {
 		return errors.New(errors.ErrConfig,
 			"No hosts configured",
 			"Add a host with 'rr host add' first.")
 	}
 
-	// Probe all hosts in parallel
-	results := probeAllHosts(globalCfg.Hosts)
+	order, hosts, scope, err := statusHosts(resolved)
+	if err != nil {
+		return err
+	}
 
-	// Determine which host would be selected (first healthy host)
+	results := probeAllHosts(order, hosts)
 	selected := findSelectedHost(results)
 
 	// Where does this tree sync? (reflects worktree isolation)
-	mapping := buildProjectMapping(globalCfg)
+	mapping := buildProjectMapping(hosts)
 
 	// JSON output: explicit --json flag, or default structured mode (not --pretty)
 	if statusJSON || MachineMode() {
-		return outputStatusJSON(results, selected, mapping)
+		return outputStatusJSON(results, scope, selected, mapping)
 	}
 
-	return outputStatusText(results, selected, mapping)
+	return outputStatusText(results, scope, selected, mapping)
+}
+
+// statusHosts returns the hosts a run from here would use, in the order it
+// tries them: this machine in local mode, the project's hosts list (or host)
+// when .rr.yaml names one, otherwise every global host alphabetically, which
+// is also how a run orders them.
+func statusHosts(resolved *config.ResolvedConfig) ([]string, map[string]config.Host, string, error) {
+	if configLocalMode(resolved) {
+		// Runs go to this machine without trying any host: through the
+		// global local host when there is one, as resolveExecTarget does.
+		name, h := config.LocalHost(resolved)
+		if name == "" {
+			name, h = host.LocalAlias, config.Host{Local: true}
+		}
+		return []string{name}, map[string]config.Host{name: h}, statusScopeLocal, nil
+	}
+
+	if resolved.Project != nil && (len(resolved.Project.Hosts) > 0 || resolved.Project.Host != "") {
+		order, hosts, err := config.ResolveHosts(resolved, "")
+		if err != nil {
+			return nil, nil, "", err
+		}
+		return order, hosts, statusScopeProject, nil
+	}
+
+	order := make([]string, 0, len(resolved.Global.Hosts))
+	for name := range resolved.Global.Hosts {
+		order = append(order, name)
+	}
+	sort.Strings(order)
+	return order, resolved.Global.Hosts, statusScopeGlobal, nil
 }
 
 // probeResult holds the result of probing a single host.
@@ -115,41 +182,45 @@ type probeResult struct {
 	Aliases  []host.ProbeResult
 }
 
-// probeAllHosts probes all configured hosts in parallel.
-func probeAllHosts(hosts map[string]config.Host) map[string]probeResult {
-	results := make(map[string]probeResult)
-	var mu gosync.Mutex
+// probeAllHosts probes the hosts in order, in parallel, and returns their
+// results in that order.
+func probeAllHosts(order []string, hosts map[string]config.Host) []probeResult {
+	results := make([]probeResult, len(order))
 	var wg gosync.WaitGroup
 
 	timeout := host.DefaultProbeTimeout
 
-	for name := range hosts {
+	for i, name := range order {
 		wg.Add(1)
-		go func(hostName string, hostCfg config.Host) {
+		go func(i int, hostName string, hostCfg config.Host) {
 			defer wg.Done()
 
-			aliasResults := host.ProbeAll(hostCfg.SSH, timeout)
+			var aliasResults []host.ProbeResult
+			if hostCfg.Local {
+				// Nothing to dial: a local host is this machine.
+				aliasResults = []host.ProbeResult{{SSHAlias: host.LocalAlias, Success: true}}
+			} else {
+				aliasResults = host.ProbeAll(hostCfg.SSH, timeout)
+			}
 
-			mu.Lock()
-			results[hostName] = probeResult{
+			results[i] = probeResult{
 				HostName: hostName,
 				Aliases:  aliasResults,
 			}
-			mu.Unlock()
-		}(name, hosts[name])
+		}(i, name, hosts[name])
 	}
 
 	wg.Wait()
 	return results
 }
 
-// findSelectedHost determines which host/alias would be used for the next command.
-// Returns the first healthy host found.
-func findSelectedHost(results map[string]probeResult) *Selected {
-	for name, result := range results {
+// findSelectedHost returns the first reachable host in results' order, with
+// its first reachable alias, or nil when none is reachable.
+func findSelectedHost(results []probeResult) *Selected {
+	for _, result := range results {
 		for _, alias := range result.Aliases {
 			if alias.Success {
-				return &Selected{Host: name, Alias: alias.SSHAlias}
+				return &Selected{Host: result.HostName, Alias: alias.SSHAlias}
 			}
 		}
 	}
@@ -158,16 +229,17 @@ func findSelectedHost(results map[string]probeResult) *Selected {
 
 // outputStatusJSON outputs status in JSON format.
 // When MachineMode() is enabled, wraps output in the standard JSON envelope.
-func outputStatusJSON(results map[string]probeResult, selected *Selected, mapping *ProjectMapping) error {
+func outputStatusJSON(results []probeResult, scope string, selected *Selected, mapping *ProjectMapping) error {
 	output := StatusOutput{
 		Hosts:    make([]HostStatus, 0, len(results)),
+		Scope:    scope,
 		Selected: selected,
 		Project:  mapping,
 	}
 
-	for name, result := range results {
+	for _, result := range results {
 		hostStatus := HostStatus{
-			Name:    name,
+			Name:    result.HostName,
 			Aliases: make([]AliasStatus, 0, len(result.Aliases)),
 			Healthy: false,
 		}
@@ -204,16 +276,16 @@ func outputStatusJSON(results map[string]probeResult, selected *Selected, mappin
 }
 
 // outputStatusText outputs status in human-readable format using a table.
-func outputStatusText(results map[string]probeResult, selected *Selected, mapping *ProjectMapping) error {
+func outputStatusText(results []probeResult, scope string, selected *Selected, mapping *ProjectMapping) error {
 	mutedStyle := lipgloss.NewStyle().Foreground(ui.ColorMuted)
 	errorStyle := lipgloss.NewStyle().Foreground(ui.ColorError)
 
 	// Build table rows
 	var rows []ui.StatusTableRow
-	for name, result := range results {
+	for _, result := range results {
 		for _, alias := range result.Aliases {
 			row := ui.StatusTableRow{
-				Host:  name,
+				Host:  result.HostName,
 				Alias: alias.SSHAlias,
 			}
 
@@ -224,7 +296,7 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 				row.Status = "fail"
 				errMsg := "Connection failed"
 				if probeErr, ok := alias.Error.(*host.ProbeError); ok {
-					errMsg = probeErr.Reason.String()
+					errMsg = probeErr.Summary()
 				} else if alias.Error != nil {
 					errMsg = alias.Error.Error()
 				}
@@ -256,9 +328,17 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 	} else {
 		fmt.Printf("Selected: %s\n", errorStyle.Render("none (no reachable hosts)"))
 	}
+	switch scope {
+	case statusScopeProject:
+		fmt.Println(mutedStyle.Render("Hosts from .rr.yaml, in the order runs try them. A run skips a locked host."))
+	case statusScopeLocal:
+		fmt.Println(mutedStyle.Render("Runs use this machine: local_fallback is on and there are no hosts to try."))
+	default:
+		fmt.Println(mutedStyle.Render("All hosts in ~/.rr/config.yaml, alphabetically. Set 'hosts:' in .rr.yaml to pick a project's hosts and their order."))
+	}
 
 	// Show where this tree syncs (worktree-aware)
-	if mapping != nil && len(mapping.RemoteDirs) > 0 {
+	if mapping != nil && (len(mapping.RemoteDirs) > 0 || len(mapping.InPlaceHosts) > 0) {
 		fmt.Println()
 		treeDesc := "This tree"
 		if mapping.IsLinkedWorktree {
@@ -269,6 +349,9 @@ func outputStatusText(results map[string]probeResult, selected *Selected, mappin
 			hostNames = append(hostNames, name)
 		}
 		sort.Strings(hostNames)
+		for _, name := range mapping.InPlaceHosts {
+			fmt.Printf("%s runs in place on %s\n", treeDesc, name)
+		}
 		for _, name := range hostNames {
 			fmt.Printf("%s syncs to: %s\n", treeDesc, mutedStyle.Render(fmt.Sprintf("%s:%s", name, mapping.RemoteDirs[name])))
 		}

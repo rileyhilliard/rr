@@ -56,6 +56,8 @@ pre-commit:
     # Check: validate JSON syntax
     check-json:
       glob: "*.json"
+      # site/ formats and checks its own JSON (Biome), including tsconfig with comments.
+      exclude: "^site/"
       run: |
         if command -v python3 >/dev/null 2>&1; then
           for file in {staged_files}; do

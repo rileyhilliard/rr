@@ -21,7 +21,8 @@ type PruneOptions struct {
 // hostPruneOutcome records the result of pruning one host.
 type hostPruneOutcome struct {
 	Host    string   `json:"host"`
-	Status  string   `json:"status"` // pruned | clean | failed
+	Status  string   `json:"status"`           // pruned | clean | skipped | failed
+	Reason  string   `json:"reason,omitempty"` // why it was skipped
 	Removed []string `json:"removed,omitempty"`
 	Error   string   `json:"error,omitempty"`
 }
@@ -89,6 +90,14 @@ func pruneCommand(opts PruneOptions) error {
 func pruneHost(hostName string, hostCfg config.Host, projectRoot string, dryRun bool) hostPruneOutcome {
 	outcome := hostPruneOutcome{Host: hostName}
 
+	// A local host runs in the checkout itself: nothing was synced to it,
+	// so there's nothing to check.
+	if hostCfg.Local {
+		outcome.Status = "skipped"
+		outcome.Reason = "in_place"
+		return outcome
+	}
+
 	var conn *host.Connection
 	var connErr error
 	for _, alias := range hostCfg.SSH {
@@ -134,6 +143,8 @@ func printPruneOutcome(o hostPruneOutcome, dryRun bool) {
 		}
 	case "clean":
 		fmt.Printf("%s %s: no stale worktree dirs\n", ui.SymbolPending, o.Host)
+	case "skipped":
+		fmt.Printf("%s %s: skipped (local host, runs in place; nothing synced to prune)\n", ui.SymbolSkipped, o.Host)
 	default:
 		fmt.Printf("%s %s: %s\n", ui.SymbolFail, o.Host, o.Error)
 	}

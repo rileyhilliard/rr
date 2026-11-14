@@ -39,7 +39,7 @@ func (c *RequirementsCheck) Run() CheckResult {
 
 	// Check each requirement
 	cache := require.NewCache() // Use fresh cache for doctor
-	results, err := require.CheckAll(c.Conn.Client, c.Requirements, cache, c.HostName)
+	results, err := require.CheckAll(c.Conn.Client, &c.Conn.Host, c.Requirements, cache, c.HostName)
 	if err != nil {
 		return CheckResult{
 			Name:       c.Name(),
@@ -93,7 +93,7 @@ func (c *RequirementsCheck) Fix() error {
 
 	// Check requirements and install missing ones that have installers
 	cache := require.NewCache()
-	results, err := require.CheckAll(c.Conn.Client, c.Requirements, cache, c.HostName)
+	results, err := require.CheckAll(c.Conn.Client, &c.Conn.Host, c.Requirements, cache, c.HostName)
 	if err != nil {
 		return err
 	}

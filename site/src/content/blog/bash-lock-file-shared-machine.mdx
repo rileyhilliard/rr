@@ -1,0 +1,141 @@
+---
+title: "Bash lock files without race conditions"
+headline: "How to prevent a bash lock file race condition on a shared machine"
+description: "Prevent bash lock file races with flock or atomic creation, keep the lock on the shared host, and handle cleanup and stale holders explicitly."
+published: 2026-11-05
+keyword: "bash lock file race condition on a shared machine"
+feature: locking
+relatedDocs: [configuration, troubleshooting]
+---
+
+import FlowDemo from "../../components/blog/FlowDemo.astro";
+
+To prevent a bash lock file race condition on a shared machine, acquire the lock in one operation. On Linux, use `flock`; for a shell-only approach, use atomic creation with cleanup.
+
+Put the lock on the machine doing the work, and make every competing job use the same path. Checking whether a file exists and then creating it leaves a gap where two jobs can both proceed. A directory lock also needs a plan for crashes, because cleanup traps cannot always run.
+
+## Why does a simple bash lock file race?
+
+A file-existence check doesn't reserve anything. This script can start two test runs even though both callers check the lock:
+
+```bash
+# Unsafe: do not use this as a lock.
+lock=/tmp/test-machine.lock
+if [ ! -f "$lock" ]; then
+  touch "$lock"
+  make test
+  rm -f "$lock"
+fi
+```
+
+Job A checks and sees no file. Before it reaches `touch`, job B checks and sees the same thing. Both create or update the file, and both run the command. The shorter `[ -f "$lock" ] || touch "$lock"` has the same race. Putting the commands on one line doesn't combine them into an atomic operation.
+
+Acquisition must both test availability and claim ownership in one step. All callers must agree on that step, too: a script that only tests for a file won't cooperate with another script using `flock` on it.
+
+## How do you use flock to lock a script?
+
+On Linux, util-linux's `flock` can wrap a command directly:
+
+```bash
+flock -n /tmp/test-machine.lock make test
+```
+
+The exclusive lock is the default. `-n` makes acquisition fail immediately if another caller holds it; the test command doesn't start. To wait with a deadline, replace `-n` with `-w` and a timeout in seconds:
+
+```bash
+flock -w 60 /tmp/test-machine.lock make test
+```
+
+Here, 60 seconds is an example waiting limit, not a limit on the test run. Without either option, `flock` waits until acquisition succeeds. The [flock command manual](https://man7.org/linux/man-pages/man1/flock.1.html) describes these forms and their exit statuses.
+
+For several commands inside a Bash script, open the file on a descriptor and lock that descriptor:
+
+```bash title="run-tests.sh"
+#!/usr/bin/env bash
+exec 9>/tmp/test-machine.lock || exit 1
+flock -n 9 || exit 1
+
+make test || exit "$?"
+make integration
+```
+
+Descriptor 9 stays open in the script. Keep the protected work in the foreground; background children can inherit the descriptor and extend the lock's lifetime.
+
+Leave the lock file in place. The kernel lock is released when all descriptors referring to that lock close, including inherited descriptors. An empty file remaining afterward is normal. Deleting and recreating the path while someone holds it can let later callers lock a different file. These lifetime rules come from the [flock system-call manual](https://man7.org/linux/man-pages/man2/flock.2.html).
+
+## How do you use mkdir as an atomic lock?
+
+Creating a directory is the usual shell lock file alternative when `flock` isn't available. The underlying [mkdir operation fails if the path already exists](https://man7.org/linux/man-pages/man2/mkdir.2.html). Use plain `mkdir` for acquisition: `mkdir -p` deliberately accepts an existing directory, so its success cannot establish ownership.
+
+This example assumes cooperating jobs using the same account on a host's local filesystem. It also claims a PID file exclusively as a second check before starting work:
+
+```bash title="run-tests.sh"
+#!/usr/bin/env bash
+lockdir=/tmp/test-machine.lock.d
+
+if ! mkdir "$lockdir"; then
+  printf '%s\n' 'Lock unavailable; tests did not start.' >&2
+  exit 1
+fi
+
+if ! (set -C; printf '%s\n' "$$" > "$lockdir/pid"); then
+  printf '%s\n' 'Could not claim the lock; tests did not start.' >&2
+  exit 1
+fi
+
+cleanup() {
+  rm -f "$lockdir/pid"
+  rmdir "$lockdir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+make test
+```
+
+`set -C` enables noclobber: Bash refuses to overwrite an existing regular file with `>`. The subshell confines that setting to the claim. Exclusive file creation can also be used on its own as an acquisition primitive; it still needs ownership-aware cleanup. The [Bash manual](https://man7.org/linux/man-pages/man1/bash.1.html) documents noclobber and `trap`.
+
+The extra claim protects against a `mkdir` command implementation incorrectly reporting success to racing callers, a case rr explicitly handles. If the claim fails, the script leaves the directory alone because another caller may own it. A permission error can also make acquisition fail; the error message doesn't prove another job is running.
+
+## How do you handle stale locks?
+
+An `EXIT` trap handles ordinary script exits, but `SIGKILL` and power loss can leave a directory lock behind. A reboot doesn't guarantee cleanup for every lock location. The example above deliberately has no automatic takeover: confirm the old job has stopped before removing its PID file and directory.
+
+Cleanup must belong to the holder. Register it only after acquisition succeeds, or a losing caller could delete the winner's lock. The example also assumes nobody deletes and replaces the directory while the holder runs. Adding automatic takeover requires stronger ownership checks so an old holder's delayed cleanup cannot remove its replacement.
+
+Holder information makes recovery easier. Record the command and the originating hostname alongside the PID so you know where to investigate. A PID by itself is ambiguous across machines, and operating systems reuse PIDs. Checking whether that number exists on your laptop says nothing about a process started by someone else's laptop.
+
+A heartbeat helps distinguish a long-running job from an abandoned lock. The holder periodically updates a timestamp; waiters consider takeover only after those updates stop. A missed heartbeat can also mean a stalled connection while the job continues, so a timeout is a recovery policy, not proof that work stopped. For deployment scripts, that uncertainty needs particular care.
+
+## How do you lock a machine that several laptops share?
+
+Acquire the lock over SSH on the shared host. A local lock around `ssh` coordinates callers on your laptop only. Another laptop has its own `/tmp` and can start work independently.
+
+For a Linux test host reachable as `testbox`, with the project already present at `~/project`, run:
+
+```bash
+ssh testbox 'cd "$HOME/project" && flock -n /tmp/test-machine.lock make test'
+```
+
+Every laptop using that remote account and path competes for the same host-local lock. The command doesn't reserve other hosts or coordinate an entire pool. On a host without the util-linux `flock` command, use a remote wrapper with a creation-based lock. Check the command's availability on the host executing it.
+
+The lock should cover synchronization as well as execution if jobs share a checkout. Otherwise, one laptop can overwrite source files while another is testing them. With separate remote checkouts, use the same host-wide lock path when your goal is to serialize all test runs on that machine.
+
+These examples assume a local filesystem on the execution host. Network-mounted lock files have filesystem-specific behavior; the flock manuals describe limitations for NFS and CIFS. Separate login accounts also need an agreed lock location and permissions. Giving each account a private lock path won't coordinate their jobs.
+
+## How does rr lock a test machine?
+
+rr is one option when several scripts or coding agents need to sync working trees and reserve test hosts (for the agent case, see [running multiple Claude Code agents in parallel](/blog/run-multiple-claude-code-agents/)). It's a single Go binary that uses rsync over SSH, locks a free host, runs your command there, and streams output back. The remote needs SSH, rsync and your toolchain; there's no remote daemon to install.
+
+Each independent rr process competes for host locks. With several configured hosts, a run can take the next unlocked one. The diagram follows those rules and shows how separate processes wait when hosts are occupied.
+
+<FlowDemo caption="An illustrative simulation of independent rr processes competing for host locks. It follows rr's lock rules; it is not a recorded run." />
+
+rr takes the lock with `mkdir`, creating the directory `/tmp/rr-locks/rr.lock` by default, then exclusively creates `info.json` with noclobber before treating the lock as held. Its implementation includes this second claim because some mkdir implementations can report success to two racing callers. The metadata records the user and originating hostname, plus the start time, PID and command. A machine token helps identify holders on the same originating machine; local jobs also record their process group.
+
+While holding the lock, rr touches `info.json` every 30 seconds. The default stale threshold is 90 seconds since its last modification; takeover warns with the holder's identity. A dead rr process on the calling machine can be reclaimed immediately once its recorded job process group is also gone. rr re-reads the holder information before that deletion and aborts if it changed. A recorded local job that is still alive keeps its lock even if the heartbeat is old.
+
+Waiters poll every two seconds without a guaranteed order. For one host, `lock.timeout` defaults to five minutes. Ctrl+C while waiting exits cleanly with code 130 before anything runs. Release is idempotent, so a second release can't delete another run's lock. The [configuration reference](/docs/configuration/) explains the lock settings; the [troubleshooting guide](/docs/troubleshooting/) covers stuck runs. After checking the holder, `rr unlock [host]` or `rr unlock --all` clears locks manually.
+
+The lock covers one host and lock directory across projects. Keep the same `lock.dir` in projects sharing a machine; a separate directory creates a separate lock. Commands launched outside this protocol can still collide with rr runs. For installation, use the [rr install instructions](/#install).

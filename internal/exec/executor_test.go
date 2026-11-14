@@ -23,6 +23,18 @@ func TestIsCommandNotFound(t *testing.T) {
 			wantFound: true,
 		},
 		{
+			name:      "zsh sourcing a missing file is not a missing command",
+			stderr:    "zsh:.:1: no such file or directory: ./scripts/env.sh",
+			exitCode:  127,
+			wantFound: false,
+		},
+		{
+			name:      "bash sourcing a missing file is not a missing command",
+			stderr:    "bash: line 1: ./scripts/env.sh: No such file or directory",
+			exitCode:  127,
+			wantFound: false,
+		},
+		{
 			name:      "zsh command not found with line number",
 			stderr:    "zsh:1: command not found: python",
 			exitCode:  127,

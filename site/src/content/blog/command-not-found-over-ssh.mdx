@@ -1,0 +1,121 @@
+---
+title: "Command not found over SSH: fixing PATH"
+description: "Fix command not found over SSH by comparing remote PATH values, using a login shell, or loading tool initialization before your command runs."
+published: 2026-11-05
+keyword: "command not found over SSH"
+feature: setup
+relatedDocs: [troubleshooting, configuration]
+---
+
+import CommandDemo from "../../components/blog/CommandDemo.astro";
+
+Command not found over SSH usually means the remote command got a different `PATH` from your interactive session. Try `ssh host 'bash -lc "node --version"'` to load Bash's login profile first.
+
+An ordinary `ssh host 'node --version'` runs through a non-interactive, non-login shell. It can skip the file that adds your tool to `PATH`. Compare the environments on the same remote account, then use a login shell or load the tool's initialization explicitly. If Node exists only on your laptop, install it on the remote machine first.
+
+```bash
+ssh host 'echo "$PATH"; command -v node'
+ssh host 'bash -lc "echo \$PATH; command -v node"'
+```
+
+Replace `host` with your SSH destination and `node` with the failing tool. These examples assume a Bash- or Zsh-compatible remote shell; use the login-shell command for the shell you actually configured.
+
+## Why is a command not found over SSH when it works locally?
+
+The useful comparison is between two sessions on the remote machine. A successful command in your laptop's terminal only proves that the laptop has it. Log in with `ssh host`, run `command -v node`, and check `node --version` there. If both work, the remote installation exists and shell initialization becomes the next place to look.
+
+OpenSSH [executes a supplied command through the account's shell with `-c`](https://man.openbsd.org/sshd.8). That shell normally has no interactive prompt and is not a login shell. The account's configured shell still runs, but its startup mode differs from the session you get by logging in without a command.
+
+Login and interactive are separate properties. A login shell reads login startup files. An interactive shell reads settings intended for a person at a prompt. Adding `-l` to Bash or Zsh requests login behavior; it does not also request an interactive shell.
+
+Homebrew's `shellenv` setup often lives in a login profile on macOS. nvm initialization may live in an interactive shell's rc file. If that initialization never runs, the directory containing `node` never reaches `PATH`. The same diagnosis applies to a missing `go` or `cargo`: find where the remote session adds its executable directory, then check whether the failing shell reads that file.
+
+## How do I check which PATH the remote shell gets?
+
+Print the failing session's `PATH` before changing any dotfiles. The first command above prints it and asks the shell to resolve `node`. The second starts a Bash login shell and repeats the lookup. If only the second resolves Node, loading the login profile changed the environment enough to find it.
+
+Compare those results with `echo "$PATH"` and `command -v node` after an ordinary `ssh host` login. A directory present only in the working session points to the missing setup. A different resolved executable can also explain why a command runs but reports an unexpected version.
+
+The quoting keeps the comparison on the remote machine. Outer single quotes prevent your local shell from expanding `$PATH`. In the nested Bash example, the backslash keeps the outer remote shell from expanding it before the inner login shell starts. Without that backslash, you can print the old environment while thinking you measured the new one.
+
+`command -v` checks how the shell resolves a name, which can include a function or alias. For a compiler or runtime, you usually want the executable path. If your interactive lookup reports an alias, find the underlying program and test that directly. An alias you use at a prompt is a poor dependency for an unattended command.
+
+## How do I use a login shell for remote commands?
+
+Use the shell whose login profile contains your PATH setup. For Bash, the command is:
+
+```bash
+ssh host 'bash -lc "node --version"'
+```
+
+For Zsh, use:
+
+```bash
+ssh host 'zsh -lc "node --version"'
+```
+
+The `-l` requests login startup files, and `-c` supplies the command to execute. Bash reads `/etc/profile`, then the first readable personal file among `~/.bash_profile`, `~/.bash_login`, and `~/.profile`. A `~/.bash_profile` that exists but omits your PATH setup can therefore explain why an edit to `~/.profile` had no effect. The [Bash startup-file rules](https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html) describe the selection order.
+
+A login shell can still miss initialization placed only in an interactive rc file. For a typical nvm installation under `~/.nvm`, source its script in the same shell as the command:
+
+```bash
+ssh host 'bash -lc ". \"\$HOME/.nvm/nvm.sh\" && node --version"'
+```
+
+Adjust the script path if you installed nvm elsewhere. nvm is a sourced shell function, so searching for an `nvm` executable will not fix its initialization. Loading the script also requires an installed Node version to use; this command does not install Node.
+
+An absolute path is a smaller fix for a one-off command. Copy the executable path reported in the working remote session and invoke that path over SSH. It bypasses PATH lookup for that executable, though a script may still launch other tools by name. Paths inside version-manager directories can change when you replace a runtime, so explicit initialization is easier to maintain for repeated runs.
+
+## Where should I set PATH for non-interactive SSH commands?
+
+Keep shared environment setup small and separate from prompt configuration. A directory export can run without a terminal; completion plugins and prompt themes belong in interactive startup. Moving an entire interactive configuration into every shell startup can introduce output or assumptions that break unattended commands.
+
+Zsh normally reads `~/.zshenv` even for non-interactive commands. If you use `ZDOTDIR`, the file lives there instead. For a remote Zsh account that needs tools in `~/.local/bin`, add:
+
+```bash title="~/.zshenv"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Use the directory that actually contains your tool. This export does not install anything, and it helps only commands run through Zsh. The [Zsh startup-file reference](https://zsh.sourceforge.io/Doc/Release/Files.html) also documents how startup options can disable later files.
+
+Bash can read `~/.bashrc` when it detects an SSH connection, even for a non-interactive command. That behavior is not a general promise that every non-interactive Bash invocation reads `.bashrc`. Check the file for an early return when the shell is non-interactive: an export below that return never runs. Place a small shared export before the guard, or explicitly source a dedicated environment file in your remote command.
+
+For Homebrew, use its existing initialization rather than guessing which installation directory to add. The [Homebrew shellenv documentation](https://docs.brew.sh/Manpage#shellenv-shell-) explains how it emits environment exports. If `brew` itself is missing from PATH, use its installed absolute path to run `shellenv`; a bare `brew shellenv` cannot find the program that is already missing.
+
+Retest with the original `ssh host 'node --version'` after editing startup files. A successful interactive login leaves the failing execution mode untested.
+
+## How do I check tools on the remote before a run?
+
+For an occasional remote command, the SSH checks above are enough (the guide to [running a command on a remote machine over SSH](/blog/ssh-run-command-on-remote-machine/) covers quoting and exit codes). Repeated test runs benefit from keeping the shell setup beside the host configuration. rr is one option: it syncs your working tree with rsync over SSH, locks a free host, runs your command there, and streams the output back. The remote still needs SSH, rsync and your toolchain; rr has no remote daemon to provide them.
+
+rr explicitly sources `~/.bashrc` and `~/.zshrc` when present before remote commands. Its default shell invocation is non-login, so login-profile setup can still be missing, and an early return in an rc file still matters. Set a host's shell to load its login profile, or add targeted initialization with `setup_commands`:
+
+```yaml title="~/.rr/config.yaml"
+hosts:
+  mini:
+    ssh: [mac-mini.local]
+    dir: ${HOME}/projects/${PROJECT}
+    shell: "zsh -l -c"
+    setup_commands:
+      - source ~/.nvm/nvm.sh
+    require: [go, node]
+```
+
+Keep the nvm line only if that host uses it. rr runs host setup commands before changing into the project directory, then executes your command. Setup commands are joined to the remaining steps with `&&`, so a failed initialization stops the command. The [configuration reference](/docs/configuration/) covers these host fields.
+
+`require` declares tools to check before syncing. rr merges project, host and task requirements, then uses `command -v` through the host's configured shell and setup commands after connecting and taking the lock. A missing requirement stops the run. This catches availability problems; a requirement named `node` does not enforce a Node version.
+
+Run `rr doctor` to inspect the connection setup. This recording shows it checking SSH, rsync, config and each host before a run.
+
+<CommandDemo command="doctor" caption="rr doctor checking SSH, rsync, config and each host before a run." />
+
+For environment diagnostics, request the additional checks:
+
+```bash
+rr doctor --path
+rr doctor --requirements
+```
+
+`--path` compares login and interactive shell PATH values on each host and suggests `setup_commands`. `--requirements` checks declared tools. Doctor exits with status 1 for failed checks, including missing requirements, and status 0 when there are only warnings. A PATH warning therefore needs reading even when the exit status is successful.
+
+The [troubleshooting guide](/docs/troubleshooting/) covers missing remote commands. If you want to use rr for repeated runs, the [installation instructions](/#install) include Homebrew setup. After configuring the host, check the actual runtime with `rr run "node --version"` before sending a test suite.

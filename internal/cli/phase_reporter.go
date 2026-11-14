@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	rrerrors "github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/host"
 	"github.com/rileyhilliard/rr/internal/ui"
 )
@@ -92,7 +94,7 @@ func warnNoTests(details map[string]interface{}) {
 	// Deliberately says nothing about where relative paths resolve: that
 	// depends on the offset and on --cwd, and details.remote_cwd already
 	// reports the answer. Stale directory advice is worse than none.
-	msg := "No tests ran - the runner collected zero tests. " +
+	msg := "No tests ran - the runner collected none, or skipped every one. " +
 		"Check the path or filter you passed."
 	if tasks, ok := details["no_tests_tasks"].([]string); ok && len(tasks) > 0 {
 		msg = fmt.Sprintf("No tests ran in: %s. Check the path or filter passed to those subtasks.",
@@ -145,8 +147,13 @@ func (r *StructuredReporter) PhaseComplete(phase, host string, duration time.Dur
 }
 
 func (r *StructuredReporter) PhaseFailed(phase string, err error) {
+	// The error envelope that follows has the code and suggestion, so the
+	// event gets the one-line message, not the pretty-printed error.
 	errMsg := ""
-	if err != nil {
+	var rrErr *rrerrors.Error
+	if errors.As(err, &rrErr) {
+		errMsg = rrErr.Message
+	} else if err != nil {
 		errMsg = err.Error()
 	}
 	WritePhaseEvent(PhaseEvent{
