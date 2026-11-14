@@ -461,7 +461,13 @@ func buildSSHConfig(settings *sshSettings) (*ssh.ClientConfig, error) {
 			if len(settings.identityFiles) > 0 {
 				identities = settings.identityFiles
 			}
-			fromAgent = onlySigners(fromAgent, identityPublicKeys(identities))
+			allowed := identityPublicKeys(identities)
+			if len(allowed) == 0 {
+				warnOnce("idonly:"+settings.hostname, fmt.Sprintf(
+					"IdentitiesOnly is set for %s but none of its identity files could be read (%s); no agent keys will be offered",
+					settings.hostname, strings.Join(identities, ", ")))
+			}
+			fromAgent = onlySigners(fromAgent, allowed)
 		}
 
 		// Try the identity files from SSH config
@@ -660,6 +666,12 @@ func identityPublicKeys(paths []string) [][]byte {
 		if err != nil {
 			continue
 		}
+		// The IdentityFile may be the public key itself, with the private
+		// key only in the agent (1Password's setup).
+		if pub, _, _, _, err := ssh.ParseAuthorizedKey(data); err == nil {
+			keys = append(keys, pub.Marshal())
+			continue
+		}
 		signer, err := ssh.ParsePrivateKey(data)
 		if err == nil {
 			keys = append(keys, signer.PublicKey().Marshal())
@@ -701,7 +713,8 @@ func combinedSigners(agentSocket string, fromAgent func() ([]ssh.Signer, error),
 }
 
 // onlySigners narrows an agent's keys to those in allowed (marshaled public
-// keys), for IdentitiesOnly.
+// keys), for IdentitiesOnly. A certificate counts as its key, as in OpenSSH,
+// so an agent-held certificate is offered for its identity.
 func onlySigners(signers func() ([]ssh.Signer, error), allowed [][]byte) func() ([]ssh.Signer, error) {
 	return func() ([]ssh.Signer, error) {
 		all, err := signers()
@@ -710,7 +723,11 @@ func onlySigners(signers func() ([]ssh.Signer, error), allowed [][]byte) func() 
 		}
 		var kept []ssh.Signer
 		for _, s := range all {
-			if slices.ContainsFunc(allowed, func(k []byte) bool { return bytes.Equal(k, s.PublicKey().Marshal()) }) {
+			pub := s.PublicKey()
+			if cert, ok := pub.(*ssh.Certificate); ok {
+				pub = cert.Key
+			}
+			if slices.ContainsFunc(allowed, func(k []byte) bool { return bytes.Equal(k, pub.Marshal()) }) {
 				kept = append(kept, s)
 			}
 		}

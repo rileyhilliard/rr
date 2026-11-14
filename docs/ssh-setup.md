@@ -202,6 +202,7 @@ rr runs commands over its own SSH client, not `ssh` (sync uses rsync, which does
 | `ProxyJump` | Yes. rr runs `ssh -W` to the jump host, as OpenSSH does, so the jump host is resolved through your config and your `ssh`. Chains (`a,b`) and `ProxyJump none` work. A `ProxyCommand` on the same host wins, where OpenSSH takes whichever comes first |
 | `StrictHostKeyChecking` | Yes: `yes`, `ask`, `accept-new`, `no`/`off`. See [Host keys](#host-keys) |
 | `UserKnownHostsFile`, `GlobalKnownHostsFile` | Yes, including several paths, `~`, `${VAR}`, `none` and `/dev/null`. Paths rr can't use are skipped with a warning: ones with `%` tokens, ones naming an unset variable, and relative paths. See [Host keys](#host-keys) |
+| `HostKeyAlias` | No. rr checks and records host keys under the `HostName` (and `[host]:port` for a non-default port), so a key `ssh` stored under the alias isn't found |
 | `Match` blocks | No. Host entries after the first `Match` line aren't seen, so put the hosts rr uses above it |
 
 For authentication, rr tries the SSH agent first, then each `IdentityFile` from your config that the agent doesn't already hold, then `~/.ssh/id_ed25519`, `~/.ssh/id_rsa`, and `~/.ssh/id_ecdsa`. It can't prompt for a passphrase, so passphrase-protected keys have to be loaded in the agent.

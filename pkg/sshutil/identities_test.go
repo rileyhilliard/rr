@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	stderrors "errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 func TestResolveSSHSettings_IdentitiesOnly(t *testing.T) {
@@ -150,4 +152,80 @@ func TestOnlySigners_PassesAgentErrorsThrough(t *testing.T) {
 	agentErr := stderrors.New("agent: connection reset")
 	_, err := onlySigners(func() ([]ssh.Signer, error) { return nil, agentErr }, nil)()
 	assert.ErrorIs(t, err, agentErr)
+}
+
+// An IdentityFile can name the public key itself, as 1Password's setup does
+// (IdentityFile ~/.ssh/github.pub with the private key only in the agent).
+// OpenSSH reads the file as a public key before trying path.pub.
+func TestOnlySigners_PublicKeyIdentityFile(t *testing.T) {
+	dir := t.TempDir()
+	inAgent := writeIdentity(t, filepath.Join(dir, "github"), true)
+	other := writeIdentity(t, filepath.Join(dir, "other"), false)
+	agentKeys := func() ([]ssh.Signer, error) { return []ssh.Signer{other, inAgent}, nil }
+
+	kept, err := onlySigners(agentKeys, identityPublicKeys([]string{filepath.Join(dir, "github.pub")}))()
+
+	require.NoError(t, err)
+	require.Len(t, kept, 1)
+	assert.Equal(t, inAgent.PublicKey().Marshal(), kept[0].PublicKey().Marshal())
+}
+
+// A certificate the agent holds for an identity is offered for it, as
+// OpenSSH compares the certificate's key, not the certificate.
+func TestOnlySigners_KeepsAgentCertificates(t *testing.T) {
+	dir := t.TempDir()
+	identity := writeIdentity(t, filepath.Join(dir, "id"), true)
+	ca := writeIdentity(t, filepath.Join(dir, "ca"), false)
+	cert := &ssh.Certificate{
+		Key: identity.PublicKey(), CertType: ssh.UserCert, KeyId: "test",
+		ValidPrincipals: []string{"me"}, ValidBefore: ssh.CertTimeInfinity,
+	}
+	require.NoError(t, cert.SignCert(rand.Reader, ca))
+	certSigner, err := ssh.NewCertSigner(cert, identity)
+	require.NoError(t, err)
+	agentKeys := func() ([]ssh.Signer, error) { return []ssh.Signer{certSigner}, nil }
+
+	kept, err := onlySigners(agentKeys, identityPublicKeys([]string{filepath.Join(dir, "id")}))()
+
+	require.NoError(t, err)
+	require.Len(t, kept, 1)
+	assert.Equal(t, cert.Marshal(), kept[0].PublicKey().Marshal(), "the certificate itself is offered")
+}
+
+// With IdentitiesOnly and no identity file rr can read, no agent key is
+// offered; rr says so rather than failing auth with no hint why.
+func TestBuildSSHConfig_WarnsWhenIdentitiesOnlyMatchesNothing(t *testing.T) {
+	t.Setenv("RR_TEST_SSH_KEY", "")
+	dir, err := os.MkdirTemp("", "rr-agent") // short: unix socket paths are limited
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "agent.sock")
+	listener, err := net.Listen("unix", socket)
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
+	keyring := agent.NewKeyring()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	require.NoError(t, keyring.Add(agent.AddedKey{PrivateKey: priv}))
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _ = agent.ServeAgent(keyring, conn) }()
+		}
+	}()
+	t.Cleanup(CloseAgent)
+	warnings := captureWarnings(t)
+
+	_, _ = buildSSHConfig(&sshSettings{
+		hostname: "example.com", port: "22", user: "me",
+		identityAgent: socket, identitiesOnly: true,
+		identityFiles: []string{filepath.Join(dir, "id_%h")},
+	})
+
+	require.Len(t, warnings(), 1)
+	assert.Contains(t, warnings()[0], "IdentitiesOnly is set for example.com")
+	assert.Contains(t, warnings()[0], "id_%h")
 }
