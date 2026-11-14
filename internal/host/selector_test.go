@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/rileyhilliard/rr/internal/config"
 	"github.com/rileyhilliard/rr/internal/errors"
 	sshmock "github.com/rileyhilliard/rr/pkg/sshutil/testing"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // skipIfNoSSH skips the test if SSH tests are disabled.
@@ -25,6 +28,17 @@ func skipIfNoSSH(t *testing.T) {
 }
 
 // getTestSSHHost returns the SSH host for testing.
+// closedLocalAddr returns a 127.0.0.1 address with nothing listening, so a
+// dial to it is refused right away.
+func closedLocalAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+	return addr
+}
+
 func getTestSSHHost() string {
 	host := os.Getenv("RR_TEST_SSH_HOST")
 	if host == "" {
@@ -461,10 +475,13 @@ func TestSelector_Select_FallbackOnFirstAliasFail(t *testing.T) {
 	skipIfNoSSH(t)
 
 	host := getTestSSHHost()
+	// The first alias refuses at once, so its failure is reported before the
+	// second wins. A blackholed address (192.0.2.1) gets no EventFailed:
+	// aliases dial in parallel and the race ends when the grace window does.
+	refused := closedLocalAddr(t)
 	hosts := map[string]config.Host{
 		"test": {
-			// First alias is unreachable, second should work
-			SSH: []string{"192.0.2.1", host},
+			SSH: []string{refused, host},
 			Dir: "/tmp/test",
 		},
 	}
@@ -502,7 +519,7 @@ func TestSelector_Select_FallbackOnFirstAliasFail(t *testing.T) {
 	// Should have a failure event for the unreachable host
 	var sawFailure bool
 	for _, e := range events {
-		if e.Type == EventFailed && e.Alias == "192.0.2.1" {
+		if e.Type == EventFailed && e.Alias == refused {
 			sawFailure = true
 			break
 		}
@@ -1037,41 +1054,35 @@ func TestSelector_SelectByTag_Success(t *testing.T) {
 	}
 }
 
-func TestSelector_SelectByTag_MultipleHostsWithTag(t *testing.T) {
-	skipIfNoSSH(t)
-
-	host := getTestSSHHost()
+// --tag picks the first tagged host in priority order: the project's hosts:
+// order when set, alphabetical otherwise. It doesn't fall over to the next
+// tagged host; only a run without --host or --tag load-balances. Local hosts
+// skip the dial, so this needs no SSH server.
+func TestSelector_SelectByTag_FollowsHostOrder(t *testing.T) {
 	hosts := map[string]config.Host{
-		"host1": {
-			SSH:  []string{"192.0.2.1"}, // Unreachable
-			Tags: []string{"fast"},
-			Dir:  "/tmp/test",
-		},
-		"host2": {
-			SSH:  []string{host}, // Reachable
-			Tags: []string{"fast"},
-			Dir:  "/tmp/test",
-		},
+		"alpha":    {Local: true, Tags: []string{"fast"}},
+		"zeta":     {Local: true, Tags: []string{"fast"}},
+		"untagged": {Local: true},
 	}
-
-	selector := NewSelector(hosts)
-	selector.SetTimeout(2 * time.Second)
-	defer selector.Close()
-
-	conn, err := selector.SelectByTag("fast")
-	if err != nil {
-		t.Fatalf("SelectByTag(\"fast\") failed: %v", err)
+	tests := []struct {
+		name  string
+		order []string
+		want  string
+	}{
+		{"project order", []string{"untagged", "zeta", "alpha"}, "zeta"},
+		{"alphabetical without an order", nil, "alpha"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selector := NewSelector(hosts)
+			selector.SetHostOrder(tt.order)
+			defer selector.Close()
 
-	// Should connect to whichever host is reachable
-	if conn.Name != "host2" {
-		// If host1 was tried first and failed, that's OK
-		// The point is we got a connection
-		t.Logf("Connected to %s", conn.Name)
-	}
+			conn, err := selector.SelectByTag("fast")
 
-	if conn.Client == nil {
-		t.Error("conn.Client should not be nil")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, conn.Name)
+		})
 	}
 }
 

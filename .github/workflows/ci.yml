@@ -213,7 +213,7 @@ jobs:
           RR_TEST_SSH_USER: testuser
         run: |
           # -coverpkg=./... ensures coverage is tracked for ALL packages, not just the test packages
-          if ! go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... -json ./tests/integration/... ./pkg/sshutil/... ./internal/cli/... > integration-results.json 2>&1; then
+          if ! go test -race -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=./... -json ./tests/integration/... ./pkg/sshutil/... ./internal/cli/... ./internal/host/... > integration-results.json 2>&1; then
             echo "Integration tests failed. Showing failures:"
             echo ""
 

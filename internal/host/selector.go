@@ -407,6 +407,7 @@ func (s *Selector) SelectByTag(tag string) (*Connection, error) {
 	// Create a temporary selector with filtered hosts
 	filteredSelector := &Selector{
 		hosts:         matchingHosts,
+		hostOrder:     s.hostOrder,
 		timeout:       s.timeout,
 		eventHandler:  s.eventHandler,
 		localFallback: s.localFallback,
