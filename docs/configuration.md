@@ -690,6 +690,8 @@ tasks:
 
 **CLI flags for non-parallel tasks:** `--host`, `--tag`, `--local`, `--probe-timeout`, `--repeat N` (run the task N times in parallel across hosts, for flake detection), and `--tail N` (print the last N lines of the run log after the result). Tasks with `depends` also get `--skip-deps` and `--from`.
 
+**`--tty`** gives the command a terminal, so a `sudo` password prompt, an `apt` confirmation, or a REPL works the way it does over `ssh -t`. It's on `rr run`, `rr exec`, and non-parallel tasks, and it's for a person at an interactive shell: rr refuses it when stdin or stdout isn't a terminal, so agents and scripts should leave it off. Each command (each step, for a `steps:` task) gets the terminal only while it runs. Connecting, sync, and the summary happen as usual, and Ctrl+C reaches the remote command. A PTY merges stdout and stderr, so a `--tty` run skips the failure hints that read stderr. The run log still records the output, so `rr logs`, `--tail`, and test summaries keep working. rr refuses `--tty` with `--repeat`, on a parallel task, on a task with `depends` (unless `--skip-deps`), on a [local host](#local-host), and on Windows (use WSL). `--local` with no local host configured runs the command in your terminal directly, with no run log.
+
 ### Parallel task
 
 Run multiple subtasks simultaneously across your host pool:

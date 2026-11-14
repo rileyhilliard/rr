@@ -89,6 +89,7 @@ rr ships default sync excludes (`.git`, `.venv`, `node_modules`, caches, agent d
 - `--cwd <dir>` - (`run`/`exec`) Directory to run in, relative to the project root
 - `--tail N` - (`run`/`exec`/single-command tasks) Reprint the last N log lines after the result
 - `--skip-requirements` - (`run`/`exec` only) Skip requirement checks
+- `--tty` - Gives the command a terminal for a person typing at it (sudo prompts). Don't use it as an agent: without a terminal it fails with `CONFIG_INVALID`, and a command that would prompt needs the user to run it themselves
 - `--no-phases` - Suppress intermediate phase events; the final result event is still emitted
 - `--pretty` / `-p` - Human-readable output (spinners, colors). Default is structured JSON.
 

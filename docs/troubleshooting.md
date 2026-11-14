@@ -594,7 +594,7 @@ Host *
 
 **"Host key verification failed"**
 
-The remote host's key changed or you're connecting for the first time:
+The remote host's key changed or you're connecting for the first time. rr reads `StrictHostKeyChecking`, `UserKnownHostsFile` and `GlobalKnownHostsFile` for the host from `~/.ssh/config`, and the error names the files it checked. Run `ssh -v myserver` to see which files `ssh` uses and what it decides.
 
 ```bash
 # Accept the new host key (works with SSH config aliases)
@@ -603,6 +603,10 @@ ssh -o StrictHostKeyChecking=accept-new myserver exit
 # Or connect manually to verify and accept interactively
 ssh myserver
 ```
+
+With `StrictHostKeyChecking accept-new` set for the host, rr appends an unknown key to the host's first `UserKnownHostsFile` and connects; a changed key still fails. With `StrictHostKeyChecking no`, rr doesn't check the key and writes nothing. When the host has `UserKnownHostsFile /dev/null` (Lima VMs do), accepting the key with `ssh` records it nowhere, so set `StrictHostKeyChecking no` for that host instead.
+
+For a changed key, the error gives the `ssh-keygen -R ... -f <file>` command for the file holding the old key, with the host written `[host]:port` when the port isn't 22.
 
 Note: `ssh-keyscan` won't work with SSH config aliases since it doesn't read `~/.ssh/config`. Use the `ssh` command instead.
 

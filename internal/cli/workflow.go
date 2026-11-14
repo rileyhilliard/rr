@@ -22,6 +22,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/lock"
 	"github.com/rileyhilliard/rr/internal/require"
 	rrsync "github.com/rileyhilliard/rr/internal/sync"
+	"github.com/rileyhilliard/rr/internal/tty"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"golang.org/x/term"
@@ -40,6 +41,7 @@ type WorkflowOptions struct {
 	Local            bool          // Force local execution (skip remote hosts)
 	Command          string        // Command being run (stored in lock for monitoring)
 	TaskName         string        // Task name for task-specific requirements
+	TTY              bool          // --tty: reject a connection that can't give the command a terminal
 }
 
 // WorkflowContext holds state from workflow setup for use during execution.
@@ -124,11 +126,14 @@ func (w *WorkflowContext) setupSignalHandler() {
 
 		// Second signal force-quits immediately (users expect double Ctrl+C
 		// to kill). Local commands are killed first: exiting doesn't stop
-		// them, since each runs in its own session.
+		// them, since each runs in its own session. A --tty command's
+		// deferred terminal restore never runs past os.Exit, so restore
+		// here or the shell is left in raw mode.
 		if _, ok := <-w.signalChan; !ok {
 			return
 		}
 		host.KillLocalCommands()
+		tty.RestoreAll()
 		os.Exit(130)
 	}()
 }
@@ -781,13 +786,21 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 
 	if ctx.target.local {
 		connectLocalTarget(ctx)
+		// Check --tty before the lock: waiting out a busy local host only to
+		// refuse the run would waste the wait.
+		if err := checkTTYTarget(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 		if err := lockPhase(ctx, opts); err != nil {
 			ctx.Close()
 			return nil, err
 		}
-	} else if err := connectRemote(ctx, opts); err != nil {
-		ctx.Close()
-		return nil, err
+	} else {
+		if err := connectRemote(ctx, opts); err != nil {
+			ctx.Close()
+			return nil, err
+		}
 	}
 
 	// Phase 3: Check requirements (before sync)
@@ -803,6 +816,18 @@ func SetupWorkflow(opts WorkflowOptions) (*WorkflowContext, error) {
 	}
 
 	return ctx, nil
+}
+
+// checkTTYTarget runs checkTTYConnection on the picked connection when the
+// run asked for --tty. Callers run it before lockPhase: which connection a
+// run gets (a local host, a fallback) is only known after connecting, and a
+// busy local host would otherwise hold the run for lock.timeout only to
+// refuse it.
+func checkTTYTarget(ctx *WorkflowContext, opts WorkflowOptions) error {
+	if !opts.TTY {
+		return nil
+	}
+	return checkTTYConnection(ctx.Conn)
 }
 
 // connectRemote picks a remote host and takes its lock. With several hosts
@@ -822,8 +847,12 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 			return explainNoFallback(ctx, opts.TaskName, err)
 		}
 		// A fallback took no lock while picking; lock it now (a no-op for
-		// bare local execution).
+		// bare local execution). With a global local host the fallback
+		// runs on it, which --tty can't use.
 		if ctx.Conn.LocalReason != "" {
+			if err := checkTTYTarget(ctx, opts); err != nil {
+				return err
+			}
 			return lockPhase(ctx, opts)
 		}
 		recordLocalJob(ctx)
@@ -835,6 +864,9 @@ func connectRemote(ctx *WorkflowContext, opts WorkflowOptions) error {
 		return explainNoFallback(ctx, opts.TaskName, err)
 	}
 	if err := checkTaskHost(ctx, opts.TaskName); err != nil {
+		return err
+	}
+	if err := checkTTYTarget(ctx, opts); err != nil {
 		return err
 	}
 	// Phase 2: Acquire lock (before sync)

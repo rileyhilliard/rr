@@ -43,6 +43,7 @@ rr run --pull "coverage.xml" "pytest --cov --cov-report=xml"
 - `--pull <pattern>` - Pull files back after the command, even if it failed (repeatable)
 - `--pull-dest <dir>` - Local destination for `--pull`
 - `--tail <N>` - Reprint the last N lines of the run log after the result
+- `--tty` - Give the command a terminal, for a person at an interactive shell answering a prompt (sudo, apt). Agents shouldn't use it: rr rejects it with `CONFIG_INVALID` when stdin or stdout isn't a terminal. If a command needs a password prompt, ask the user to run it with `--tty` themselves. Not allowed with `--repeat` or on a `local: true` host
 
 ### `rr exec "cmd"`
 
@@ -87,7 +88,7 @@ rr parses flags before the task does, so `rr test -k login` fails with a hint to
 
 With `--pretty`, a failed test task prints a failure block (failing tests with `file:line` and message) after the status line.
 
-**Single-command and multi-step task flags:** `--host`, `--tag`, `--probe-timeout`, `--local`, `--repeat`, `--tail`, plus `--skip-deps` and `--from <task>` when the task has `depends`. Tasks don't take `--cwd`, `--pull`, or `--skip-requirements`; they always run from the project root.
+**Single-command and multi-step task flags:** `--host`, `--tag`, `--probe-timeout`, `--local`, `--repeat`, `--tail`, `--tty` (humans only, as for `rr run`; a task with `depends` needs `--skip-deps` with it), plus `--skip-deps` and `--from <task>` when the task has `depends`. Tasks don't take `--cwd`, `--pull`, or `--skip-requirements`; they always run from the project root.
 
 **Parallel task flags:** `--host`, `--tag`, `--local`, `--stream`, `--verbose`, `--quiet`, `--fail-fast`, `--max-parallel N`, `--no-logs`, `--dry-run`.
 

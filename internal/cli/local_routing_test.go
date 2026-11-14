@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -110,7 +109,7 @@ func TestRun_LocalFlagRoutesThroughLocalHost(t *testing.T) {
 
 			group, err := strconv.Atoi(readTrimmed(t, pgid))
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantOwnGroup, group != syscall.Getpgrp(),
+			assert.Equal(t, tt.wantOwnGroup, group != processGroup(),
 				"routed runs get their own session (no TTY); bare runs share rr's")
 		})
 	}

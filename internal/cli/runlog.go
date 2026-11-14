@@ -25,6 +25,18 @@ const maxTailReadBytes = 1 << 20 // 1MB
 // without erroring. The returned func closes the file (safe to call
 // always).
 func setupRunLog(wf *WorkflowContext, name string, sh *output.StreamHandler) (string, func()) {
+	path, f, closeLog := openRunLog(wf, name)
+	if f != nil {
+		sh.SetTee(f)
+	}
+	return path, closeLog
+}
+
+// openRunLog opens a per-run log file and records details.log_file, for a
+// caller that writes the raw output itself (--tty, where there's no
+// StreamHandler). Best-effort like setupRunLog: on failure the path is "",
+// the writer nil, and the close func a no-op.
+func openRunLog(wf *WorkflowContext, name string) (string, io.Writer, func()) {
 	logsCfg := wf.Resolved.Global.Logs
 	baseDir := logsCfg.Dir
 	if baseDir == "" {
@@ -33,16 +45,15 @@ func setupRunLog(wf *WorkflowContext, name string, sh *output.StreamHandler) (st
 
 	f, path, err := logs.OpenRunLog(baseDir, name)
 	if err != nil {
-		return "", func() {}
+		return "", nil, func() {}
 	}
 
-	sh.SetTee(f)
 	wf.AddResultDetail("log_file", path)
 
 	// Apply the same retention policy as parallel runs.
 	_ = logs.Cleanup(logsCfg)
 
-	return path, func() { _ = f.Close() }
+	return path, f, func() { _ = f.Close() }
 }
 
 // attachRunOutcome parses the run log (see formatters.ParseRunOutcome),
