@@ -5,11 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.30.0] - 2026-11-14
 
-### Security
+### Added
 
-- Release binaries are built with Go 1.26.11, which fixes GO-2026-6859 in `net/http`. Building from source now needs Go 1.26.11.
+- `--tty` on `rr run`, `rr exec` and single-host tasks runs the command on a remote terminal, the way `ssh -t` does, so `sudo` and other commands that prompt work. Run logs, `--tail` and test summaries still work. It's for people at a terminal: rr rejects it when stdin or stdout isn't one, with `--repeat`, on parallel tasks, on tasks with dependencies (unless `--skip-deps`), on `local: true` hosts and on Windows.
+- rr reads `StrictHostKeyChecking`, `UserKnownHostsFile` and `GlobalKnownHostsFile` from `~/.ssh/config`, so hosts set up for `ssh` (a Lima VM's generated config, say) connect in rr too. `accept-new` records unknown keys, `no` skips the check, and `/etc/ssh/ssh_known_hosts` is now read when it exists. Host key errors name the files checked and give the `ssh-keygen -R` command for the right file and port. `--no-strict-host-key-checking` still wins.
+- rr reads `IdentitiesOnly`: only the agent keys matching the host's `IdentityFile`s are offered, so an agent with many keys no longer uses up the server's `MaxAuthTries`. An `IdentityFile` can be the public key, with the private key in an agent such as 1Password, and agent-held certificates count for their key.
+
+### Fixed
+
+- A host's `IdentityFile` was never offered when the SSH agent was running but didn't hold that key. Agent keys and key files are now offered together, agent first.
+- When a host's only alias fails to connect, the error keeps that connection's own advice (an untrusted or changed host key, an encrypted key) instead of generic network advice.
+- Go test failures in the JSON result now include `file:line` and the failure message. Without `-v`, a second failing test no longer gets the first one's message, and parallel tests no longer take each other's locations.
+
+### Changed
+
+- Release binaries are built with Go 1.26.11, and building from source needs it. govulncheck flags GO-2026-6859 in `net/http` for 1.26.10; it's an HTTP server crash that rr, which only makes HTTP requests for `rr update`, can't hit.
 
 ## [0.29.4] - 2026-11-03
 
