@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `--tag` picked the alphabetically first host with the tag and ignored the order of the project's `hosts:` list. It now takes the first tagged host in that order, as a run without `--tag` does.
+
 ## [0.30.0] - 2026-11-14
 
 ### Added
