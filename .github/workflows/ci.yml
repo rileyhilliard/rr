@@ -129,11 +129,11 @@ jobs:
           path: ~/go/bin/govulncheck
           # go.mod in the key: a govulncheck built with an older Go can't
           # load a module whose go directive is newer.
-          key: govulncheck-${{ runner.os }}-v1.3.0-${{ hashFiles('go.mod') }}
+          key: govulncheck-${{ runner.os }}-v1.9.0-${{ hashFiles('go.mod') }}
 
       - name: Run govulncheck
         run: |
-          [ -f ~/go/bin/govulncheck ] || go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+          [ -f ~/go/bin/govulncheck ] || go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           govulncheck ./...
 
   integration:

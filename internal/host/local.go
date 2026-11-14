@@ -193,7 +193,7 @@ func (c *LocalClient) ExecStreamContext(ctx context.Context, cmd string, stdout,
 			return LocalExitCode(waitErr), ctx.Err()
 		case <-time.After(localInterruptGrace):
 			killProcessGroup(command)
-			<-done
+			<-done //nolint:errcheck // killed: the exit code is 130 whatever Wait says
 			return 130, ctx.Err()
 		}
 	case waitErr := <-done:

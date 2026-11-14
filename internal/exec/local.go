@@ -123,7 +123,7 @@ func RunLocalCommand(ctx context.Context, command *exec.Cmd) (exitCode int, err 
 			// Let Wait finish copying output, so the caller doesn't read it
 			// mid-write, unless something the command started holds it open.
 			select {
-			case <-done:
+			case <-done: //nolint:errcheck // killed: the exit code is 130 whatever Wait says
 			case <-time.After(localKillWait):
 			}
 			return 130, ctx.Err() // as a local host reports a killed command
