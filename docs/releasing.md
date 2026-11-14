@@ -23,7 +23,7 @@ git push origin v1.2.3
 
 The rest happens automatically. CHANGELOG.md is maintained by hand in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format; add the version's entry through a PR, since `main` only accepts PR merges. Breaking changes also go in [MIGRATION.md](MIGRATION.md).
 
-The `/merge-release` Claude Code command (`.claude/commands/merge-release.md`) scripts the PR merge, tag, and changelog PR.
+The `/merge-release` Claude Code skill (`.claude/skills/merge-release/SKILL.md`) adds the changelog entry to the feature PR, merges it, and tags main.
 
 To check the GoReleaser config locally without publishing:
 

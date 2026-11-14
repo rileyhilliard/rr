@@ -49,6 +49,15 @@ make test-local         # Force local execution (skip rr)
 make lint-local         # Force local lint (skip rr)
 ```
 
+## Agent Environment Notes
+
+- Never run bare `golangci-lint`. The one on PATH may be older than the pin in `.golangci-version` and built with an older Go, so it fails on this module. `rr lint` and `make lint-local` run the pinned binary.
+- The local shell is zsh. An unmatched glob is an error (`no matches found: --include=*.go`), so quote globs. The runners' login shell can be zsh too: send remote scripts with `ssh host bash -s < script`.
+- macOS `sed` has no `\b`. Use `perl -pi -e` for word-boundary edits.
+- It's `rr version`. `rr --version` doesn't exist.
+- Integration tests need Docker running plus `./scripts/ci-ssh-server.sh start`. Docker Desktop may be stopped.
+- CI and the automatic CodeRabbit review only run for PRs based on `main`. A stacked PR gets neither until it's retargeted, and retargeting doesn't start CI; a push does. `./scripts/pr-wait.sh` fails fast on such a PR.
+
 ## Git Hooks (Lefthook)
 
 Pre-commit hooks auto-run on commit: `gofmt`, `goimports`, `go vet`, `golangci-lint --fix`. Commit messages must follow Conventional Commits format (`feat:`, `fix:`, `docs:`, etc.).

@@ -254,6 +254,27 @@ jobs:
           fi
           echo "All integration tests passed"
 
+      - name: Fail on skipped tests
+        run: |
+          # Every test in this job can run here: the SSH container is up and
+          # rsync is installed. A skip means a dependency went missing, and
+          # the job would stay green without it. Package-level skips (no test
+          # files) have no Test field and don't count. fromjson? drops the
+          # non-JSON lines that 2>&1 mixes in.
+          SKIPS=$(jq -Rn '[inputs | fromjson? | select(.Action == "skip" and .Test != null)] | length' integration-results.json)
+          if [ "$SKIPS" -gt 0 ]; then
+            echo "::error::$SKIPS integration test(s) skipped. Every test in this job should run."
+            jq -Rrn '
+              [inputs | fromjson? | select(.Test != null)] as $ev
+              | [$ev[] | select(.Action == "skip") | {Package, Test}] | unique[] as $s
+              | "--- SKIP: \($s.Test) (\($s.Package))",
+                ($ev[] | select(.Package == $s.Package and .Test == $s.Test and .Action == "output")
+                  | .Output | select(test("^(=== |--- SKIP)") | not) | rtrimstr("\n"))
+            ' integration-results.json
+            exit 1
+          fi
+          echo "No integration tests skipped"
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
         with:

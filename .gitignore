@@ -50,6 +50,10 @@ coverage.html
 plans/
 reports/
 
+# Claude Code local and runtime files
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # Landing site (site/). rr's sync reads only this root .gitignore, so the site's
 # dependencies and build output are listed here as well as in site/.gitignore.
 site/node_modules/
