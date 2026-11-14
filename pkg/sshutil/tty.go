@@ -109,7 +109,7 @@ func (c *Client) ExecTTYContext(ctx context.Context, cmd string, opts TTYOptions
 	case <-ctx.Done():
 		session.Close()
 		select {
-		case <-done:
+		case <-done: //nolint:errcheck // cancelled: the exit code is 130 whatever Wait says
 		case <-time.After(ttyCloseWait):
 		}
 		return 130, ctx.Err()

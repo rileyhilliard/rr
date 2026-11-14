@@ -13,7 +13,7 @@ make build    # Creates ./rr binary
 
 ## Requirements
 
-- Go 1.26.10+ (the `go` directive in `go.mod`)
+- Go 1.26.11+ (the `go` directive in `go.mod`)
 - lefthook (git hooks)
 - golangci-lint at the version in `.golangci-version` (`make setup` or `make install-linter` installs it into your Go bin dir, and `make lint` runs that binary)
 - rsync (for integration tests)
