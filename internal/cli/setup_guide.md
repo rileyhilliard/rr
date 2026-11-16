@@ -132,7 +132,7 @@ Install the rest over SSH, after checking with the user:
 ```bash
 ssh <alias> "curl -LsSf https://astral.sh/uv/install.sh | sh"      # uv
 ssh <alias> "curl -fsSL https://bun.sh/install | bash"             # bun
-ssh <alias> "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash"  # node via nvm
+ssh <alias> "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash && . ~/.nvm/nvm.sh && nvm install --lts"  # node via nvm (use the version the project pins, if any)
 ```
 
 Then make the tools visible to rr's non-interactive shell through the host's

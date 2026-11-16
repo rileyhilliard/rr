@@ -70,11 +70,16 @@ func projectSetup() (*ProjectSetupOutput, error) {
 		return nil, err
 	}
 
+	stack, err := setup.DetectStack(cwd)
+	if err != nil {
+		return nil, err
+	}
+
 	out := &ProjectSetupOutput{
 		GlobalConfig: globalPath,
 		Hosts:        []ProjectSetupHost{},
 		Created:      []string{},
-		Stack:        setup.DetectStack(cwd),
+		Stack:        stack,
 		Guide:        setupGuide,
 	}
 	for name := range globalCfg.Hosts {
@@ -82,9 +87,10 @@ func projectSetup() (*ProjectSetupOutput, error) {
 	}
 	sort.Slice(out.Hosts, func(i, j int) bool { return out.Hosts[i].Name < out.Hosts[j].Name })
 
-	// Find reports a .rr.yaml above a nested worktree as an error that says
-	// how to fix it; writing a new one here would hide that.
-	existing, err := config.Find("")
+	// Find reports a .rr.yaml above a nested worktree, or a --config path
+	// that doesn't exist, as an error that says how to fix it; writing a new
+	// one here would hide that.
+	existing, err := config.Find(cfgFile)
 	if err != nil {
 		return nil, err
 	}

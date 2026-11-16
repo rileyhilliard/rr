@@ -115,7 +115,7 @@ run_test_contains() {
     fi
 
     # Use grep -F for fixed string matching and -- to prevent pattern as option
-    if echo "$output" | grep -qF -- "$expected"; then
+    if grep -qF -- "$expected" <<< "$output"; then
         log_pass "$name"
         return 0
     else

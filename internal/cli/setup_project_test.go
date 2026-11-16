@@ -97,3 +97,18 @@ func TestProjectSetup_NestedWorktreeReportsParentConfig(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(worktree, config.ConfigFileName))
 	assert.True(t, os.IsNotExist(statErr))
 }
+
+// An explicit --config that doesn't exist is an error, not a reason to write
+// a fresh .rr.yaml in the current directory.
+func TestProjectSetup_MissingExplicitConfig(t *testing.T) {
+	project := setupProjectEnv(t, "", map[string]string{"go.mod": "module x\n"})
+	prev := cfgFile
+	cfgFile = filepath.Join(project, "nope.yaml")
+	t.Cleanup(func() { cfgFile = prev })
+
+	_, err := projectSetup()
+	require.Error(t, err)
+	assert.True(t, errors.IsCode(err, errors.ErrConfigNotFound), err)
+	_, statErr := os.Stat(filepath.Join(project, config.ConfigFileName))
+	assert.True(t, os.IsNotExist(statErr))
+}

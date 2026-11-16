@@ -63,6 +63,16 @@ func TestDetectStack(t *testing.T) {
 			tasks:     map[string]string{},
 		},
 		{
+			name: "multi-target makefile rule picks make test over go test",
+			files: map[string]string{
+				"go.mod":   "module x\n",
+				"Makefile": "GOFLAGS := -race\ntest lint: prepare\n\tgo test ./...\nprepare:\n\techo\n",
+			},
+			languages: []string{"go", "make"},
+			require:   []string{"go", "make"},
+			tasks:     map[string]string{"test": "make test", "build": "go build ./...", "lint": "make lint"},
+		},
+		{
 			name: "makefile targets override language defaults",
 			files: map[string]string{
 				"go.mod":   "module x\n",
@@ -81,7 +91,8 @@ func TestDetectStack(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
 			}
 
-			s := DetectStack(dir)
+			s, err := DetectStack(dir)
+			require.NoError(t, err)
 			assert.Equal(t, tt.languages, s.Languages)
 			assert.Equal(t, tt.require, s.Require)
 			assert.Equal(t, len(tt.files) == 0, s.Empty())
@@ -97,4 +108,23 @@ func TestDetectStack(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDetectStack_Errors(t *testing.T) {
+	t.Run("malformed package.json", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte("{not json"), 0o644))
+		_, err := DetectStack(dir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "package.json")
+	})
+
+	t.Run("unreadable marker file", func(t *testing.T) {
+		dir := t.TempDir()
+		// A directory named go.mod exists but can't be read as a file.
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "go.mod"), 0o755))
+		_, err := DetectStack(dir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "go.mod")
+	})
 }
