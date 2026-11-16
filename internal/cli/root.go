@@ -60,7 +60,7 @@ Common workflows:
 
 Get started:
   rr init                   Create .rr.yaml configuration
-  rr setup                  Configure SSH keys and test connection
+  rr setup [host]           Set up this project (or SSH keys for a host)
   rr doctor                 Diagnose connection issues`,
 	SilenceUsage:  true,
 	SilenceErrors: true,

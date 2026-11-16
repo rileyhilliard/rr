@@ -31,18 +31,13 @@ Once installed, Claude understands:
 
 ### Guided Setup
 
-Run from your project root to set up rr:
+Ask Claude to set up rr for your project. It runs `rr setup` from the project root, which:
 
-```
-/rr:setup
-```
+1. Detects the stack (`go.mod`, `package.json`, `pyproject.toml`, `Cargo.toml`, `Makefile`) and writes a `.rr.yaml` with matching `require:` and `tasks:` when the project has none
+2. Reports the configured hosts and the remaining steps in order: adding hosts (remote machines, or this machine as a local host), checking SSH, testing execution, checking the tools each host needs
+3. Prints a guide for each step and its common failures
 
-This walks through:
-1. Creating/verifying global config with hosts (remote machines, or this machine as a local host)
-2. Creating project config with appropriate sync exclusions and tasks
-3. Verifying SSH connectivity
-4. Testing remote execution
-5. Checking dependencies on the remote host
+The guide ships in the rr binary, so Claude only reads it when it runs `rr setup`. You can run `rr setup --pretty` yourself for the same report.
 
 ### General Help
 
@@ -63,16 +58,13 @@ Add a new host to my rr config
 ├── marketplace.json
 └── plugin.json
 plugins/rr/
-├── commands/
-│   └── setup.md        # /rr:setup - guided setup workflow
 └── skills/
     └── rr/
         ├── SKILL.md    # rr knowledge - auto-invoked when relevant
         └── reference/  # config, commands, tasks, requirements, JSON output, troubleshooting
 ```
 
-- **Commands** (`/rr:setup`): User-invoked actions
-- **Skills** (`rr`): Context Claude uses automatically when working with rr
+- **Skills** (`rr`): Context Claude uses automatically when working with rr. Setup guidance lives in `rr setup`, not the plugin.
 
 ## Alternative Installation
 

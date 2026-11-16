@@ -131,7 +131,7 @@ If you use [Claude Code](https://claude.ai/code), the `rr` plugin teaches Claude
 /plugin install rr@rr
 ```
 
-Then run `/rr:setup` from your project root. It writes the configs, checks SSH connectivity, runs a test command remotely, and makes sure the tools your project needs exist on each host. See [docs/claude-code.md](docs/claude-code.md) for details.
+Then ask Claude to set up rr for your project. It runs `rr setup`, which writes a `.rr.yaml` for your stack and hands Claude the remaining steps: adding hosts, checking SSH, running a test command remotely, and making sure the tools your project needs exist on each host. See [docs/claude-code.md](docs/claude-code.md) for details.
 
 ## Quick start
 
@@ -415,7 +415,7 @@ The [troubleshooting guide](docs/troubleshooting.md) covers more.
 | ------------------------------------------ | ----------------------------------- |
 | [SSH Setup](docs/ssh-setup.md)             | Get passwordless SSH working        |
 | [Configuration](docs/configuration.md)     | All config options                  |
-| [Claude Code](docs/claude-code.md)         | The rr plugin and `/rr:setup`       |
+| [Claude Code](docs/claude-code.md)         | The rr plugin                       |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes             |
 | [Architecture](docs/ARCHITECTURE.md)       | How rr works under the hood         |
 | [Migration](docs/MIGRATION.md)             | Upgrading from older versions       |

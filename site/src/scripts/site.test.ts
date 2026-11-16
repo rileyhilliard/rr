@@ -81,7 +81,7 @@ describe("copy lines (CopyLine.astro)", () => {
     const user = userEvent.setup();
     await load(
       copyLine("brew install rr", 'data-track="install_copied" data-track-method="Homebrew"') +
-        copyLine("/rr:setup", 'data-track="plugin_copied"') +
+        copyLine("/plugin install rr@rr", 'data-track="plugin_copied"') +
         copyLine("rr doctor", 'data-track="not_an_event"'),
     );
     const buttons = [...document.querySelectorAll("button")];

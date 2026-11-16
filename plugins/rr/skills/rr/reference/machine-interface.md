@@ -192,8 +192,14 @@ rr init --non-interactive --host dev-box
 
 3. Based on error.code:
 
-   CONFIG_NOT_FOUND:
-     -> Run: rr init --non-interactive --host <host>
+   CONFIG_NOT_FOUND naming a .rr.yaml above this checkout:
+     -> This is a nested worktree without its own .rr.yaml
+     -> Copy or commit .rr.yaml into it (the suggestion has the cp command)
+     -> rr setup returns the same error here and writes nothing
+
+   CONFIG_NOT_FOUND (any other):
+     -> Run: rr setup (writes .rr.yaml for the detected stack and lists what's left)
+     -> Or: rr init --non-interactive --host <host>
 
    SSH_TIMEOUT:
      -> Check network: ping <hostname>
@@ -205,10 +211,6 @@ rr init --non-interactive --host dev-box
 
    SSH_HOST_KEY:
      -> Run: ssh -o StrictHostKeyChecking=accept-new <hostname> exit
-
-   CONFIG_NOT_FOUND naming a .rr.yaml above this checkout:
-     -> This is a nested worktree without its own .rr.yaml
-     -> Copy or commit .rr.yaml into it (the suggestion has the cp command)
 
    LOCK_HELD:
      -> Message names the holder; wait if it's a live run

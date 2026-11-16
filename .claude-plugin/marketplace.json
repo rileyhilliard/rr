@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Claude Code plugin for the rr CLI - sync code and run commands on remote machines",
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "plugins": [
     {
       "name": "rr",
       "source": "./plugins/rr/",
       "description": "Teaches Claude to use the rr CLI for syncing code and running commands on remote machines",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "author": {
         "name": "Riley Hilliard",
         "url": "https://github.com/rileyhilliard"
@@ -24,8 +24,7 @@
       "keywords": ["remote", "ssh", "sync", "rsync", "development", "cli"],
       "category": "tools",
       "strict": true,
-      "skills": ["./skills/rr"],
-      "commands": ["./commands/setup.md"]
+      "skills": ["./skills/rr"]
     }
   ]
 }

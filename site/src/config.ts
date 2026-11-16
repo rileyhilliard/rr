@@ -50,11 +50,7 @@ export const site = {
     { label: "Go", command: "go install github.com/rileyhilliard/rr/cmd/rr@latest" },
   ] as InstallOption[],
   /** Claude Code users add the plugin after installing rr; it teaches Claude the CLI. */
-  plugin: [
-    "/plugin marketplace add https://github.com/rileyhilliard/rr",
-    "/plugin install rr@rr",
-    "/rr:setup",
-  ],
+  plugin: ["/plugin marketplace add https://github.com/rileyhilliard/rr", "/plugin install rr@rr"],
   /** The "why": README "Why rr", as the same day with and without rr. */
   why: {
     before: {

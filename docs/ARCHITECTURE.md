@@ -286,7 +286,7 @@ The lock is taken before sync so rr never overwrites files under a command that 
 
 ### Example: SSH Setup
 
-`rr setup` takes one SSH target (an alias from `~/.ssh/config` or `user@host`) and does not edit rr's config. Hosts are added with `rr host add` or `rr init`.
+`rr setup <host>` takes one SSH target (an alias from `~/.ssh/config` or `user@host`) and does not edit rr's config. With no host, `rr setup` sets up the current project instead: it writes `.rr.yaml` for the detected stack and reports the remaining steps. Hosts are added with `rr host add` or `rr init`.
 
 ```bash
 $ rr setup dev@192.168.1.50
