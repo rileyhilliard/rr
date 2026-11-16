@@ -345,18 +345,27 @@ test_logs_clean_command() {
     run_test "logs clean --older invalid (should fail)" 1 "$RR_BIN" logs clean --older "badvalue"
 }
 
-# Test setup command (basic help only - requires SSH for full test)
+# Test setup command (project setup; the SSH form needs a real host)
 test_setup_command() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Testing Setup Command"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+    local test_dir
+    test_dir=$(mktemp -d)
+    trap "rm -rf '$test_dir'" RETURN
+    mkdir -p "$test_dir/proj/.git"
+    echo "module example.com/x" > "$test_dir/proj/go.mod"
+
     # Test setup --help
     run_test_contains "setup --help" "SSH" 0 "$RR_BIN" setup --help
 
-    # Test setup with no args (should fail - requires host)
-    run_test "setup no args (should fail)" 1 "$RR_BIN" setup
+    # With no host, setup writes .rr.yaml for the detected stack and lists next steps
+    run_test_contains "setup no args reports next steps" "next_steps" 0 \
+        env -C "$test_dir/proj" HOME="$test_dir" "$RR_BIN" setup
+    run_test_contains "setup no args wrote go tasks" "go test ./..." 0 \
+        cat "$test_dir/proj/.rr.yaml"
 }
 
 # Test JSON output modes

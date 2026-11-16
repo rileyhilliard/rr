@@ -201,22 +201,33 @@ Examples:
 	},
 }
 
-// setupCmd configures SSH keys and tests connection
+// setupCmd sets up rr for a project, or SSH for one host
 var setupCmd = &cobra.Command{
-	Use:   "setup <host>",
-	Short: "Configure SSH keys and test connection",
-	Long: `Set up SSH authentication and verify connectivity to a remote host.
+	Use:   "setup [host]",
+	Short: "Set up rr for this project, or SSH keys for a host",
+	Long: `With no host, set up rr for the project in the current directory.
 
-Guides you through:
+Detects the project's stack (go.mod, package.json, pyproject.toml,
+Cargo.toml, Makefile) and writes a .rr.yaml with matching require: and
+tasks: entries when the project has none. An existing .rr.yaml is left
+alone. Then reports the configured hosts, the remaining setup steps in
+order, and a guide for each step and its failures. Run it again to see
+what's left.
+
+With a host, set up SSH authentication for it:
   - SSH key generation (if needed)
-  - Key deployment to remote hosts
+  - Key deployment to the remote host
   - Connection testing
 
 Examples:
+  rr setup
   rr setup myserver
   rr setup user@192.168.1.100`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return ProjectSetup()
+		}
 		return setupCommand(args[0])
 	},
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/rileyhilliard/rr/internal/errors"
 	"github.com/rileyhilliard/rr/internal/exec"
 	"github.com/rileyhilliard/rr/internal/host"
+	"github.com/rileyhilliard/rr/internal/setup"
 	"github.com/rileyhilliard/rr/internal/ui"
 	"github.com/rileyhilliard/rr/pkg/sshutil"
 	"golang.org/x/term"
@@ -85,7 +86,9 @@ type machineConfig struct {
 
 // projectConfigValues holds the collected project configuration values.
 type projectConfigValues struct {
-	hostRefs []string // References to hosts in global config (empty = use all)
+	hostRefs []string     // References to hosts in global config (empty = use all)
+	require  []string     // Tools hosts must have (empty = commented example)
+	tasks    []setup.Task // Named tasks (empty = commented example)
 }
 
 // checkExistingConfig checks for existing config and prompts for overwrite.
@@ -618,20 +621,41 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	sb.WriteString("  # Where lock files are stored on remote\n")
 	sb.WriteString("  # dir: /tmp/rr-locks\n\n")
 
-	// Tasks section (commented out example)
-	sb.WriteString("# Named tasks for common commands\n")
-	sb.WriteString("# tasks:\n")
-	sb.WriteString("#   test:\n")
-	sb.WriteString("#     description: Run the test suite\n")
-	sb.WriteString("#     run: pytest\n")
-	sb.WriteString("#\n")
-	sb.WriteString("#   build:\n")
-	sb.WriteString("#     description: Build the project\n")
-	sb.WriteString("#     steps:\n")
-	sb.WriteString("#       - name: Install dependencies\n")
-	sb.WriteString("#         run: pip install -e .\n")
-	sb.WriteString("#       - name: Run build\n")
-	sb.WriteString("#         run: python setup.py build\n\n")
+	// Requirements
+	if len(vals.require) > 0 {
+		sb.WriteString("# Tools every host must have (checked before each run, see 'rr doctor --requirements')\n")
+		sb.WriteString("require:\n")
+		for _, r := range vals.require {
+			sb.WriteString(fmt.Sprintf("  - %s\n", yamlValue(r)))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Tasks section
+	if len(vals.tasks) > 0 {
+		sb.WriteString("# Named tasks for common commands (run with 'rr <task>')\n")
+		sb.WriteString("tasks:\n")
+		for _, t := range vals.tasks {
+			sb.WriteString(fmt.Sprintf("  %s:\n", yamlValue(t.Name)))
+			sb.WriteString(fmt.Sprintf("    description: %s\n", yamlValue(t.Description)))
+			sb.WriteString(fmt.Sprintf("    run: %s\n", yamlValue(t.Run)))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("# Named tasks for common commands\n")
+		sb.WriteString("# tasks:\n")
+		sb.WriteString("#   test:\n")
+		sb.WriteString("#     description: Run the test suite\n")
+		sb.WriteString("#     run: pytest\n")
+		sb.WriteString("#\n")
+		sb.WriteString("#   build:\n")
+		sb.WriteString("#     description: Build the project\n")
+		sb.WriteString("#     steps:\n")
+		sb.WriteString("#       - name: Install dependencies\n")
+		sb.WriteString("#         run: pip install -e .\n")
+		sb.WriteString("#       - name: Run build\n")
+		sb.WriteString("#         run: python setup.py build\n\n")
+	}
 
 	// Monitor section (commented out)
 	sb.WriteString("# Resource monitoring dashboard settings (rr monitor)\n")
@@ -652,8 +676,9 @@ func generateProjectConfigContent(vals *projectConfigValues) string {
 	return sb.String()
 }
 
-// writeProjectConfig writes the project configuration file.
-func writeProjectConfig(configPath string, vals *projectConfigValues) error {
+// saveProjectConfig generates the .rr.yaml content, checks it parses, and
+// writes it without printing anything.
+func saveProjectConfig(configPath string, vals *projectConfigValues) error {
 	content := generateProjectConfigContent(vals)
 
 	// Validate the generated YAML is parseable
@@ -668,6 +693,14 @@ func writeProjectConfig(configPath string, vals *projectConfigValues) error {
 		return errors.WrapWithCode(err, errors.ErrConfig,
 			fmt.Sprintf("Couldn't write the config file to %s", configPath),
 			"Check that you have write permissions in this directory.")
+	}
+	return nil
+}
+
+// writeProjectConfig writes the project configuration file.
+func writeProjectConfig(configPath string, vals *projectConfigValues) error {
+	if err := saveProjectConfig(configPath, vals); err != nil {
+		return err
 	}
 
 	fmt.Printf("%s Created %s\n\n", ui.SymbolSuccess, configPath)

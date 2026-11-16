@@ -53,7 +53,6 @@ export const site = {
   plugin: [
     "/plugin marketplace add https://github.com/rileyhilliard/rr",
     "/plugin install rr@rr",
-    "/rr:setup",
   ],
   /** The "why": README "Why rr", as the same day with and without rr. */
   why: {

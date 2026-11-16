@@ -115,7 +115,7 @@ In Claude Code, add the marketplace and install the plugin:
 /plugin install rr@rr
 ```
 
-Run `/rr:setup` from the local project root. It walks through global host configuration at `~/.rr/config.yaml` and project configuration at `.rr.yaml`, including stack-appropriate sync exclusions and tasks. It checks SSH with `rr doctor`, then tests execution with `rr exec "pwd"` and sync with `rr run "ls -la"`. Requirements can be declared with `require:`; `rr provision` can install missing tools that have supported installers.
+Ask Claude to set up rr from the local project root. It runs `rr setup`, which writes a `.rr.yaml` with `require:` and tasks for the detected stack, then lists the remaining steps: hosts in `~/.rr/config.yaml`, an SSH check with `rr doctor`, execution with `rr exec`, and sync with `rr run "ls -la"`. Requirements can be declared with `require:`; `rr provision` can install missing tools that have supported installers.
 
 The plugin teaches Claude the command syntax and how to read structured results, including the zero-test and pipeline pitfalls. Ask it to use rr for the failing test while keeping edits in the local checkout. The [Claude Code plugin guide](/docs/claude-code/) covers setup and usage. Update the installed plugin when needed with:
 

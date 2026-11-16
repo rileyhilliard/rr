@@ -193,7 +193,8 @@ rr init --non-interactive --host dev-box
 3. Based on error.code:
 
    CONFIG_NOT_FOUND:
-     -> Run: rr init --non-interactive --host <host>
+     -> Run: rr setup (writes .rr.yaml for the detected stack and lists what's left)
+     -> Or: rr init --non-interactive --host <host>
 
    SSH_TIMEOUT:
      -> Check network: ping <hostname>

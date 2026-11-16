@@ -58,6 +58,6 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git push --force"}}' | bash .
 Depending on which stacks fragments are installed, `settings.json` may also:
 
 - register the `claude-essentials` marketplace and enable its `ce` plugin (skills for testing, error handling and writing; review and log-reading agents), or
-- register the `rr` marketplace and enable the `rr` plugin (the rr skill and `/rr:setup`), pre-approving rr's read-only commands (`rr doctor`, `rr status`, `rr tasks`). `rr run`/`exec` and named tasks still prompt, because they run commands on remote hosts.
+- register the `rr` marketplace and enable the `rr` plugin (the rr skill), pre-approving rr's read-only commands (`rr doctor`, `rr status`, `rr tasks`). `rr run`/`exec` and named tasks still prompt, because they run commands on remote hosts.
 
 Both take effect once each person trusts the folder in Claude Code.

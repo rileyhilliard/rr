@@ -241,6 +241,15 @@ rr pull --dry-run "dist/"
 
 **Flags:** `--host`, `--tag`, `--probe-timeout`, `--dest <dir>`, `--dry-run`
 
+### `rr setup`
+
+Set up rr in the current project. Detects the stack (`go.mod`, `package.json`, `pyproject.toml`, `Cargo.toml`, `Makefile`) and writes `.rr.yaml` with `require:` and `tasks:` when the project has none; never overwrites one. Returns `{hosts, project_config, created, stack, next_steps, guide}`: follow `next_steps` in order, using `guide` for how-tos and failures. A nested worktree without its own `.rr.yaml` fails with `CONFIG_NOT_FOUND` instead of writing one.
+
+```bash
+rr setup
+rr setup --pretty   # same report for a person
+```
+
 ### `rr setup <host>`
 
 Configure SSH keys and test connection.

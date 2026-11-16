@@ -64,7 +64,7 @@ Each section answers one visitor question.
    5. The agent runs the **full suite**: `Bash(rr test)`. Phase events stream, the run fans out across hosts, and the final `result` event reports success, with `details.summary` counts.
    6. The agent replies with a one-line summary.
 
-   Under the transcript sits a short list of real error codes it might see instead (`LOCK_HELD`, `SSH_TIMEOUT`, …, from `internal/cli/json.go`), noting that the agent branches on the code, not the message. Then the Claude Code plugin as an add-on step: install rr first, then `/plugin marketplace add …`, `/plugin install rr@rr`, `/rr:setup`.
+   Under the transcript sits a short list of real error codes it might see instead (`LOCK_HELD`, `SSH_TIMEOUT`, …, from `internal/cli/json.go`), noting that the agent branches on the code, not the message. Then the Claude Code plugin as an add-on step: install rr first, then `/plugin marketplace add …`, `/plugin install rr@rr`, then `rr setup`.
 8. **"What does setup look like?"** The minimal two-file setup: a global host plus a `.rr.yaml` with one task (README lines 295–326). The proof line under it: "OpenData runs ~14,000 tests through `rr test`", linking to the OpenData config in the docs.
 9. **"Why not X?"** The README comparison table (rsync && ssh, GitHub Actions, Ansible, DevPod/Tilt, VS Code Remote) as a real `<table>`.
 10. **Install.**

@@ -22,6 +22,7 @@ rr exec "git status"   # Run command without syncing
 rr sync                # Just sync files
 rr <taskname>          # Run named task from config
 rr tasks               # List tasks
+rr setup               # Set up rr in this project: writes .rr.yaml, prints next steps + guide
 rr provision           # Install missing tools on hosts
 rr doctor              # Diagnose issues
 rr unlock <host>       # Release a stuck lock
@@ -78,6 +79,8 @@ rr ships default sync excludes (`.git`, `.venv`, `node_modules`, caches, agent d
 | `rr unlock [host]` / `rr unlock --all` | Release stuck locks |
 | `rr prune` | Remove remote dirs left by deleted git worktrees |
 | `rr host list/add/remove` | Manage hosts |
+| `rr setup` | Set up rr in the current project |
+| `rr setup <host>` | Set up SSH keys for one host |
 
 **See [commands.md](reference/commands.md) for full command reference.**
 
@@ -307,21 +310,9 @@ Dependency flags (tasks with `depends`): `--skip-deps` runs only the target task
 
 **See [troubleshooting.md](reference/troubleshooting.md) for detailed diagnostics.**
 
-## Quick Setup
+## Setting Up a Project
 
-```bash
-# 1. Add a host (or this machine: rr host add --local --name dev)
-rr host add
-
-# 2. Initialize project
-cd your-project && rr init
-
-# 3. Verify
-rr doctor
-
-# 4. Run
-rr run "make test"
-```
+When asked to set up rr (or a project has no `.rr.yaml`, or hosts are missing), run `rr setup` from the project root and follow what it returns. It writes a `.rr.yaml` with `require:` and `tasks:` for the detected stack when there isn't one (an existing file is left alone), and returns `data.next_steps` in order plus `data.guide`, the how-to and failure fixes for each step. Hosts need details only the user has, so it never adds them: ask the user, then `rr host add`. Run `rr setup` again to see what's left.
 
 ## Reference Files
 

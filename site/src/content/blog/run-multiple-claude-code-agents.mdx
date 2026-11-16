@@ -110,13 +110,13 @@ In Claude Code, install the rr plugin so the session has its command and configu
 /plugin install rr@rr
 ```
 
-Run guided setup from your project root:
+Run guided setup from your project root (or ask Claude to set up rr, and it runs this):
 
 ```text
-/rr:setup
+rr setup
 ```
 
-Setup writes configuration and tests remote execution. It also checks SSH and required tools. The [Claude Code integration guide](/docs/claude-code/) covers the plugin. For hosts you've named `mini` and `workstation`, the relevant project settings are:
+Setup writes the project config and lists what's left: adding hosts, checking SSH, testing remote execution, and checking required tools. The [Claude Code integration guide](/docs/claude-code/) covers the plugin. For hosts you've named `mini` and `workstation`, the relevant project settings are:
 
 ```yaml title=".rr.yaml"
 hosts: [mini, workstation]
