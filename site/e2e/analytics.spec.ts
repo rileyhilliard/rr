@@ -138,8 +138,35 @@ window._POSTHOG_REMOTE_CONFIG[${JSON.stringify(key)}] = { config: ${JSON.stringi
   return route.fulfill({ json: { status: 1 } });
 }
 
+// The analytics gate holds every event until the visitor gives a trusted input. Playwright's
+// mouse is real input (CDP), so a move opens it, but only once the page's analytics script
+// is listening: posthog-js asks for its remote config right after that, so a person's move
+// is simulated once that request has been answered. Each move goes somewhere new, since a
+// move to the spot the pointer already holds may not fire a pointermove.
+//
+// Then wait for the page's own $pageview to be delivered. The gate captures it after
+// remote config, so posthog-js batches it (about three seconds) instead of sending it at
+// once, and a batch still waiting when the next navigation starts isn't delivered here.
+let moves = 0;
+let delivered: Sent[] = [];
+async function afterLoad(page: Page, navigate: () => Promise<unknown>) {
+  const before = delivered.filter((item) => item.event === "$pageview").length;
+  const configured = page.waitForResponse((response) => response.url().includes("/array/"));
+  await navigate();
+  await configured;
+  moves += 1;
+  await page.mouse.move(5 + (moves % 200), 5 + (moves % 150));
+  await expect
+    .poll(() => delivered.filter((item) => item.event === "$pageview").length, { timeout: 15000 })
+    .toBeGreaterThan(before);
+}
+
+// Navigate, then give the page the pointer move a person's visit includes.
+const visit = (page: Page, url: string) => afterLoad(page, () => page.goto(url));
+
 async function open(page: Page, siteURL: string) {
   const sent: Sent[] = [];
+  delivered = sent;
   // posthog-js drops every event from a browser that looks automated (navigator.webdriver,
   // a HeadlessChrome brand), which is right for bots; this browser stands in for a person.
   // On the context, so a tab a click opens isn't dropped as a bot either.
@@ -149,7 +176,7 @@ async function open(page: Page, siteURL: string) {
   });
   // On the context, so a page's last batch, sent as it unloads, is caught too.
   await page.context().route(`${host}/**`, (route) => servePostHog(route, sent));
-  await page.goto(`${siteURL}/`);
+  await visit(page, `${siteURL}/`);
   return sent;
 }
 
@@ -192,14 +219,14 @@ async function typeIntoAField(page: Page) {
 // Picks an install method, copies a command and reads a docs page: the clicks and
 // changes a visitor makes.
 async function useSite(page: Page, siteURL: string) {
-  await page.goto(`${siteURL}/`);
+  await visit(page, `${siteURL}/`);
   const install = page.locator("#install");
   await install.getByRole("tab").nth(1).click();
   await install.getByRole("button", { name: /copy/i }).first().click();
   await typeIntoAField(page);
-  await page.goto(`${siteURL}${DOC}`);
+  await visit(page, `${siteURL}${DOC}`);
   // Leaving the page flushes what posthog-js buffers: heatmaps, recordings, web vitals.
-  await page.goto(`${siteURL}/`);
+  await visit(page, `${siteURL}/`);
 }
 
 test("counts a cookieless visitor without recordings or heatmaps, and sends web vitals", async ({
@@ -233,7 +260,7 @@ test("records after Accept, with typed text masked and no network payloads", asy
 }) => {
   const sent = await open(page, siteURL);
   await banner(page).getByRole("button", { name: "Accept" }).click();
-  await page.goto(`${siteURL}/`);
+  await visit(page, `${siteURL}/`);
   await waitForRecorder(page);
   // A request the page makes while recording, with a header and a body no recording may hold.
   const probe = { header: "probe-header-7c41", body: "probe-body-7c41" };
@@ -298,7 +325,7 @@ test("stops after a decline on another steamfield.io site, on the next page load
 }) => {
   const sent = await open(page, siteURL);
   await banner(page).getByRole("button", { name: "Accept" }).click();
-  await page.goto(`${siteURL}/`);
+  await visit(page, `${siteURL}/`);
   await waitForRecorder(page);
   await typeIntoAField(page);
   await page.locator("#install").getByRole("tab").nth(1).click();
@@ -314,14 +341,14 @@ test("stops after a decline on another steamfield.io site, on the next page load
   const cookies = await context.cookies();
   await context.clearCookies({ name: `__ph_opt_in_out_${key}` });
   expect(cookies.some((cookie) => cookie.name === `__ph_opt_in_out_${key}`)).toBe(true);
-  await page.goto(`${siteURL}${DOC}`);
-  await page.goBack();
+  await visit(page, `${siteURL}${DOC}`);
+  await afterLoad(page, () => page.goBack());
   // A fresh load: Playwright's Chromium runs with the back-forward cache off, so the
   // restored-page path is covered by analytics.test.ts's pageshow tests instead.
   const since = Date.now();
   await page.locator("#install").getByRole("tab").first().click();
   await typeIntoAField(page);
-  await page.goto(`${siteURL}${DOC}`);
+  await visit(page, `${siteURL}${DOC}`);
   await expect.poll(() => named(sent, "$pageview", since).length, delivery).toBeGreaterThan(0);
   expect(named(sent, "$snapshot", since)).toEqual([]);
   expect(named(sent, "$$heatmap", since)).toEqual([]);
